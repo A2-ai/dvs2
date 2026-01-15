@@ -1,0 +1,22 @@
+
+[workspace]
+members = ["dvc-core", "dvc-cli"]
+exclude = ["dvcR"]
+resolver = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[workspace.package]
+version = "0.0.2-9000"
+authors = [
+    'Jenna Johnson <jenna@a2-ai.com>',
+    'Devin Pastoor <devin@a2-ai.com>',
+    'Mossa Merhi Reimert <mossa@a2-ai.com>',
+    'A2-Ai',
+]
+description = 'This package allows users to version large or sensitive files under Git without tracking the file directly.'
+license = 'MIT'
+edition = '2021'
+rust-version = '1.78'
