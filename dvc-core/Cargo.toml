@@ -1,5 +1,5 @@
 [package]
-name = 'dvc'
+name = 'dvc-core'
 publish = true
 version.workspace = true
 authors.workspace = true
@@ -9,8 +9,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [lib]
-crate-type = ['staticlib']
-name = 'dvs'
+path = "lib.rs"
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
@@ -30,24 +29,3 @@ xdg = "3.0.0"
 pathdiff = "0.2.1"
 # extendr-api = { version = "0.8.1", features = ["serde", "result_condition"] }
 # TODO: add miniextendr-api instead
-
-[profile.release]
-lto = true
-codegen-units = 1
-
-[workspace]
-members = ["dvs-cli", "dvs-core"]
-default-members = ["."]
-
-[workspace.package]
-version = "0.0.2-9000"
-authors = [
-  'Jenna Johnson <jenna@a2-ai.com>',
-  'Devin Pastoor <devin@a2-ai.com>',
-  'Mossa Merhi Reimert <mossa@a2-ai.com>',
-  'A2-Ai',
-]
-description = 'This package allows users to version large or sensitive files under Git without tracking the file directly.'
-license = 'MIT'
-edition = '2021'
-rust-version = '1.78'
