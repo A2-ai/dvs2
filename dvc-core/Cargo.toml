@@ -1,0 +1,53 @@
+[package]
+name = 'dvc'
+publish = true
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ['staticlib']
+name = 'dvs'
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_yaml = "0.9.33"
+serde_json = "1.0.79"
+clap = { version = "4.4.17", features = ["derive"], optional = true }
+blake3 = { version = "1.5.1", features = ["rayon"] }
+memmap2 = "0.9.4"
+rayon = { version = "1.7.0", optional = true }
+file-owner = "0.1.2"
+chrono = "0.4.37"
+walkdir = "2.4.0"
+path-absolutize = "3.1.1"
+anyhow = { version = "1.0.81", optional = true }
+glob = "0.3.1"
+xdg = "3.0.0"
+pathdiff = "0.2.1"
+# extendr-api = { version = "0.8.1", features = ["serde", "result_condition"] }
+# TODO: add miniextendr-api instead
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[workspace]
+members = ["dvs-cli", "dvs-core"]
+default-members = ["."]
+
+[workspace.package]
+version = "0.0.2-9000"
+authors = [
+  'Jenna Johnson <jenna@a2-ai.com>',
+  'Devin Pastoor <devin@a2-ai.com>',
+  'Mossa Merhi Reimert <mossa@a2-ai.com>',
+  'A2-Ai',
+]
+description = 'This package allows users to version large or sensitive files under Git without tracking the file directly.'
+license = 'MIT'
+edition = '2021'
+rust-version = '1.78'
