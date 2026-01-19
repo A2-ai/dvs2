@@ -142,4 +142,4 @@ clippy-all: clippy rpkg-clippy
 #   just bump-version -- --set=0.1.0.9000
 #   just bump-version -- --mode=workspace
 bump-version *args:
-    Rscript tools/bump-version.R {{args}}
+    Rscript tools/bump-version.R {{rpkg_dir}} {{args}}
