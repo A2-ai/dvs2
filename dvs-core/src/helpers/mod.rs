@@ -10,5 +10,6 @@ pub mod hash;
 pub mod ignore;
 pub mod layout;
 pub mod parse;
+pub mod reflog;
 pub mod repo;
 pub mod store;

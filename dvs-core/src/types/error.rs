@@ -81,6 +81,10 @@ pub enum DvsError {
     /// I/O error.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Generic not found error.
+    #[error("{0}")]
+    NotFound(String),
 }
 
 impl DvsError {
@@ -105,6 +109,7 @@ impl DvsError {
             DvsError::Yaml(_) => "yaml_error",
             DvsError::Json(_) => "json_error",
             DvsError::Io(_) => "io_error",
+            DvsError::NotFound(_) => "not_found",
         }
     }
 }

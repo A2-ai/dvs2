@@ -10,6 +10,8 @@ pub mod status;
 pub mod push;
 pub mod pull;
 pub mod materialize;
+pub mod log;
+pub mod rollback;
 
 use std::io;
 use thiserror::Error;

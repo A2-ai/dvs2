@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use fs_err as fs;
 use glob::glob;
 use crate::{AddResult, Config, Metadata, Outcome, DvsError, Backend, RepoBackend, detect_backend_cwd};
+use crate::types::{ReflogOp, MetadataEntry, WorkspaceState};
 use crate::helpers::{config as config_helper, copy, file, hash};
+use crate::helpers::layout::Layout;
+use crate::helpers::reflog::{SnapshotStore, Reflog, current_actor};
 
 /// Add files to DVS tracking.
 ///
@@ -41,6 +44,19 @@ pub fn add_with_backend(
     // Load configuration
     let config = config_helper::load_config(repo_root)?;
 
+    // Setup reflog infrastructure
+    let layout = Layout::new(repo_root.to_path_buf());
+    let snapshot_store = SnapshotStore::new(&layout);
+    let reflog = Reflog::new(&layout);
+
+    // Capture state before add
+    let old_state = capture_workspace_state(backend)?;
+    let old_state_id = if !old_state.is_empty() {
+        Some(snapshot_store.save(&old_state)?)
+    } else {
+        None
+    };
+
     // Expand glob patterns
     let expanded_files = expand_globs(backend, files)?;
 
@@ -52,12 +68,77 @@ pub fn add_with_backend(
 
     // Process each file
     let mut results = Vec::with_capacity(expanded_files.len());
+    let mut changed_paths = Vec::new();
+
     for path in expanded_files {
         let result = add_single_file(backend, &path, message, &config);
+        // Track paths that were actually added/updated
+        if result.outcome == Outcome::Copied {
+            changed_paths.push(result.relative_path.clone());
+        }
         results.push(result);
     }
 
+    // Record state change in reflog if anything changed
+    if !changed_paths.is_empty() {
+        let new_state = capture_workspace_state(backend)?;
+        let new_state_id = snapshot_store.save(&new_state)?;
+
+        // Only record if state actually changed
+        if old_state_id.as_ref() != Some(&new_state_id) {
+            reflog.record(
+                current_actor(),
+                ReflogOp::Add,
+                message.map(|s| s.to_string()),
+                old_state_id,
+                new_state_id,
+                changed_paths,
+            )?;
+        }
+    }
+
     Ok(results)
+}
+
+/// Capture the current workspace state.
+///
+/// Collects all metadata files and returns a WorkspaceState snapshot.
+fn capture_workspace_state(backend: &Backend) -> Result<WorkspaceState, DvsError> {
+    let repo_root = backend.root();
+
+    // Find all .dvs metadata files
+    let mut metadata_entries = Vec::new();
+
+    for entry in walkdir::WalkDir::new(repo_root)
+        .into_iter()
+        .filter_entry(|e| {
+            // Skip .git and .dvs directories
+            let name = e.file_name().to_string_lossy();
+            name != ".git" && name != ".dvs"
+        })
+    {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let path = entry.path();
+        if path.is_file() && path.extension().map_or(false, |ext| ext == "dvs") {
+            // Load metadata
+            if let Ok(meta) = Metadata::load(path) {
+                // Get the relative path to the data file
+                if let Some(data_path) = Metadata::data_path(path) {
+                    if let Some(relative) = pathdiff::diff_paths(&data_path, repo_root) {
+                        metadata_entries.push(MetadataEntry::new(relative, meta));
+                    }
+                }
+            }
+        }
+    }
+
+    // TODO: Also include manifest (dvs.lock) if present
+    // For now, just include metadata
+    Ok(WorkspaceState::new(None, metadata_entries))
 }
 
 /// Expand glob patterns and filter files.

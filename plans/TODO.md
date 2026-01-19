@@ -18,10 +18,13 @@
 
 - [x] **Plan 026: Wire CLI to new operations** - Connected `dvs push`, `dvs pull`, `dvs materialize` CLI commands to dvs-core operations. Each command supports both all-objects and file-specific modes, with progress output.
 
-### Pending Plans
+- [x] **Plan 037: Reversible Workspace Reflog** - Local reflog + snapshot store for DVS-tracked state rollback. Implemented `WorkspaceState` and `ReflogEntry` types, `SnapshotStore` and `Reflog` helpers in dvs-core, wired reflog recording into `dvs add`, and added `dvs log` and `dvs rollback` CLI commands.
 
-- [ ] **Plan 037: Reversible Workspace Reflog** - Local reflog + snapshot store
-  so users can rollback DVS-tracked state without Git.
+### Pending Plans
+- [ ] **Plan 038: Exn-First Error Handling Migration** - Adopt `exn` as primary
+  error system and phase out `thiserror`/`anyhow`.
+- [ ] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
+  harness to verify CLI/R/other interfaces produce the same effects.
 
 ### Future Plans (Not Yet Written)
 
@@ -40,6 +43,8 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 - [x] `dvs push [--remote URL]` subcommand - calls `dvs_core::push()`
 - [x] `dvs pull [--remote URL]` subcommand - calls `dvs_core::pull()`
 - [x] `dvs materialize [files...]` subcommand - calls `dvs_core::materialize()`
+- [x] `dvs log [-n N]` subcommand - view reflog history
+- [x] `dvs rollback [--force] [--no-materialize] <target>` subcommand - rollback to previous state
 - [ ] `dvs config` subcommand - show/edit configuration
 - [ ] `dvs daemon` subcommand - start/stop/status daemon
 - [ ] Progress bars for large file operations
@@ -109,7 +114,7 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ## Testing
 
-- [x] Unit tests for dvs-core types (102 tests passing)
+- [x] Unit tests for dvs-core types (142 tests passing)
 - [x] Unit tests for dvs-core helpers
 - [x] Unit tests for dvs-core operations
 - [ ] Integration tests with temp directories

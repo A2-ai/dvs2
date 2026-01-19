@@ -62,6 +62,36 @@ impl Layout {
         self.dvs_dir().join("locks")
     }
 
+    /// Get the refs directory (`.dvs/refs/`).
+    pub fn refs_dir(&self) -> PathBuf {
+        self.dvs_dir().join("refs")
+    }
+
+    /// Get the logs directory (`.dvs/logs/`).
+    pub fn logs_dir(&self) -> PathBuf {
+        self.dvs_dir().join("logs")
+    }
+
+    /// Get the snapshots directory (`.dvs/state/snapshots/`).
+    pub fn snapshots_dir(&self) -> PathBuf {
+        self.state_dir().join("snapshots")
+    }
+
+    /// Get the HEAD ref path (`.dvs/refs/HEAD`).
+    pub fn head_ref_path(&self) -> PathBuf {
+        self.refs_dir().join("HEAD")
+    }
+
+    /// Get the HEAD reflog path (`.dvs/logs/refs/HEAD`).
+    pub fn head_log_path(&self) -> PathBuf {
+        self.logs_dir().join("refs").join("HEAD")
+    }
+
+    /// Get a snapshot file path by its ID.
+    pub fn snapshot_path(&self, id: &str) -> PathBuf {
+        self.snapshots_dir().join(format!("{}.json", id))
+    }
+
     /// Get the manifest file path (`dvs.lock` in repo root).
     pub fn manifest_path(&self) -> PathBuf {
         self.repo_root.join(Manifest::filename())
@@ -91,6 +121,12 @@ impl Layout {
         fs::create_dir_all(self.objects_dir())?;
         fs::create_dir_all(self.state_dir())?;
         fs::create_dir_all(self.locks_dir())?;
+        fs::create_dir_all(self.refs_dir())?;
+        fs::create_dir_all(self.snapshots_dir())?;
+        // logs/refs/HEAD parent directory
+        if let Some(parent) = self.head_log_path().parent() {
+            fs::create_dir_all(parent)?;
+        }
 
         Ok(())
     }
@@ -225,6 +261,13 @@ mod tests {
         assert_eq!(layout.state_dir(), PathBuf::from("/repo/.dvs/state"));
         assert_eq!(layout.locks_dir(), PathBuf::from("/repo/.dvs/locks"));
         assert_eq!(layout.manifest_path(), PathBuf::from("/repo/dvs.lock"));
+        // Reflog paths
+        assert_eq!(layout.refs_dir(), PathBuf::from("/repo/.dvs/refs"));
+        assert_eq!(layout.logs_dir(), PathBuf::from("/repo/.dvs/logs"));
+        assert_eq!(layout.snapshots_dir(), PathBuf::from("/repo/.dvs/state/snapshots"));
+        assert_eq!(layout.head_ref_path(), PathBuf::from("/repo/.dvs/refs/HEAD"));
+        assert_eq!(layout.head_log_path(), PathBuf::from("/repo/.dvs/logs/refs/HEAD"));
+        assert_eq!(layout.snapshot_path("abc123"), PathBuf::from("/repo/.dvs/state/snapshots/abc123.json"));
     }
 
     #[test]
@@ -250,6 +293,10 @@ mod tests {
         assert!(layout.objects_dir().exists());
         assert!(layout.state_dir().exists());
         assert!(layout.locks_dir().exists());
+        // Reflog directories
+        assert!(layout.refs_dir().exists());
+        assert!(layout.snapshots_dir().exists());
+        assert!(layout.head_log_path().parent().unwrap().exists());
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

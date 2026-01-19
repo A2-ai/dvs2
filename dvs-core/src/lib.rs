@@ -36,6 +36,8 @@ pub use ops::{init, add, get, status};
 pub use ops::{push, push_with_backend, push_files, PushResult, PushSummary};
 pub use ops::{pull, pull_with_backend, pull_files, PullResult, PullSummary};
 pub use ops::{materialize, materialize_with_backend, materialize_files, MaterializeResult, MaterializeSummary};
+pub use ops::{log, log_with_backend, log_entry, log_entry_with_backend, LogEntry};
+pub use ops::{rollback, rollback_with_backend, RollbackTarget, RollbackResult};
 
 // Re-export backend types
 pub use helpers::backend::{Backend, RepoBackend, GitBackend, DvsBackend, detect_backend, detect_backend_cwd};
