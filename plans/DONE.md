@@ -435,3 +435,88 @@ for HTTP content-addressable storage.
 - Local .dvs/ cache directory structure
 - Push/pull/materialize operations for remote data workflow
 - MaterializedState tracking for incremental updates
+
+## Plan 023: Git Backend (libgit2 default + CLI fallback)
+
+Implemented a Git abstraction layer that defaults to libgit2 (`git2` crate) and falls back to the system Git CLI for edge cases or when explicitly requested.
+
+### Dependencies
+
+- [x] Added `git2 = "0.20"` to workspace dependencies
+- [x] Added `git2.workspace = true` to dvs-core dependencies
+
+### helpers/git_ops.rs - Git operations abstraction
+
+- [x] `HeadInfo` struct with `oid`, `branch`, `is_detached` fields
+- [x] `StatusInfo` struct with `is_dirty`, `has_untracked` fields
+- [x] `GitOps` trait with methods:
+  - `discover_repo_root()` - Find repository root from path
+  - `head_info()` - Get HEAD commit OID and branch name
+  - `status_info()` - Get dirty/untracked status
+  - `config_value()` - Read Git config values
+  - `remote_url()` - Get remote URL
+  - `create_tag_lightweight()` - Create lightweight tag
+  - `backend_name()` - Get backend identifier
+
+### Git2Ops implementation (libgit2)
+
+- [x] `Git2Ops::new()` - Create new git2 backend
+- [x] `discover_repo_root()` - Uses `Repository::discover()`
+- [x] `head_info()` - Reads HEAD, handles detached state and unborn branches
+- [x] `status_info()` - Uses `StatusOptions` with untracked file detection
+- [x] `config_value()` - Reads from repository config
+- [x] `remote_url()` - Uses `find_remote()` to get URL
+- [x] `create_tag_lightweight()` - Creates lightweight tag via `tag_lightweight()`
+
+### GitCliOps implementation (system git)
+
+- [x] `GitCliOps::new()` - Create new CLI backend
+- [x] `run_git()` - Execute git command with `-C` flag
+- [x] `run_git_optional()` - Execute git command, return None on failure
+- [x] `discover_repo_root()` - Uses `git rev-parse --show-toplevel`
+- [x] `head_info()` - Uses `git rev-parse HEAD` and `git symbolic-ref --short HEAD`
+- [x] `status_info()` - Parses `git status --porcelain` output
+- [x] `config_value()` - Uses `git config --get`
+- [x] `remote_url()` - Uses `git remote get-url`
+- [x] `create_tag_lightweight()` - Uses `git tag`
+
+### Backend selection
+
+- [x] `select_git_backend()` - Returns CLI backend if `DVS_GIT_BACKEND=cli`, otherwise git2
+- [x] `default_git_backend()` - Returns `Git2Ops`
+- [x] `cli_git_backend()` - Returns `GitCliOps`
+- [x] `with_fallback()` - Tries git2 first, falls back to CLI on certain errors
+- [x] `should_fallback()` - Checks if error message suggests fallback (unsupported, worktree, submodule, sparse)
+
+### Integration with existing GitBackend
+
+- [x] Updated `GitBackend::find_root()` to use `select_git_backend().discover_repo_root()`
+- [x] Added `GitBackend::find_root_simple()` as filesystem-only fallback
+- [x] Updated `GitBackend::current_branch()` to use `git_ops.head_info()`
+
+### Tests - 14 new tests
+
+- [x] `test_head_info_default` - HeadInfo default values
+- [x] `test_status_info_default` - StatusInfo default values
+- [x] `test_git2_backend_name` - Git2Ops backend name
+- [x] `test_cli_backend_name` - GitCliOps backend name
+- [x] `test_select_default_backend` - Default backend selection
+- [x] `test_should_fallback` - Fallback error detection
+- [x] `test_git2_discover_repo_root` - Git2 repo discovery
+- [x] `test_git2_head_info` - Git2 HEAD info
+- [x] `test_git2_status_info` - Git2 status info
+- [x] `test_git2_config_value` - Git2 config reading
+- [x] `test_git2_remote_url` - Git2 remote URL
+- [x] `test_cli_discover_repo_root` - CLI repo discovery
+- [x] `test_cli_head_info` - CLI HEAD info
+- [x] `test_with_fallback` - Fallback mechanism
+
+### Summary
+
+- **116 tests passing** (up from 102)
+- Git operations abstraction via `GitOps` trait
+- Default libgit2 backend (`git2` crate) for performance
+- CLI fallback for edge cases (worktrees, submodules, sparse checkouts)
+- Environment variable `DVS_GIT_BACKEND=cli` to force CLI backend
+- Automatic fallback on unsupported repository layouts
+- Integrated with existing `GitBackend` for seamless usage
