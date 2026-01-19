@@ -7,5 +7,7 @@ pub mod copy;
 pub mod file;
 pub mod hash;
 pub mod ignore;
+pub mod layout;
 pub mod parse;
 pub mod repo;
+pub mod store;

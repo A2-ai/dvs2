@@ -310,3 +310,128 @@ Full implementation of the core DVS business logic with 66 tests passing.
 - All dvs-core operations fully implemented
 - Full integration with Backend abstraction
 - Cross-platform support (Unix permissions with non-Unix stubs)
+
+## Plan 024: Git-Friendly Remote Data Layout (HTTP-first)
+
+Implemented manifest-based remote data tracking with push/pull/materialize operations
+for HTTP content-addressable storage.
+
+### types/oid.rs - Object ID with algorithm prefix
+
+- [x] `HashAlgo` enum (Blake3, Sha256, Xxh3) with prefix strings and hex lengths
+- [x] `Oid` struct with `algo` and `hex` fields
+- [x] `Oid::new()`, `Oid::blake3()`, `Oid::sha256()`, `Oid::xxh3()` constructors
+- [x] `Oid::parse()` - Parse from "algo:hex" string format
+- [x] `Oid::storage_subpath()` - Returns "{algo}/{prefix}/{suffix}" for storage
+- [x] `Oid::storage_path_components()` - Returns (prefix, suffix) tuple
+- [x] Custom serde serialization/deserialization for "algo:hex" format
+- [x] `Display` and `FromStr` implementations
+- [x] 9 unit tests for OID functionality
+
+### types/manifest.rs - Manifest file (dvs.lock) tracking
+
+- [x] `Compression` enum (None, Zstd, Gzip)
+- [x] `ManifestEntry` struct with path, oid, bytes, compression, remote fields
+- [x] `Manifest` struct with version, base_url, entries
+- [x] `Manifest::new()`, `Manifest::filename()` - Constructor and filename constant
+- [x] `Manifest::load()`, `Manifest::save()` - JSON serialization
+- [x] `Manifest::add()`, `Manifest::upsert()`, `Manifest::remove()`, `Manifest::get()`
+- [x] `Manifest::merge()` - Merge another manifest
+- [x] `Manifest::unique_oids()` - Get deduplicated OIDs
+- [x] 9 unit tests for manifest functionality
+
+### helpers/store.rs - Object store abstraction
+
+- [x] `ObjectStore` trait with `has()`, `get()`, `put()`, `store_type()` methods
+- [x] `LocalStore` implementation:
+  - Filesystem-based content-addressable storage
+  - `object_path()` - Returns full path for OID
+  - Idempotent put (skips if exists)
+- [x] `HttpStore` implementation:
+  - HTTP CAS client using curl subprocess
+  - `object_url()` - Returns "{base}/objects/{algo}/{hex}"
+  - HEAD for existence check, GET for download, PUT for upload
+- [x] `ChainStore` implementation:
+  - Multi-store with fallback
+  - `has()` checks all stores in order
+  - `get()` fetches from first store that has object
+  - `put()` writes to all stores
+- [x] 6 unit tests for store functionality
+
+### helpers/layout.rs - Local .dvs/ directory structure
+
+- [x] `DVS_DIR` constant (".dvs")
+- [x] `Layout` struct with repo_root path
+- [x] Path methods: `dvs_dir()`, `config_path()`, `cache_dir()`, `objects_dir()`
+- [x] Path methods: `state_dir()`, `locks_dir()`, `manifest_path()`, `lock_path()`
+- [x] `cached_object_path()` - Returns path for cached OID
+- [x] `init()` - Create .dvs/ directory structure
+- [x] `exists()`, `is_cached()` - Check directory/object existence
+- [x] `cached_oids()` - Walk cache and return all stored OIDs
+- [x] `MaterializedState` struct with files map and timestamp
+- [x] `MaterializedState::load()`, `save()`, `needs_materialize()`, `mark_materialized()`
+- [x] 8 unit tests for layout functionality
+
+### ops/push.rs - Upload objects to remote
+
+- [x] `PushResult` struct with oid, uploaded flag, error option
+- [x] `PushResult::success()`, `error()`, `is_error()` methods
+- [x] `PushSummary` struct with uploaded/present/failed counts and results
+- [x] `push()` - Push with backend auto-detection
+- [x] `push_with_backend()` - Full push implementation:
+  - Load manifest
+  - Determine remote URL (arg or manifest base_url)
+  - Create local/remote stores
+  - Push each unique OID
+- [x] `push_single_object()` - Push one object (skip if present on remote)
+- [x] `push_files()` - Push specific files by path
+- [x] 3 unit tests for push functionality
+
+### ops/pull.rs - Download objects from remote
+
+- [x] `PullResult` struct with oid, downloaded flag, error option
+- [x] `PullResult::success()`, `error()`, `is_error()` methods
+- [x] `PullSummary` struct with downloaded/cached/failed counts and results
+- [x] `pull()` - Pull with backend auto-detection
+- [x] `pull_with_backend()` - Full pull implementation:
+  - Load manifest
+  - Determine remote URL
+  - Initialize local cache
+  - Pull each unique OID
+- [x] `pull_single_object()` - Pull one object (skip if already cached)
+- [x] `pull_files()` - Pull specific files by path
+- [x] 3 unit tests for pull functionality
+
+### ops/materialize.rs - Copy cached objects to working tree
+
+- [x] `MaterializeResult` struct with path, oid, materialized flag, error option
+- [x] `MaterializeResult::success()`, `error()`, `is_error()` methods
+- [x] `MaterializeSummary` struct with materialized/up_to_date/failed counts and results
+- [x] `materialize()` - Materialize with backend auto-detection
+- [x] `materialize_with_backend()` - Full materialize implementation:
+  - Load manifest and materialized state
+  - Materialize each entry
+  - Save updated state
+- [x] `materialize_single_file()` - Materialize one file:
+  - Check if already materialized with same OID
+  - Copy from cache to working tree
+  - Update materialized state
+- [x] `materialize_files()` - Materialize specific files by path
+- [x] 3 unit tests for materialize functionality
+
+### lib.rs exports
+
+- [x] Re-export `Oid`, `HashAlgo`, `Manifest`, `ManifestEntry`, `Compression`
+- [x] Re-export `push`, `push_with_backend`, `push_files`, `PushResult`, `PushSummary`
+- [x] Re-export `pull`, `pull_with_backend`, `pull_files`, `PullResult`, `PullSummary`
+- [x] Re-export `materialize`, `materialize_with_backend`, `materialize_files`, `MaterializeResult`, `MaterializeSummary`
+
+### Summary
+
+- **102 tests passing** (up from 66)
+- Manifest-based remote data tracking via dvs.lock
+- Content-addressable OID format with algorithm prefix (blake3:, sha256:, xxh3:)
+- ObjectStore trait with local, HTTP, and chain store implementations
+- Local .dvs/ cache directory structure
+- Push/pull/materialize operations for remote data workflow
+- MaterializedState tracking for incremental updates

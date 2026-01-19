@@ -1,5 +1,9 @@
 # TODO
 
+Note: The current direction uses `.dvs/` + `data.lock` for the HTTP-first
+workflow (see `plans/024-git-friendly-remote-data.md`). Some items below still
+reference `.dvs` sidecars and should be reconciled during implementation.
+
 ## Configuration Options to Implement
 
 These are the config fields that need to be wired up:
