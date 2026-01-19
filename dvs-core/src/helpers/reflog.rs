@@ -225,7 +225,7 @@ impl<'a> Reflog<'a> {
 
 /// Get the current username for reflog entries.
 pub fn current_actor() -> String {
-    whoami::username()
+    whoami::username().unwrap_or_else(|_| "unknown".to_string())
 }
 
 #[cfg(test)]
