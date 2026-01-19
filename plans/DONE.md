@@ -67,3 +67,49 @@
 - [x] Create CLAUDE.md with project context
 - [x] Create TODO.md (this file's companion)
 - [x] Create DONE.md (this file)
+
+## Plan 003: Repo Backend + Fallback Workspace
+
+Implemented a unified repository/workspace interface that prefers Git-backed projects
+but cleanly falls back to DVS-only workspaces when no Git repo exists.
+
+### helpers/ignore.rs - Gitignore-style pattern matching
+
+- [x] `IgnoreSource` enum (GitIgnore, DvsIgnore, Ignore) for tracking pattern origins
+- [x] `IgnorePattern` struct with compiled glob matching, negation, and dir-only support
+- [x] `IgnorePatterns` collection with `add_from_file()` and `is_ignored()` methods
+- [x] Helper functions: `load_gitignore_patterns()`, `load_dvs_ignore_patterns()`
+- [x] Helper functions: `add_gitignore_pattern()`, `add_dvsignore_pattern()`, `add_ignore_pattern()`
+- [x] `should_ignore()` convenience function for simple pattern checking
+
+### helpers/backend.rs - Repository backend abstraction
+
+- [x] `RepoBackend` trait with methods: `root()`, `normalize()`, `add_ignore()`, `is_ignored()`, `current_branch()`, `backend_type()`
+- [x] `GitBackend` implementation:
+  - Root detection via `.git` directory
+  - Path normalization using pathdiff
+  - Gitignore handling via `load_gitignore_patterns()`
+  - Branch detection by reading `.git/HEAD`
+- [x] `DvsBackend` implementation:
+  - Root detection via `dvs.yaml` or `.dvs/` directory
+  - Path normalization using pathdiff
+  - DVS ignore handling (`.dvsignore` and `.ignore`)
+  - Returns `None` for `current_branch()` (no branch concept)
+- [x] `Backend` enum for runtime dispatch (Git or Dvs)
+- [x] `detect_backend()` - prefers Git, falls back to DVS-only workspace
+- [x] `detect_backend_cwd()` - convenience wrapper using current directory
+
+### ops updates - Backend integration
+
+- [x] `init()` now calls `detect_backend_cwd()`, added `init_with_backend()`
+- [x] `add()` now calls `detect_backend_cwd()`, added `add_with_backend()`
+- [x] `get()` now calls `detect_backend_cwd()`, added `get_with_backend()`
+- [x] `status()` now calls `detect_backend_cwd()`, added `status_with_backend()`
+
+### Tests - 22 tests passing
+
+- [x] Pattern parsing tests (simple, negated, directory, path, comments, empty)
+- [x] Pattern matching tests (basename, full path, directory-only)
+- [x] Collection tests (negation handling, should_ignore helper)
+- [x] Backend tests (types, root finding, branch detection, path normalization)
+- [x] DVS workspace detection tests (`dvs.yaml` and `.dvs/` directory)

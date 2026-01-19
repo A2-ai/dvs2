@@ -1,7 +1,7 @@
 //! DVS initialization operation.
 
 use std::path::Path;
-use crate::{Config, DvsError};
+use crate::{Config, DvsError, Backend, detect_backend_cwd};
 
 /// Initialize DVS for a project.
 ///
@@ -19,7 +19,7 @@ use crate::{Config, DvsError};
 ///
 /// # Errors
 ///
-/// * `NotInGitRepo` - Not in a git repository
+/// * `NotInitialized` - Not in a git repository or DVS workspace
 /// * `ConfigMismatch` - Config exists with different settings
 /// * `PermissionDenied` - Cannot create storage directory
 pub fn init(
@@ -27,20 +27,29 @@ pub fn init(
     permissions: Option<u32>,
     group: Option<&str>,
 ) -> Result<Config, DvsError> {
-    todo!("Implement init operation")
+    // Detect backend (prefer git, fallback to dvs workspace)
+    let backend = detect_backend_cwd()?;
+    init_with_backend(&backend, storage_dir, permissions, group)
 }
 
-/// Check if the current directory is inside a git repository.
-fn find_git_root() -> Result<std::path::PathBuf, DvsError> {
-    todo!("Find git root directory")
+/// Initialize DVS with a specific backend.
+///
+/// Use this when you already have a backend reference.
+pub fn init_with_backend(
+    _backend: &Backend,
+    _storage_dir: &Path,
+    _permissions: Option<u32>,
+    _group: Option<&str>,
+) -> Result<Config, DvsError> {
+    todo!("Implement init operation with backend")
 }
 
 /// Validate and create the storage directory.
-fn setup_storage_directory(path: &Path, permissions: Option<u32>) -> Result<(), DvsError> {
+fn setup_storage_directory(_path: &Path, _permissions: Option<u32>) -> Result<(), DvsError> {
     todo!("Setup storage directory")
 }
 
 /// Validate group membership.
-fn validate_group(group: &str) -> Result<(), DvsError> {
+fn validate_group(_group: &str) -> Result<(), DvsError> {
     todo!("Validate group membership")
 }

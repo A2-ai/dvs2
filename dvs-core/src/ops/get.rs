@@ -1,7 +1,7 @@
 //! DVS get operation.
 
 use std::path::PathBuf;
-use crate::{GetResult, DvsError};
+use crate::{GetResult, DvsError, Backend, detect_backend_cwd};
 
 /// Retrieve files from DVS storage.
 ///
@@ -20,16 +20,27 @@ use crate::{GetResult, DvsError};
 /// * `NotInitialized` - DVS not initialized
 /// * `BatchError` - Multiple explicit paths don't have metadata
 pub fn get(files: &[PathBuf]) -> Result<Vec<GetResult>, DvsError> {
-    todo!("Implement get operation")
+    let backend = detect_backend_cwd()?;
+    get_with_backend(&backend, files)
+}
+
+/// Retrieve files with a specific backend.
+///
+/// Use this when you already have a backend reference.
+pub fn get_with_backend(
+    _backend: &Backend,
+    _files: &[PathBuf],
+) -> Result<Vec<GetResult>, DvsError> {
+    todo!("Implement get operation with backend")
 }
 
 /// Expand glob patterns to tracked files only.
-fn expand_globs_tracked(patterns: &[PathBuf]) -> Result<Vec<PathBuf>, DvsError> {
+fn expand_globs_tracked(_backend: &Backend, _patterns: &[PathBuf]) -> Result<Vec<PathBuf>, DvsError> {
     todo!("Expand glob patterns to tracked files")
 }
 
 /// Process a single file for retrieval.
-fn get_single_file(path: &std::path::Path, config: &crate::Config) -> GetResult {
+fn get_single_file(_backend: &Backend, _path: &std::path::Path, _config: &crate::Config) -> GetResult {
     todo!("Get single file")
 }
 

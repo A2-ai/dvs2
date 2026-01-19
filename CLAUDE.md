@@ -6,7 +6,7 @@ DVS (Data Version System) is a tool for versioning large or sensitive files unde
 
 ## Repository Structure
 
-```
+```shell
 dvsexperimental/
 ├── Cargo.toml              # Workspace manifest (dvs-core, dvs-cli)
 ├── dvs-core/               # Core Rust library
@@ -96,3 +96,8 @@ just test-all           # Test everything
 ## Issues for Upstream (miniextendr)
 
 See `/Users/elea/Documents/GitHub/miniextendr/dvs_review/case-sensitivity-issue.md` for the case sensitivity fix that should be upstreamed to miniextendr's rpkg template.
+
+## Plans
+
+Once a plan is executed, please store a summary of the plan, underneath of
+a heading in DONE.md.

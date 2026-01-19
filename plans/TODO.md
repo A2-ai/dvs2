@@ -5,6 +5,7 @@
 These are the config fields that need to be wired up:
 
 ### dvs.yaml (repository config)
+
 - [ ] `storage_dir` - Path to content-addressable storage
 - [ ] `permissions` - File permissions (octal, e.g., 0640)
 - [ ] `group` - Unix group for files
@@ -12,6 +13,7 @@ These are the config fields that need to be wired up:
 - [ ] `gitignore_data_files` - Auto-add data files to .gitignore
 
 ### .dvs sidecar files (per-file metadata)
+
 - [ ] `file_hash` - Blake3 hash of content
 - [ ] `file_size` - Size in bytes
 - [ ] `saved_by` - Username who last saved
@@ -20,6 +22,7 @@ These are the config fields that need to be wired up:
 - [ ] `original_path` - Path relative to repo root
 
 ### Daemon config
+
 - [ ] `watch_paths` - Directories to watch
 - [ ] `debounce_ms` - Delay before processing changes
 - [ ] `auto_add` - Enable auto-add for new files
@@ -30,6 +33,7 @@ These are the config fields that need to be wired up:
 - [ ] `socket_path` - Unix socket for IPC
 
 ### Server config
+
 - [ ] `host` - Bind address
 - [ ] `port` - Listen port
 - [ ] `storage_root` - Storage directory
@@ -48,6 +52,7 @@ These are the config fields that need to be wired up:
 ## dvs-core
 
 ### Types
+
 - [ ] `Config::load()` - Parse dvs.yaml with serde_yaml
 - [ ] `Config::save()` - Write dvs.yaml with serde_yaml
 - [ ] `Config::validate()` - Check storage_dir exists, permissions valid
@@ -56,6 +61,7 @@ These are the config fields that need to be wired up:
 - [ ] `FileInfo::from_path()` - Stat file, get size/mtime
 
 ### Operations
+
 - [ ] `init::init()` - Create dvs.yaml, setup storage directory
 - [ ] `init::find_git_root()` - Walk up to find .git directory
 - [ ] `init::setup_storage_directory()` - Create dirs, set permissions
@@ -76,6 +82,7 @@ These are the config fields that need to be wired up:
 - [ ] `status::determine_status()` - Return Current/Modified/Missing/etc
 
 ### Helpers
+
 - [ ] `hash::get_file_hash()` - Choose mmap vs read based on size
 - [ ] `hash::hash_mmap()` - Memory-mapped blake3 hashing
 - [ ] `hash::hash_read()` - Traditional read-based hashing
@@ -285,3 +292,8 @@ These are the config fields that need to be wired up:
 - [ ] Offline mode with sync queue
 - [ ] File type detection and validation
 - [ ] Metadata versioning/history
+
+## Misc
+
+- [ ] add a configuration "version", and assume that it is `legacy` if no
+    version is provided.
