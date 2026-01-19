@@ -329,6 +329,7 @@ dependencies = [
  "exn",
  "file-owner",
  "glob",
+ "libc",
  "memmap2",
  "path-absolutize",
  "pathdiff",
