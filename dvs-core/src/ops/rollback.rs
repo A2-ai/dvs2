@@ -115,7 +115,7 @@ pub fn rollback_with_backend(
     let target_state_id = match &target {
         RollbackTarget::StateId(id) => {
             if !snapshot_store.exists(id) {
-                return Err(DvsError::NotFound(format!("State not found: {}", id)));
+                return Err(DvsError::not_found(format!("State not found: {}", id)));
             }
             id.clone()
         }
@@ -125,11 +125,14 @@ pub fn rollback_with_backend(
                 Some(e) => {
                     // Parse state ID from "state:xxx" format
                     crate::types::ReflogEntry::parse_state_id(&e.new)
-                        .ok_or_else(|| DvsError::NotFound(format!("Invalid state ID format: {}", e.new)))?
+                        .ok_or_else(|| DvsError::not_found(format!("Invalid state ID format: {}", e.new)))?
                         .to_string()
                 }
                 None => {
-                    return Err(DvsError::NotFound(format!("Reflog entry not found at index {}", index)));
+                    return Err(DvsError::not_found(format!(
+                        "Reflog entry not found at index {}",
+                        index
+                    )));
                 }
             }
         }

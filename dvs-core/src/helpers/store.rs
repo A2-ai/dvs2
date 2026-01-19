@@ -54,9 +54,10 @@ impl ObjectStore for LocalStore {
     fn get(&self, oid: &Oid, dest: &Path) -> StoreResult<()> {
         let src = self.object_path(oid);
         if !src.exists() {
-            return Err(DvsError::StorageError {
-                message: format!("Object not found in local store: {}", oid),
-            });
+            return Err(DvsError::storage_error(format!(
+                "Object not found in local store: {}",
+                oid
+            )));
         }
 
         // Create parent directory
@@ -70,9 +71,7 @@ impl ObjectStore for LocalStore {
 
     fn put(&self, oid: &Oid, src: &Path) -> StoreResult<()> {
         if !src.exists() {
-            return Err(DvsError::FileNotFound {
-                path: src.to_path_buf(),
-            });
+            return Err(DvsError::file_not_found(src));
         }
 
         let dest = self.object_path(oid);
@@ -131,9 +130,7 @@ impl ObjectStore for HttpStore {
         let output = std::process::Command::new("curl")
             .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "-I", &url])
             .output()
-            .map_err(|e| DvsError::StorageError {
-                message: format!("Failed to execute curl: {}", e),
-            })?;
+            .map_err(|e| DvsError::storage_error(format!("Failed to execute curl: {}", e)))?;
 
         let status = String::from_utf8_lossy(&output.stdout);
         let code: u16 = status.trim().parse().unwrap_or(0);
@@ -153,14 +150,13 @@ impl ObjectStore for HttpStore {
         let status = std::process::Command::new("curl")
             .args(["-s", "-f", "-o", &dest.to_string_lossy(), &url])
             .status()
-            .map_err(|e| DvsError::StorageError {
-                message: format!("Failed to execute curl: {}", e),
-            })?;
+            .map_err(|e| DvsError::storage_error(format!("Failed to execute curl: {}", e)))?;
 
         if !status.success() {
-            return Err(DvsError::StorageError {
-                message: format!("Failed to download object from {}: HTTP error", url),
-            });
+            return Err(DvsError::storage_error(format!(
+                "Failed to download object from {}: HTTP error",
+                url
+            )));
         }
 
         Ok(())
@@ -168,9 +164,7 @@ impl ObjectStore for HttpStore {
 
     fn put(&self, oid: &Oid, src: &Path) -> StoreResult<()> {
         if !src.exists() {
-            return Err(DvsError::FileNotFound {
-                path: src.to_path_buf(),
-            });
+            return Err(DvsError::file_not_found(src));
         }
 
         let url = self.object_url(oid);
@@ -187,14 +181,13 @@ impl ObjectStore for HttpStore {
                 &url,
             ])
             .status()
-            .map_err(|e| DvsError::StorageError {
-                message: format!("Failed to execute curl: {}", e),
-            })?;
+            .map_err(|e| DvsError::storage_error(format!("Failed to execute curl: {}", e)))?;
 
         if !status.success() {
-            return Err(DvsError::StorageError {
-                message: format!("Failed to upload object to {}: HTTP error", url),
-            });
+            return Err(DvsError::storage_error(format!(
+                "Failed to upload object to {}: HTTP error",
+                url
+            )));
         }
 
         Ok(())
@@ -235,9 +228,10 @@ impl ObjectStore for ChainStore {
                 return store.get(oid, dest);
             }
         }
-        Err(DvsError::StorageError {
-            message: format!("Object not found in any store: {}", oid),
-        })
+        Err(DvsError::storage_error(format!(
+            "Object not found in any store: {}",
+            oid
+        )))
     }
 
     fn put(&self, oid: &Oid, src: &Path) -> StoreResult<()> {

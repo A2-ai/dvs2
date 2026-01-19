@@ -20,9 +20,9 @@
 
 - [x] **Plan 037: Reversible Workspace Reflog** - Local reflog + snapshot store for DVS-tracked state rollback. Implemented `WorkspaceState` and `ReflogEntry` types, `SnapshotStore` and `Reflog` helpers in dvs-core, wired reflog recording into `dvs add`, and added `dvs log` and `dvs rollback` CLI commands.
 
+- [x] **Plan 038: Exn-First Error Handling Migration** - Migrated dvs-core to `exn`-based error handling. Created `ErrorKind` enum with flat variants and `DvsError` wrapper around `exn::Exn<ErrorKind>`. Preserved stable `error_type()` strings for R interop. Removed `thiserror` and `anyhow` from dvs-core dependencies.
+
 ### Pending Plans
-- [ ] **Plan 038: Exn-First Error Handling Migration** - Adopt `exn` as primary
-  error system and phase out `thiserror`/`anyhow`.
 - [ ] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
   harness to verify CLI/R/other interfaces produce the same effects.
 

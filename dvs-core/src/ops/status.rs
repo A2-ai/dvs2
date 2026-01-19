@@ -117,9 +117,7 @@ fn expand_patterns(backend: &Backend, patterns: &[PathBuf]) -> Result<Vec<PathBu
                     }
                 }
                 Err(_) => {
-                    return Err(DvsError::InvalidGlob {
-                        pattern: pattern_str.to_string(),
-                    });
+                    return Err(DvsError::invalid_glob(pattern_str.to_string()));
                 }
             }
         } else {

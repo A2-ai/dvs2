@@ -28,18 +28,16 @@ pub fn check_meta_files_exist(paths: &[std::path::PathBuf]) -> Result<(), DvsErr
     if missing.is_empty() {
         Ok(())
     } else {
-        Err(DvsError::BatchError {
-            message: format!(
-                "Missing metadata for {} files: {}",
-                missing.len(),
-                missing
-                    .iter()
-                    .take(5)
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        })
+        Err(DvsError::batch_error(format!(
+            "Missing metadata for {} files: {}",
+            missing.len(),
+            missing
+                .iter()
+                .take(5)
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )))
     }
 }
 

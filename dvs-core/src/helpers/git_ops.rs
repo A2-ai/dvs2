@@ -89,21 +89,17 @@ impl Git2Ops {
 
 impl GitOps for Git2Ops {
     fn discover_repo_root(&self, start: &Path) -> Result<PathBuf, DvsError> {
-        let repo = git2::Repository::discover(start).map_err(|e| DvsError::GitError {
-            message: format!("Failed to discover repository: {}", e),
-        })?;
+        let repo = git2::Repository::discover(start).map_err(|e| DvsError::git_error(format!("Failed to discover repository: {}", e)))?;
 
-        let workdir = repo.workdir().ok_or_else(|| DvsError::GitError {
-            message: "Repository has no working directory (bare repository)".to_string(),
+        let workdir = repo.workdir().ok_or_else(|| {
+            DvsError::git_error("Repository has no working directory (bare repository)")
         })?;
 
         Ok(workdir.to_path_buf())
     }
 
     fn head_info(&self, repo_root: &Path) -> Result<HeadInfo, DvsError> {
-        let repo = git2::Repository::open(repo_root).map_err(|e| DvsError::GitError {
-            message: format!("Failed to open repository: {}", e),
-        })?;
+        let repo = git2::Repository::open(repo_root).map_err(|e| DvsError::git_error(format!("Failed to open repository: {}", e)))?;
 
         let head = match repo.head() {
             Ok(h) => h,
@@ -116,9 +112,7 @@ impl GitOps for Git2Ops {
                 });
             }
             Err(e) => {
-                return Err(DvsError::GitError {
-                    message: format!("Failed to get HEAD: {}", e),
-                });
+                return Err(DvsError::git_error(format!("Failed to get HEAD: {}", e)));
             }
         };
 
@@ -139,18 +133,14 @@ impl GitOps for Git2Ops {
     }
 
     fn status_info(&self, repo_root: &Path) -> Result<StatusInfo, DvsError> {
-        let repo = git2::Repository::open(repo_root).map_err(|e| DvsError::GitError {
-            message: format!("Failed to open repository: {}", e),
-        })?;
+        let repo = git2::Repository::open(repo_root).map_err(|e| DvsError::git_error(format!("Failed to open repository: {}", e)))?;
 
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(true)
             .recurse_untracked_dirs(false)
             .exclude_submodules(true);
 
-        let statuses = repo.statuses(Some(&mut opts)).map_err(|e| DvsError::GitError {
-            message: format!("Failed to get status: {}", e),
-        })?;
+        let statuses = repo.statuses(Some(&mut opts)).map_err(|e| DvsError::git_error(format!("Failed to get status: {}", e)))?;
 
         let mut is_dirty = false;
         let mut has_untracked = false;
@@ -185,27 +175,22 @@ impl GitOps for Git2Ops {
     }
 
     fn config_value(&self, repo_root: &Path, key: &str) -> Result<Option<String>, DvsError> {
-        let repo = git2::Repository::open(repo_root).map_err(|e| DvsError::GitError {
-            message: format!("Failed to open repository: {}", e),
-        })?;
+        let repo = git2::Repository::open(repo_root).map_err(|e| DvsError::git_error(format!("Failed to open repository: {}", e)))?;
 
-        let config = repo.config().map_err(|e| DvsError::GitError {
-            message: format!("Failed to get config: {}", e),
-        })?;
+        let config = repo.config().map_err(|e| DvsError::git_error(format!("Failed to get config: {}", e)))?;
 
         match config.get_string(key) {
             Ok(value) => Ok(Some(value)),
             Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
-            Err(e) => Err(DvsError::GitError {
-                message: format!("Failed to get config value '{}': {}", key, e),
-            }),
+            Err(e) => Err(DvsError::git_error(format!(
+                "Failed to get config value '{}': {}",
+                key, e
+            ))),
         }
     }
 
     fn remote_url(&self, repo_root: &Path, name: &str) -> Result<Option<String>, DvsError> {
-        let repo = git2::Repository::open(repo_root).map_err(|e| DvsError::GitError {
-            message: format!("Failed to open repository: {}", e),
-        })?;
+        let repo = git2::Repository::open(repo_root).map_err(|e| DvsError::git_error(format!("Failed to open repository: {}", e)))?;
 
         let remote_result = repo.find_remote(name);
         match remote_result {
@@ -214,9 +199,10 @@ impl GitOps for Git2Ops {
                 Ok(url)
             }
             Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
-            Err(e) => Err(DvsError::GitError {
-                message: format!("Failed to find remote '{}': {}", name, e),
-            }),
+            Err(e) => Err(DvsError::git_error(format!(
+                "Failed to find remote '{}': {}",
+                name, e
+            ))),
         }
     }
 
@@ -226,22 +212,16 @@ impl GitOps for Git2Ops {
         name: &str,
         target_oid: &str,
     ) -> Result<(), DvsError> {
-        let repo = git2::Repository::open(repo_root).map_err(|e| DvsError::GitError {
-            message: format!("Failed to open repository: {}", e),
-        })?;
+        let repo = git2::Repository::open(repo_root).map_err(|e| DvsError::git_error(format!("Failed to open repository: {}", e)))?;
 
-        let oid = git2::Oid::from_str(target_oid).map_err(|e| DvsError::GitError {
-            message: format!("Invalid OID '{}': {}", target_oid, e),
-        })?;
+        let oid = git2::Oid::from_str(target_oid).map_err(|e| DvsError::git_error(format!("Invalid OID '{}': {}", target_oid, e)))?;
 
-        let obj = repo.find_object(oid, None).map_err(|e| DvsError::GitError {
-            message: format!("Failed to find object '{}': {}", target_oid, e),
+        let obj = repo.find_object(oid, None).map_err(|e| {
+            DvsError::git_error(format!("Failed to find object '{}': {}", target_oid, e))
         })?;
 
         repo.tag_lightweight(name, &obj, false)
-            .map_err(|e| DvsError::GitError {
-                message: format!("Failed to create tag '{}': {}", name, e),
-            })?;
+            .map_err(|e| DvsError::git_error(format!("Failed to create tag '{}': {}", name, e)))?;
 
         Ok(())
     }
@@ -272,15 +252,15 @@ impl GitCliOps {
             .arg(repo_root)
             .args(args)
             .output()
-            .map_err(|e| DvsError::GitError {
-                message: format!("Failed to execute git: {}", e),
-            })?;
+            .map_err(|e| DvsError::git_error(format!("Failed to execute git: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(DvsError::GitError {
-                message: format!("git {} failed: {}", args.join(" "), stderr.trim()),
-            });
+            return Err(DvsError::git_error(format!(
+                "git {} failed: {}",
+                args.join(" "),
+                stderr.trim()
+            )));
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -315,14 +295,10 @@ impl GitOps for GitCliOps {
             .arg(start)
             .args(["rev-parse", "--show-toplevel"])
             .output()
-            .map_err(|e| DvsError::GitError {
-                message: format!("Failed to execute git: {}", e),
-            })?;
+            .map_err(|e| DvsError::git_error(format!("Failed to execute git: {}", e)))?;
 
         if !output.status.success() {
-            return Err(DvsError::GitError {
-                message: "Not a git repository".to_string(),
-            });
+            return Err(DvsError::git_error("Not a git repository"));
         }
 
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();

@@ -70,7 +70,7 @@ pub fn init_with_backend(
             || existing.permissions != config.permissions
             || existing.group != config.group
         {
-            return Err(DvsError::ConfigMismatch);
+            return Err(DvsError::config_mismatch());
         }
 
         // Same config already exists, return it
@@ -94,9 +94,10 @@ fn setup_storage_directory(path: &Path, permissions: Option<u32>) -> Result<(), 
     if path.exists() {
         // Validate existing directory
         if !path.is_dir() {
-            return Err(DvsError::StorageError {
-                message: format!("Storage path exists but is not a directory: {}", path.display()),
-            });
+            return Err(DvsError::storage_error(format!(
+                "Storage path exists but is not a directory: {}",
+                path.display()
+            )));
         }
         config_helper::validate_storage_dir(path)?;
     } else {
@@ -116,9 +117,7 @@ fn setup_storage_directory(path: &Path, permissions: Option<u32>) -> Result<(), 
 /// Validate group membership.
 fn validate_group(group: &str) -> Result<(), DvsError> {
     if !copy::group_exists(group) {
-        return Err(DvsError::GroupNotSet {
-            group: group.to_string(),
-        });
+        return Err(DvsError::group_not_set(group));
     }
     Ok(())
 }

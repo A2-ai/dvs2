@@ -655,3 +655,141 @@ Connected `dvs push`, `dvs pull`, and `dvs materialize` CLI commands to the dvs-
 - **125 tests passing** (119 dvs-core + 6 dvs-cli)
 - CLI now supports full remote workflow: push, pull, materialize
 - Commands integrate seamlessly with existing init/add/get/status
+
+## Plan 037: Reversible Workspace Reflog
+
+Implemented local reflog and snapshot store for DVS-tracked state rollback.
+
+### types/reflog.rs - Reflog types
+
+- [x] `ReflogOp` enum (Init, Add, Get, Push, Pull, Materialize, Rollback, Other)
+- [x] `ReflogEntry` struct with actor, timestamp, op, message, old/new state IDs, paths
+- [x] `ReflogEntry::to_jsonl()`, `from_jsonl()` - JSONL serialization
+- [x] `ReflogEntry::format_state_id()` - Adds "state:" prefix
+- [x] `WorkspaceState` struct with entries map (path -> MetadataEntry)
+- [x] `MetadataEntry` struct with oid, bytes, hash_algo
+- [x] `WorkspaceState::compute_id()` - Content-addressable ID via BLAKE3
+- [x] 7 unit tests for reflog types
+
+### helpers/reflog.rs - Reflog storage
+
+- [x] `SnapshotStore` struct for workspace state persistence
+- [x] `SnapshotStore::save()`, `load()`, `exists()`, `list()` methods
+- [x] Content-addressed storage in `.dvs/state/snapshots/<id>.json`
+- [x] `Reflog` struct for HEAD ref and log management
+- [x] `Reflog::read_head()`, `update_head()` - HEAD ref management
+- [x] `Reflog::append()`, `read_all()`, `read_recent()` - Log operations
+- [x] `Reflog::record()` - High-level state change recording
+- [x] `current_actor()` - Get current username for entries
+- [x] 7 unit tests for reflog storage
+
+### ops/log.rs - Log viewing operation
+
+- [x] `log()`, `log_with_backend()` - View reflog history
+- [x] `LogResult` struct with entries and formatting
+- [x] Optional limit parameter for recent entries
+- [x] 3 unit tests for log operation
+
+### ops/rollback.rs - Rollback operation
+
+- [x] `RollbackTarget` enum (ByIndex, ToState, Latest)
+- [x] `RollbackTarget::parse()` - Parse "HEAD~N", "@{N}", or state ID
+- [x] `rollback()`, `rollback_with_backend()` - Full rollback implementation
+- [x] `RollbackResult` struct with old_state, new_state, affected_paths
+- [x] Optional `--force` to skip conflicts, `--no-materialize` to skip file restore
+- [x] 4 unit tests for rollback operation
+
+### ops/add.rs integration
+
+- [x] Records state change after successful add
+- [x] Captures old state from HEAD, new state from current workspace
+- [x] Reflog entry includes affected paths
+
+### CLI commands
+
+- [x] `dvs log [-n N]` - View reflog history
+- [x] `dvs rollback [--force] [--no-materialize] <target>` - Rollback to previous state
+
+### Summary
+
+- **142 tests passing** (136 dvs-core + 6 dvs-cli)
+- Workspace state snapshots for point-in-time recovery
+- Append-only reflog for auditable change history
+- Rollback by index (HEAD~N), state ID, or latest
+- Integrated with dvs add for automatic state recording
+
+## Plan 038: Exn-First Error Handling Migration
+
+Migrated dvs-core from `thiserror` enums to `exn`-based context-aware error handling while preserving stable `error_type()` strings for R interop.
+
+### Motivation
+
+Following the "two audiences" error design pattern:
+- **Machines** (R interface): Flat, actionable error types via `error_type()` strings
+- **Humans** (CLI): Rich context with location information via `exn` wrapping
+
+### types/error.rs - Error redesign
+
+- [x] `ErrorKind` enum with all error variants:
+  - `NotInGitRepo`, `NotInitialized`, `ConfigMismatch`
+  - `FileNotFound { path }`, `MetadataNotFound { path }`, `FileOutsideRepo { path }`
+  - `StorageError { message }`, `PermissionDenied { message }`, `GroupNotSet { group }`
+  - `ConfigError { message }`, `GitError { message }`, `IoError { message }`
+  - `InvalidGlob { pattern }`, `NoFilesMatched { pattern }`, `BatchError { message }`
+  - `HashMismatch { path, expected, actual }`
+  - `YamlError { message }`, `JsonError { message }`, `NotFound { message }`
+- [x] `ErrorKind::error_type()` - Stable string mapping for R interop
+- [x] `DvsError` struct wrapping `exn::Exn<ErrorKind>`
+- [x] `DvsError::new(kind)` - Create from ErrorKind
+- [x] `DvsError::kind()` - Access underlying ErrorKind
+- [x] `DvsError::error_type()` - Delegate to ErrorKind for stable strings
+- [x] Constructor methods for all error types:
+  - `not_in_git_repo()`, `not_initialized()`, `config_mismatch()`
+  - `file_not_found(path)`, `metadata_not_found(path)`, `file_outside_repo(path)`
+  - `storage_error(msg)`, `permission_denied(msg)`, `group_not_set(group)`
+  - `config_error(msg)`, `git_error(msg)`, `invalid_glob(pattern)`
+  - `no_files_matched(pattern)`, `batch_error(msg)`, `not_found(msg)`
+  - `hash_mismatch(path, expected, actual)`
+- [x] `Display` and `std::error::Error` implementations
+- [x] `From` implementations for `std::io::Error`, `serde_yaml::Error`, `serde_json::Error`, `git2::Error`
+- [x] Backward compatibility methods: `is_not_in_git_repo()`, `is_not_initialized()`, etc.
+
+### Call site migration
+
+Migrated all error construction from enum variant syntax to constructor methods:
+
+- [x] `helpers/config.rs` - `DvsError::not_in_git_repo()`, `not_initialized()`, `storage_error()`
+- [x] `helpers/store.rs` - `DvsError::storage_error()`, `file_not_found()`
+- [x] `helpers/git_ops.rs` - `DvsError::git_error()`
+- [x] `helpers/backend.rs` - `DvsError::file_outside_repo()`, `not_initialized()`
+- [x] `helpers/copy.rs` - `DvsError::config_error()`, `group_not_set()`, `permission_denied()`
+- [x] `helpers/file.rs` - `DvsError::batch_error()`
+- [x] `helpers/hash.rs` - `DvsError::config_error()`
+- [x] `helpers/reflog.rs` - `DvsError::not_found()`
+- [x] `ops/init.rs` - `DvsError::config_mismatch()`, `group_not_set()`
+- [x] `ops/add.rs` - `DvsError::file_not_found()`, `invalid_glob()`, `no_files_matched()`
+- [x] `ops/get.rs` - `DvsError::metadata_not_found()`, `storage_error()`, `hash_mismatch()`
+- [x] `ops/status.rs` - `DvsError::metadata_not_found()`
+- [x] `ops/push.rs`, `pull.rs`, `materialize.rs` - Various error constructors
+- [x] `ops/rollback.rs` - `DvsError::not_found()`
+
+### Downstream crate compatibility
+
+- [x] dvs-cli: `#[from] dvs_core::DvsError` continues to work (thiserror `From` impl)
+- [x] dvs-daemon: `#[from] dvs_core::DvsError` continues to work
+- [x] dvs-server: `#[from] dvs_core::DvsError` continues to work
+
+### Dependency cleanup
+
+- [x] Removed `thiserror.workspace = true` from dvs-core/Cargo.toml
+- [x] Removed `anyhow = { workspace = true, optional = true }` from dvs-core/Cargo.toml
+- [x] `exn = "0.2.1"` is now the only error handling dependency in dvs-core
+
+### Summary
+
+- **148 tests passing** (142 dvs-core + 6 dvs-cli)
+- Context-aware errors via `exn` with automatic location capture
+- Stable `error_type()` strings preserved for R interop
+- Constructor methods provide cleaner error creation API
+- Removed thiserror and anyhow dependencies from dvs-core
+- Downstream crates unchanged (thiserror `#[from]` still works)

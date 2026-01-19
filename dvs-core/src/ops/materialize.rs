@@ -73,7 +73,7 @@ pub fn materialize_with_backend(backend: &Backend) -> Result<MaterializeSummary,
     // Load manifest
     let manifest_path = layout.manifest_path();
     if !manifest_path.exists() {
-        return Err(DvsError::NotInitialized);
+        return Err(DvsError::not_initialized());
     }
     let manifest = Manifest::load(&manifest_path)?;
 
@@ -169,7 +169,7 @@ pub fn materialize_files(
     // Load manifest
     let manifest_path = layout.manifest_path();
     if !manifest_path.exists() {
-        return Err(DvsError::NotInitialized);
+        return Err(DvsError::not_initialized());
     }
     let manifest = Manifest::load(&manifest_path)?;
 
