@@ -126,3 +126,8 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 - [ ] Git hooks integration (post-checkout, pre-push)
 - [ ] Garbage collection for orphaned objects
 - [ ] Web UI for server
+
+## Misc.
+
+- [ ] All dependencies in `core` ought to be optional, such that the sibling
+crates can decide which core-features to adopt and which to forego.
