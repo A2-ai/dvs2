@@ -100,4 +100,9 @@ See `/Users/elea/Documents/GitHub/miniextendr/dvs_review/case-sensitivity-issue.
 ## Plans
 
 Once a plan is executed, please store a summary of the plan, underneath of
-a heading in DONE.md.
+a heading in DONE.md. Also update the plan status in TODO.md.
+
+## Development Guidelines
+
+- **No backward compatibility**: We do not care about backward compatibility for now. Feel free to make breaking changes to APIs, file formats, and configurations as needed.
+- **DVS naming**: Always use "DVS" or "dvs" (Data Version System). Never use "DVC" which is a different project.
