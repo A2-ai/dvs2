@@ -29,6 +29,36 @@ dvsexperimental/
 └── justfile                # Build recipes
 ```
 
+## CLI Installation
+
+The CLI binary is named `dvs` (not `dvs-cli`). Install from source:
+
+```bash
+# Install with locked dependencies (recommended)
+cargo install --path dvs-cli --locked
+
+# Force reinstall if already installed
+cargo install --path dvs-cli --locked --force
+
+# Or via cargo directly from the workspace
+cargo build -p dvs-cli --release
+# Binary will be at target/release/dvs
+```
+
+After installation, the `dvs` command is available:
+
+```bash
+dvs init <storage_dir>
+dvs add <files...>
+dvs get <files...>
+dvs status [files...]
+dvs push [--remote URL]
+dvs pull [--remote URL]
+dvs materialize [files...]
+dvs log [-n N]
+dvs rollback <target>
+```
+
 ## Key Technical Details
 
 ### Workspace vs R Package
