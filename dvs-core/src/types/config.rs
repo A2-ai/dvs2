@@ -3,6 +3,7 @@
 use fs_err as fs;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use crate::HashAlgo;
 
 /// DVS project configuration, stored in `dvs.yaml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,6 +18,11 @@ pub struct Config {
     /// Optional Linux group for stored files.
     #[serde(default)]
     pub group: Option<String>,
+
+    /// Hash algorithm for content addressing.
+    /// Defaults to BLAKE3 if not specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash_algo: Option<HashAlgo>,
 }
 
 impl Config {
@@ -26,7 +32,28 @@ impl Config {
             storage_dir,
             permissions,
             group,
+            hash_algo: None,
         }
+    }
+
+    /// Create a new configuration with a specific hash algorithm.
+    pub fn with_hash_algo(
+        storage_dir: PathBuf,
+        permissions: Option<u32>,
+        group: Option<String>,
+        hash_algo: HashAlgo,
+    ) -> Self {
+        Self {
+            storage_dir,
+            permissions,
+            group,
+            hash_algo: Some(hash_algo),
+        }
+    }
+
+    /// Get the configured hash algorithm, or the default.
+    pub fn hash_algorithm(&self) -> HashAlgo {
+        self.hash_algo.unwrap_or_else(crate::helpers::hash::default_algorithm)
     }
 
     /// Load configuration from a YAML file.

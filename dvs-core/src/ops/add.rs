@@ -154,8 +154,9 @@ fn add_single_file(
         }
     };
 
-    // Compute hash
-    let checksum = match hash::get_file_hash(path) {
+    // Compute hash using configured algorithm
+    let hash_algo = config.hash_algorithm();
+    let checksum = match hash::get_file_hash_with_algo(path, hash_algo) {
         Ok(h) => h,
         Err(e) => {
             return AddResult::error(
@@ -173,8 +174,8 @@ fn add_single_file(
     // Check if already present with same hash
     if metadata_path.exists() {
         if let Ok(existing_meta) = Metadata::load(&metadata_path) {
-            if existing_meta.blake3_checksum == checksum {
-                // Same file already tracked
+            if existing_meta.checksum() == checksum && existing_meta.hash_algo == hash_algo {
+                // Same file already tracked with same algorithm
                 return AddResult::success(
                     relative_path,
                     path.to_path_buf(),
@@ -202,13 +203,14 @@ fn add_single_file(
         }
     }
 
-    // Create metadata
+    // Create metadata with configured hash algorithm
     let username = file::get_current_username().unwrap_or_else(|_| "unknown".to_string());
-    let metadata = Metadata::new(
+    let metadata = Metadata::with_algo(
         checksum.clone(),
         size,
         message.map(|s| s.to_string()),
         username,
+        hash_algo,
     );
 
     // Save metadata

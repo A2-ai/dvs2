@@ -5,7 +5,8 @@ use std::fmt;
 use std::str::FromStr;
 
 /// Hash algorithm for content identification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum HashAlgo {
     /// BLAKE3 hash (64 hex chars).
     Blake3,
@@ -84,6 +85,11 @@ impl Oid {
     /// Create a SHA-256 OID from a hex string.
     pub fn sha256(hex: String) -> Self {
         Self::new(HashAlgo::Sha256, hex)
+    }
+
+    /// Create an XXH3 OID from a hex string.
+    pub fn xxh3(hex: String) -> Self {
+        Self::new(HashAlgo::Xxh3, hex)
     }
 
     /// Get the storage path components: (prefix, suffix).

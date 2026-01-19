@@ -35,6 +35,8 @@ anyhow = "1.0"
 
 # Hashing (used by: dvs-core)
 blake3 = { version = "1.8", features = ["rayon"] }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+sha2 = "0.10"
 
 # File system (used by: dvs-core, dvs-cli)
 fs-err = "2"

@@ -560,3 +560,67 @@ Replaced `std::fs` with `fs_err` crate across dvs-core for improved filesystem e
 - All filesystem I/O uses fs_err for better error messages
 - Lint rule enforces consistent usage
 - `std::fs::Permissions` allowed (required for Unix permission setting)
+
+## Plan 025: Hashing + Fingerprinting for DVS (Phase 1)
+
+Implemented multi-algorithm hashing support with BLAKE3 (default), XXH3 (fast non-cryptographic), and SHA-256 (HTTP interoperability).
+
+### Dependencies (optional features)
+
+- [x] Added `xxhash-rust = { version = "0.8", features = ["xxh3"] }` to workspace
+- [x] Added `sha2 = "0.10"` to workspace
+- [x] dvs-core features: `blake3` (default), `xxh3`, `sha256`, `all-hashes`
+
+### helpers/hash.rs - Multi-algorithm hashing
+
+- [x] `Hasher` trait with `update()`, `finalize()`, `algorithm()` methods
+- [x] `Blake3Hasher` - BLAKE3 streaming hasher (feature: `blake3`)
+- [x] `Xxh3Hasher` - XXH3 streaming hasher (feature: `xxh3`)
+- [x] `Sha256Hasher` - SHA-256 streaming hasher (feature: `sha256`)
+- [x] `hash_blake3()`, `hash_xxh3()`, `hash_sha256()` - Single-shot hash functions
+- [x] `create_hasher(algo)` - Factory function for hasher by algorithm
+- [x] `default_algorithm()` - Returns default based on enabled features (BLAKE3 > XXH3 > SHA-256)
+- [x] `get_file_hash_with_algo(path, algo)` - Hash file with specified algorithm
+- [x] `hash_bytes(data, algo)` - Hash bytes with specified algorithm
+- [x] `verify_hash_with_algo(path, expected, algo)` - Verify file hash with algorithm
+
+### types/oid.rs - XXH3 support
+
+- [x] Added `Oid::xxh3(hex)` constructor
+- [x] Added `Serialize`/`Deserialize` derives to `HashAlgo`
+- [x] `#[serde(rename_all = "lowercase")]` for clean JSON output
+
+### types/config.rs - Configurable hash algorithm
+
+- [x] Added `hash_algo: Option<HashAlgo>` field (defaults to Blake3 for backward compatibility)
+- [x] `Config::with_hash_algo()` constructor for specifying algorithm
+- [x] `Config::hash_algorithm()` - Returns configured or default algorithm
+- [x] `#[serde(skip_serializing_if = "Option::is_none")]` to keep files clean
+
+### types/metadata.rs - Hash algorithm tracking
+
+- [x] Added `hash_algo: HashAlgo` field with default to Blake3
+- [x] `Metadata::with_algo()` constructor for specifying algorithm
+- [x] `Metadata::checksum()` - Accessor for the checksum field
+- [x] Backward compatible: old metadata files default to Blake3
+
+### ops/add.rs - Configurable algorithm in add
+
+- [x] Uses `config.hash_algorithm()` for file hashing
+- [x] Creates metadata with configured algorithm via `Metadata::with_algo()`
+- [x] Comparison checks both checksum and algorithm match
+
+### Tests - 4 new algorithm tests
+
+- [x] `test_hash_small_file_xxh3` - XXH3 file hashing
+- [x] `test_hash_small_file_sha256` - SHA-256 file hashing
+- [x] `test_xxh3_hasher_streaming` - XXH3 streaming
+- [x] `test_sha256_hasher_streaming` - SHA-256 streaming
+
+### Summary
+
+- **123 tests passing** with `all-hashes` feature (119 default + 4 algorithm tests)
+- Multi-algorithm support: BLAKE3 (64 char), XXH3 (16 char), SHA-256 (64 char)
+- Feature flags for optional algorithm dependencies
+- Backward compatible with existing metadata files
+- Phase 2 (chunking, Merkle trees) and Phase 3 (tables, sketches) deferred
