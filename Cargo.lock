@@ -312,7 +312,7 @@ checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
 name = "dvs-cli"
-version = "0.0.2-9000"
+version = "0.0.0-9000"
 dependencies = [
  "clap",
  "dvs-core",
@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "dvs-core"
-version = "0.0.2-9000"
+version = "0.0.0-9000"
 dependencies = [
  "anyhow",
  "blake3",
@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "dvs-daemon"
-version = "0.0.2-9000"
+version = "0.0.0-9000"
 dependencies = [
  "dvs-core",
  "notify",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "dvs-server"
-version = "0.0.2-9000"
+version = "0.0.0-9000"
 dependencies = [
  "axum",
  "dvs-core",

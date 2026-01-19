@@ -8,7 +8,7 @@ lto = true
 codegen-units = 1
 
 [workspace.package]
-version = "0.0.2-9000"
+version = "0.0.0-9000"
 authors = [
     'Jenna Johnson <jenna@a2-ai.com>',
     'Devin Pastoor <devin@a2-ai.com>',

@@ -1,4 +1,4 @@
-AC_INIT([dvsR], [0.1.0])
+AC_INIT([dvsR], [0.0.0.9000])
 
 dnl Verify we're running from the R package directory
 if test ! -f "DESCRIPTION" || test ! -f "NAMESPACE"; then
