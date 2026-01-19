@@ -1,6 +1,5 @@
-
 [workspace]
-members = ["dvs-core", "dvs-cli"]
+members = ["dvs-core", "dvs-cli", "dvs-daemon", "dvs-server"]
 exclude = ["dvsR"]
 resolver = "3"
 
@@ -20,3 +19,39 @@ description = 'This package allows users to version large or sensitive files und
 license = 'MIT'
 edition = '2021'
 rust-version = '1.78'
+
+[workspace.dependencies]
+# Internal crates
+dvs-core = { path = "dvs-core" }
+
+# Serialization (used by: dvs-core, dvs-daemon, dvs-server)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Error handling (used by: dvs-core, dvs-daemon, dvs-server)
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Hashing (used by: dvs-core)
+blake3 = { version = "1.8", features = ["rayon"] }
+
+# File system (used by: dvs-core)
+memmap2 = "0.9"
+walkdir = "2.5"
+glob = "0.3"
+
+# File watching (used by: dvs-daemon)
+notify = "8"
+
+# Async runtime (used by: dvs-daemon, dvs-server)
+tokio = { version = "1", features = ["full"] }
+
+# HTTP server (used by: dvs-server)
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+
+# Utilities (used by: dvs-core)
+chrono = { version = "0.4", features = ["serde"] }

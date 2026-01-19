@@ -1,31 +1,49 @@
 [package]
-name = 'dvs-core'
+name = "dvs-core"
+description = """
+Core library for DVS (Data Version System).
+
+Provides content-addressable storage with blake3 hashing for versioning large
+or sensitive files under Git. This crate contains:
+- Types: Config, Metadata, FileInfo, error types
+- Operations: init, add, get, status
+- Helpers: hashing, file copying, config loading, glob expansion
+"""
 publish = true
 version.workspace = true
 authors.workspace = true
-description.workspace = true
 license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [lib]
-path = "lib.rs"
+path = "src/lib.rs"
 
 [dependencies]
-serde = { version = "1.0.228", features = ["derive"] }
-serde_yaml = "0.9.33"
-serde_json = "1.0.79"
-clap = { version = "4.4.17", features = ["derive"], optional = true }
-blake3 = { version = "1.5.1", features = ["rayon"] }
-memmap2 = "0.9.4"
-rayon = { version = "1.7.0", optional = true }
+# Serialization
+serde.workspace = true
+serde_yaml.workspace = true
+serde_json.workspace = true
+
+# Hashing
+blake3.workspace = true
+memmap2.workspace = true
+
+# File system
+walkdir.workspace = true
+glob.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Utilities
+chrono.workspace = true
 file-owner = "0.1.2"
-chrono = "0.4.37"
-walkdir = "2.4.0"
 path-absolutize = "3.1.1"
-anyhow = { version = "1.0.81", optional = true }
-glob = "0.3.1"
 xdg = "3.0.0"
-pathdiff = "0.2.1"
-# extendr-api = { version = "0.8.1", features = ["serde", "result_condition"] }
-# TODO: add miniextendr-api instead
+pathdiff = "0.2.3"
+
+# Optional
+anyhow = { workspace = true, optional = true }
+rayon = { version = "1.0", optional = true }
+exn = { version = "0.2.1", optional = true }
