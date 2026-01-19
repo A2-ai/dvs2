@@ -1,7 +1,7 @@
 
 [workspace]
-members = ["dvc-core", "dvc-cli"]
-exclude = ["dvcR"]
+members = ["dvs-core", "dvs-cli"]
+exclude = ["dvsR"]
 resolver = "3"
 
 [profile.release]

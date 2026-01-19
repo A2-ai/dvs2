@@ -1,0 +1,21 @@
+Package: dvsR
+Title: Data Version Control System by A2-AI
+Version: 0.0.0.9000
+Authors@R: c(
+    person("Jenna", "Johnson", , "jenna@a2-ai.com", role = c("aut", "cre")),
+    person("Devin", "Pastoor", , "devin@a2-ai.com", role = "aut"),
+    person("Mossa", "Merhi Reimert", , "mossa@a2-ai.com", role = "aut"),
+    person("A2-Ai", role = c("cph", "fnd"))
+    )
+Description: Provides version control for large binary and text files that are
+    stored either locally or remotely. Uses content-addressable storage with
+    blake3 hashing to efficiently deduplicate files while tracking metadata
+    in Git-friendly .dvs files.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+SystemRequirements: Cargo (Rust package manager), rustc >= 1.78.0
+Config/build/bootstrap: TRUE
+Config/build/extra-sources: src/rust/Cargo.lock
+Config/build/never-clean: true

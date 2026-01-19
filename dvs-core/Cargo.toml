@@ -1,5 +1,5 @@
 [package]
-name = 'dvc-core'
+name = 'dvs-core'
 publish = true
 version.workspace = true
 authors.workspace = true
