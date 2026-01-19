@@ -624,3 +624,34 @@ Implemented multi-algorithm hashing support with BLAKE3 (default), XXH3 (fast no
 - Feature flags for optional algorithm dependencies
 - Backward compatible with existing metadata files
 - Phase 2 (chunking, Merkle trees) and Phase 3 (tables, sketches) deferred
+
+## Plan 026: Wire CLI to new operations
+
+Connected `dvs push`, `dvs pull`, and `dvs materialize` CLI commands to the dvs-core operations.
+
+### New CLI Commands
+
+- [x] `dvs push [-r/--remote URL] [files...]` - Push objects to remote storage
+- [x] `dvs pull [-r/--remote URL] [files...]` - Pull objects from remote storage
+- [x] `dvs materialize [files...]` - Materialize files from cache to working tree
+
+### Command Implementations
+
+- [x] `commands/push.rs` - Calls `dvs_core::push()` or `dvs_core::push_files()`
+- [x] `commands/pull.rs` - Calls `dvs_core::pull()` or `dvs_core::pull_files()`
+- [x] `commands/materialize.rs` - Calls `dvs_core::materialize()` or `dvs_core::materialize_files()`
+
+### Features
+
+- Empty files argument = process all objects/files from manifest
+- Specific files = process only those files
+- `--remote/-r` flag to override manifest base_url for push/pull
+- Progress output showing uploaded/downloaded/materialized items
+- Summary counts at end (uploaded/present/failed, etc.)
+- Exit with error code if any operations failed
+
+### Summary
+
+- **125 tests passing** (119 dvs-core + 6 dvs-cli)
+- CLI now supports full remote workflow: push, pull, materialize
+- Commands integrate seamlessly with existing init/add/get/status
