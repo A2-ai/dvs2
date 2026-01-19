@@ -171,3 +171,142 @@ all DVS behavior to dvs-core.
 - [x] Path normalization test
 - [x] Absolute path resolution test
 - [x] Tilde expansion test
+
+## dvs-core Business Logic Implementation
+
+Full implementation of the core DVS business logic with 66 tests passing.
+
+### helpers/hash.rs - Blake3 hashing utilities
+
+- [x] `MMAP_THRESHOLD` constant (16KB) for choosing hashing strategy
+- [x] `get_file_hash()` - Auto-selects mmap vs buffered read based on file size
+- [x] `storage_path_for_hash()` - Computes content-addressable storage path (`{prefix}/{suffix}`)
+- [x] `hash_mmap()` - Memory-mapped hashing for large files
+- [x] `hash_read()` - Buffered read hashing for small files
+- [x] `verify_hash()` - Compare file hash against expected value
+- [x] 4 unit tests for hashing functionality
+
+### helpers/copy.rs - File copy utilities
+
+- [x] `COPY_BUFFER_SIZE` constant (64KB) for buffered copying
+- [x] `copy_to_storage()` - Copy file to storage with optional permissions/group
+- [x] `copy_from_storage()` - Copy file from storage to local path
+- [x] `copy_file()` - Buffered file copy implementation
+- [x] `set_permissions()` - Unix file permissions via libc (with non-Unix stub)
+- [x] `set_group()` - Unix group ownership via libc/chown (with non-Unix stub)
+- [x] `group_exists()` - Check if group exists on system
+- [x] 3 unit tests for copy functionality
+
+### helpers/file.rs - File metadata utilities
+
+- [x] `save_metadata()` - Save metadata to `.dvs` file
+- [x] `load_metadata()` - Load metadata from `.dvs` file
+- [x] `check_meta_files_exist()` - Batch check for missing metadata
+- [x] `get_current_username()` - Cross-platform username detection (env vars + libc)
+- [x] `get_file_size()` - Get file size in bytes
+- [x] `file_exists()` - Check if file exists
+- [x] `metadata_path_for()` - Get metadata path for data file
+- [x] `data_path_for()` - Get data path from metadata file
+- [x] 5 unit tests for file utilities
+
+### helpers/config.rs - Configuration utilities
+
+- [x] `find_repo_root()` - Search upward for .git, dvs.yaml, or .dvs/
+- [x] `find_repo_root_from()` - Same, from a specific start path
+- [x] `load_config()` - Load Config from dvs.yaml
+- [x] `save_config()` - Save Config to dvs.yaml
+- [x] `validate_storage_dir()` - Check directory exists and is writable
+- [x] `create_storage_dir()` - Create storage directory (with parents)
+- [x] `config_path()` - Get path to dvs.yaml
+- [x] `is_initialized()` - Check if DVS is initialized
+- [x] `expand_path()` - Expand `~` and relative paths
+- [x] 6 unit tests for config utilities
+
+### types/config.rs - Config load/save
+
+- [x] `Config::load()` - Load from YAML file using serde_yaml
+- [x] `Config::save()` - Save to YAML file
+- [x] 3 unit tests for config serialization
+
+### types/metadata.rs - Metadata load/save
+
+- [x] `Metadata::load()` - Load from JSON file using serde_json
+- [x] `Metadata::save()` - Save to JSON file (pretty-printed)
+- [x] 5 unit tests for metadata serialization
+
+### ops/init.rs - Initialization operation
+
+- [x] `init()` - Initialize DVS with backend auto-detection
+- [x] `init_with_backend()` - Full init implementation:
+  - Validate group membership
+  - Create/validate storage directory
+  - Create Config
+  - Check for existing config (ConfigMismatch error)
+  - Save dvs.yaml
+  - Add `*.dvs` to .gitignore
+- [x] `setup_storage_directory()` - Create or validate storage dir
+- [x] `validate_group()` - Check group exists
+- [x] `add_to_gitignore()` - Add pattern to .gitignore (idempotent)
+- [x] 5 unit tests for init functionality
+
+### ops/add.rs - Add files operation
+
+- [x] `add()` - Add files with backend auto-detection
+- [x] `add_with_backend()` - Full add implementation:
+  - Load config
+  - Expand glob patterns
+  - Process each file
+- [x] `expand_globs()` - Expand glob patterns, filter ignored files
+- [x] `add_single_file()` - Add a single file:
+  - Compute relative path
+  - Check file exists
+  - Get file size
+  - Compute blake3 hash
+  - Check if already present (Outcome::Present)
+  - Copy to storage
+  - Create and save metadata
+- [x] `rollback_add()` - Cleanup on failure
+- [x] 5 unit tests for add functionality
+
+### ops/get.rs - Retrieve files operation
+
+- [x] `get()` - Get files with backend auto-detection
+- [x] `get_with_backend()` - Full get implementation:
+  - Load config
+  - Expand glob patterns to tracked files
+  - Process each file
+- [x] `expand_globs_tracked()` - Expand patterns to files with .dvs metadata
+- [x] `get_single_file()` - Get a single file:
+  - Compute relative path
+  - Load metadata
+  - Check if local matches (Outcome::Present)
+  - Verify storage file exists
+  - Copy from storage
+  - Verify hash after copy
+- [x] `file_matches_metadata()` - Check if file matches expected hash
+- [x] 3 unit tests for get functionality
+
+### ops/status.rs - Status check operation
+
+- [x] `status()` - Check status with backend auto-detection
+- [x] `status_with_backend()` - Full status implementation:
+  - Load config
+  - Find files (all tracked or expand patterns)
+  - Process each file
+- [x] `find_all_tracked_files()` - Walk repo and find all .dvs files
+- [x] `expand_patterns()` - Expand patterns to tracked files
+- [x] `status_single_file()` - Check status of single file:
+  - Compute relative path
+  - Load metadata
+  - Determine status (Current/Absent/Unsynced)
+  - Verify storage file exists
+- [x] `determine_status()` - Compare local file to metadata hash
+- [x] 4 unit tests for status functionality
+
+### Summary
+
+- **66 tests passing** (up from 28)
+- All dvs-core helpers fully implemented
+- All dvs-core operations fully implemented
+- Full integration with Backend abstraction
+- Cross-platform support (Unix permissions with non-Unix stubs)

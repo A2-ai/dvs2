@@ -1,5 +1,6 @@
 //! DVS metadata types (.dvs files).
 
+use std::fs;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 
@@ -42,12 +43,16 @@ impl Metadata {
 
     /// Load metadata from a `.dvs` file.
     pub fn load(path: &std::path::Path) -> Result<Self, crate::DvsError> {
-        todo!("Load metadata from JSON file")
+        let contents = fs::read_to_string(path)?;
+        let metadata: Metadata = serde_json::from_str(&contents)?;
+        Ok(metadata)
     }
 
     /// Save metadata to a `.dvs` file.
     pub fn save(&self, path: &std::path::Path) -> Result<(), crate::DvsError> {
-        todo!("Save metadata to JSON file")
+        let json = serde_json::to_string_pretty(self)?;
+        fs::write(path, json)?;
+        Ok(())
     }
 
     /// Get the metadata file path for a given data file.
@@ -68,5 +73,80 @@ impl Metadata {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_metadata_new() {
+        let metadata = Metadata::new(
+            "abc123".to_string(),
+            1024,
+            Some("test message".to_string()),
+            "testuser".to_string(),
+        );
+        assert_eq!(metadata.blake3_checksum, "abc123");
+        assert_eq!(metadata.size, 1024);
+        assert_eq!(metadata.message, "test message");
+        assert_eq!(metadata.saved_by, "testuser");
+    }
+
+    #[test]
+    fn test_metadata_roundtrip() {
+        let temp_dir = std::env::temp_dir().join("dvs-test-metadata-roundtrip");
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let meta_path = temp_dir.join("test.csv.dvs");
+        let metadata = Metadata::new(
+            "deadbeef1234567890abcdef".to_string(),
+            2048,
+            Some("first version".to_string()),
+            "alice".to_string(),
+        );
+
+        // Save
+        metadata.save(&meta_path).unwrap();
+
+        // Load
+        let loaded = Metadata::load(&meta_path).unwrap();
+        assert_eq!(loaded.blake3_checksum, metadata.blake3_checksum);
+        assert_eq!(loaded.size, metadata.size);
+        assert_eq!(loaded.message, metadata.message);
+        assert_eq!(loaded.saved_by, metadata.saved_by);
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_metadata_path() {
+        let data = std::path::PathBuf::from("/data/file.csv");
+        let meta = Metadata::metadata_path(&data);
+        assert_eq!(meta, std::path::PathBuf::from("/data/file.csv.dvs"));
+    }
+
+    #[test]
+    fn test_data_path() {
+        let meta = std::path::PathBuf::from("/data/file.csv.dvs");
+        let data = Metadata::data_path(&meta).unwrap();
+        assert_eq!(data, std::path::PathBuf::from("/data/file.csv"));
+
+        // Non-.dvs file should return None
+        let not_meta = std::path::PathBuf::from("/data/file.csv");
+        assert!(Metadata::data_path(&not_meta).is_none());
+    }
+
+    #[test]
+    fn test_metadata_no_message() {
+        let metadata = Metadata::new(
+            "hash".to_string(),
+            100,
+            None,
+            "user".to_string(),
+        );
+        assert_eq!(metadata.message, "");
     }
 }
