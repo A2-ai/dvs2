@@ -71,7 +71,7 @@ pub fn pull_with_backend(
     // Load manifest
     let manifest_path = layout.manifest_path();
     if !manifest_path.exists() {
-        return Err(DvsError::NotInitialized);
+        return Err(DvsError::not_initialized());
     }
     let manifest = Manifest::load(&manifest_path)?;
 
@@ -79,9 +79,7 @@ pub fn pull_with_backend(
     let url = remote_url
         .map(|s| s.to_string())
         .or(manifest.base_url.clone())
-        .ok_or_else(|| DvsError::ConfigError {
-            message: "No remote URL specified and none in manifest".to_string(),
-        })?;
+        .ok_or_else(|| DvsError::config_error("No remote URL specified and none in manifest"))?;
 
     // Create stores
     let local_store = LocalStore::new(layout.objects_dir());
@@ -139,7 +137,7 @@ pub fn pull_files(
     // Load manifest
     let manifest_path = layout.manifest_path();
     if !manifest_path.exists() {
-        return Err(DvsError::NotInitialized);
+        return Err(DvsError::not_initialized());
     }
     let manifest = Manifest::load(&manifest_path)?;
 
@@ -147,9 +145,7 @@ pub fn pull_files(
     let url = remote_url
         .map(|s| s.to_string())
         .or(manifest.base_url.clone())
-        .ok_or_else(|| DvsError::ConfigError {
-            message: "No remote URL specified and none in manifest".to_string(),
-        })?;
+        .ok_or_else(|| DvsError::config_error("No remote URL specified and none in manifest"))?;
 
     // Create stores
     let local_store = LocalStore::new(layout.objects_dir());

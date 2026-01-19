@@ -45,7 +45,7 @@ impl<'a> SnapshotStore<'a> {
     pub fn load(&self, id: &str) -> Result<WorkspaceState, DvsError> {
         let path = self.layout.snapshot_path(id);
         if !path.exists() {
-            return Err(DvsError::NotFound(format!("Snapshot not found: {}", id)));
+            return Err(DvsError::not_found(format!("Snapshot not found: {}", id)));
         }
 
         let contents = fs::read_to_string(&path)?;

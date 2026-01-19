@@ -206,9 +206,10 @@ pub fn create_hasher(algo: HashAlgo) -> Result<Box<dyn Hasher>, DvsError> {
         HashAlgo::Sha256 => Ok(Box::new(Sha256Hasher::new())),
 
         #[allow(unreachable_patterns)]
-        _ => Err(DvsError::ConfigError {
-            message: format!("Hash algorithm {} not enabled (missing feature)", algo),
-        }),
+        _ => Err(DvsError::config_error(format!(
+            "Hash algorithm {} not enabled (missing feature)",
+            algo
+        ))),
     }
 }
 
@@ -288,9 +289,10 @@ pub fn hash_bytes(data: &[u8], algo: HashAlgo) -> Result<String, DvsError> {
         HashAlgo::Sha256 => Ok(hash_sha256(data)),
 
         #[allow(unreachable_patterns)]
-        _ => Err(DvsError::ConfigError {
-            message: format!("Hash algorithm {} not enabled (missing feature)", algo),
-        }),
+        _ => Err(DvsError::config_error(format!(
+            "Hash algorithm {} not enabled (missing feature)",
+            algo
+        ))),
     }
 }
 

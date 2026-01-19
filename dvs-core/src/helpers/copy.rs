@@ -95,30 +95,28 @@ pub fn set_group(path: &Path, group: &str) -> Result<(), DvsError> {
     use std::os::unix::ffi::OsStrExt;
 
     // Get the group ID from the group name
-    let group_cstr = CString::new(group).map_err(|_| DvsError::ConfigError {
-        message: format!("Invalid group name: {}", group),
-    })?;
+    let group_cstr = CString::new(group)
+        .map_err(|_| DvsError::config_error(format!("Invalid group name: {}", group)))?;
 
     let grp = unsafe { libc::getgrnam(group_cstr.as_ptr()) };
     if grp.is_null() {
-        return Err(DvsError::GroupNotSet {
-            group: group.to_string(),
-        });
+        return Err(DvsError::group_not_set(group));
     }
 
     let gid = unsafe { (*grp).gr_gid };
 
     // Get the path as a C string
-    let path_cstr = CString::new(path.as_os_str().as_bytes()).map_err(|_| DvsError::ConfigError {
-        message: format!("Invalid path: {}", path.display()),
-    })?;
+    let path_cstr = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| DvsError::config_error(format!("Invalid path: {}", path.display())))?;
 
     // Change the group (keep user the same with -1)
     let result = unsafe { libc::chown(path_cstr.as_ptr(), u32::MAX, gid) };
     if result != 0 {
-        return Err(DvsError::PermissionDenied {
-            message: format!("Failed to set group {} on {}", group, path.display()),
-        });
+        return Err(DvsError::permission_denied(format!(
+            "Failed to set group {} on {}",
+            group,
+            path.display()
+        )));
     }
 
     Ok(())

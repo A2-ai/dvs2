@@ -36,7 +36,7 @@ pub fn find_repo_root_from(start: &Path) -> Result<PathBuf, DvsError> {
         match current.parent() {
             Some(parent) => current = parent.to_path_buf(),
             None => {
-                return Err(DvsError::NotInGitRepo);
+                return Err(DvsError::not_in_git_repo());
             }
         }
     }
@@ -47,7 +47,7 @@ pub fn load_config(repo_root: &Path) -> Result<Config, DvsError> {
     let config_path = config_path(repo_root);
 
     if !config_path.exists() {
-        return Err(DvsError::NotInitialized);
+        return Err(DvsError::not_initialized());
     }
 
     Config::load(&config_path)
@@ -62,15 +62,17 @@ pub fn save_config(config: &Config, repo_root: &Path) -> Result<(), DvsError> {
 /// Validate storage directory exists and is accessible.
 pub fn validate_storage_dir(storage_dir: &Path) -> Result<(), DvsError> {
     if !storage_dir.exists() {
-        return Err(DvsError::StorageError {
-            message: format!("Storage directory does not exist: {}", storage_dir.display()),
-        });
+        return Err(DvsError::storage_error(format!(
+            "Storage directory does not exist: {}",
+            storage_dir.display()
+        )));
     }
 
     if !storage_dir.is_dir() {
-        return Err(DvsError::StorageError {
-            message: format!("Storage path is not a directory: {}", storage_dir.display()),
-        });
+        return Err(DvsError::storage_error(format!(
+            "Storage path is not a directory: {}",
+            storage_dir.display()
+        )));
     }
 
     // Check if we can write to the directory by attempting to create a temp file
@@ -80,13 +82,11 @@ pub fn validate_storage_dir(storage_dir: &Path) -> Result<(), DvsError> {
             let _ = fs::remove_file(&test_file);
             Ok(())
         }
-        Err(e) => Err(DvsError::StorageError {
-            message: format!(
-                "Cannot write to storage directory {}: {}",
-                storage_dir.display(),
-                e
-            ),
-        }),
+        Err(e) => Err(DvsError::storage_error(format!(
+            "Cannot write to storage directory {}: {}",
+            storage_dir.display(),
+            e
+        ))),
     }
 }
 
@@ -94,15 +94,20 @@ pub fn validate_storage_dir(storage_dir: &Path) -> Result<(), DvsError> {
 pub fn create_storage_dir(storage_dir: &Path) -> Result<(), DvsError> {
     if storage_dir.exists() {
         if !storage_dir.is_dir() {
-            return Err(DvsError::StorageError {
-                message: format!("Storage path exists but is not a directory: {}", storage_dir.display()),
-            });
+            return Err(DvsError::storage_error(format!(
+                "Storage path exists but is not a directory: {}",
+                storage_dir.display()
+            )));
         }
         return Ok(());
     }
 
-    fs::create_dir_all(storage_dir).map_err(|e| DvsError::StorageError {
-        message: format!("Failed to create storage directory {}: {}", storage_dir.display(), e),
+    fs::create_dir_all(storage_dir).map_err(|e| {
+        DvsError::storage_error(format!(
+            "Failed to create storage directory {}: {}",
+            storage_dir.display(),
+            e
+        ))
     })
 }
 

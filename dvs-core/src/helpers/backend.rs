@@ -169,7 +169,7 @@ impl RepoBackend for GitBackend {
         // Use pathdiff to get relative path from root
         match pathdiff::diff_paths(&abs_path, &self.root) {
             Some(rel) => Ok(rel),
-            None => Err(DvsError::FileOutsideRepo { path: abs_path }),
+            None => Err(DvsError::file_outside_repo(abs_path)),
         }
     }
 
@@ -256,7 +256,7 @@ impl RepoBackend for DvsBackend {
         // Use pathdiff to get relative path from root
         match pathdiff::diff_paths(&abs_path, &self.root) {
             Some(rel) => Ok(rel),
-            None => Err(DvsError::FileOutsideRepo { path: abs_path }),
+            None => Err(DvsError::file_outside_repo(abs_path)),
         }
     }
 
@@ -304,7 +304,7 @@ pub fn detect_backend(start: &Path) -> Result<Backend, DvsError> {
         return Ok(Backend::Dvs(DvsBackend::new(dvs_root)));
     }
 
-    Err(DvsError::NotInitialized)
+    Err(DvsError::not_initialized())
 }
 
 /// Detect backend, starting from the current working directory.

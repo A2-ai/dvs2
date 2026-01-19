@@ -42,9 +42,13 @@ pub fn get_with_backend(
     let expanded_files = expand_globs_tracked(backend, files)?;
 
     if expanded_files.is_empty() {
-        return Err(DvsError::NoFilesMatched {
-            pattern: files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "),
-        });
+        return Err(DvsError::no_files_matched(
+            files
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
     }
 
     // Process each file
@@ -85,9 +89,7 @@ fn expand_globs_tracked(backend: &Backend, patterns: &[PathBuf]) -> Result<Vec<P
                     }
                 }
                 Err(_) => {
-                    return Err(DvsError::InvalidGlob {
-                        pattern: pattern_str.to_string(),
-                    });
+                    return Err(DvsError::invalid_glob(pattern_str.to_string()));
                 }
             }
         } else {
