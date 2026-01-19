@@ -145,5 +145,9 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ## Misc.
 
-- [ ] All dependencies in `core` ought to be optional, such that the sibling
-crates can decide which core-features to adopt and which to forego.
+- [ ] **Optional dvs-core dependencies**: Currently only hash algorithms (blake3/xxh3/sha256) and rayon are optional. Making all dependencies optional would allow sibling crates (dvs-cli, dvsR, dvs-server, dvs-daemon) to opt-in only to what they need. Key dependencies to make optional:
+  - `git2` - for Git-backed workspaces
+  - `walkdir`, `glob` - for file discovery
+  - `chrono` - for timestamps
+  - `serde_yaml` - for config files
+  - etc.
