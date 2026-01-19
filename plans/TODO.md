@@ -12,6 +12,8 @@
 
 - [x] **Plan 023: Git Backend (libgit2 default + CLI fallback)** - Git abstraction via `GitOps` trait with `Git2Ops` (libgit2) and `GitCliOps` (system git) implementations. Covers repo discovery, HEAD info, status, config reading, remote URLs, and lightweight tags. Environment variable `DVS_GIT_BACKEND=cli` forces CLI backend.
 
+- [x] **Plan 029: fs-err Inclusion** - Replaced `std::fs` with `fs_err` across dvs-core for better filesystem error messages. All key modules (init, add, get, status, config, layout, store, copy, metadata, materialize, manifest) use `fs_err`. Justfile lint (`check-std-fs`) enforces usage, allowing only `std::fs::Permissions` and `std::fs::Metadata` types.
+
 ### Pending Plans
 
 - [ ] **Plan 025: Hashing + Fingerprinting for DVS** - Define hashing and fingerprinting strategy for blobs, tables/dataframes, and trees. Includes algorithm selection (XXH3 vs BLAKE3 vs SHA-256), chunking strategy, Merkle/DAG, and table canonicalization.

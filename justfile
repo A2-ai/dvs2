@@ -48,8 +48,9 @@ check *args:
     cargo check --manifest-path={{quote(workspace_manifest)}} {{args}}
 
 # Check for std::fs usage in workspace Rust sources
+# Allows std::fs::Permissions and std::fs::Metadata (types that fs-err doesn't re-export)
 check-std-fs:
-    @! rg -n -g '*.rs' -e 'std::fs' -e 'std::\s*\{[^}]*\bfs\b[^}]*\}' dvs-core dvs-cli dvs-daemon dvs-server
+    @! rg -nP -g '*.rs' -e 'std::fs(?!::(Permissions|Metadata)\b)' -e 'std::\s*\{[^}]*\bfs\b[^}]*\}' dvs-core dvs-cli dvs-daemon dvs-server
 
 # Run any cargo subcommand against the workspace
 cargo subcmd *args:

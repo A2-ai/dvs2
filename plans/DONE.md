@@ -520,3 +520,43 @@ Implemented a Git abstraction layer that defaults to libgit2 (`git2` crate) and 
 - Environment variable `DVS_GIT_BACKEND=cli` to force CLI backend
 - Automatic fallback on unsupported repository layouts
 - Integrated with existing `GitBackend` for seamless usage
+
+## Plan 029: fs-err Inclusion
+
+Replaced `std::fs` with `fs_err` crate across dvs-core for improved filesystem error messages that include paths.
+
+### Dependencies
+
+- [x] Added `fs-err = "2"` to workspace dependencies
+
+### Module updates
+
+- [x] `helpers/config.rs` - `use fs_err as fs;`
+- [x] `helpers/copy.rs` - `use fs_err::{self as fs, File};`
+- [x] `helpers/file.rs` - `use fs_err as fs;`
+- [x] `helpers/hash.rs` - `use fs_err as fs;` and `use fs_err::File;`
+- [x] `helpers/ignore.rs` - `use fs_err::{self as fs, OpenOptions};`
+- [x] `helpers/layout.rs` - `use fs_err as fs;`
+- [x] `helpers/store.rs` - `use fs_err as fs;`
+- [x] `helpers/backend.rs` - `use fs_err as fs;` (in tests)
+- [x] `ops/init.rs` - `use fs_err as fs;`
+- [x] `ops/add.rs` - `use fs_err as fs;`
+- [x] `ops/get.rs` - `use fs_err as fs;` (in tests)
+- [x] `ops/status.rs` - `use fs_err as fs;` (in tests)
+- [x] `ops/materialize.rs` - `use fs_err as fs;`
+- [x] `types/config.rs` - `use fs_err as fs;`
+- [x] `types/manifest.rs` - `use fs_err as fs;`
+- [x] `types/metadata.rs` - `use fs_err as fs;`
+
+### Justfile lint rule
+
+- [x] Added `check-std-fs` recipe with PCRE2 negative lookahead
+- [x] Allows `std::fs::Permissions` and `std::fs::Metadata` (types fs-err doesn't re-export)
+- [x] Pattern: `'std::fs(?!::(Permissions|Metadata)\b)'`
+
+### Summary
+
+- **122 tests passing** (116 dvs-core + 6 dvs-cli)
+- All filesystem I/O uses fs_err for better error messages
+- Lint rule enforces consistent usage
+- `std::fs::Permissions` allowed (required for Unix permission setting)
