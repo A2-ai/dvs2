@@ -55,3 +55,6 @@ tracing = "0.1"
 
 # Utilities (used by: dvs-core)
 chrono = { version = "0.4", features = ["serde"] }
+
+# Git (used by: dvs-core)
+git2 = "0.20"

@@ -54,6 +54,10 @@ pub enum DvsError {
     #[error("config already exists with different settings - edit dvs.yaml manually")]
     ConfigMismatch,
 
+    /// Git operation error.
+    #[error("git error: {message}")]
+    GitError { message: String },
+
     /// Glob pattern error.
     #[error("invalid glob pattern: {pattern}")]
     InvalidGlob { pattern: String },
@@ -94,6 +98,7 @@ impl DvsError {
             DvsError::GroupNotSet { .. } => "group_not_set",
             DvsError::ConfigError { .. } => "config_error",
             DvsError::ConfigMismatch => "config_mismatch",
+            DvsError::GitError { .. } => "git_error",
             DvsError::InvalidGlob { .. } => "invalid_glob",
             DvsError::NoFilesMatched { .. } => "no_files_matched",
             DvsError::BatchError { .. } => "batch_error",

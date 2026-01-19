@@ -4,13 +4,13 @@
 //! The backend handles repo root detection, path normalization, ignore
 //! file handling, and optional branch information.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use crate::DvsError;
 use super::ignore::{
     add_gitignore_pattern, load_gitignore_patterns,
     add_dvsignore_pattern, load_dvs_ignore_patterns,
 };
+use super::git_ops::select_git_backend;
 
 /// Backend trait for repository/workspace operations.
 ///
@@ -117,7 +117,7 @@ impl RepoBackend for Backend {
 /// Git repository backend.
 ///
 /// Uses `.git` for root detection, `.gitignore` for ignore handling,
-/// and provides branch information.
+/// and provides branch information via the `git_ops` module.
 #[derive(Debug)]
 pub struct GitBackend {
     root: PathBuf,
@@ -130,7 +130,17 @@ impl GitBackend {
     }
 
     /// Find Git root by walking up from the given path.
+    ///
+    /// Uses the git_ops module (libgit2 or CLI fallback) for discovery.
     pub fn find_root(start: &Path) -> Option<PathBuf> {
+        let backend = select_git_backend();
+        backend.discover_repo_root(start).ok()
+    }
+
+    /// Find Git root using simple filesystem check (no git2/cli).
+    ///
+    /// This is a fallback method that doesn't require git to be installed.
+    pub fn find_root_simple(start: &Path) -> Option<PathBuf> {
         let mut current = start.to_path_buf();
         loop {
             if current.join(".git").exists() {
@@ -174,22 +184,10 @@ impl RepoBackend for GitBackend {
     }
 
     fn current_branch(&self) -> Result<Option<String>, DvsError> {
-        // Read .git/HEAD to get the current branch
-        let head_path = self.root.join(".git/HEAD");
-        if !head_path.exists() {
-            return Ok(None);
-        }
-
-        let content = fs::read_to_string(&head_path)?;
-        let content = content.trim();
-
-        // Check if it's a symbolic ref (branch) or detached HEAD
-        if let Some(ref_name) = content.strip_prefix("ref: refs/heads/") {
-            Ok(Some(ref_name.to_string()))
-        } else {
-            // Detached HEAD (commit hash)
-            Ok(None)
-        }
+        // Use git_ops for robust HEAD parsing
+        let backend = select_git_backend();
+        let head_info = backend.head_info(&self.root)?;
+        Ok(head_info.branch)
     }
 
     fn backend_type(&self) -> &'static str {

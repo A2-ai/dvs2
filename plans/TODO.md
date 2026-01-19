@@ -16,6 +16,8 @@
 
 - [ ] **Plan 025: Hashing + Fingerprinting for DVS** - Define hashing and fingerprinting strategy for blobs, tables/dataframes, and trees. Includes algorithm selection (XXH3 vs BLAKE3 vs SHA-256), chunking strategy, Merkle/DAG, and table canonicalization.
 
+- [ ] **Plan 029: fs-err Inclusion** - Adopt the `fs-err` crate for richer filesystem error context in dvs-core (and optionally dvs-cli).
+
 ### Future Plans (Not Yet Written)
 
 - [ ] **Plan 026: Wire CLI to new operations** - Connect `dvs push`, `dvs pull`, `dvs materialize` CLI commands to the dvs-core operations.
