@@ -3,7 +3,7 @@
 //! Supports both Git-style ignore files (`.gitignore`) and DVS-specific
 //! ignore files (`.dvsignore`, `.ignore`).
 
-use std::fs::{self, OpenOptions};
+use fs_err::{self as fs, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use glob::Pattern;

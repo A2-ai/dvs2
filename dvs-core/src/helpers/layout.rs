@@ -6,7 +6,7 @@
 //! - `state/` - materialization state, locks, etc.
 //! - `locks/` - lock files for concurrent operations
 
-use std::fs;
+use fs_err as fs;
 use std::path::{Path, PathBuf};
 use crate::DvsError;
 use crate::types::{Oid, HashAlgo, Manifest};

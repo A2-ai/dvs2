@@ -1,6 +1,7 @@
 //! DVS add operation.
 
 use std::path::{Path, PathBuf};
+use fs_err as fs;
 use glob::glob;
 use crate::{AddResult, Config, Metadata, Outcome, DvsError, Backend, RepoBackend, detect_backend_cwd};
 use crate::helpers::{config as config_helper, copy, file, hash};
@@ -237,7 +238,7 @@ fn rollback_add(
 ) -> Result<(), DvsError> {
     // Remove metadata file if it was created
     if metadata_path.exists() {
-        std::fs::remove_file(metadata_path)?;
+        fs::remove_file(metadata_path)?;
     }
 
     // Note: We don't remove from storage because other files may reference the same hash
@@ -250,7 +251,7 @@ fn rollback_add(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use fs_err as fs;
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
 

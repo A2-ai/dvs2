@@ -1,6 +1,6 @@
 //! File metadata utilities.
 
-use std::fs;
+use fs_err as fs;
 use std::path::Path;
 use crate::{Metadata, DvsError};
 

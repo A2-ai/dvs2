@@ -1,6 +1,6 @@
 //! DVS metadata types (.dvs files).
 
-use std::fs;
+use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 

@@ -1,6 +1,6 @@
 //! Object store abstraction for remote/local content-addressable storage.
 
-use std::fs;
+use fs_err as fs;
 use std::path::{Path, PathBuf};
 use crate::DvsError;
 use crate::types::Oid;

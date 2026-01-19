@@ -316,7 +316,7 @@ pub fn detect_backend_cwd() -> Result<Backend, DvsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use fs_err as fs;
 
     #[test]
     fn test_git_backend_type() {

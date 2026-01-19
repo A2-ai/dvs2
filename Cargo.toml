@@ -36,7 +36,8 @@ anyhow = "1.0"
 # Hashing (used by: dvs-core)
 blake3 = { version = "1.8", features = ["rayon"] }
 
-# File system (used by: dvs-core)
+# File system (used by: dvs-core, dvs-cli)
+fs-err = "2"
 memmap2 = "0.9"
 walkdir = "2.5"
 glob = "0.3"

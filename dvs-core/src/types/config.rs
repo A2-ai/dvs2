@@ -1,6 +1,6 @@
 //! DVS configuration types.
 
-use std::fs;
+use fs_err as fs;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 

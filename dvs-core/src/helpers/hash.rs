@@ -1,6 +1,7 @@
 //! Blake3 hashing utilities.
 
-use std::fs::File;
+use fs_err as fs;
+use fs_err::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use blake3::Hasher;
@@ -14,7 +15,7 @@ pub const MMAP_THRESHOLD: u64 = 16 * 1024;
 ///
 /// Uses memory-mapped I/O for files >= 16KB, traditional read for smaller files.
 pub fn get_file_hash(path: &Path) -> Result<String, DvsError> {
-    let metadata = std::fs::metadata(path)?;
+    let metadata = fs::metadata(path)?;
     let size = metadata.len();
 
     if size >= MMAP_THRESHOLD {
@@ -80,7 +81,7 @@ mod tests {
     #[test]
     fn test_hash_small_file() {
         let temp_dir = std::env::temp_dir().join("dvs-test-hash-small");
-        let _ = std::fs::create_dir_all(&temp_dir);
+        let _ = fs::create_dir_all(&temp_dir);
         let file_path = temp_dir.join("small.txt");
 
         let mut file = File::create(&file_path).unwrap();
@@ -92,13 +93,13 @@ mod tests {
         assert_eq!(hash.len(), 64); // Blake3 produces 64-char hex string
 
         // Cleanup
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn test_hash_consistency() {
         let temp_dir = std::env::temp_dir().join("dvs-test-hash-consistency");
-        let _ = std::fs::create_dir_all(&temp_dir);
+        let _ = fs::create_dir_all(&temp_dir);
         let file_path = temp_dir.join("test.txt");
 
         let mut file = File::create(&file_path).unwrap();
@@ -111,13 +112,13 @@ mod tests {
         assert_eq!(hash1, hash2);
 
         // Cleanup
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn test_verify_hash() {
         let temp_dir = std::env::temp_dir().join("dvs-test-verify-hash");
-        let _ = std::fs::create_dir_all(&temp_dir);
+        let _ = fs::create_dir_all(&temp_dir);
         let file_path = temp_dir.join("verify.txt");
 
         let mut file = File::create(&file_path).unwrap();
@@ -129,6 +130,6 @@ mod tests {
         assert!(!verify_hash(&file_path, "wrong_hash").unwrap());
 
         // Cleanup
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

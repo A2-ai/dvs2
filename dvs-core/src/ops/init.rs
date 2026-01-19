@@ -1,6 +1,6 @@
 //! DVS initialization operation.
 
-use std::fs;
+use fs_err as fs;
 use std::path::Path;
 use crate::{Config, DvsError, Backend, RepoBackend, detect_backend_cwd};
 use crate::helpers::{config as config_helper, copy};

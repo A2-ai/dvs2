@@ -10,13 +10,11 @@
 
 - [x] **Plan 024: Git-Friendly Remote Data Layout (HTTP-first)** - Manifest-based remote data tracking with push/pull/materialize operations. Implemented `Oid` type with algorithm prefix, `Manifest` and `ManifestEntry` types, `ObjectStore` trait with `LocalStore` and `HttpStore`, `.dvs/` layout helpers, and push/pull/materialize operations.
 
+- [x] **Plan 023: Git Backend (libgit2 default + CLI fallback)** - Git abstraction via `GitOps` trait with `Git2Ops` (libgit2) and `GitCliOps` (system git) implementations. Covers repo discovery, HEAD info, status, config reading, remote URLs, and lightweight tags. Environment variable `DVS_GIT_BACKEND=cli` forces CLI backend.
+
 ### Pending Plans
 
-- [ ] **Plan 023: Git Backend (libgit2 default + CLI fallback)** - Git abstraction that defaults to libgit2-backed implementation (`git2` crate) and falls back to Git CLI for edge cases. Covers repo discovery, HEAD info, status, config reading, and lightweight tag creation.
-
 - [ ] **Plan 025: Hashing + Fingerprinting for DVS** - Define hashing and fingerprinting strategy for blobs, tables/dataframes, and trees. Includes algorithm selection (XXH3 vs BLAKE3 vs SHA-256), chunking strategy, Merkle/DAG, and table canonicalization.
-
-- [ ] **Plan 029: fs-err Inclusion** - Adopt the `fs-err` crate for richer filesystem error context in dvs-core (and optionally dvs-cli).
 
 ### Future Plans (Not Yet Written)
 

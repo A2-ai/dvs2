@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use super::oid::Oid;
 
@@ -128,7 +129,7 @@ impl Manifest {
 
     /// Load manifest from a file.
     pub fn load(path: &Path) -> Result<Self, crate::DvsError> {
-        let contents = std::fs::read_to_string(path)?;
+        let contents = fs::read_to_string(path)?;
         let manifest: Manifest = serde_json::from_str(&contents)?;
         Ok(manifest)
     }
@@ -136,7 +137,7 @@ impl Manifest {
     /// Save manifest to a file.
     pub fn save(&self, path: &Path) -> Result<(), crate::DvsError> {
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, json)?;
+        fs::write(path, json)?;
         Ok(())
     }
 

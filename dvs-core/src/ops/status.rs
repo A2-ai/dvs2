@@ -225,7 +225,7 @@ fn determine_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use fs_err as fs;
     use crate::helpers::copy;
     use std::sync::atomic::{AtomicU64, Ordering};
 
