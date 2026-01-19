@@ -32,7 +32,7 @@ pub use types::{
 };
 
 // Re-export operations at crate root
-pub use ops::{init, add, get, status};
+pub use ops::{init, init_with_backend, add, add_with_backend, get, get_with_backend, status, status_with_backend};
 pub use ops::{push, push_with_backend, push_files, PushResult, PushSummary};
 pub use ops::{pull, pull_with_backend, pull_files, PullResult, PullSummary};
 pub use ops::{materialize, materialize_with_backend, materialize_files, MaterializeResult, MaterializeSummary};

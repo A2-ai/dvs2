@@ -22,9 +22,17 @@
 
 - [x] **Plan 038: Exn-First Error Handling Migration** - Migrated dvs-core to `exn`-based error handling. Created `ErrorKind` enum with flat variants and `DvsError` wrapper around `exn::Exn<ErrorKind>`. Preserved stable `error_type()` strings for R interop. Removed `thiserror` and `anyhow` from dvs-core dependencies.
 
-### Pending Plans
+### In Progress
 - [ ] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
   harness to verify CLI/R/other interfaces produce the same effects.
+  - [x] Created `dvs-testkit` crate with `TestRepo`, `WorkspaceSnapshot`
+  - [x] Implemented `CoreRunner` baseline
+  - [x] Created standard scenarios (init/add/get/status)
+  - [x] Implemented `CliRunner` (feature-gated with `cli-runner`)
+  - [x] Wired conformance tests into CI (via `--all-features`)
+  - [ ] Implement `RRunner` for dvsR (blocked by Plan 028)
+  - [ ] Implement `ServerRunner` for HTTP endpoints (blocked by Plan 027)
+  - [ ] Implement `DaemonRunner` for daemon IPC
 
 ### Future Plans (Not Yet Written)
 
