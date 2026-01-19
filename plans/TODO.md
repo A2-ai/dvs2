@@ -16,13 +16,14 @@
 
 - [x] **Plan 025: Hashing + Fingerprinting for DVS (Phase 1)** - Multi-algorithm hashing support with BLAKE3 (default), XXH3 (fast), and SHA-256 (interop). Implemented `Hasher` trait for streaming hash computation, feature flags for optional algorithms, configurable `hash_algo` in Config/Metadata, and `dvs add` uses config's hash algorithm.
 
+- [x] **Plan 026: Wire CLI to new operations** - Connected `dvs push`, `dvs pull`, `dvs materialize` CLI commands to dvs-core operations. Each command supports both all-objects and file-specific modes, with progress output.
+
 ### Pending Plans
 
-None currently - all core plans complete!
+- [ ] **Plan 037: Reversible Workspace Reflog** - Local reflog + snapshot store
+  so users can rollback DVS-tracked state without Git.
 
 ### Future Plans (Not Yet Written)
-
-- [ ] **Plan 026: Wire CLI to new operations** - Connect `dvs push`, `dvs pull`, `dvs materialize` CLI commands to the dvs-core operations.
 
 - [ ] **Plan 027: Server HTTP CAS endpoints** - Implement the HTTP CAS server endpoints (HEAD/GET/PUT for objects) in dvs-server to support remote storage.
 
@@ -36,9 +37,9 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ### dvs-cli (Wire new operations)
 
-- [ ] `dvs push [--remote URL]` subcommand - calls `dvs_core::push()`
-- [ ] `dvs pull [--remote URL]` subcommand - calls `dvs_core::pull()`
-- [ ] `dvs materialize [files...]` subcommand - calls `dvs_core::materialize()`
+- [x] `dvs push [--remote URL]` subcommand - calls `dvs_core::push()`
+- [x] `dvs pull [--remote URL]` subcommand - calls `dvs_core::pull()`
+- [x] `dvs materialize [files...]` subcommand - calls `dvs_core::materialize()`
 - [ ] `dvs config` subcommand - show/edit configuration
 - [ ] `dvs daemon` subcommand - start/stop/status daemon
 - [ ] Progress bars for large file operations

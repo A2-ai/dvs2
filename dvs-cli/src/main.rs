@@ -12,7 +12,7 @@ use fs_err as fs;
 
 use clap::{Parser, Subcommand};
 
-use commands::{init, add, get, status};
+use commands::{init, add, get, status, push, pull, materialize};
 use output::Output;
 
 /// DVS - Data Version System
@@ -91,6 +91,32 @@ pub enum Command {
         files: Vec<PathBuf>,
     },
 
+    /// Push objects to remote storage
+    Push {
+        /// Remote URL (overrides manifest base_url)
+        #[arg(long, short, value_name = "URL")]
+        remote: Option<String>,
+
+        /// Files to push (empty = all objects in manifest)
+        files: Vec<PathBuf>,
+    },
+
+    /// Pull objects from remote storage
+    Pull {
+        /// Remote URL (overrides manifest base_url)
+        #[arg(long, short, value_name = "URL")]
+        remote: Option<String>,
+
+        /// Files to pull (empty = all objects in manifest)
+        files: Vec<PathBuf>,
+    },
+
+    /// Materialize files from cache to working tree
+    Materialize {
+        /// Files to materialize (empty = all files in manifest)
+        files: Vec<PathBuf>,
+    },
+
     /// Filesystem navigation helpers
     #[command(subcommand)]
     Fs(FsCommand),
@@ -135,6 +161,15 @@ fn main() -> ExitCode {
         }
         Command::Status { files } => {
             status::run(&output, files)
+        }
+        Command::Push { remote, files } => {
+            push::run(&output, remote, files)
+        }
+        Command::Pull { remote, files } => {
+            pull::run(&output, remote, files)
+        }
+        Command::Materialize { files } => {
+            materialize::run(&output, files)
         }
         Command::Fs(fs_cmd) => {
             match fs_cmd {

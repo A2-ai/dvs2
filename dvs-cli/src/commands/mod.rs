@@ -7,6 +7,9 @@ pub mod init;
 pub mod add;
 pub mod get;
 pub mod status;
+pub mod push;
+pub mod pull;
+pub mod materialize;
 
 use std::io;
 use thiserror::Error;
