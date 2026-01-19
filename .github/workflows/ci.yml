@@ -20,7 +20,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.head_ref || github.ref }}
@@ -29,7 +29,7 @@ jobs:
         with:
           toolchain: 1.78.0
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.8.2
       - name: Install just
         uses: extractions/setup-just@v3
       - name: Install ripgrep
@@ -56,6 +56,14 @@ jobs:
           git add -A
           git commit -m "chore: fmt"
           git push origin "HEAD:${PR_BRANCH}"
+      - name: Re-check formatting after auto-format
+        if: steps.fmt_check.outcome == 'failure' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: just fmt-check
+      - name: Fail on fmt-check for forked PRs
+        if: steps.fmt_check.outcome == 'failure' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "fmt-check failed on a forked PR; please run just fmt-all locally."
+          exit 1
       - name: Cargo check
         run: just check
       - name: Clippy
@@ -71,12 +79,12 @@ jobs:
       matrix:
         not_cran: [unset, set]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Rust 1.85.0
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: 1.85.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.8.2
       - name: Set up R
         uses: r-lib/actions/setup-r@v2
       - name: Install R dependencies
