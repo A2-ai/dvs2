@@ -139,6 +139,14 @@ check-all: check rpkg-check
 fmt-all: fmt
     cargo fmt --manifest-path={{quote(rpkg_manifest)}}
 
+# Check formatting for all Rust code
+fmt-check-all:
+    cargo fmt --manifest-path={{quote(workspace_manifest)}} -- --check
+    cargo fmt --manifest-path={{quote(rpkg_manifest)}} -- --check
+
+# Alias fmt-check to fmt-check-all (default)
+fmt-check: fmt-check-all
+
 # Run clippy on everything
 clippy-all: clippy rpkg-clippy
 
