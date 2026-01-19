@@ -28,3 +28,6 @@ pub use types::{
 
 // Re-export operations at crate root
 pub use ops::{init, add, get, status};
+
+// Re-export backend types
+pub use helpers::backend::{Backend, RepoBackend, GitBackend, DvsBackend, detect_backend, detect_backend_cwd};

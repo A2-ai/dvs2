@@ -1,7 +1,7 @@
 //! DVS add operation.
 
 use std::path::PathBuf;
-use crate::{AddResult, DvsError};
+use crate::{AddResult, DvsError, Backend, detect_backend_cwd};
 
 /// Add files to DVS tracking.
 ///
@@ -21,25 +21,38 @@ use crate::{AddResult, DvsError};
 /// * `NotInitialized` - DVS not initialized
 /// * `BatchError` - Multiple explicit paths don't exist
 pub fn add(files: &[PathBuf], message: Option<&str>) -> Result<Vec<AddResult>, DvsError> {
-    todo!("Implement add operation")
+    let backend = detect_backend_cwd()?;
+    add_with_backend(&backend, files, message)
+}
+
+/// Add files with a specific backend.
+///
+/// Use this when you already have a backend reference.
+pub fn add_with_backend(
+    _backend: &Backend,
+    _files: &[PathBuf],
+    _message: Option<&str>,
+) -> Result<Vec<AddResult>, DvsError> {
+    todo!("Implement add operation with backend")
 }
 
 /// Expand glob patterns and filter files.
-fn expand_globs(patterns: &[PathBuf]) -> Result<Vec<PathBuf>, DvsError> {
+fn expand_globs(_backend: &Backend, _patterns: &[PathBuf]) -> Result<Vec<PathBuf>, DvsError> {
     todo!("Expand glob patterns")
 }
 
 /// Process a single file for adding.
 fn add_single_file(
-    path: &std::path::Path,
-    message: Option<&str>,
-    config: &crate::Config,
+    _backend: &Backend,
+    _path: &std::path::Path,
+    _message: Option<&str>,
+    _config: &crate::Config,
 ) -> AddResult {
     todo!("Add single file")
 }
 
 /// Compute the storage path for a file hash.
-fn storage_path_for_hash(storage_dir: &std::path::Path, hash: &str) -> PathBuf {
+fn storage_path_for_hash(_storage_dir: &std::path::Path, _hash: &str) -> PathBuf {
     todo!("Compute storage path from hash")
 }
 
