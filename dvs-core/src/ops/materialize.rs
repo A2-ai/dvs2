@@ -1,6 +1,6 @@
 //! DVS materialize operation - copy cached objects to working tree.
 
-use std::fs;
+use fs_err as fs;
 use std::path::PathBuf;
 use crate::{DvsError, Manifest, Oid, Backend, RepoBackend, detect_backend_cwd};
 use crate::helpers::layout::{Layout, MaterializedState};

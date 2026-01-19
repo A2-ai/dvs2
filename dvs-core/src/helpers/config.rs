@@ -1,6 +1,6 @@
 //! Configuration loading and validation utilities.
 
-use std::fs;
+use fs_err as fs;
 use std::path::{Path, PathBuf};
 use crate::{Config, DvsError};
 

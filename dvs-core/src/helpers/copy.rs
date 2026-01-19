@@ -1,6 +1,6 @@
 //! File copy utilities.
 
-use std::fs::{self, File};
+use fs_err::{self as fs, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use crate::DvsError;
@@ -80,9 +80,10 @@ fn copy_file(source: &Path, dest: &Path) -> Result<u64, DvsError> {
 /// Set file permissions (Unix-only).
 #[cfg(unix)]
 pub fn set_permissions(path: &Path, permissions: u32) -> Result<(), DvsError> {
+    use std::fs::Permissions;
     use std::os::unix::fs::PermissionsExt;
 
-    let perms = fs::Permissions::from_mode(permissions);
+    let perms = Permissions::from_mode(permissions);
     fs::set_permissions(path, perms)?;
     Ok(())
 }

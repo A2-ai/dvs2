@@ -47,6 +47,10 @@ fmt *args:
 check *args:
     cargo check --manifest-path={{quote(workspace_manifest)}} {{args}}
 
+# Check for std::fs usage in workspace Rust sources
+check-std-fs:
+    @! rg -n -g '*.rs' -e 'std::fs' -e 'std::\s*\{[^}]*\bfs\b[^}]*\}' dvs-core dvs-cli dvs-daemon dvs-server
+
 # Run any cargo subcommand against the workspace
 cargo subcmd *args:
     cargo {{subcmd}} --manifest-path={{quote(workspace_manifest)}} {{args}}

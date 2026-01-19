@@ -8,6 +8,7 @@ mod paths;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use fs_err as fs;
 
 use clap::{Parser, Subcommand};
 
@@ -148,7 +149,7 @@ fn main() -> ExitCode {
                 }
                 FsCommand::Ls { path } => {
                     let target = path.unwrap_or_else(|| PathBuf::from("."));
-                    match std::fs::read_dir(&target) {
+                    match fs::read_dir(&target) {
                         Ok(entries) => {
                             for entry in entries.flatten() {
                                 let name = entry.file_name();
