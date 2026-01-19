@@ -12,7 +12,7 @@ use fs_err as fs;
 
 use clap::{Parser, Subcommand};
 
-use commands::{init, add, get, status, push, pull, materialize};
+use commands::{init, add, get, status, push, pull, materialize, log, rollback};
 use output::Output;
 
 /// DVS - Data Version System
@@ -117,6 +117,27 @@ pub enum Command {
         files: Vec<PathBuf>,
     },
 
+    /// View reflog (history of state changes)
+    Log {
+        /// Maximum number of entries to show
+        #[arg(short = 'n', long, value_name = "COUNT")]
+        limit: Option<usize>,
+    },
+
+    /// Rollback to a previous state
+    Rollback {
+        /// Target state (state ID or reflog index like @{0})
+        target: String,
+
+        /// Force rollback even if working tree is dirty
+        #[arg(short, long)]
+        force: bool,
+
+        /// Skip materializing data files (only restore metadata)
+        #[arg(long)]
+        no_materialize: bool,
+    },
+
     /// Filesystem navigation helpers
     #[command(subcommand)]
     Fs(FsCommand),
@@ -170,6 +191,12 @@ fn main() -> ExitCode {
         }
         Command::Materialize { files } => {
             materialize::run(&output, files)
+        }
+        Command::Log { limit } => {
+            log::run(&output, limit)
+        }
+        Command::Rollback { target, force, no_materialize } => {
+            rollback::run(&output, target, force, !no_materialize)
         }
         Command::Fs(fs_cmd) => {
             match fs_cmd {

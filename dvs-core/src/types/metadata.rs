@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use crate::HashAlgo;
 
 /// Metadata stored in `.dvs` files alongside tracked data files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Metadata {
     /// Hash of the file contents (hex string).
     /// Field name kept as `blake3_checksum` for backward compatibility.
