@@ -15,21 +15,20 @@ concurrency:
 
 jobs:
   rust-workspace:
-    name: Rust workspace
+    name: Rust workspace (stable)
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.head_ref || github.ref }}
-      - name: Set up Rust 1.78.0
-        uses: dtolnay/rust-toolchain@v1
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.78.0
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2.8.2
+      - uses: Swatinem/rust-cache@v2
       - name: Install just
         uses: extractions/setup-just@v3
       - name: Install ripgrep
@@ -64,37 +63,105 @@ jobs:
         run: |
           echo "fmt-check failed on a forked PR; please run just fmt-all locally."
           exit 1
-      - name: Cargo check
+      - name: Cargo check (warnings as errors)
+        env:
+          RUSTFLAGS: "-D warnings"
         run: just check
-      - name: Clippy
-        run: just clippy
-      - name: Tests
+      - name: Clippy (warnings as errors)
+        run: just clippy -- -D warnings
+      - name: Tests (default features)
         run: just test
+      - name: Tests (all features)
+        run: cargo test --manifest-path Cargo.toml --workspace --all-features
+      - name: Tests (no default features)
+        run: cargo test --manifest-path Cargo.toml --workspace --no-default-features
+      - name: Docs (warnings as errors)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --manifest-path Cargo.toml --workspace --no-deps
+
+  rust-msrv:
+    name: Rust MSRV (1.78.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust 1.78.0
+        uses: dtolnay/rust-toolchain@1.78.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Cargo check (workspace)
+        run: cargo check --manifest-path Cargo.toml --workspace
+      - name: Tests (workspace)
+        run: cargo test --manifest-path Cargo.toml --workspace
+
+  rust-cross-platform:
+    name: Rust tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cargo check (workspace)
+        run: cargo check --manifest-path Cargo.toml --workspace
+      - name: Tests (workspace)
+        run: cargo test --manifest-path Cargo.toml --workspace
+
+  rpkg-rust:
+    name: dvsR Rust crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Cargo check (warnings as errors)
+        env:
+          RUSTFLAGS: "-D warnings"
+        run: cargo check --manifest-path dvsR/src/rust/Cargo.toml
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --manifest-path dvsR/src/rust/Cargo.toml -- -D warnings
+      - name: Tests
+        run: cargo test --manifest-path dvsR/src/rust/Cargo.toml
+
+  rust-audit:
+    name: Cargo audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit dependencies
+        uses: actions-rust-lang/audit@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   r-cmd-check:
-    name: R CMD check (NOT_CRAN=${{ matrix.not_cran }})
+    name: R CMD check (R=${{ matrix.r-version }}, NOT_CRAN=${{ matrix.not_cran }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        r-version: [oldrel-1, release, devel]
         not_cran: [unset, set]
     steps:
-      - uses: actions/checkout@v6
-      - name: Set up Rust 1.85.0
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: 1.85.0
-      - uses: Swatinem/rust-cache@v2.8.2
+      - uses: actions/checkout@v4
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Set up R
         uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.r-version }}
       - name: Install R dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
           working-directory: dvsR
-      - name: Install just
-        uses: extractions/setup-just@v3
-      - name: Rust tests for dvsR
-        run: just rpkg-test
       - name: R CMD check (NOT_CRAN unset)
         if: matrix.not_cran == 'unset'
         working-directory: dvsR
@@ -105,3 +172,9 @@ jobs:
         env:
           NOT_CRAN: "true"
         run: R CMD check --as-cran --no-manual .
+      - name: Upload R CMD check results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r-cmd-check-${{ matrix.r-version }}-${{ matrix.not_cran }}
+          path: dvsR/*.Rcheck
