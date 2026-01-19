@@ -113,3 +113,61 @@ but cleanly falls back to DVS-only workspaces when no Git repo exists.
 - [x] Collection tests (negation handling, should_ignore helper)
 - [x] Backend tests (types, root finding, branch detection, path normalization)
 - [x] DVS workspace detection tests (`dvs.yaml` and `.dvs/` directory)
+
+## Plan 022: clap CLI Integration
+
+Built a clap-based CLI that handles filesystem navigation concerns while delegating
+all DVS behavior to dvs-core.
+
+### main.rs - CLI entry point with clap parsing
+
+- [x] `Cli` struct with global options (`-C/--cwd`, `--repo`, `--format`, `--quiet`)
+- [x] `Command` enum with subcommands: `Init`, `Add`, `Get`, `Status`, `Fs`
+- [x] `FsCommand` for navigation helpers: `Pwd`, `Ls`
+- [x] `OutputFormat` enum: `Human`, `Json`
+- [x] Working directory change via `-C` flag before command dispatch
+- [x] Proper exit codes (success/failure)
+
+### commands/ - Command implementations
+
+- [x] `commands/mod.rs` - `CliError` type with thiserror, `Result` alias
+- [x] `commands/init.rs` - Parse permissions, resolve paths, call `dvs_core::init()`
+- [x] `commands/add.rs` - Resolve file paths, call `dvs_core::add()`, output results by outcome
+- [x] `commands/get.rs` - Resolve file paths, call `dvs_core::get()`, output results by outcome
+- [x] `commands/status.rs` - Resolve file paths, call `dvs_core::status()`, output by file status
+
+### output.rs - Output formatting
+
+- [x] `Output` struct with format and quiet mode
+- [x] Methods: `println()`, `success()`, `info()`, `warn()`, `error()`
+- [x] ANSI color codes for human format (green success, yellow warning, red error)
+- [x] JSON output format support
+- [x] `escape_json()` helper for safe JSON string output
+
+### paths.rs - Path resolution utilities
+
+- [x] `set_cwd()` - Change working directory with validation
+- [x] `resolve_path()` - Expand `~` and make paths absolute
+- [x] `normalize_path()` - Resolve `.` and `..` components
+- [x] `home_dir()` - Cross-platform home directory detection
+
+### CLI Features
+
+- [x] Global `-C/--cwd` flag to change directory before running
+- [x] Global `--repo` flag for explicit repository root
+- [x] Global `--format` flag (human/json output)
+- [x] Global `-q/--quiet` flag to suppress non-error output
+- [x] `dvs init <storage_dir> [--permissions] [--group]`
+- [x] `dvs add <files...> [-m/--message]`
+- [x] `dvs get <files...>`
+- [x] `dvs status [files...]`
+- [x] `dvs fs pwd` - Print current directory
+- [x] `dvs fs ls [path]` - List directory contents
+
+### Tests - 6 tests passing
+
+- [x] Permission parsing tests (valid octal, invalid input)
+- [x] JSON escaping test
+- [x] Path normalization test
+- [x] Absolute path resolution test
+- [x] Tilde expansion test

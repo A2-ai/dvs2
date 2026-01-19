@@ -53,7 +53,7 @@ cargo subcmd *args:
 
 # Install the dvs CLI binary
 install-cli *args:
-    cargo install --path=dvs-cli {{args}}
+    cargo install --force --locked --path=dvs-cli {{args}}
 
 # ============================================================================
 # R package recipes (dvsR)

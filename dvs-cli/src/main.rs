@@ -1,3 +1,178 @@
-fn main() {
-    println!("Hello, world!");
+//! DVS Command-Line Interface
+//!
+//! Provides the `dvs` binary with subcommands for managing data versioning.
+
+mod commands;
+mod output;
+mod paths;
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+
+use commands::{init, add, get, status};
+use output::Output;
+
+/// DVS - Data Version System
+///
+/// Version large or sensitive files under Git without tracking them directly.
+/// Uses content-addressable storage with blake3 hashing.
+#[derive(Parser)]
+#[command(name = "dvs")]
+#[command(author, version, about, long_about = None)]
+#[command(propagate_version = true)]
+pub struct Cli {
+    /// Change to this directory before running the command
+    #[arg(short = 'C', long = "cwd", global = true, value_name = "DIR")]
+    cwd: Option<PathBuf>,
+
+    /// Explicit repository root (overrides auto-detection)
+    #[arg(long = "repo", global = true, value_name = "DIR")]
+    repo: Option<PathBuf>,
+
+    /// Output format
+    #[arg(long, global = true, default_value = "human")]
+    format: OutputFormat,
+
+    /// Suppress non-error output
+    #[arg(short, long, global = true)]
+    quiet: bool,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum OutputFormat {
+    #[default]
+    Human,
+    Json,
+}
+
+#[derive(Subcommand)]
+pub enum Command {
+    /// Initialize DVS for this repository
+    Init {
+        /// Path to external storage directory
+        storage_dir: PathBuf,
+
+        /// File permissions for stored files (octal, e.g., 664)
+        #[arg(long, value_name = "OCTAL")]
+        permissions: Option<String>,
+
+        /// Linux group for stored files
+        #[arg(long, value_name = "GROUP")]
+        group: Option<String>,
+    },
+
+    /// Add files to DVS tracking
+    Add {
+        /// Files or glob patterns to add
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+
+        /// Message describing this version
+        #[arg(short, long)]
+        message: Option<String>,
+    },
+
+    /// Retrieve files from DVS storage
+    Get {
+        /// Files or glob patterns to retrieve
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+    },
+
+    /// Check status of tracked files
+    Status {
+        /// Files or glob patterns to check (empty = all tracked files)
+        files: Vec<PathBuf>,
+    },
+
+    /// Filesystem navigation helpers
+    #[command(subcommand)]
+    Fs(FsCommand),
+}
+
+#[derive(Subcommand)]
+pub enum FsCommand {
+    /// Print current working directory
+    Pwd,
+
+    /// List files in directory
+    Ls {
+        /// Directory to list (default: current directory)
+        path: Option<PathBuf>,
+    },
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+
+    // Create output handler
+    let output = Output::new(cli.format, cli.quiet);
+
+    // Change working directory if requested
+    if let Some(ref cwd) = cli.cwd {
+        if let Err(e) = paths::set_cwd(cwd) {
+            output.error(&format!("Failed to change directory: {}", e));
+            return ExitCode::FAILURE;
+        }
+    }
+
+    // Execute the command
+    let result: commands::Result<()> = match cli.command {
+        Command::Init { storage_dir, permissions, group } => {
+            init::run(&output, storage_dir, permissions, group)
+        }
+        Command::Add { files, message } => {
+            add::run(&output, files, message)
+        }
+        Command::Get { files } => {
+            get::run(&output, files)
+        }
+        Command::Status { files } => {
+            status::run(&output, files)
+        }
+        Command::Fs(fs_cmd) => {
+            match fs_cmd {
+                FsCommand::Pwd => {
+                    match std::env::current_dir() {
+                        Ok(cwd) => {
+                            output.println(&cwd.display().to_string());
+                            Ok(())
+                        }
+                        Err(e) => Err(commands::CliError::Io(e)),
+                    }
+                }
+                FsCommand::Ls { path } => {
+                    let target = path.unwrap_or_else(|| PathBuf::from("."));
+                    match std::fs::read_dir(&target) {
+                        Ok(entries) => {
+                            for entry in entries.flatten() {
+                                let name = entry.file_name();
+                                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                                if is_dir {
+                                    output.println(&format!("{}/", name.to_string_lossy()));
+                                } else {
+                                    output.println(&name.to_string_lossy());
+                                }
+                            }
+                            Ok(())
+                        }
+                        Err(e) => Err(commands::CliError::Io(e)),
+                    }
+                }
+            }
+        }
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            output.error(&e.to_string());
+            ExitCode::FAILURE
+        }
+    }
 }
