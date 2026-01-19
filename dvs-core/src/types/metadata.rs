@@ -3,11 +3,13 @@
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use crate::HashAlgo;
 
 /// Metadata stored in `.dvs` files alongside tracked data files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
-    /// Blake3 hash of the file contents (64-character hex string).
+    /// Hash of the file contents (hex string).
+    /// Field name kept as `blake3_checksum` for backward compatibility.
     pub blake3_checksum: String,
 
     /// File size in bytes.
@@ -22,6 +24,21 @@ pub struct Metadata {
 
     /// Username of the person who added this file.
     pub saved_by: String,
+
+    /// Hash algorithm used for this file.
+    /// Defaults to Blake3 for backward compatibility with existing metadata.
+    #[serde(default = "default_hash_algo", skip_serializing_if = "is_blake3")]
+    pub hash_algo: HashAlgo,
+}
+
+/// Default hash algorithm for backward compatibility.
+fn default_hash_algo() -> HashAlgo {
+    HashAlgo::Blake3
+}
+
+/// Check if algorithm is Blake3 (for skip_serializing_if).
+fn is_blake3(algo: &HashAlgo) -> bool {
+    *algo == HashAlgo::Blake3
 }
 
 impl Metadata {
@@ -38,7 +55,31 @@ impl Metadata {
             add_time: Utc::now(),
             message: message.unwrap_or_default(),
             saved_by,
+            hash_algo: HashAlgo::Blake3,
         }
+    }
+
+    /// Create new metadata with a specific hash algorithm.
+    pub fn with_algo(
+        checksum: String,
+        size: u64,
+        message: Option<String>,
+        saved_by: String,
+        hash_algo: HashAlgo,
+    ) -> Self {
+        Self {
+            blake3_checksum: checksum,
+            size,
+            add_time: Utc::now(),
+            message: message.unwrap_or_default(),
+            saved_by,
+            hash_algo,
+        }
+    }
+
+    /// Get the checksum (alias for blake3_checksum field).
+    pub fn checksum(&self) -> &str {
+        &self.blake3_checksum
     }
 
     /// Load metadata from a `.dvs` file.

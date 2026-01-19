@@ -19,15 +19,26 @@ rust-version.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = ["blake3"]
+blake3 = ["dep:blake3"]
+xxh3 = ["dep:xxhash-rust"]
+sha256 = ["dep:sha2"]
+all-hashes = ["blake3", "xxh3", "sha256"]
+
 [dependencies]
 # Serialization
 serde.workspace = true
 serde_yaml.workspace = true
 serde_json.workspace = true
 
-# Hashing
-blake3.workspace = true
+# Hashing (always needed for file I/O)
 memmap2.workspace = true
+
+# Hash algorithms (optional features)
+blake3 = { workspace = true, optional = true }
+xxhash-rust = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 # File system
 fs-err.workspace = true

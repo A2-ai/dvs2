@@ -14,9 +14,11 @@
 
 - [x] **Plan 029: fs-err Inclusion** - Replaced `std::fs` with `fs_err` across dvs-core for better filesystem error messages. All key modules (init, add, get, status, config, layout, store, copy, metadata, materialize, manifest) use `fs_err`. Justfile lint (`check-std-fs`) enforces usage, allowing only `std::fs::Permissions` and `std::fs::Metadata` types.
 
+- [x] **Plan 025: Hashing + Fingerprinting for DVS (Phase 1)** - Multi-algorithm hashing support with BLAKE3 (default), XXH3 (fast), and SHA-256 (interop). Implemented `Hasher` trait for streaming hash computation, feature flags for optional algorithms, configurable `hash_algo` in Config/Metadata, and `dvs add` uses config's hash algorithm.
+
 ### Pending Plans
 
-- [ ] **Plan 025: Hashing + Fingerprinting for DVS** - Define hashing and fingerprinting strategy for blobs, tables/dataframes, and trees. Includes algorithm selection (XXH3 vs BLAKE3 vs SHA-256), chunking strategy, Merkle/DAG, and table canonicalization.
+None currently - all core plans complete!
 
 ### Future Plans (Not Yet Written)
 
