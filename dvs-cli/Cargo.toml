@@ -1,10 +1,24 @@
 [package]
 name = "dvs-cli"
+description = """
+Command-line interface for DVS (Data Version System).
+
+Provides the `dvs` binary with subcommands:
+- dvs init: Initialize DVS in a git repository
+- dvs add: Add files to version control
+- dvs get: Retrieve files from storage
+- dvs status: Check status of tracked files
+"""
 version.workspace = true
 authors.workspace = true
-description.workspace = true
 license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "dvs"
+path = "src/main.rs"
+
 [dependencies]
+dvs-core.workspace = true
+clap = { version = "4.5", features = ["derive"] }

@@ -1,0 +1,32 @@
+[package]
+name = "dvs-daemon"
+description = """
+Background daemon for DVS (Data Version System).
+
+Provides automatic file watching and sync capabilities:
+- File watcher: Monitor tracked files for changes using notify
+- Event handler: Auto-sync modified files to storage
+- IPC: Unix socket communication for daemon control
+- Commands: start, stop, status, reload
+"""
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+dvs-core.workspace = true
+
+# Async runtime
+tokio.workspace = true
+
+# File watching
+notify.workspace = true
+
+# Serialization (for IPC)
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
