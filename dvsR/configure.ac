@@ -164,6 +164,18 @@ AC_SUBST([VENDOR_OUT])
 VENDOR_OUT_CARGO="$abs_rpkg_src_cargo/vendor"
 AC_SUBST([VENDOR_OUT_CARGO])
 
+dnl Source replacement config for .cargo/config.toml
+CARGO_SOURCE_REPLACE="$(cat <<EOF
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "$VENDOR_OUT_CARGO"
+EOF
+)"
+AC_SUBST([CARGO_SOURCE_REPLACE])
+
+
 dnl Generate Cargo.toml and document.rs from templates
 AC_CONFIG_FILES([src/rust/Cargo.toml:src/rust/Cargo.toml.in])
 AC_CONFIG_FILES([src/rust/document.rs:src/rust/document.rs.in])
@@ -173,17 +185,197 @@ AC_CONFIG_FILES([src/Makevars:src/Makevars.in])
 AC_CONFIG_FILES([src/entrypoint.c:src/entrypoint.c.in])
 AC_CONFIG_FILES([src/mx_abi.c:src/mx_abi.c.in])
 
-dnl Generate .cargo/config.toml for vendoring (CRAN mode)
-AS_IF([test "$NOT_CRAN" != "true"], [
-  mkdir -p "$abs_rpkg_src/rust/.cargo"
-  cat > "$abs_rpkg_src/rust/.cargo/config.toml" << EOF
-[source.crates-io]
-replace-with = "vendored-sources"
+dnl ---- output files ----
+dnl Create .cargo directory
+AS_MKDIR_P([src/rust/.cargo])
 
-[source.vendored-sources]
-directory = "$VENDOR_OUT_CARGO"
-EOF
-  AC_MSG_NOTICE([Created .cargo/config.toml for vendored sources])
-])
+dnl Generate config files from templates
+AC_CONFIG_FILES([src/rust/.cargo/config.toml:src/rust/cargo-config.toml.in])
+
+dnl ---- AC_CONFIG_COMMANDS run after AC_CONFIG_FILES generates files ----
+
+dnl 1) Run cargo vendor (dev mode only, after Cargo.toml is generated)
+AC_CONFIG_COMMANDS([cargo-vendor],
+[
+  if test "$NOT_CRAN" != "true"; then
+    dnl CRAN/offline mode - check for vendor directory or tarball
+    if test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
+      if test -f "$abs_rpkg_dir/inst/vendor.tar.xz"; then
+        echo "configure: CRAN build - unpacking inst/vendor.tar.xz"
+        tar -xJf "$abs_rpkg_dir/inst/vendor.tar.xz" -C "$abs_rpkg_src"
+        if test $? -ne 0; then
+          echo "configure: error: failed to unpack vendor.tar.xz" >&2
+          exit 1
+        fi
+      else
+        echo "configure: error: CRAN/offline build but vendor directory is missing: $VENDOR_OUT" >&2
+        echo "configure:        Run configure with NOT_CRAN=true first, or use a release tarball." >&2
+        exit 1
+      fi
+    fi
+    echo "configure: CRAN build - using pre-vendored sources"
+  else
+    dnl Dev mode - run cargo vendor
+    MANIFEST="src/rust/Cargo.toml"
+    LOCKFILE="src/rust/Cargo.lock"
+    STAMP="$VENDOR_OUT/.vendor.lock.cksum"
+
+    _need_vendor=0
+    if test ! -f "$STAMP"; then
+      _need_vendor=1
+    elif test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
+      _need_vendor=1
+    fi
+
+    if test $_need_vendor -eq 1; then
+      echo "configure: running cargo vendor"
+      mkdir -p "$VENDOR_OUT"
+
+      dnl Temporarily move .cargo/config.toml to avoid circular vendored-sources reference
+      _cargo_cfg="src/rust/.cargo/config.toml"
+      _cargo_cfg_bak="src/rust/.cargo/config.toml.bak"
+      if test -f "$_cargo_cfg"; then
+        mv "$_cargo_cfg" "$_cargo_cfg_bak"
+      fi
+
+      $CARGO $RUST_TOOLCHAIN vendor \
+        --manifest-path "$MANIFEST" \
+        "$VENDOR_OUT" > /dev/null
+      _vendor_status=$?
+
+      dnl Restore cargo config
+      if test -f "$_cargo_cfg_bak"; then
+        mv "$_cargo_cfg_bak" "$_cargo_cfg"
+      fi
+
+      if test $_vendor_status -ne 0; then
+        echo "configure: error: cargo vendor failed" >&2
+        exit 1
+      fi
+    fi
+
+    dnl Generate Cargo.lock if missing
+    if test ! -f "$LOCKFILE"; then
+      echo "configure: generating Cargo.lock"
+      $CARGO $RUST_TOOLCHAIN generate-lockfile --manifest-path "$MANIFEST"
+      if test $? -ne 0; then
+        echo "configure: error: cargo generate-lockfile failed" >&2
+        exit 1
+      fi
+    fi
+
+    dnl Update vendor stamp
+    _new="$(cksum < "$LOCKFILE" | awk '{print $1":"$2}')"
+    echo "$_new" > "$STAMP"
+
+    dnl Clear checksums for tarball compatibility
+    echo "configure: clearing vendor checksums"
+    for _crate_dir in "$VENDOR_OUT"/*/; do
+      if test -d "$_crate_dir"; then
+        echo '{"files":{}}' > "${_crate_dir}.cargo-checksum.json"
+      fi
+    done
+
+    echo "configure: vendor complete"
+  fi
+],
+[CARGO="$CARGO" RUST_TOOLCHAIN="$RUST_TOOLCHAIN" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir"])
+
+dnl 2) Compress vendor directory for CRAN tarballs
+AC_CONFIG_COMMANDS([compress-vendor],
+[
+  if test "$NOT_CRAN" = "true" && test -d "$VENDOR_OUT" && test -n "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
+    VENDOR_TARBALL="$abs_rpkg_dir/inst/vendor.tar.xz"
+    VENDOR_STAMP="$abs_rpkg_dir/inst/.vendor.tar.xz.cksum"
+
+    _lock_ck=""
+    if test -f "src/rust/Cargo.lock"; then
+      _lock_ck="$(cksum < "src/rust/Cargo.lock" | awk '{print $1":"$2}')"
+    fi
+
+    _new_fingerprint="lock:$_lock_ck"
+    _old_fingerprint="$(cat "$VENDOR_STAMP" 2>/dev/null || true)"
+
+    _need_compress=0
+    if test ! -f "$VENDOR_TARBALL"; then
+      _need_compress=1
+      echo "configure: vendor.tar.xz does not exist"
+    elif test "x$_new_fingerprint" != "x$_old_fingerprint"; then
+      _need_compress=1
+      echo "configure: vendor contents changed"
+    fi
+
+    if test $_need_compress -eq 1; then
+      echo "configure: compressing vendor directory to inst/vendor.tar.xz"
+      mkdir -p "$abs_rpkg_dir/inst"
+
+      dnl Create temp staging area
+      _staging_tmp="$abs_rpkg_src/.vendor-tarball-staging"
+      rm -rf "$_staging_tmp"
+      mkdir -p "$_staging_tmp"
+      cp -R "$VENDOR_OUT" "$_staging_tmp/vendor"
+
+      dnl Clear checksums in staging copy
+      for _crate_dir in "$_staging_tmp/vendor"/*/; do
+        test -d "$_crate_dir" && echo '{"files":{}}' > "${_crate_dir}.cargo-checksum.json"
+      done
+
+      dnl Remove unnecessary directories to reduce size
+      find "$_staging_tmp/vendor" -type d -name 'tests' -exec rm -rf {} + 2>/dev/null || true
+      find "$_staging_tmp/vendor" -type d -name 'benches' -exec rm -rf {} + 2>/dev/null || true
+      find "$_staging_tmp/vendor" -type d -name 'examples' -exec rm -rf {} + 2>/dev/null || true
+      find "$_staging_tmp/vendor" -type d -name '.github' -exec rm -rf {} + 2>/dev/null || true
+      dnl Truncate .md files (keep file but remove content)
+      find "$_staging_tmp/vendor" -name '*.md' -type f | while read _md; do : > "$_md"; done
+
+      dnl Create tarball
+      tar -cJf "$VENDOR_TARBALL" -C "$_staging_tmp" vendor
+      _tar_status=$?
+
+      rm -rf "$_staging_tmp"
+
+      if test $_tar_status -ne 0; then
+        echo "configure: warning: failed to compress vendor directory" >&2
+      else
+        echo "$_new_fingerprint" > "$VENDOR_STAMP"
+        echo "configure: created inst/vendor.tar.xz"
+      fi
+    else
+      echo "configure: skipping vendor compression (unchanged)"
+    fi
+  fi
+],
+[NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir"])
+
+dnl 3) Extract CARGO_STATICLIB_NAME from generated Cargo.toml
+AC_CONFIG_COMMANDS([patch-staticlib-name],
+[
+  if test "$NOT_CRAN" = "true"; then
+    _pkgid_flags="--color=never"
+  else
+    _pkgid_flags="--offline --color=never"
+  fi
+  _pkgid_output="$( $CARGO $RUST_TOOLCHAIN pkgid $_pkgid_flags --manifest-path src/rust/Cargo.toml 2>/dev/null )"
+  _pkgid_status=$?
+  if test $_pkgid_status -ne 0; then
+    dnl Fallback: extract from Cargo.toml directly
+    REAL_STATICLIB_NAME="$($SED -n 's/^name = "\(.*\)"/\1/p' src/rust/Cargo.toml | head -1 | tr '-' '_')"
+  else
+    REAL_STATICLIB_NAME="$(echo "$_pkgid_output" | "$SED" 's/.*#\([^@]*\)@.*/\1/' | tr '-' '_')"
+  fi
+  if test -z "$REAL_STATICLIB_NAME"; then
+    echo "configure: warning: Could not extract package name, using default: $CARGO_STATICLIB_NAME" >&2
+    REAL_STATICLIB_NAME="$CARGO_STATICLIB_NAME"
+  fi
+  echo "configure: CARGO_STATICLIB_NAME = $REAL_STATICLIB_NAME"
+
+  dnl Patch generated files
+  for f in src/Makevars src/rust/document.rs; do
+    if test -f "$f"; then
+      "$SED" "s/__CARGO_STATICLIB_NAME_PLACEHOLDER__/$REAL_STATICLIB_NAME/g" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    fi
+  done
+],
+[CARGO="$CARGO" RUST_TOOLCHAIN="$RUST_TOOLCHAIN" NOT_CRAN="$NOT_CRAN" SED="$SED" CARGO_STATICLIB_NAME="$CARGO_STATICLIB_NAME"])
 
 AC_OUTPUT

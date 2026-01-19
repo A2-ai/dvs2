@@ -51,12 +51,20 @@ check *args:
 cargo subcmd *args:
     cargo {{subcmd}} --manifest-path={{quote(workspace_manifest)}} {{args}}
 
+# Install the dvs CLI binary
+install-cli *args:
+    cargo install --path=dvs-cli {{args}}
+
 # ============================================================================
 # R package recipes (dvsR)
 # ============================================================================
 
 # Configure the R package (generates Cargo.toml from .in template)
 rpkg-configure:
+    cd {{quote(rpkg_dir)}} && NOT_CRAN=true ./configure
+
+# Vendor R package dependencies (runs configure with NOT_CRAN=true)
+vendor:
     cd {{quote(rpkg_dir)}} && NOT_CRAN=true ./configure
 
 # Build the R package Rust library

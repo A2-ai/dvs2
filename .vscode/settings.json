@@ -38,7 +38,7 @@
     // Exclude build artifacts from search
     "files.exclude": {
         "**/target": true,
-        "**/dvsR/src/vendor": true,
+        // "**/dvsR/src/vendor": true,
         "**/autom4te.cache": true,
         "**/*.o": true,
         "**/*.so": true,
