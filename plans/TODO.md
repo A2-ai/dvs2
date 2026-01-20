@@ -188,7 +188,7 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ## Testing
 
-- [x] Unit tests for dvs-core types (163 tests passing)
+- [x] Unit tests for dvs-core types (166 tests passing)
 - [x] Unit tests for dvs-core helpers
 - [x] Unit tests for dvs-core operations
 - [x] Unit tests for dvs-server (20 tests: storage, auth, config)
