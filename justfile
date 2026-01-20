@@ -61,6 +61,10 @@ cargo subcmd *args:
 install-cli *args:
     cargo install --force --locked --path=dvs-cli {{args}}
 
+# Install the R package (alias for rpkg-install)
+install-rpkg:
+    NOT_CRAN=true Rscript -e 'install.packages("{{rpkg_dir}}", repos = NULL, type = "source")'
+
 # ============================================================================
 # R package recipes (dvsR)
 # ============================================================================

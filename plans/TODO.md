@@ -118,12 +118,13 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 - [x] `HEAD /objects/{algo}/{hash}` - check object existence
 - [x] `GET /objects/{algo}/{hash}` - download object
-- [x] `PUT /objects/{algo}/{hash}` - upload object
+- [x] `PUT /objects/{algo}/{hash}` - upload object (requires Write permission)
+- [x] `DELETE /objects/{algo}/{hash}` - delete object (requires Delete permission)
 - [x] Authentication middleware (API key / Bearer token)
 - [x] Storage backend wiring to LocalStorage
-- [ ] DELETE endpoint for admin access
-- [ ] CORS middleware configuration
-- [ ] Request body size limits
+- [x] Auth checks wired into PUT/DELETE handlers
+- [x] CORS support (preflight, origin validation, configurable origins)
+- [x] Request body size limits (max_upload_size config, 413 response)
 
 ### dvs-daemon
 
@@ -182,7 +183,7 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ## Testing
 
-- [x] Unit tests for dvs-core types (151 tests passing)
+- [x] Unit tests for dvs-core types (159 tests passing)
 - [x] Unit tests for dvs-core helpers
 - [x] Unit tests for dvs-core operations
 - [x] Unit tests for dvs-server (14 tests: storage, auth)
@@ -226,7 +227,5 @@ This ensures the CLI binary is built with the same features (yaml-config) as the
   - [x] `toml` - via `toml-config` feature, uses `dvs.toml` when enabled (without yaml-config)
 - [ ] The r-package should be named `dvs`, it is just that the _directory_
   is named `dvsR` for convenience.
-- [ ] add a `install-rpkg` recipe that installs `dvsR`/`{dvs}`, to also mimic
+- [x] add a `install-rpkg` recipe that installs `dvsR`/`{dvs}`, to also mimic
   `just install-cli` as well.
-
-
