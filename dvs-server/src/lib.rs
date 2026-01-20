@@ -9,10 +9,17 @@
 //!
 //! - `HEAD /objects/{algo}/{hash}` - Check if object exists (returns 200 or 404)
 //! - `GET /objects/{algo}/{hash}` - Download object bytes
-//! - `PUT /objects/{algo}/{hash}` - Upload object bytes
+//! - `PUT /objects/{algo}/{hash}` - Upload object bytes (requires Write permission)
+//! - `DELETE /objects/{algo}/{hash}` - Delete object (requires Delete permission)
 //!
 //! Where `algo` is the hash algorithm (blake3, sha256, xxh3) and `hash` is the
 //! hex-encoded hash value.
+//!
+//! ## Features
+//!
+//! - **CORS**: Configurable cross-origin resource sharing with origin validation
+//! - **Body Size Limits**: Configurable max upload size (default 100MB, returns 413 if exceeded)
+//! - **Authentication**: API key/Bearer token with Read/Write/Delete/Admin permissions
 //!
 //! ## Example
 //!

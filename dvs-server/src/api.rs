@@ -4,6 +4,7 @@
 //! - `HEAD /objects/{algo}/{hash}` - Check if object exists
 //! - `GET /objects/{algo}/{hash}` - Download object
 //! - `PUT /objects/{algo}/{hash}` - Upload object
+//! - `DELETE /objects/{algo}/{hash}` - Delete object (requires Delete permission)
 //! - `GET /health` - Health check
 //! - `GET /status` - Server status
 
@@ -12,6 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tiny_http::{Header, Request, Response, StatusCode};
 
+use crate::auth::{require_permission_from_header, Permission};
 use crate::storage::{parse_oid, LocalStorage, StorageBackend};
 use crate::{ServerConfig, ServerError};
 
@@ -44,6 +46,12 @@ pub fn handle_request(state: &AppState, mut request: Request) -> Result<(), Serv
     let method = request.method().to_string();
     let url = request.url().to_string();
 
+    // Handle CORS preflight
+    if method == "OPTIONS" && state.config.cors_enabled {
+        let response = handle_cors_preflight(state, &request);
+        return request.respond(response).map_err(ServerError::IoError);
+    }
+
     // Route based on path
     let response = match (method.as_str(), url.as_str()) {
         // Health check
@@ -61,11 +69,15 @@ pub fn handle_request(state: &AppState, mut request: Request) -> Result<(), Serv
         _ => Ok(Response::from_string("Not Found").with_status_code(StatusCode(404))),
     };
 
-    // Send response
+    // Send response with CORS headers if enabled
     match response {
-        Ok(resp) => request.respond(resp).map_err(ServerError::IoError),
+        Ok(resp) => {
+            let resp = add_cors_headers(state, &request, resp);
+            request.respond(resp).map_err(ServerError::IoError)
+        }
         Err(e) => {
             let error_response = error_to_response(&e);
+            let error_response = add_cors_headers(state, &request, error_response);
             request
                 .respond(error_response)
                 .map_err(ServerError::IoError)
@@ -119,12 +131,39 @@ fn handle_object_request(
         }
 
         "PUT" => {
-            // Upload object
+            // Upload object - requires Write permission if auth enabled
+            let auth_header = get_auth_header(request);
+            require_permission_from_header(&state.config.auth, auth_header, Permission::Write)?;
+
+            // Check content length against max upload size
+            let content_length = get_content_length(request);
+            if let Some(len) = content_length {
+                if len > state.config.max_upload_size {
+                    return Ok(Response::from_string("Payload Too Large")
+                        .with_status_code(StatusCode(413)));
+                }
+            }
+
             let already_exists = state.storage.exists(&oid)?;
 
-            // Read request body
+            // Read request body with size limit
+            let max_size = state.config.max_upload_size as usize;
             let mut body = Vec::new();
-            request.as_reader().read_to_end(&mut body)?;
+            let mut buf = [0u8; 8192];
+            let mut total_read = 0usize;
+
+            loop {
+                let n = request.as_reader().read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                total_read += n;
+                if total_read > max_size {
+                    return Ok(Response::from_string("Payload Too Large")
+                        .with_status_code(StatusCode(413)));
+                }
+                body.extend_from_slice(&buf[..n]);
+            }
 
             state.storage.put(&oid, &body)?;
 
@@ -135,8 +174,121 @@ fn handle_object_request(
             }
         }
 
+        "DELETE" => {
+            // Delete object - requires Delete permission
+            let auth_header = get_auth_header(request);
+            require_permission_from_header(&state.config.auth, auth_header, Permission::Delete)?;
+
+            if state.storage.exists(&oid)? {
+                state.storage.delete(&oid)?;
+                Ok(Response::from_data(vec![]).with_status_code(StatusCode(204)))
+            } else {
+                Ok(Response::from_data(vec![]).with_status_code(StatusCode(404)))
+            }
+        }
+
         _ => Ok(Response::from_string("Method Not Allowed").with_status_code(StatusCode(405))),
     }
+}
+
+/// Extract Authorization header from request.
+fn get_auth_header(request: &Request) -> Option<&str> {
+    for header in request.headers() {
+        if header.field.as_str().to_ascii_lowercase() == "authorization" {
+            return Some(header.value.as_str());
+        }
+    }
+    None
+}
+
+/// Extract Content-Length header from request.
+fn get_content_length(request: &Request) -> Option<u64> {
+    for header in request.headers() {
+        if header.field.as_str().to_ascii_lowercase() == "content-length" {
+            return header.value.as_str().parse().ok();
+        }
+    }
+    None
+}
+
+/// Extract Origin header from request.
+fn get_origin_header(request: &Request) -> Option<&str> {
+    for header in request.headers() {
+        if header.field.as_str().to_ascii_lowercase() == "origin" {
+            return Some(header.value.as_str());
+        }
+    }
+    None
+}
+
+/// Handle CORS preflight (OPTIONS) request.
+fn handle_cors_preflight(state: &AppState, request: &Request) -> Response<std::io::Cursor<Vec<u8>>> {
+    let mut response = Response::from_data(vec![]).with_status_code(StatusCode(204));
+
+    // Add CORS headers
+    let origin = get_origin_header(request);
+    if let Some(origin) = origin {
+        if is_origin_allowed(state, origin) {
+            response = response
+                .with_header(Header::from_bytes("Access-Control-Allow-Origin", origin).unwrap())
+                .with_header(
+                    Header::from_bytes(
+                        "Access-Control-Allow-Methods",
+                        "GET, HEAD, PUT, DELETE, OPTIONS",
+                    )
+                    .unwrap(),
+                )
+                .with_header(
+                    Header::from_bytes(
+                        "Access-Control-Allow-Headers",
+                        "Authorization, Content-Type",
+                    )
+                    .unwrap(),
+                )
+                .with_header(Header::from_bytes("Access-Control-Max-Age", "86400").unwrap());
+        }
+    }
+
+    response
+}
+
+/// Add CORS headers to a response if CORS is enabled.
+fn add_cors_headers(
+    state: &AppState,
+    request: &Request,
+    response: Response<std::io::Cursor<Vec<u8>>>,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    if !state.config.cors_enabled {
+        return response;
+    }
+
+    let origin = match get_origin_header(request) {
+        Some(o) => o,
+        None => return response,
+    };
+
+    if !is_origin_allowed(state, origin) {
+        return response;
+    }
+
+    response.with_header(Header::from_bytes("Access-Control-Allow-Origin", origin).unwrap())
+}
+
+/// Check if an origin is allowed by CORS configuration.
+fn is_origin_allowed(state: &AppState, origin: &str) -> bool {
+    // If no origins configured, allow all (wildcard)
+    if state.config.cors_origins.is_empty() {
+        return true;
+    }
+
+    // Check if origin matches any configured origin
+    for allowed in &state.config.cors_origins {
+        if allowed == "*" || allowed == origin {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Handle GET /health
