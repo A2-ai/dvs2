@@ -110,7 +110,20 @@ pub fn add_with_backend(
 fn capture_workspace_state(backend: &Backend) -> Result<WorkspaceState, DvsError> {
     let repo_root = backend.root();
 
-    // Find all .dvs metadata files
+    #[cfg(feature = "walkdir")]
+    let metadata_entries = capture_metadata_walkdir(repo_root)?;
+
+    #[cfg(not(feature = "walkdir"))]
+    let metadata_entries = capture_metadata_recursive(repo_root)?;
+
+    // TODO: Also include manifest (dvs.lock) if present
+    // For now, just include metadata
+    Ok(WorkspaceState::new(None, metadata_entries))
+}
+
+/// Capture metadata using walkdir crate.
+#[cfg(feature = "walkdir")]
+fn capture_metadata_walkdir(repo_root: &Path) -> Result<Vec<MetadataEntry>, DvsError> {
     let mut metadata_entries = Vec::new();
 
     for entry in walkdir::WalkDir::new(repo_root)
@@ -140,9 +153,48 @@ fn capture_workspace_state(backend: &Backend) -> Result<WorkspaceState, DvsError
         }
     }
 
-    // TODO: Also include manifest (dvs.lock) if present
-    // For now, just include metadata
-    Ok(WorkspaceState::new(None, metadata_entries))
+    Ok(metadata_entries)
+}
+
+/// Capture metadata using recursive fs::read_dir (fallback when walkdir disabled).
+#[cfg(not(feature = "walkdir"))]
+fn capture_metadata_recursive(repo_root: &Path) -> Result<Vec<MetadataEntry>, DvsError> {
+    fn recurse(dir: &Path, repo_root: &Path, entries: &mut Vec<MetadataEntry>) -> Result<(), DvsError> {
+        let dir_entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return Ok(()), // Skip unreadable directories
+        };
+
+        for entry in dir_entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+
+            // Skip .git and .dvs directories
+            if name == ".git" || name == ".dvs" {
+                continue;
+            }
+
+            if path.is_dir() {
+                recurse(&path, repo_root, entries)?;
+            } else if path.extension().map_or(false, |ext| ext == "dvs") {
+                // Load metadata
+                if let Ok(meta) = Metadata::load(&path) {
+                    // Get the relative path to the data file
+                    if let Some(data_path) = Metadata::data_path(&path) {
+                        if let Some(relative) = pathdiff::diff_paths(&data_path, repo_root) {
+                            entries.push(MetadataEntry::new(relative, meta));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    let mut metadata_entries = Vec::new();
+    recurse(repo_root, repo_root, &mut metadata_entries)?;
+    Ok(metadata_entries)
 }
 
 /// Expand glob patterns and filter files.

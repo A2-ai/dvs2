@@ -176,8 +176,8 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ## Misc.
 
-- [ ] **Optional dvs-core dependencies (Plan 041)**: Making dependencies optional so sibling crates can opt-in.
+- [x] **Optional dvs-core dependencies (Plan 041)**: Making dependencies optional so sibling crates can opt-in.
   - [x] `git2` - via `git2-backend` feature (default on), CLI fallback always available
   - [x] `memmap2` - via `mmap` feature (default on), streaming fallback always available
-  - [ ] `serde_yaml` - via `yaml-config` feature
-  - [ ] `walkdir` - via `walkdir` feature
+  - [x] `walkdir` - via `walkdir` feature (default on), recursive fs::read_dir fallback
+  - [-] `serde_yaml` - skipped: deeply integrated "dvs.yaml" filename throughout codebase

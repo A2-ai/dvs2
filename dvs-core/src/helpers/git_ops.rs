@@ -1,12 +1,13 @@
 //! Git operations abstraction with libgit2 and CLI backends.
 //!
 //! Provides a `GitOps` trait that abstracts Git operations, with two implementations:
-//! - `Git2Ops`: Uses the `git2` crate (libgit2) - default
-//! - `GitCliOps`: Uses the system `git` CLI - fallback
+//! - `Git2Ops`: Uses the `git2` crate (libgit2) - requires `git2-backend` feature
+//! - `GitCliOps`: Uses the system `git` CLI - always available
 //!
 //! Backend selection:
 //! - Set `DVS_GIT_BACKEND=cli` to force CLI backend
-//! - Otherwise uses git2, with automatic fallback to CLI on certain errors
+//! - With `git2-backend` feature: uses git2 by default, with automatic fallback to CLI
+//! - Without `git2-backend` feature: always uses CLI backend
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -73,13 +74,17 @@ pub trait GitOps: Send + Sync {
 }
 
 // ============================================================================
-// Git2Ops Implementation (libgit2)
+// Git2Ops Implementation (libgit2) - requires `git2-backend` feature
 // ============================================================================
 
 /// Git operations using the `git2` crate (libgit2).
+///
+/// Only available when the `git2-backend` feature is enabled.
+#[cfg(feature = "git2-backend")]
 #[derive(Debug, Clone, Default)]
 pub struct Git2Ops;
 
+#[cfg(feature = "git2-backend")]
 impl Git2Ops {
     /// Create a new Git2Ops instance.
     pub fn new() -> Self {
@@ -87,6 +92,7 @@ impl Git2Ops {
     }
 }
 
+#[cfg(feature = "git2-backend")]
 impl GitOps for Git2Ops {
     fn discover_repo_root(&self, start: &Path) -> Result<PathBuf, DvsError> {
         let repo = git2::Repository::discover(start).map_err(|e| DvsError::git_error(format!("Failed to discover repository: {}", e)))?;
@@ -372,20 +378,40 @@ impl GitOps for GitCliOps {
 // Backend Selection
 // ============================================================================
 
-/// Select the Git backend based on environment variable.
+/// Select the Git backend based on environment variable and available features.
 ///
 /// - If `DVS_GIT_BACKEND=cli`, returns `GitCliOps`
-/// - Otherwise returns `Git2Ops`
+/// - With `git2-backend` feature: returns `Git2Ops` by default
+/// - Without `git2-backend` feature: returns `GitCliOps`
 pub fn select_git_backend() -> Box<dyn GitOps> {
     match std::env::var("DVS_GIT_BACKEND").as_deref() {
         Ok("cli") => Box::new(GitCliOps::new()),
-        _ => Box::new(Git2Ops::new()),
+        _ => {
+            #[cfg(feature = "git2-backend")]
+            {
+                Box::new(Git2Ops::new())
+            }
+            #[cfg(not(feature = "git2-backend"))]
+            {
+                Box::new(GitCliOps::new())
+            }
+        }
     }
 }
 
-/// Get the default Git backend (git2).
+/// Get the default Git backend.
+///
+/// With `git2-backend` feature: returns `Git2Ops`
+/// Without `git2-backend` feature: returns `GitCliOps`
+#[cfg(feature = "git2-backend")]
 pub fn default_git_backend() -> Git2Ops {
     Git2Ops::new()
+}
+
+/// Get the default Git backend (CLI when git2-backend is disabled).
+#[cfg(not(feature = "git2-backend"))]
+pub fn default_git_backend() -> GitCliOps {
+    GitCliOps::new()
 }
 
 /// Get the CLI Git backend.
@@ -395,8 +421,9 @@ pub fn cli_git_backend() -> GitCliOps {
 
 /// Execute a Git operation with automatic fallback to CLI on certain errors.
 ///
-/// Tries the git2 backend first, and falls back to CLI if the error
-/// suggests an unsupported repository layout (worktrees, etc.).
+/// With `git2-backend` feature: tries git2 first, falls back to CLI on errors.
+/// Without `git2-backend` feature: uses CLI directly.
+#[cfg(feature = "git2-backend")]
 pub fn with_fallback<T, F>(op: F) -> Result<T, DvsError>
 where
     F: Fn(&dyn GitOps) -> Result<T, DvsError>,
@@ -421,7 +448,18 @@ where
     }
 }
 
+/// Execute a Git operation (CLI only when git2-backend is disabled).
+#[cfg(not(feature = "git2-backend"))]
+pub fn with_fallback<T, F>(op: F) -> Result<T, DvsError>
+where
+    F: Fn(&dyn GitOps) -> Result<T, DvsError>,
+{
+    let cli_backend = GitCliOps::new();
+    op(&cli_backend)
+}
+
 /// Check if an error message suggests we should fall back to CLI.
+#[cfg(feature = "git2-backend")]
 fn should_fallback(error_msg: &str) -> bool {
     let fallback_patterns = [
         "unsupported",
@@ -453,6 +491,7 @@ mod tests {
         assert!(!info.has_untracked);
     }
 
+    #[cfg(feature = "git2-backend")]
     #[test]
     fn test_git2_backend_name() {
         let backend = Git2Ops::new();
@@ -465,14 +504,25 @@ mod tests {
         assert_eq!(backend.backend_name(), "cli");
     }
 
+    #[cfg(feature = "git2-backend")]
     #[test]
     fn test_select_default_backend() {
-        // Without env var, should select git2
+        // Without env var, should select git2 when feature is enabled
         std::env::remove_var("DVS_GIT_BACKEND");
         let backend = select_git_backend();
         assert_eq!(backend.backend_name(), "git2");
     }
 
+    #[cfg(not(feature = "git2-backend"))]
+    #[test]
+    fn test_select_default_backend() {
+        // Without git2-backend feature, should always select CLI
+        std::env::remove_var("DVS_GIT_BACKEND");
+        let backend = select_git_backend();
+        assert_eq!(backend.backend_name(), "cli");
+    }
+
+    #[cfg(feature = "git2-backend")]
     #[test]
     fn test_should_fallback() {
         assert!(should_fallback("unsupported repository layout"));
@@ -482,6 +532,7 @@ mod tests {
         assert!(!should_fallback("permission denied"));
     }
 
+    #[cfg(feature = "git2-backend")]
     #[test]
     fn test_git2_discover_repo_root() {
         // Test in the current repo (which should be a git repo)
@@ -493,6 +544,7 @@ mod tests {
         assert!(root.join(".git").exists());
     }
 
+    #[cfg(feature = "git2-backend")]
     #[test]
     fn test_git2_head_info() {
         let cwd = std::env::current_dir().unwrap();
@@ -509,6 +561,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "git2-backend")]
     #[test]
     fn test_git2_status_info() {
         let cwd = std::env::current_dir().unwrap();
@@ -519,6 +572,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "git2-backend")]
     #[test]
     fn test_git2_config_value() {
         let cwd = std::env::current_dir().unwrap();
@@ -530,6 +584,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "git2-backend")]
     #[test]
     fn test_git2_remote_url() {
         let cwd = std::env::current_dir().unwrap();

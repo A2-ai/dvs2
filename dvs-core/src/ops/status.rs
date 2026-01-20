@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use glob::glob;
+#[cfg(feature = "walkdir")]
 use walkdir::WalkDir;
 use crate::{StatusResult, Config, Metadata, FileStatus, DvsError, Backend, RepoBackend, detect_backend_cwd};
 use crate::helpers::{config as config_helper, hash};
@@ -59,8 +60,23 @@ pub fn status_with_backend(
 
 /// Find all tracked files in the repository.
 fn find_all_tracked_files(backend: &Backend) -> Result<Vec<PathBuf>, DvsError> {
-    let mut files = Vec::new();
     let repo_root = backend.root();
+
+    #[cfg(feature = "walkdir")]
+    {
+        find_tracked_files_walkdir(repo_root)
+    }
+
+    #[cfg(not(feature = "walkdir"))]
+    {
+        find_tracked_files_recursive(repo_root)
+    }
+}
+
+/// Find tracked files using walkdir crate.
+#[cfg(feature = "walkdir")]
+fn find_tracked_files_walkdir(repo_root: &Path) -> Result<Vec<PathBuf>, DvsError> {
+    let mut files = Vec::new();
 
     // Walk the repository and find all .dvs files
     for entry in WalkDir::new(repo_root)
@@ -87,6 +103,44 @@ fn find_all_tracked_files(backend: &Backend) -> Result<Vec<PathBuf>, DvsError> {
         }
     }
 
+    Ok(files)
+}
+
+/// Find tracked files using recursive fs::read_dir (fallback when walkdir disabled).
+#[cfg(not(feature = "walkdir"))]
+fn find_tracked_files_recursive(repo_root: &Path) -> Result<Vec<PathBuf>, DvsError> {
+    use fs_err as fs;
+
+    fn recurse(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), DvsError> {
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return Ok(()), // Skip unreadable directories
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+
+            // Skip hidden directories (like .git, .dvs)
+            if name.starts_with('.') {
+                continue;
+            }
+
+            if path.is_dir() {
+                recurse(&path, files)?;
+            } else if path.extension().map_or(false, |ext| ext == "dvs") {
+                // This is a .dvs metadata file
+                if let Some(data_path) = Metadata::data_path(&path) {
+                    files.push(data_path);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    let mut files = Vec::new();
+    recurse(repo_root, &mut files)?;
     Ok(files)
 }
 

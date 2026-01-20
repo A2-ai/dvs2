@@ -1,16 +1,27 @@
 //! Multi-algorithm hashing utilities.
 //!
 //! Supports BLAKE3 (default), XXH3 (fast), and SHA-256 (interop) via feature flags.
+//!
+//! With the `mmap` feature enabled, files >= 16KB use memory-mapped I/O for performance.
+//! Without the `mmap` feature, all files use streaming reads.
 
 use fs_err as fs;
 use fs_err::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "mmap")]
 use memmap2::Mmap;
 use crate::{DvsError, HashAlgo};
 
 /// Hash threshold for memory-mapped I/O (16KB).
+///
+/// With `mmap` feature: files >= this size use mmap
+/// Without `mmap` feature: all files use streaming read
+#[cfg(feature = "mmap")]
 pub const MMAP_THRESHOLD: u64 = 16 * 1024;
+
+#[cfg(not(feature = "mmap"))]
+pub const MMAP_THRESHOLD: u64 = u64::MAX; // Never use mmap
 
 // ============================================================================
 // Hasher trait for streaming hash computation
@@ -232,26 +243,32 @@ pub fn default_algorithm() -> HashAlgo {
 
 /// Compute the hash of a file using the specified algorithm.
 ///
-/// Uses memory-mapped I/O for files >= 16KB, traditional read for smaller files.
+/// With `mmap` feature: uses memory-mapped I/O for files >= 16KB.
+/// Without `mmap` feature: always uses streaming read.
 pub fn get_file_hash_with_algo(path: &Path, algo: HashAlgo) -> Result<String, DvsError> {
     let metadata = fs::metadata(path)?;
     let size = metadata.len();
 
+    #[cfg(feature = "mmap")]
     if size >= MMAP_THRESHOLD {
-        hash_file_mmap(path, algo)
-    } else {
-        hash_file_read(path, algo)
+        return hash_file_mmap(path, algo);
     }
+
+    // Small files or mmap feature disabled
+    let _ = size; // silence unused warning when mmap disabled
+    hash_file_read(path, algo)
 }
 
 /// Compute the hash of a file using the default algorithm (BLAKE3).
 ///
-/// Uses memory-mapped I/O for files >= 16KB, traditional read for smaller files.
+/// With `mmap` feature: uses memory-mapped I/O for files >= 16KB.
+/// Without `mmap` feature: always uses streaming read.
 pub fn get_file_hash(path: &Path) -> Result<String, DvsError> {
     get_file_hash_with_algo(path, default_algorithm())
 }
 
 /// Hash a file using memory-mapped I/O.
+#[cfg(feature = "mmap")]
 fn hash_file_mmap(path: &Path, algo: HashAlgo) -> Result<String, DvsError> {
     let file = File::open(path)?;
     let mmap = unsafe { Mmap::map(&file)? };
