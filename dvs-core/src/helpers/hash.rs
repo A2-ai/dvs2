@@ -311,12 +311,16 @@ pub fn hash_bytes(data: &[u8], algo: HashAlgo) -> Result<String, DvsError> {
     }
 }
 
-/// Get the storage path for a given hash.
+/// Get the storage path for a given hash and algorithm.
 ///
-/// Storage structure: `{storage_dir}/{first_2_chars}/{remaining_chars}`
-pub fn storage_path_for_hash(storage_dir: &Path, hash: &str) -> PathBuf {
+/// Storage structure: `{storage_dir}/{algo}/{first_2_chars}/{remaining_chars}`
+///
+/// This layout supports multiple hash algorithms without collision:
+/// - `storage/blake3/ab/c123...`
+/// - `storage/sha256/ab/c123...`
+pub fn storage_path_for_hash(storage_dir: &Path, algo: HashAlgo, hash: &str) -> PathBuf {
     let (prefix, suffix) = hash.split_at(2.min(hash.len()));
-    storage_dir.join(prefix).join(suffix)
+    storage_dir.join(algo.prefix()).join(prefix).join(suffix)
 }
 
 /// Verify that a file matches the expected hash.
@@ -344,8 +348,12 @@ mod tests {
     fn test_storage_path_for_hash() {
         let storage = PathBuf::from("/storage");
         let hash = "abc123def456";
-        let path = storage_path_for_hash(&storage, hash);
-        assert_eq!(path, PathBuf::from("/storage/ab/c123def456"));
+        let path = storage_path_for_hash(&storage, HashAlgo::Blake3, hash);
+        assert_eq!(path, PathBuf::from("/storage/blake3/ab/c123def456"));
+
+        // Different algorithms use different subdirectories
+        let path_sha256 = storage_path_for_hash(&storage, HashAlgo::Sha256, hash);
+        assert_eq!(path_sha256, PathBuf::from("/storage/sha256/ab/c123def456"));
     }
 
     #[test]
