@@ -13,8 +13,8 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser, Subcommand};
 
 use commands::{
-    add, config, get, git_status, init, install, log, materialize, pull, push, rollback, status,
-    uninstall,
+    add, config, get, git_status, init, install, log, materialize, merge_repo, pull, push,
+    rollback, status, uninstall,
 };
 use output::Output;
 
@@ -190,6 +190,29 @@ pub enum Command {
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
+
+    /// Merge another DVS repository into this one
+    #[command(name = "merge-repo")]
+    MergeRepo {
+        /// Path to source DVS repository
+        source: PathBuf,
+
+        /// Place imported files under this subdirectory
+        #[arg(long, value_name = "PATH")]
+        prefix: Option<PathBuf>,
+
+        /// How to handle path conflicts (abort, skip, overwrite)
+        #[arg(long, default_value = "abort", value_name = "MODE")]
+        conflict: String,
+
+        /// Verify object hashes during copy
+        #[arg(long)]
+        verify: bool,
+
+        /// Show what would be merged without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -312,6 +335,36 @@ fn main() -> ExitCode {
                 ConfigCommand::Set { key, value } => config::ConfigAction::Set { key, value },
             };
             config::run(&output, action)
+        }
+        Command::MergeRepo {
+            source,
+            prefix,
+            conflict,
+            verify,
+            dry_run,
+        } => {
+            let conflict_mode = match dvs_core::ConflictMode::from_str(&conflict) {
+                Some(mode) => mode,
+                None => {
+                    return {
+                        output.error(&format!(
+                            "Invalid conflict mode: {}. Use 'abort', 'skip', or 'overwrite'",
+                            conflict
+                        ));
+                        ExitCode::FAILURE
+                    }
+                }
+            };
+            merge_repo::run(
+                &output,
+                merge_repo::MergeRepoOptions {
+                    source,
+                    prefix,
+                    conflict_mode,
+                    verify,
+                    dry_run,
+                },
+            )
         }
     };
 

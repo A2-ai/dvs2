@@ -11,6 +11,7 @@ pub mod init;
 pub mod install;
 pub mod log;
 pub mod materialize;
+pub mod merge_repo;
 pub mod pull;
 pub mod push;
 pub mod rollback;

@@ -30,6 +30,9 @@ pub use ops::{
 };
 pub use ops::{pull, pull_files, pull_with_backend, PullResult, PullSummary};
 pub use ops::{push, push_files, push_with_backend, PushResult, PushSummary};
+pub use ops::{
+    merge_repo, merge_repo_with_backend, ConflictMode, MergeOptions, MergeResult,
+};
 pub use ops::{rollback, rollback_with_backend, RollbackResult, RollbackTarget};
 
 // Re-export backend types

@@ -5,6 +5,7 @@ mod get;
 mod init;
 mod log;
 mod materialize;
+mod merge_repo;
 mod pull;
 mod push;
 mod rollback;
@@ -19,5 +20,8 @@ pub use materialize::{
 };
 pub use pull::{pull, pull_files, pull_with_backend, PullResult, PullSummary};
 pub use push::{push, push_files, push_with_backend, PushResult, PushSummary};
+pub use merge_repo::{
+    merge_repo, merge_repo_with_backend, ConflictMode, MergeOptions, MergeResult,
+};
 pub use rollback::{rollback, rollback_with_backend, RollbackResult, RollbackTarget};
 pub use status::{status, status_with_backend};
