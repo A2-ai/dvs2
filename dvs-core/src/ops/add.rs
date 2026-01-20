@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use fs_err as fs;
 use glob::glob;
-use crate::{AddResult, Config, Metadata, Outcome, DvsError, Backend, RepoBackend, detect_backend_cwd};
+use crate::{AddResult, Config, Metadata, MetadataFormat, Outcome, DvsError, Backend, RepoBackend, detect_backend_cwd};
 use crate::types::{ReflogOp, MetadataEntry, WorkspaceState};
 use crate::helpers::{config as config_helper, copy, file, hash};
 use crate::helpers::layout::Layout;
@@ -140,7 +140,10 @@ fn capture_metadata_walkdir(repo_root: &Path) -> Result<Vec<MetadataEntry>, DvsE
         };
 
         let path = entry.path();
-        if path.is_file() && path.extension().map_or(false, |ext| ext == "dvs") {
+        let filename = path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default();
+        // Check for both .dvs (JSON) and .dvs.toml (TOML) files
+        let is_metadata = filename.ends_with(".dvs") || filename.ends_with(".dvs.toml");
+        if path.is_file() && is_metadata {
             // Load metadata
             if let Ok(meta) = Metadata::load(path) {
                 // Get the relative path to the data file
@@ -176,13 +179,18 @@ fn capture_metadata_recursive(repo_root: &Path) -> Result<Vec<MetadataEntry>, Dv
 
             if path.is_dir() {
                 recurse(&path, repo_root, entries)?;
-            } else if path.extension().map_or(false, |ext| ext == "dvs") {
-                // Load metadata
-                if let Ok(meta) = Metadata::load(&path) {
-                    // Get the relative path to the data file
-                    if let Some(data_path) = Metadata::data_path(&path) {
-                        if let Some(relative) = pathdiff::diff_paths(&data_path, repo_root) {
-                            entries.push(MetadataEntry::new(relative, meta));
+            } else {
+                let filename = path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default();
+                // Check for both .dvs (JSON) and .dvs.toml (TOML) files
+                let is_metadata = filename.ends_with(".dvs") || filename.ends_with(".dvs.toml");
+                if is_metadata {
+                    // Load metadata
+                    if let Ok(meta) = Metadata::load(&path) {
+                        // Get the relative path to the data file
+                        if let Some(data_path) = Metadata::data_path(&path) {
+                            if let Some(relative) = pathdiff::diff_paths(&data_path, repo_root) {
+                                entries.push(MetadataEntry::new(relative, meta));
+                            }
                         }
                     }
                 }
@@ -304,11 +312,13 @@ fn add_single_file(
 
     // Check if file already exists in storage with same hash
     let storage_path = hash::storage_path_for_hash(&config.storage_dir, &checksum);
-    let metadata_path = Metadata::metadata_path(path);
+    let metadata_format = config.metadata_format();
+    let metadata_path = Metadata::metadata_path_for_format(path, metadata_format);
 
-    // Check if already present with same hash
-    if metadata_path.exists() {
-        if let Ok(existing_meta) = Metadata::load(&metadata_path) {
+    // Check if already present with same hash (check both JSON and TOML formats)
+    if let Some(existing_format) = Metadata::find_existing_format(path) {
+        let existing_path = Metadata::metadata_path_for_format(path, existing_format);
+        if let Ok(existing_meta) = Metadata::load(&existing_path) {
             if existing_meta.checksum() == checksum && existing_meta.hash_algo == hash_algo {
                 // Same file already tracked with same algorithm
                 return AddResult::success(

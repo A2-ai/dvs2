@@ -18,6 +18,7 @@ pub use types::{
     Config,
     GeneratedBy,
     Metadata,
+    MetadataFormat,
     FileInfo,
     AddResult,
     GetResult,

@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use fs_err as fs;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
-use commands::{init, add, get, status, push, pull, materialize, log, rollback};
+use commands::{init, add, get, status, push, pull, materialize, log, rollback, install, git_status};
 use output::Output;
 
 /// DVS - Data Version System
@@ -76,6 +76,10 @@ pub enum Command {
         /// Message describing this version
         #[arg(short, long)]
         message: Option<String>,
+
+        /// Metadata file format (json or toml)
+        #[arg(long, value_name = "FORMAT")]
+        metadata_format: Option<String>,
     },
 
     /// Retrieve files from DVS storage
@@ -141,6 +145,29 @@ pub enum Command {
     /// Filesystem navigation helpers
     #[command(subcommand)]
     Fs(FsCommand),
+
+    /// Install git-status-dvs shim and shell completions
+    Install {
+        /// Directory to install git-status-dvs shim
+        #[arg(long, value_name = "DIR")]
+        install_dir: Option<PathBuf>,
+
+        /// Only install shell completions (skip shim)
+        #[arg(long)]
+        completions_only: bool,
+
+        /// Shells to install completions for (bash, zsh, fish, powershell)
+        #[arg(long, value_name = "SHELL")]
+        shell: Vec<String>,
+    },
+
+    /// Combined git status and DVS status
+    #[command(name = "git-status")]
+    GitStatus {
+        /// Additional arguments to pass to git status
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -153,6 +180,11 @@ pub enum FsCommand {
         /// Directory to list (default: current directory)
         path: Option<PathBuf>,
     },
+}
+
+/// Build the CLI command for completion generation.
+pub fn build_cli() -> clap::Command {
+    Cli::command()
 }
 
 fn main() -> ExitCode {
@@ -174,8 +206,8 @@ fn main() -> ExitCode {
         Command::Init { storage_dir, permissions, group } => {
             init::run(&output, storage_dir, permissions, group)
         }
-        Command::Add { files, message } => {
-            add::run(&output, files, message)
+        Command::Add { files, message, metadata_format } => {
+            add::run(&output, files, message, metadata_format)
         }
         Command::Get { files } => {
             get::run(&output, files)
@@ -228,6 +260,12 @@ fn main() -> ExitCode {
                     }
                 }
             }
+        }
+        Command::Install { install_dir, completions_only, shell } => {
+            install::run(&output, install_dir, completions_only, shell)
+        }
+        Command::GitStatus { args } => {
+            git_status::run(&output, args)
         }
     };
 

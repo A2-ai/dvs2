@@ -11,7 +11,19 @@ pub fn run(
     output: &Output,
     files: Vec<PathBuf>,
     message: Option<String>,
+    metadata_format: Option<String>,
 ) -> Result<()> {
+    // Parse and validate metadata format if provided
+    if let Some(ref fmt) = metadata_format {
+        if dvs_core::MetadataFormat::from_str(fmt).is_none() {
+            return Err(super::CliError::InvalidArg(format!(
+                "Invalid metadata format '{}'. Use 'json' or 'toml'.",
+                fmt
+            )));
+        }
+        // Note: Format is controlled by config; CLI override for future enhancement
+    }
+
     // Resolve all file paths
     let resolved_files: Vec<PathBuf> = files
         .iter()
