@@ -13,8 +13,15 @@ rust-version.workspace = true
 name = "dvs"
 path = "src/main.rs"
 
+[features]
+default = []
+# Config format passthrough (for consistency in --all-features builds)
+yaml-config = ["dvs-core/yaml-config"]
+toml-config = ["dvs-core/toml-config"]
+
 [dependencies]
-dvs-core.workspace = true
+# Enable git2-backend for native Git integration in the CLI
+dvs-core = { workspace = true, features = ["git2-backend"] }
 clap = { version = "4.5", features = ["derive"] }
 thiserror.workspace = true
 fs-err.workspace = true

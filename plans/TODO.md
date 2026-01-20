@@ -76,7 +76,19 @@
 - [ ] **Plan 041: TOML Metadata Files** - `plans/041-toml-metadata-files.md`
 - [ ] **Plan 042: Git Subcommand + Shell Completion Install** - `plans/042-git-subcommand-install.md`
 - [ ] **Plan 043: Replace Axum/Tower with tiny_http for dvs-server** - `plans/043-tiny-http-server.md`
+- [ ] **Plan 045: Track DVS Build/Version in Generated Configs** - `plans/045-config-version-descriptor.md`
+
+### Partially Implemented Plans
+
 - [ ] **Plan 044: Dependency Feature Matrix + Lightweight Defaults** - `plans/044-dependency-feature-matrix.md`
+  - [x] Changed dvs-core default config format from YAML to TOML (`toml-config`)
+  - [x] Made `git2-backend` opt-in (removed from default features)
+  - [x] Removed unused `rayon` dependency from dvs-core
+  - [x] Updated dvs-cli to enable `git2-backend` by default
+  - [x] Added `yaml-config` and `toml-config` feature passthroughs to dvs-cli
+  - [x] Updated dvs-testkit to use `Config::config_filename()` for portability
+  - [ ] Replace axum/tower with tiny_http (see Plan 043)
+  - [ ] Update testkit server-runner to use ureq instead of reqwest
 
 ### Future Plans (Not Yet Written)
 
@@ -178,6 +190,17 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 - [x] Unit tests for dvs-server (14 tests: storage, auth)
 - [x] Unit tests for dvs-testkit (22 tests: TestRepo, WorkspaceSnapshot, CoreRunner, CliRunner, ServerRunner)
 - [ ] Integration tests with temp directories
+
+### Test workflow note
+
+When running tests with `--all-features`, build the CLI first to ensure feature consistency:
+
+```bash
+cargo build -p dvs-cli --all-features && cargo test --all-features
+```
+
+This ensures the CLI binary is built with the same features (yaml-config) as the testkit.
+
 - [ ] Integration tests with real git repos
 - [ ] dvs-daemon IPC tests
 - [ ] dvs-server HTTP integration tests
