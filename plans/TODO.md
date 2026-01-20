@@ -36,6 +36,8 @@
 
 - [x] **Plan 047: dvs config Command** - Added `dvs config` subcommand for viewing and editing DVS configuration. Includes `dvs config show` (display all values), `dvs config get <key>` (get specific value), and `dvs config set <key> <value>` (set value). Supports keys: storage_dir, permissions, group, hash_algo, metadata_format. Validates values (octal permissions, valid hash algorithms, valid metadata formats). Updates generated_by on save.
 
+- [x] **Plan 046: Merge One DVS Repository into Another** - Added `dvs merge-repo <source>` command to import tracked files, metadata, and objects from a source DVS repository into the destination. Supports `--prefix` to place imports under a subdirectory, `--conflict` mode (abort/skip/overwrite), `--verify` for hash verification, and `--dry-run`. Includes 8 unit tests covering all merge scenarios.
+
 ### In Progress
 
 - [ ] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
@@ -84,7 +86,6 @@
 - [ ] **Plan 034: Concurrency Locks for Dataset Updates** - `plans/034-concurrency-locks.md`
 - [ ] **Plan 035: Feature Store + Derived Dataset Framework** - `plans/035-feature-store-derived.md`
 - [ ] **Plan 036: Remote Snapshot Sources (HTTP/GitHub)** - `plans/036-remote-snapshot-sources.md`
-- [ ] **Plan 046: Merge One DVS Repository into Another** - `plans/046-repo-merge.md`
 - [ ] **Plan 040: Proc-macro Usage Audit** - `plans/040-proc-macro-usage-audit.md`
 
 ### Future Plans (Not Yet Written)

@@ -101,6 +101,8 @@ pub enum ReflogOp {
     Rollback,
     /// Initial state.
     Init,
+    /// Repository merged in.
+    Merge,
 }
 
 impl std::fmt::Display for ReflogOp {
@@ -110,6 +112,7 @@ impl std::fmt::Display for ReflogOp {
             ReflogOp::Remove => write!(f, "remove"),
             ReflogOp::Rollback => write!(f, "rollback"),
             ReflogOp::Init => write!(f, "init"),
+            ReflogOp::Merge => write!(f, "merge"),
         }
     }
 }
@@ -248,6 +251,7 @@ mod tests {
         assert_eq!(ReflogOp::Remove.to_string(), "remove");
         assert_eq!(ReflogOp::Rollback.to_string(), "rollback");
         assert_eq!(ReflogOp::Init.to_string(), "init");
+        assert_eq!(ReflogOp::Merge.to_string(), "merge");
     }
 
     #[test]

@@ -56,6 +56,8 @@ pub enum ErrorKind {
     IoError { message: String },
     /// Generic not found error.
     NotFound { message: String },
+    /// Merge conflict (paths exist in both source and destination).
+    MergeConflict { paths: String },
 }
 
 impl ErrorKind {
@@ -85,6 +87,7 @@ impl ErrorKind {
             ErrorKind::TomlError { .. } => "toml_error",
             ErrorKind::IoError { .. } => "io_error",
             ErrorKind::NotFound { .. } => "not_found",
+            ErrorKind::MergeConflict { .. } => "merge_conflict",
         }
     }
 }
@@ -133,6 +136,9 @@ impl fmt::Display for ErrorKind {
             ErrorKind::TomlError { message } => write!(f, "toml error: {}", message),
             ErrorKind::IoError { message } => write!(f, "io error: {}", message),
             ErrorKind::NotFound { message } => write!(f, "{}", message),
+            ErrorKind::MergeConflict { paths } => {
+                write!(f, "merge conflict - paths exist in both repos: {}", paths)
+            }
         }
     }
 }
@@ -270,6 +276,18 @@ impl DvsError {
         Self::new(ErrorKind::NotFound {
             message: message.into(),
         })
+    }
+
+    /// Create a "merge conflict" error.
+    pub fn merge_conflict(paths: impl Into<String>) -> Self {
+        Self::new(ErrorKind::MergeConflict {
+            paths: paths.into(),
+        })
+    }
+
+    /// Alias for config_error (used for general configuration issues).
+    pub fn config(message: impl Into<String>) -> Self {
+        Self::config_error(message)
     }
 }
 
