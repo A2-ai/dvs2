@@ -9,43 +9,36 @@
 //! - `ops`: High-level operations (init, add, get, status)
 //! - `helpers`: Low-level utilities (hashing, file ops, config parsing)
 
-pub mod types;
-pub mod ops;
 pub mod helpers;
+pub mod ops;
+pub mod types;
 
 // Re-export commonly used types at crate root
 pub use types::{
-    Config,
-    GeneratedBy,
-    Metadata,
-    MetadataFormat,
-    FileInfo,
-    AddResult,
-    GetResult,
-    StatusResult,
-    Outcome,
-    FileStatus,
-    DvsError,
-    Oid,
-    HashAlgo,
-    Manifest,
-    ManifestEntry,
-    Compression,
+    AddResult, Compression, Config, DvsError, FileInfo, FileStatus, GeneratedBy, GetResult,
+    HashAlgo, Manifest, ManifestEntry, Metadata, MetadataFormat, Oid, Outcome, StatusResult,
 };
 
 // Re-export operations at crate root
-pub use ops::{init, init_with_backend, add, add_with_backend, get, get_with_backend, status, status_with_backend};
-pub use ops::{push, push_with_backend, push_files, PushResult, PushSummary};
-pub use ops::{pull, pull_with_backend, pull_files, PullResult, PullSummary};
-pub use ops::{materialize, materialize_with_backend, materialize_files, MaterializeResult, MaterializeSummary};
-pub use ops::{log, log_with_backend, log_entry, log_entry_with_backend, LogEntry};
-pub use ops::{rollback, rollback_with_backend, RollbackTarget, RollbackResult};
+pub use ops::{
+    add, add_with_backend, get, get_with_backend, init, init_with_backend, status,
+    status_with_backend,
+};
+pub use ops::{log, log_entry, log_entry_with_backend, log_with_backend, LogEntry};
+pub use ops::{
+    materialize, materialize_files, materialize_with_backend, MaterializeResult, MaterializeSummary,
+};
+pub use ops::{pull, pull_files, pull_with_backend, PullResult, PullSummary};
+pub use ops::{push, push_files, push_with_backend, PushResult, PushSummary};
+pub use ops::{rollback, rollback_with_backend, RollbackResult, RollbackTarget};
 
 // Re-export backend types
-pub use helpers::backend::{Backend, RepoBackend, GitBackend, DvsBackend, detect_backend, detect_backend_cwd};
+pub use helpers::backend::{
+    detect_backend, detect_backend_cwd, Backend, DvsBackend, GitBackend, RepoBackend,
+};
 
 // Re-export store types for testing
 pub use helpers::store::{LocalStore, ObjectStore};
 
 // Re-export version information
-pub use helpers::version::{version, version_string, commit_sha, DvsVersion, VERSION_STRING};
+pub use helpers::version::{commit_sha, version, version_string, DvsVersion, VERSION_STRING};

@@ -40,17 +40,19 @@
 //! let snapshot = WorkspaceSnapshot::capture(&repo).unwrap();
 //! ```
 
+mod diff;
 mod repo;
-mod snapshot;
 mod runner;
 mod scenario;
-mod diff;
+mod snapshot;
 
+pub use diff::{Mismatch, SnapshotDiff};
 pub use repo::TestRepo;
-pub use snapshot::{WorkspaceSnapshot, FileSnapshot, ObjectPresence};
-pub use runner::{InterfaceRunner, RunResult, Op, OpKind, CoreRunner, ConformanceResult, run_conformance_test};
-pub use scenario::{Scenario, Step, Expectation};
-pub use diff::{SnapshotDiff, Mismatch};
+pub use runner::{
+    run_conformance_test, ConformanceResult, CoreRunner, InterfaceRunner, Op, OpKind, RunResult,
+};
+pub use scenario::{Expectation, Scenario, Step};
+pub use snapshot::{FileSnapshot, ObjectPresence, WorkspaceSnapshot};
 
 #[cfg(feature = "cli-runner")]
 pub use runner::CliRunner;

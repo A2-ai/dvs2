@@ -5,15 +5,11 @@ use crate::output::Output;
 use dvs_core::RollbackTarget;
 
 /// Run the rollback command.
-pub fn run(
-    output: &Output,
-    target: String,
-    force: bool,
-    materialize: bool,
-) -> Result<()> {
+pub fn run(output: &Output, target: String, force: bool, materialize: bool) -> Result<()> {
     let target = RollbackTarget::parse(&target);
 
-    output.println(&format!("Rolling back to {}...",
+    output.println(&format!(
+        "Rolling back to {}...",
         match &target {
             RollbackTarget::StateId(id) => format!("state {}", &id[..8.min(id.len())]),
             RollbackTarget::Index(i) => format!("@{{{}}}", i),
@@ -26,7 +22,10 @@ pub fn run(
         let to_short = &result.to_state[..8.min(result.to_state.len())];
 
         if !result.restored_files.is_empty() {
-            output.println(&format!("Restored {} file(s):", result.restored_files.len()));
+            output.println(&format!(
+                "Restored {} file(s):",
+                result.restored_files.len()
+            ));
             for path in &result.restored_files {
                 output.println(&format!("  + {}", path.display()));
             }

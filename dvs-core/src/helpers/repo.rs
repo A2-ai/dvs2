@@ -1,7 +1,7 @@
 //! Git repository utilities.
 
-use std::path::Path;
 use crate::DvsError;
+use std::path::Path;
 
 /// Check if a path is inside a git repository.
 pub fn is_git_repo(_path: &Path) -> bool {

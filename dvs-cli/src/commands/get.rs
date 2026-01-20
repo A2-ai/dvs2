@@ -2,15 +2,12 @@
 
 use std::path::PathBuf;
 
+use super::Result;
 use crate::output::Output;
 use crate::paths;
-use super::Result;
 
 /// Run the get command.
-pub fn run(
-    output: &Output,
-    files: Vec<PathBuf>,
-) -> Result<()> {
+pub fn run(output: &Output, files: Vec<PathBuf>) -> Result<()> {
     // Resolve all file paths
     let resolved_files: Vec<PathBuf> = files
         .iter()
@@ -38,7 +35,11 @@ pub fn run(
             dvs_core::Outcome::Error => {
                 error_count += 1;
                 let msg = result.error_message.as_deref().unwrap_or("unknown error");
-                output.error(&format!("Error: {} - {}", result.relative_path.display(), msg));
+                output.error(&format!(
+                    "Error: {} - {}",
+                    result.relative_path.display(),
+                    msg
+                ));
             }
         }
     }

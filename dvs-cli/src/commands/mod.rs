@@ -3,18 +3,18 @@
 //! Each subcommand is implemented in its own module and delegates
 //! to dvs-core for actual DVS logic.
 
-pub mod init;
 pub mod add;
 pub mod get;
-pub mod status;
-pub mod push;
-pub mod pull;
-pub mod materialize;
-pub mod log;
-pub mod rollback;
-pub mod install;
-pub mod uninstall;
 pub mod git_status;
+pub mod init;
+pub mod install;
+pub mod log;
+pub mod materialize;
+pub mod pull;
+pub mod push;
+pub mod rollback;
+pub mod status;
+pub mod uninstall;
 
 use std::io;
 use thiserror::Error;

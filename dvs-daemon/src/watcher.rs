@@ -1,7 +1,7 @@
 //! File system watcher for tracking file changes.
 
-use std::path::PathBuf;
 use crate::DaemonError;
+use std::path::PathBuf;
 
 /// File watcher configuration.
 #[derive(Debug, Clone)]

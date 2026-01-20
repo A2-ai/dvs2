@@ -1,9 +1,9 @@
 //! File copy utilities.
 
+use crate::DvsError;
 use fs_err::{self as fs, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
-use crate::DvsError;
 
 /// Buffer size for file copying (64KB).
 const COPY_BUFFER_SIZE: usize = 64 * 1024;

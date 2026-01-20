@@ -25,13 +25,16 @@
 
 pub mod api;
 pub mod auth;
-pub mod storage;
 pub mod config;
+pub mod storage;
 
 pub use api::AppState;
-pub use auth::{AuthConfig, ApiKey, Permission, AuthContext, extract_auth_from_header, require_auth_from_header, require_permission_from_header};
-pub use storage::{StorageBackend, LocalStorage, StorageStats};
+pub use auth::{
+    extract_auth_from_header, require_auth_from_header, require_permission_from_header, ApiKey,
+    AuthConfig, AuthContext, Permission,
+};
 pub use config::ServerConfig;
+pub use storage::{LocalStorage, StorageBackend, StorageStats};
 
 /// Server error types.
 #[derive(Debug, thiserror::Error)]
@@ -92,7 +95,9 @@ pub fn start_server(config: ServerConfig) -> Result<(), ServerError> {
 /// Start the server and return a handle for shutdown.
 ///
 /// This is useful for testing - returns the server and a function to stop it.
-pub fn start_server_background(config: ServerConfig) -> Result<(String, ServerHandle), ServerError> {
+pub fn start_server_background(
+    config: ServerConfig,
+) -> Result<(String, ServerHandle), ServerError> {
     let bind_addr = config.bind_address();
     let state = AppState::new(config)?;
 

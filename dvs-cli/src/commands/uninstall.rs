@@ -2,11 +2,11 @@
 //!
 //! Removes git-status-dvs shim and shell completions installed by `dvs install`.
 
-use std::path::PathBuf;
 use fs_err as fs;
+use std::path::PathBuf;
 
-use crate::output::Output;
 use super::Result;
+use crate::output::Output;
 
 /// Shell types for completion removal.
 #[derive(Debug, Clone, Copy)]
@@ -90,10 +90,7 @@ pub fn run(
                         removed_something = true;
                     }
                     Err(e) => {
-                        output.info(&format!(
-                            "Could not remove {}: {}",
-                            shim_path.display(), e
-                        ));
+                        output.info(&format!("Could not remove {}: {}", shim_path.display(), e));
                     }
                 }
             }
@@ -133,7 +130,8 @@ pub fn run(
                     Err(e) => {
                         output.info(&format!(
                             "Could not remove {}: {}",
-                            completion_path.display(), e
+                            completion_path.display(),
+                            e
                         ));
                     }
                 }
@@ -142,7 +140,9 @@ pub fn run(
     }
 
     if !removed_something {
-        output.info("Nothing was removed. DVS may not be installed, or was installed to a custom location.");
+        output.info(
+            "Nothing was removed. DVS may not be installed, or was installed to a custom location.",
+        );
     }
 
     Ok(())

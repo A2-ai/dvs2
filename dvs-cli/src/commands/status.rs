@@ -2,15 +2,12 @@
 
 use std::path::PathBuf;
 
+use super::Result;
 use crate::output::Output;
 use crate::paths;
-use super::Result;
 
 /// Run the status command.
-pub fn run(
-    output: &Output,
-    files: Vec<PathBuf>,
-) -> Result<()> {
+pub fn run(output: &Output, files: Vec<PathBuf>) -> Result<()> {
     // Resolve file paths (empty means all tracked files)
     let resolved_files: Vec<PathBuf> = if files.is_empty() {
         Vec::new()
@@ -49,7 +46,11 @@ pub fn run(
             dvs_core::FileStatus::Error => {
                 error_count += 1;
                 let msg = result.error_message.as_deref().unwrap_or("unknown error");
-                output.error(&format!("    error: {} - {}", result.relative_path.display(), msg));
+                output.error(&format!(
+                    "    error: {} - {}",
+                    result.relative_path.display(),
+                    msg
+                ));
             }
         }
     }

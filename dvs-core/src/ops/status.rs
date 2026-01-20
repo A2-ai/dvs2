@@ -1,11 +1,13 @@
 //! DVS status operation.
 
-use std::path::{Path, PathBuf};
+use crate::helpers::{config as config_helper, hash};
+use crate::{
+    detect_backend_cwd, Backend, Config, DvsError, FileStatus, Metadata, RepoBackend, StatusResult,
+};
 use glob::glob;
+use std::path::{Path, PathBuf};
 #[cfg(feature = "walkdir")]
 use walkdir::WalkDir;
-use crate::{StatusResult, Config, Metadata, FileStatus, DvsError, Backend, RepoBackend, detect_backend_cwd};
-use crate::helpers::{config as config_helper, hash};
 
 /// Check status of tracked files.
 ///
@@ -87,11 +89,10 @@ fn find_tracked_files_walkdir(repo_root: &Path) -> Result<Vec<PathBuf>, DvsError
         let path = entry.path();
 
         // Skip hidden directories (like .git)
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_string_lossy()
-                .starts_with('.')
-        }) {
+        if path
+            .components()
+            .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+        {
             continue;
         }
 
@@ -257,10 +258,7 @@ fn status_single_file(backend: &Backend, path: &Path, config: &Config) -> Status
 }
 
 /// Determine the status of a file by comparing hashes.
-fn determine_status(
-    local_path: &Path,
-    metadata: &Metadata,
-) -> Result<FileStatus, DvsError> {
+fn determine_status(local_path: &Path, metadata: &Metadata) -> Result<FileStatus, DvsError> {
     // Check if local file exists
     if !local_path.exists() {
         return Ok(FileStatus::Absent);
@@ -277,15 +275,20 @@ fn determine_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fs_err as fs;
     use crate::helpers::copy;
+    use fs_err as fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn setup_test_repo(test_name: &str) -> (PathBuf, PathBuf) {
         let unique_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let temp_dir = std::env::temp_dir().join(format!("dvs-test-status-{}-{}-{}", std::process::id(), test_name, unique_id));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "dvs-test-status-{}-{}-{}",
+            std::process::id(),
+            test_name,
+            unique_id
+        ));
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 
@@ -298,7 +301,9 @@ mod tests {
 
         // Create config file
         let config = Config::new(storage_dir.clone(), None, None);
-        config.save(&temp_dir.join(Config::config_filename())).unwrap();
+        config
+            .save(&temp_dir.join(Config::config_filename()))
+            .unwrap();
 
         (temp_dir, storage_dir)
     }
@@ -319,12 +324,7 @@ mod tests {
         copy::copy_to_storage(&test_file, &storage_path, None, None).unwrap();
 
         // Create metadata
-        let metadata = Metadata::new(
-            checksum,
-            content.len() as u64,
-            None,
-            "tester".to_string(),
-        );
+        let metadata = Metadata::new(checksum, content.len() as u64, None, "tester".to_string());
         metadata.save(&Metadata::metadata_path(&test_file)).unwrap();
 
         // Check status
@@ -351,12 +351,7 @@ mod tests {
         fs::write(&storage_path, b"content").unwrap();
 
         // Create metadata pointing to it
-        let metadata = Metadata::new(
-            checksum.to_string(),
-            7,
-            None,
-            "tester".to_string(),
-        );
+        let metadata = Metadata::new(checksum.to_string(), 7, None, "tester".to_string());
         metadata.save(&Metadata::metadata_path(&test_file)).unwrap();
 
         // Check status
@@ -383,12 +378,7 @@ mod tests {
         copy::copy_to_storage(&test_file, &storage_path, None, None).unwrap();
 
         // Create metadata
-        let metadata = Metadata::new(
-            original_checksum,
-            16,
-            None,
-            "tester".to_string(),
-        );
+        let metadata = Metadata::new(original_checksum, 16, None, "tester".to_string());
         metadata.save(&Metadata::metadata_path(&test_file)).unwrap();
 
         // Modify the local file

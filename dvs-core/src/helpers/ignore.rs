@@ -3,11 +3,11 @@
 //! Supports both Git-style ignore files (`.gitignore`) and DVS-specific
 //! ignore files (`.dvsignore`, `.ignore`).
 
+use crate::DvsError;
 use fs_err::{self as fs, OpenOptions};
+use glob::Pattern;
 use std::io::Write;
 use std::path::Path;
-use glob::Pattern;
-use crate::DvsError;
 
 /// Source of ignore patterns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,10 +273,7 @@ fn append_pattern_to_file(path: &Path, pattern: &str) -> Result<(), DvsError> {
     }
 
     // Append the pattern
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
 
     // Ensure we start on a new line
     if path.exists() {
@@ -354,7 +351,7 @@ mod tests {
     #[test]
     fn test_dir_only_pattern() {
         let p = IgnorePattern::parse("build/", IgnoreSource::DvsIgnore).unwrap();
-        assert!(p.matches(Path::new("build"), true));  // is directory
+        assert!(p.matches(Path::new("build"), true)); // is directory
         assert!(!p.matches(Path::new("build"), false)); // is file
     }
 

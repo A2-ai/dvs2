@@ -2,10 +2,10 @@
 //!
 //! View reflog entries showing the history of DVS state changes.
 
-use crate::{DvsError, Backend, RepoBackend, detect_backend_cwd};
-use crate::types::ReflogEntry;
 use crate::helpers::layout::Layout;
 use crate::helpers::reflog::Reflog;
+use crate::types::ReflogEntry;
+use crate::{detect_backend_cwd, Backend, DvsError, RepoBackend};
 
 /// Log entry for display.
 #[derive(Debug, Clone)]
@@ -68,16 +68,18 @@ pub fn log_entry_with_backend(
     let layout = Layout::new(backend.root().to_path_buf());
     let reflog = Reflog::new(&layout);
 
-    Ok(reflog.get_by_index(index)?.map(|entry| LogEntry { index, entry }))
+    Ok(reflog
+        .get_by_index(index)?
+        .map(|entry| LogEntry { index, entry }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-    use fs_err as fs;
-    use crate::types::ReflogOp;
     use crate::helpers::reflog::current_actor;
+    use crate::types::ReflogOp;
+    use fs_err as fs;
+    use std::path::PathBuf;
 
     fn setup_test_repo() -> (tempfile::TempDir, Backend) {
         let temp = tempfile::tempdir().unwrap();
@@ -92,7 +94,9 @@ mod tests {
 
         // Create config file
         let config = crate::Config::new(root.join("storage"), None, None);
-        config.save(&root.join(crate::Config::config_filename())).unwrap();
+        config
+            .save(&root.join(crate::Config::config_filename()))
+            .unwrap();
 
         let backend = crate::detect_backend(root).unwrap();
         (temp, backend)
@@ -112,23 +116,27 @@ mod tests {
         let reflog = Reflog::new(&layout);
 
         // Add some entries
-        reflog.record(
-            current_actor(),
-            ReflogOp::Init,
-            Some("initial".to_string()),
-            None,
-            "state1".to_string(),
-            vec![],
-        ).unwrap();
+        reflog
+            .record(
+                current_actor(),
+                ReflogOp::Init,
+                Some("initial".to_string()),
+                None,
+                "state1".to_string(),
+                vec![],
+            )
+            .unwrap();
 
-        reflog.record(
-            current_actor(),
-            ReflogOp::Add,
-            Some("added file".to_string()),
-            Some("state1".to_string()),
-            "state2".to_string(),
-            vec![PathBuf::from("data.csv")],
-        ).unwrap();
+        reflog
+            .record(
+                current_actor(),
+                ReflogOp::Add,
+                Some("added file".to_string()),
+                Some("state1".to_string()),
+                "state2".to_string(),
+                vec![PathBuf::from("data.csv")],
+            )
+            .unwrap();
 
         let entries = log_with_backend(&backend, None).unwrap();
         assert_eq!(entries.len(), 2);
@@ -147,14 +155,20 @@ mod tests {
 
         // Add several entries
         for i in 0..5 {
-            reflog.record(
-                current_actor(),
-                ReflogOp::Add,
-                None,
-                if i == 0 { None } else { Some(format!("state{}", i - 1)) },
-                format!("state{}", i),
-                vec![],
-            ).unwrap();
+            reflog
+                .record(
+                    current_actor(),
+                    ReflogOp::Add,
+                    None,
+                    if i == 0 {
+                        None
+                    } else {
+                        Some(format!("state{}", i - 1))
+                    },
+                    format!("state{}", i),
+                    vec![],
+                )
+                .unwrap();
         }
 
         let entries = log_with_backend(&backend, Some(3)).unwrap();
@@ -167,14 +181,16 @@ mod tests {
         let layout = Layout::new(backend.root().to_path_buf());
         let reflog = Reflog::new(&layout);
 
-        reflog.record(
-            current_actor(),
-            ReflogOp::Init,
-            None,
-            None,
-            "state1".to_string(),
-            vec![],
-        ).unwrap();
+        reflog
+            .record(
+                current_actor(),
+                ReflogOp::Init,
+                None,
+                None,
+                "state1".to_string(),
+                vec![],
+            )
+            .unwrap();
 
         let entry = log_entry_with_backend(&backend, 0).unwrap();
         assert!(entry.is_some());

@@ -2,11 +2,11 @@
 //!
 //! The manifest (`dvs.lock`) is the source of truth tracked in Git.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use super::oid::Oid;
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
-use super::oid::Oid;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// Compression algorithm for stored objects.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,11 +220,7 @@ mod tests {
 
     #[test]
     fn test_manifest_entry_new() {
-        let entry = ManifestEntry::new(
-            PathBuf::from("data/train.parquet"),
-            test_oid(),
-            1024,
-        );
+        let entry = ManifestEntry::new(PathBuf::from("data/train.parquet"), test_oid(), 1024);
         assert_eq!(entry.path, PathBuf::from("data/train.parquet"));
         assert_eq!(entry.bytes, 1024);
         assert_eq!(entry.compression, Compression::None);
@@ -288,11 +284,10 @@ mod tests {
     #[test]
     fn test_manifest_serde_roundtrip() {
         let mut manifest = Manifest::new().with_base_url("https://example.com/dvcs".to_string());
-        manifest.upsert(ManifestEntry::new(
-            PathBuf::from("data/train.parquet"),
-            test_oid(),
-            1024,
-        ).with_compression(Compression::Zstd));
+        manifest.upsert(
+            ManifestEntry::new(PathBuf::from("data/train.parquet"), test_oid(), 1024)
+                .with_compression(Compression::Zstd),
+        );
 
         let json = serde_json::to_string_pretty(&manifest).unwrap();
         let parsed: Manifest = serde_json::from_str(&json).unwrap();
@@ -309,8 +304,16 @@ mod tests {
         let oid1 = test_oid();
         let oid2 = Oid::new(HashAlgo::Blake3, "b".repeat(64));
 
-        manifest.upsert(ManifestEntry::new(PathBuf::from("a.txt"), oid1.clone(), 100));
-        manifest.upsert(ManifestEntry::new(PathBuf::from("b.txt"), oid1.clone(), 100)); // same OID
+        manifest.upsert(ManifestEntry::new(
+            PathBuf::from("a.txt"),
+            oid1.clone(),
+            100,
+        ));
+        manifest.upsert(ManifestEntry::new(
+            PathBuf::from("b.txt"),
+            oid1.clone(),
+            100,
+        )); // same OID
         manifest.upsert(ManifestEntry::new(PathBuf::from("c.txt"), oid2, 200));
 
         let unique = manifest.unique_oids();

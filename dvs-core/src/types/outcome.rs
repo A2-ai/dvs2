@@ -1,7 +1,7 @@
 //! Operation outcome types.
 
-use std::path::PathBuf;
 use chrono::{DateTime, Utc};
+use std::path::PathBuf;
 
 /// Outcome of an add or get operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

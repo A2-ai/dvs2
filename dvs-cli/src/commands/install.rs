@@ -2,11 +2,11 @@
 //!
 //! Installs git-status-dvs shim and shell completions.
 
-use std::path::PathBuf;
 use fs_err as fs;
+use std::path::PathBuf;
 
-use crate::output::Output;
 use super::Result;
+use crate::output::Output;
 
 /// Shell types for completion generation.
 #[derive(Debug, Clone, Copy)]
@@ -61,10 +61,7 @@ fn find_bin_dir() -> Option<PathBuf> {
     let home = dirs_home()?;
 
     // Try common user bin directories
-    let candidates = [
-        home.join(".local/bin"),
-        home.join("bin"),
-    ];
+    let candidates = [home.join(".local/bin"), home.join("bin")];
 
     for dir in candidates {
         if dir.exists() && is_writable(&dir) {
@@ -96,8 +93,7 @@ fn is_writable(path: &std::path::Path) -> bool {
 
 /// Get the path to the current dvs executable.
 fn dvs_executable_path() -> Result<PathBuf> {
-    std::env::current_exe()
-        .map_err(super::CliError::Io)
+    std::env::current_exe().map_err(super::CliError::Io)
 }
 
 /// Generate the git-status-dvs shim script.
@@ -134,7 +130,8 @@ pub fn run(
             None => find_bin_dir().ok_or_else(|| {
                 super::CliError::Path(
                     "Could not find a writable bin directory. \
-                     Try creating ~/.local/bin or use --install-dir".to_string()
+                     Try creating ~/.local/bin or use --install-dir"
+                        .to_string(),
                 )
             })?,
         };
@@ -158,7 +155,9 @@ pub fn run(
 
         // Check if bin_dir is in PATH
         if let Ok(path_var) = std::env::var("PATH") {
-            let in_path = path_var.split(':').any(|p| bin_dir == std::path::Path::new(p));
+            let in_path = path_var
+                .split(':')
+                .any(|p| bin_dir == std::path::Path::new(p));
             if !in_path {
                 output.info(&format!(
                     "Note: {} is not in your PATH. Add it to use 'git status-dvs'.",
@@ -194,7 +193,9 @@ pub fn run(
             if let Err(e) = fs::create_dir_all(&completion_dir) {
                 output.info(&format!(
                     "Skipping {:?} completions: could not create {}: {}",
-                    shell, completion_dir.display(), e
+                    shell,
+                    completion_dir.display(),
+                    e
                 ));
                 continue;
             }
@@ -214,7 +215,9 @@ pub fn run(
                 Err(e) => {
                     output.info(&format!(
                         "Skipping {:?} completions: could not write {}: {}",
-                        shell, completion_path.display(), e
+                        shell,
+                        completion_path.display(),
+                        e
                     ));
                 }
             }

@@ -1,7 +1,7 @@
 //! Glob pattern and path parsing utilities.
 
-use std::path::PathBuf;
 use crate::DvsError;
+use std::path::PathBuf;
 
 /// Expand glob patterns into file paths.
 ///
@@ -16,7 +16,10 @@ pub fn matches_glob(_path: &std::path::Path, _pattern: &str) -> bool {
 }
 
 /// Normalize a path relative to the repository root.
-pub fn normalize_path(_path: &std::path::Path, _repo_root: &std::path::Path) -> Result<PathBuf, DvsError> {
+pub fn normalize_path(
+    _path: &std::path::Path,
+    _repo_root: &std::path::Path,
+) -> Result<PathBuf, DvsError> {
     todo!("Normalize path relative to repo root")
 }
 

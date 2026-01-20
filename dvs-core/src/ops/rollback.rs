@@ -2,13 +2,13 @@
 //!
 //! Restore workspace state to a previous snapshot.
 
-use std::path::PathBuf;
 use fs_err as fs;
+use std::path::PathBuf;
 
-use crate::{DvsError, Backend, RepoBackend, Metadata, detect_backend_cwd};
-use crate::types::ReflogOp;
 use crate::helpers::layout::Layout;
-use crate::helpers::reflog::{SnapshotStore, Reflog, current_actor};
+use crate::helpers::reflog::{current_actor, Reflog, SnapshotStore};
+use crate::types::ReflogOp;
+use crate::{detect_backend_cwd, Backend, DvsError, Metadata, RepoBackend};
 
 /// Target for rollback - either a state ID or reflog index.
 #[derive(Debug, Clone)]
@@ -114,7 +114,9 @@ pub fn rollback_with_backend(
                 Some(e) => {
                     // Parse state ID from "state:xxx" format
                     crate::types::ReflogEntry::parse_state_id(&e.new)
-                        .ok_or_else(|| DvsError::not_found(format!("Invalid state ID format: {}", e.new)))?
+                        .ok_or_else(|| {
+                            DvsError::not_found(format!("Invalid state ID format: {}", e.new))
+                        })?
                         .to_string()
                 }
                 None => {
@@ -210,7 +212,10 @@ pub fn rollback_with_backend(
     reflog.record(
         current_actor(),
         ReflogOp::Rollback,
-        Some(format!("Rolled back to {}", &target_state_id[..8.min(target_state_id.len())])),
+        Some(format!(
+            "Rolled back to {}",
+            &target_state_id[..8.min(target_state_id.len())]
+        )),
         current_state_id.clone(),
         target_state_id.clone(),
         restored_files.clone(),
@@ -245,7 +250,9 @@ mod tests {
 
         // Create config file
         let config = crate::Config::new(root.join("storage"), None, None);
-        config.save(&root.join(crate::Config::config_filename())).unwrap();
+        config
+            .save(&root.join(crate::Config::config_filename()))
+            .unwrap();
 
         let backend = crate::detect_backend(root).unwrap();
         (temp, backend)
@@ -253,9 +260,18 @@ mod tests {
 
     #[test]
     fn test_rollback_target_parse() {
-        assert!(matches!(RollbackTarget::parse("0"), RollbackTarget::Index(0)));
-        assert!(matches!(RollbackTarget::parse("5"), RollbackTarget::Index(5)));
-        assert!(matches!(RollbackTarget::parse("abc123"), RollbackTarget::StateId(_)));
+        assert!(matches!(
+            RollbackTarget::parse("0"),
+            RollbackTarget::Index(0)
+        ));
+        assert!(matches!(
+            RollbackTarget::parse("5"),
+            RollbackTarget::Index(5)
+        ));
+        assert!(matches!(
+            RollbackTarget::parse("abc123"),
+            RollbackTarget::StateId(_)
+        ));
     }
 
     #[test]
@@ -285,14 +301,16 @@ mod tests {
         let state1_id = snapshot_store.save(&state1).unwrap();
 
         // Record it
-        reflog.record(
-            current_actor(),
-            ReflogOp::Init,
-            None,
-            None,
-            state1_id.clone(),
-            vec![],
-        ).unwrap();
+        reflog
+            .record(
+                current_actor(),
+                ReflogOp::Init,
+                None,
+                None,
+                state1_id.clone(),
+                vec![],
+            )
+            .unwrap();
 
         // Create a state with a file
         let meta = Metadata::new(
@@ -314,14 +332,16 @@ mod tests {
         let state2_id = snapshot_store.save(&state2).unwrap();
 
         // Record it
-        reflog.record(
-            current_actor(),
-            ReflogOp::Add,
-            None,
-            Some(state1_id.clone()),
-            state2_id.clone(),
-            vec![PathBuf::from("data.csv")],
-        ).unwrap();
+        reflog
+            .record(
+                current_actor(),
+                ReflogOp::Add,
+                None,
+                Some(state1_id.clone()),
+                state2_id.clone(),
+                vec![PathBuf::from("data.csv")],
+            )
+            .unwrap();
 
         // Verify metadata file exists before rollback
         assert!(meta_path.exists());
@@ -332,7 +352,8 @@ mod tests {
             RollbackTarget::StateId(state1_id.clone()),
             true,
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(result.success);
         assert_eq!(result.to_state, state1_id);
@@ -353,22 +374,20 @@ mod tests {
         let state1 = WorkspaceState::empty();
         let state1_id = snapshot_store.save(&state1).unwrap();
 
-        reflog.record(
-            current_actor(),
-            ReflogOp::Init,
-            None,
-            None,
-            state1_id.clone(),
-            vec![],
-        ).unwrap();
+        reflog
+            .record(
+                current_actor(),
+                ReflogOp::Init,
+                None,
+                None,
+                state1_id.clone(),
+                vec![],
+            )
+            .unwrap();
 
         // Rollback to index 0 (most recent = current state)
-        let result = rollback_with_backend(
-            &backend,
-            RollbackTarget::Index(0),
-            true,
-            false,
-        ).unwrap();
+        let result =
+            rollback_with_backend(&backend, RollbackTarget::Index(0), true, false).unwrap();
 
         assert!(result.success);
         // Should be a no-op since we're already at this state

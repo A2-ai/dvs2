@@ -1,9 +1,9 @@
 //! Test repository utilities.
 
-use std::path::{Path, PathBuf};
+use dvs_core::helpers::backend::{detect_backend, Backend, GitBackend};
 use fs_err as fs;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use dvs_core::helpers::backend::{Backend, GitBackend, detect_backend};
 
 /// A temporary test repository with git init and storage directory.
 ///
@@ -122,7 +122,11 @@ impl TestRepo {
         Ok(files)
     }
 
-    fn list_files_recursive(&self, dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), TestRepoError> {
+    fn list_files_recursive(
+        &self,
+        dir: &Path,
+        files: &mut Vec<PathBuf>,
+    ) -> Result<(), TestRepoError> {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -163,7 +167,11 @@ impl TestRepo {
         Ok(objects)
     }
 
-    fn list_storage_recursive(&self, dir: &Path, objects: &mut Vec<PathBuf>) -> Result<(), TestRepoError> {
+    fn list_storage_recursive(
+        &self,
+        dir: &Path,
+        objects: &mut Vec<PathBuf>,
+    ) -> Result<(), TestRepoError> {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();

@@ -1,8 +1,8 @@
 //! Test scenario definitions.
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
 
 use crate::runner::Op;
 use crate::snapshot::ObjectPresence;
@@ -175,10 +175,9 @@ impl ScenarioBuilder {
 
     /// Add a setup file.
     pub fn setup_file(mut self, path: &str, content: &str) -> Self {
-        self.setup.files.insert(
-            path.to_string(),
-            FileContent::Text(content.to_string()),
-        );
+        self.setup
+            .files
+            .insert(path.to_string(), FileContent::Text(content.to_string()));
         self
     }
 
@@ -279,7 +278,10 @@ pub mod standard {
             .setup_file("file2.txt", "content 2")
             .setup_file("dir/file3.txt", "content 3")
             .setup_init(".dvs-storage")
-            .step("add files", Op::add(&["file1.txt", "file2.txt", "dir/file3.txt"]))
+            .step(
+                "add files",
+                Op::add(&["file1.txt", "file2.txt", "dir/file3.txt"]),
+            )
             .expect_tracked("file1.txt")
             .expect_tracked("file2.txt")
             .expect_tracked("dir/file3.txt")

@@ -2,15 +2,12 @@
 
 use std::path::PathBuf;
 
+use super::Result;
 use crate::output::Output;
 use crate::paths;
-use super::Result;
 
 /// Run the materialize command.
-pub fn run(
-    output: &Output,
-    files: Vec<PathBuf>,
-) -> Result<()> {
+pub fn run(output: &Output, files: Vec<PathBuf>) -> Result<()> {
     let summary = if files.is_empty() {
         // Materialize all files from manifest
         dvs_core::materialize()?
@@ -27,7 +24,11 @@ pub fn run(
     for result in &summary.results {
         if result.is_error() {
             let msg = result.error.as_deref().unwrap_or("unknown error");
-            output.error(&format!("Error materializing {}: {}", result.path.display(), msg));
+            output.error(&format!(
+                "Error materializing {}: {}",
+                result.path.display(),
+                msg
+            ));
         } else if result.materialized {
             output.success(&format!("Materialized: {}", result.path.display()));
         } else {

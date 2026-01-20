@@ -1,10 +1,10 @@
 //! Workspace snapshot utilities for conformance testing.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use dvs_core::{Config, Manifest, Metadata};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
-use dvs_core::{Metadata, Manifest, Config};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use crate::repo::{TestRepo, TestRepoError};
 
@@ -113,10 +113,7 @@ impl WorkspaceSnapshot {
             let data_exists = repo.file_exists(&data_path.to_string_lossy());
 
             // Check if storage object exists
-            let storage_exists = check_storage_object(
-                repo.storage_dir(),
-                metadata.checksum(),
-            );
+            let storage_exists = check_storage_object(repo.storage_dir(), metadata.checksum());
 
             let snapshot = FileSnapshot {
                 checksum: metadata.checksum().to_string(),
@@ -130,10 +127,7 @@ impl WorkspaceSnapshot {
         }
 
         // List storage objects
-        let storage_objects = repo
-            .list_storage_objects()?
-            .into_iter()
-            .collect();
+        let storage_objects = repo.list_storage_objects()?.into_iter().collect();
 
         // Load config if present
         let config = if repo.config_path().exists() {

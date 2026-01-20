@@ -3,15 +3,15 @@
 //! This crate provides a daemon that watches for file changes and automatically
 //! syncs tracked files with the DVS storage.
 
-pub mod watcher;
+pub mod config;
 pub mod handler;
 pub mod ipc;
-pub mod config;
+pub mod watcher;
 
-pub use watcher::FileWatcher;
+pub use config::DaemonConfig;
 pub use handler::EventHandler;
 pub use ipc::{DaemonClient, DaemonServer};
-pub use config::DaemonConfig;
+pub use watcher::FileWatcher;
 
 /// Daemon error types.
 #[derive(Debug, thiserror::Error)]

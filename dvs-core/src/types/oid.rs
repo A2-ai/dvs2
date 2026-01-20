@@ -1,6 +1,6 @@
 //! Object ID (content hash with algorithm prefix).
 
-use serde::{Deserialize, Serialize, Serializer, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
 

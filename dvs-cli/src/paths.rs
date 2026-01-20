@@ -27,13 +27,8 @@ pub fn set_cwd(path: &Path) -> Result<()> {
     }
 
     // Change directory
-    std::env::set_current_dir(&resolved).map_err(|e| {
-        CliError::Path(format!(
-            "Failed to change to {}: {}",
-            resolved.display(),
-            e
-        ))
-    })
+    std::env::set_current_dir(&resolved)
+        .map_err(|e| CliError::Path(format!("Failed to change to {}: {}", resolved.display(), e)))
 }
 
 /// Resolve a path, expanding ~ and making it absolute.
@@ -57,9 +52,8 @@ pub fn resolve_path(path: &Path) -> Result<PathBuf> {
     if expanded.is_absolute() {
         Ok(expanded)
     } else {
-        let cwd = std::env::current_dir().map_err(|e| {
-            CliError::Path(format!("Failed to get current directory: {}", e))
-        })?;
+        let cwd = std::env::current_dir()
+            .map_err(|e| CliError::Path(format!("Failed to get current directory: {}", e)))?;
         Ok(cwd.join(expanded))
     }
 }
@@ -67,25 +61,22 @@ pub fn resolve_path(path: &Path) -> Result<PathBuf> {
 /// Get the home directory.
 fn home_dir() -> Option<PathBuf> {
     // Try HOME environment variable first
-    std::env::var("HOME")
-        .ok()
-        .map(PathBuf::from)
-        .or({
-            // Fall back to platform-specific methods
-            #[cfg(unix)]
-            {
-                // On Unix, we could use getpwuid, but HOME is almost always set
-                None
-            }
-            #[cfg(windows)]
-            {
-                std::env::var("USERPROFILE").ok().map(PathBuf::from)
-            }
-            #[cfg(not(any(unix, windows)))]
-            {
-                None
-            }
-        })
+    std::env::var("HOME").ok().map(PathBuf::from).or({
+        // Fall back to platform-specific methods
+        #[cfg(unix)]
+        {
+            // On Unix, we could use getpwuid, but HOME is almost always set
+            None
+        }
+        #[cfg(windows)]
+        {
+            std::env::var("USERPROFILE").ok().map(PathBuf::from)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            None
+        }
+    })
 }
 
 /// Normalize a path by resolving . and .. components.

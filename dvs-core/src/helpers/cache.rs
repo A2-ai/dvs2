@@ -2,8 +2,8 @@
 //!
 //! Caches file hashes based on mtime+size to avoid re-hashing unchanged files.
 
-use std::path::Path;
 use crate::DvsError;
+use std::path::Path;
 
 /// Cache entry for a file hash.
 #[derive(Debug, Clone)]

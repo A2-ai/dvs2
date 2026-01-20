@@ -64,7 +64,11 @@ pub struct ApiKey {
 
 impl ApiKey {
     /// Create a new API key.
-    pub fn new(key: impl Into<String>, name: impl Into<String>, permissions: Vec<Permission>) -> Self {
+    pub fn new(
+        key: impl Into<String>,
+        name: impl Into<String>,
+        permissions: Vec<Permission>,
+    ) -> Self {
         Self {
             key: key.into(),
             name: name.into(),
@@ -182,7 +186,9 @@ pub fn extract_auth_from_header(
         return Ok(Some(ctx));
     }
 
-    Err(ServerError::AuthError("unsupported authorization scheme".to_string()))
+    Err(ServerError::AuthError(
+        "unsupported authorization scheme".to_string(),
+    ))
 }
 
 /// Require authentication for a request.
@@ -199,7 +205,9 @@ pub fn require_auth_from_header(
 
     match extract_auth_from_header(config, auth_header)? {
         Some(ctx) => Ok(ctx),
-        None => Err(ServerError::AuthError("authentication required".to_string())),
+        None => Err(ServerError::AuthError(
+            "authentication required".to_string(),
+        )),
     }
 }
 
@@ -240,7 +248,10 @@ mod tests {
         assert_eq!(read_only.permissions, vec![Permission::Read]);
 
         let read_write = ApiKey::read_write("key2", "Read Write");
-        assert_eq!(read_write.permissions, vec![Permission::Read, Permission::Write]);
+        assert_eq!(
+            read_write.permissions,
+            vec![Permission::Read, Permission::Write]
+        );
 
         let admin = ApiKey::admin("key3", "Admin");
         assert_eq!(admin.permissions, vec![Permission::Admin]);
@@ -268,9 +279,7 @@ mod tests {
 
     #[test]
     fn test_validate_api_key() {
-        let config = AuthConfig::with_keys(vec![
-            ApiKey::read_only("valid-key", "Test Key"),
-        ]);
+        let config = AuthConfig::with_keys(vec![ApiKey::read_only("valid-key", "Test Key")]);
 
         let ctx = validate_api_key(&config, "valid-key").unwrap();
         assert_eq!(ctx.identity, "Test Key");
@@ -283,16 +292,16 @@ mod tests {
 
     #[test]
     fn test_extract_auth_from_header() {
-        let config = AuthConfig::with_keys(vec![
-            ApiKey::read_write("secret", "Test"),
-        ]);
+        let config = AuthConfig::with_keys(vec![ApiKey::read_write("secret", "Test")]);
 
         // No auth header
         let result = extract_auth_from_header(&config, None).unwrap();
         assert!(result.is_none());
 
         // Valid Bearer token
-        let ctx = extract_auth_from_header(&config, Some("Bearer secret")).unwrap().unwrap();
+        let ctx = extract_auth_from_header(&config, Some("Bearer secret"))
+            .unwrap()
+            .unwrap();
         assert_eq!(ctx.identity, "Test");
 
         // Invalid Bearer token
@@ -309,9 +318,7 @@ mod tests {
 
     #[test]
     fn test_require_auth_enabled() {
-        let config = AuthConfig::with_keys(vec![
-            ApiKey::read_only("key", "User"),
-        ]);
+        let config = AuthConfig::with_keys(vec![ApiKey::read_only("key", "User")]);
 
         // No auth header when required
         let err = require_auth_from_header(&config, None);
@@ -324,12 +331,11 @@ mod tests {
 
     #[test]
     fn test_require_permission() {
-        let config = AuthConfig::with_keys(vec![
-            ApiKey::read_only("reader", "Reader"),
-        ]);
+        let config = AuthConfig::with_keys(vec![ApiKey::read_only("reader", "Reader")]);
 
         // Has Read permission
-        let ctx = require_permission_from_header(&config, Some("Bearer reader"), Permission::Read).unwrap();
+        let ctx = require_permission_from_header(&config, Some("Bearer reader"), Permission::Read)
+            .unwrap();
         assert!(ctx.can_read());
 
         // Lacks Write permission
