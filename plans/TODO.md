@@ -22,6 +22,8 @@
 
 - [x] **Plan 038: Exn-First Error Handling Migration** - Migrated dvs-core to `exn`-based error handling. Created `ErrorKind` enum with flat variants and `DvsError` wrapper around `exn::Exn<ErrorKind>`. Preserved stable `error_type()` strings for R interop. Removed `thiserror` and `anyhow` from dvs-core dependencies.
 
+- [x] **Plan 027: Server HTTP CAS Endpoints** - Implemented HTTP CAS (Content-Addressable Storage) server in `dvs-server`. Includes `HEAD/GET/PUT /objects/{algo}/{hash}` endpoints, `LocalStorage` backend with `{root}/{algo}/{prefix}/{suffix}` layout, API key authentication with permissions (Read/Write/Delete/Admin), and `start_server()` for binding and serving.
+
 ### In Progress
 - [ ] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
   harness to verify CLI/R/other interfaces produce the same effects.
@@ -68,8 +70,6 @@
 
 ### Future Plans (Not Yet Written)
 
-- [ ] **Plan 027: Server HTTP CAS endpoints** - Implement the HTTP CAS server endpoints (HEAD/GET/PUT for objects) in dvs-server to support remote storage.
-
 - [ ] **Plan 028: R Package Bindings** - Wire dvsR package to dvs-core operations (init, add, get, status, push, pull, materialize).
 
 ---
@@ -91,11 +91,14 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ### dvs-server (HTTP CAS)
 
-- [ ] `HEAD /objects/{algo}/{hash}` - check object existence
-- [ ] `GET /objects/{algo}/{hash}` - download object
-- [ ] `PUT /objects/{algo}/{hash}` - upload object
-- [ ] Authentication middleware (API key / Bearer token)
-- [ ] Storage backend wiring to LocalStorage
+- [x] `HEAD /objects/{algo}/{hash}` - check object existence
+- [x] `GET /objects/{algo}/{hash}` - download object
+- [x] `PUT /objects/{algo}/{hash}` - upload object
+- [x] Authentication middleware (API key / Bearer token)
+- [x] Storage backend wiring to LocalStorage
+- [ ] DELETE endpoint for admin access
+- [ ] CORS middleware configuration
+- [ ] Request body size limits
 
 ### dvs-daemon
 
@@ -157,10 +160,11 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 - [x] Unit tests for dvs-core types (142 tests passing)
 - [x] Unit tests for dvs-core helpers
 - [x] Unit tests for dvs-core operations
+- [x] Unit tests for dvs-server (14 tests: storage, auth)
 - [ ] Integration tests with temp directories
 - [ ] Integration tests with real git repos
 - [ ] dvs-daemon IPC tests
-- [ ] dvs-server API tests
+- [ ] dvs-server HTTP integration tests
 - [ ] dvsR testthat tests
 
 ---

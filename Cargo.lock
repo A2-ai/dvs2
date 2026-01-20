@@ -442,6 +442,7 @@ name = "dvs-server"
 version = "0.0.0-9000"
 dependencies = [
  "axum",
+ "blake3",
  "dvs-core",
  "serde",
  "serde_json",

@@ -867,3 +867,62 @@ Added feature combination tests to `.github/workflows/ci.yml`:
 - CI validates all feature combinations compile and pass tests
 - Sibling crates can use `default-features = false` to opt out
 - No breaking changes to public API
+
+## Plan 027: Server HTTP CAS Endpoints
+
+Implemented HTTP Content-Addressable Storage (CAS) server endpoints in `dvs-server` for remote DVS storage access.
+
+### storage.rs - Storage backend implementation
+
+- [x] `StorageBackend` trait with `exists()`, `get_path()`, `get()`, `put()`, `delete()`, `stats()`
+- [x] `LocalStorage` implementation:
+  - Content-addressable path layout: `{root}/{algo}/{prefix}/{suffix}`
+  - Atomic writes via temp file + rename
+  - Idempotent put (skip if exists)
+  - Recursive directory walking for stats
+- [x] `StorageStats` struct with bytes_used, object_count, capacity
+- [x] `parse_oid()` helper for URL path parsing
+- [x] `validate_oid()` for format validation
+- [x] 6 unit tests for storage operations
+
+### api.rs - HTTP API routes and handlers
+
+- [x] `AppState` struct with config, storage, start_time
+- [x] `create_router()` builds axum router with all routes
+- [x] CAS endpoints:
+  - `HEAD /objects/{algo}/{hash}` - check existence, return Content-Length
+  - `GET /objects/{algo}/{hash}` - download object bytes
+  - `PUT /objects/{algo}/{hash}` - upload object (201 Created / 200 OK)
+- [x] Health endpoints:
+  - `GET /health` - returns `{"status": "ok"}`
+  - `GET /status` - returns version, storage_used, object_count, uptime_secs
+- [x] `ServerError` -> axum Response conversion with proper HTTP status codes
+- [x] `ObjectPath` deserializer for `{algo}/{hash}` path params
+
+### auth.rs - Authentication and authorization
+
+- [x] `AuthConfig` struct with enabled flag and api_keys list
+- [x] `ApiKey` struct with key, name, permissions
+- [x] `Permission` enum: Read, Write, Delete, Admin
+- [x] `AuthContext` struct with identity and permissions
+- [x] Helper constructors: `ApiKey::read_only()`, `read_write()`, `admin()`
+- [x] `validate_api_key()` - validate key against config
+- [x] `extract_auth()` - parse `Authorization: Bearer <key>` header
+- [x] `require_auth()` - enforce auth when enabled, return anonymous when disabled
+- [x] `require_permission()` - check specific permission after auth
+- [x] 8 unit tests for auth functionality
+
+### lib.rs - Server entry point
+
+- [x] `start_server()` - bind to host:port, create router, serve with axum
+- [x] Re-exports: `AppState`, `AuthConfig`, `ApiKey`, `Permission`, `AuthContext`
+- [x] Re-exports: `StorageBackend`, `LocalStorage`, `StorageStats`
+- [x] Doc example for starting the server
+
+### Summary
+
+- **14 tests passing** in dvs-server (6 storage + 8 auth)
+- CAS endpoints compatible with dvs-core's `HttpStore` client
+- API key authentication with permission-based access control
+- Atomic, idempotent object storage
+- Health and status endpoints for monitoring
