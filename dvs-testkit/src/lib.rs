@@ -16,8 +16,8 @@
 //! |--------|--------|-------------|
 //! | `CoreRunner` | ✅ Implemented | Baseline - calls dvs-core directly |
 //! | `CliRunner` | ✅ Implemented | Runs `dvs` CLI binary (feature: `cli-runner`) |
+//! | `ServerRunner` | ✅ Implemented | Tests HTTP CAS endpoints (feature: `server-runner`) |
 //! | `RRunner` | ❌ Not implemented | Will run R scripts via dvsR |
-//! | `ServerRunner` | ❌ Not implemented | Will test HTTP endpoints via dvs-server |
 //! | `DaemonRunner` | ❌ Not implemented | Will test daemon IPC via dvs-daemon |
 //!
 //! # Example
@@ -54,6 +54,9 @@ pub use diff::{SnapshotDiff, Mismatch};
 
 #[cfg(feature = "cli-runner")]
 pub use runner::CliRunner;
+
+#[cfg(feature = "server-runner")]
+pub use runner::{ServerRunner, TestServer};
 
 /// Re-export dvs_core for convenience in tests.
 pub use dvs_core;

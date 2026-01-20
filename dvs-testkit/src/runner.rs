@@ -573,6 +573,400 @@ mod tests {
     }
 }
 
+// ============================================================================
+// Server Runner (requires `server-runner` feature)
+// ============================================================================
+
+/// Test server wrapper for testing HTTP CAS endpoints.
+///
+/// This starts a dvs-server in the background on a random port
+/// and provides utilities for testing object storage.
+#[cfg(feature = "server-runner")]
+pub struct TestServer {
+    /// The URL of the running server.
+    pub url: String,
+    /// The port the server is listening on.
+    pub port: u16,
+    /// Server handle for shutdown.
+    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Runtime handle.
+    runtime: tokio::runtime::Runtime,
+    /// Storage directory.
+    _storage_dir: tempfile::TempDir,
+}
+
+#[cfg(feature = "server-runner")]
+impl TestServer {
+    /// Start a new test server on a random available port.
+    pub fn start() -> Result<Self, String> {
+        use dvs_server::{ServerConfig, AuthConfig};
+
+        // Create temp storage directory
+        let storage_dir = tempfile::TempDir::new()
+            .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+
+        // Find an available port
+        let port = Self::find_available_port()?;
+        let url = format!("http://127.0.0.1:{}", port);
+
+        // Create server config
+        let config = ServerConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            storage_root: storage_dir.path().to_path_buf(),
+            auth: AuthConfig::default(), // Auth disabled for tests
+            max_upload_size: 100 * 1024 * 1024,
+            cors_enabled: false,
+            cors_origins: vec![],
+            log_level: "warn".to_string(),
+        };
+
+        // Create runtime
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .map_err(|e| format!("Failed to create runtime: {}", e))?;
+
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+        // Start server in background
+        let server_url = url.clone();
+        runtime.spawn(async move {
+            let state = match dvs_server::AppState::new(config) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to create server state: {}", e);
+                    return;
+                }
+            };
+            let app = dvs_server::create_router(state);
+
+            let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("Failed to bind: {}", e);
+                    return;
+                }
+            };
+
+            // Use select to handle graceful shutdown
+            tokio::select! {
+                _ = axum::serve(listener, app) => {}
+                _ = shutdown_rx => {}
+            }
+        });
+
+        // Wait for server to be ready
+        Self::wait_for_server(&server_url)?;
+
+        Ok(Self {
+            url,
+            port,
+            shutdown_tx: Some(shutdown_tx),
+            runtime,
+            _storage_dir: storage_dir,
+        })
+    }
+
+    /// Find an available port.
+    fn find_available_port() -> Result<u16, String> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .map_err(|e| format!("Failed to bind: {}", e))?;
+        Ok(listener.local_addr()
+            .map_err(|e| format!("Failed to get addr: {}", e))?
+            .port())
+    }
+
+    /// Wait for server to be ready.
+    fn wait_for_server(url: &str) -> Result<(), String> {
+        let health_url = format!("{}/health", url);
+        let client = reqwest::blocking::Client::new();
+
+        for _ in 0..50 {
+            match client.get(&health_url).send() {
+                Ok(resp) if resp.status().is_success() => return Ok(()),
+                _ => std::thread::sleep(std::time::Duration::from_millis(100)),
+            }
+        }
+
+        Err("Server did not become ready in time".to_string())
+    }
+
+    /// Get the base URL for object operations.
+    pub fn objects_url(&self) -> String {
+        format!("{}/objects", self.url)
+    }
+
+    /// Check if an object exists on the server.
+    pub fn object_exists(&self, algo: &str, hash: &str) -> Result<bool, String> {
+        let url = format!("{}/{}/{}", self.objects_url(), algo, hash);
+        let client = reqwest::blocking::Client::new();
+        let resp = client.head(&url).send()
+            .map_err(|e| format!("HEAD request failed: {}", e))?;
+        Ok(resp.status().is_success())
+    }
+
+    /// Get an object from the server.
+    pub fn get_object(&self, algo: &str, hash: &str) -> Result<Vec<u8>, String> {
+        let url = format!("{}/{}/{}", self.objects_url(), algo, hash);
+        let client = reqwest::blocking::Client::new();
+        let resp = client.get(&url).send()
+            .map_err(|e| format!("GET request failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("GET returned {}", resp.status()));
+        }
+
+        resp.bytes()
+            .map(|b| b.to_vec())
+            .map_err(|e| format!("Failed to read body: {}", e))
+    }
+
+    /// Put an object to the server.
+    pub fn put_object(&self, algo: &str, hash: &str, data: &[u8]) -> Result<bool, String> {
+        let url = format!("{}/{}/{}", self.objects_url(), algo, hash);
+        let client = reqwest::blocking::Client::new();
+        let resp = client.put(&url)
+            .body(data.to_vec())
+            .send()
+            .map_err(|e| format!("PUT request failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("PUT returned {}", resp.status()));
+        }
+
+        // 201 = created new, 200 = already existed
+        Ok(resp.status() == reqwest::StatusCode::CREATED)
+    }
+}
+
+#[cfg(feature = "server-runner")]
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        // Send shutdown signal
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+        // Give server time to shutdown
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Server runner - tests HTTP CAS endpoints.
+///
+/// This runner tests that objects stored via HTTP can be retrieved
+/// correctly. It's used to verify the server's storage layer.
+///
+/// Note: This runner tests object storage, not full DVS operations.
+/// For init/add/get/status, use CoreRunner or CliRunner.
+#[cfg(feature = "server-runner")]
+pub struct ServerRunner {
+    server: std::sync::Arc<TestServer>,
+}
+
+#[cfg(feature = "server-runner")]
+impl ServerRunner {
+    /// Create a new server runner.
+    pub fn new() -> Result<Self, String> {
+        let server = TestServer::start()?;
+        Ok(Self {
+            server: std::sync::Arc::new(server),
+        })
+    }
+
+    /// Get the server URL.
+    pub fn url(&self) -> &str {
+        &self.server.url
+    }
+
+    /// Get a reference to the test server.
+    pub fn server(&self) -> &TestServer {
+        &self.server
+    }
+}
+
+#[cfg(feature = "server-runner")]
+impl Default for ServerRunner {
+    fn default() -> Self {
+        Self::new().expect("Failed to start test server")
+    }
+}
+
+#[cfg(feature = "server-runner")]
+impl InterfaceRunner for ServerRunner {
+    fn name(&self) -> &'static str {
+        "server"
+    }
+
+    fn run(&self, repo: &TestRepo, op: &Op) -> RunResult {
+        // Server runner only supports push/pull operations
+        // that interact with the CAS endpoints
+        match op.kind {
+            OpKind::Push => {
+                // For push, we need to:
+                // 1. Read objects from local storage
+                // 2. Push them to the server
+                // This requires the repo to be initialized with a config
+                run_push_server(repo, &op.args, &self.server)
+            }
+            OpKind::Pull => {
+                // For pull, we need to:
+                // 1. Fetch objects from server
+                // 2. Store them locally
+                run_pull_server(repo, &op.args, &self.server)
+            }
+            _ => {
+                // For other operations, delegate to core runner
+                // since the server only provides object storage
+                let core = CoreRunner::new();
+                core.run(repo, op)
+            }
+        }
+    }
+
+    fn is_available(&self) -> bool {
+        // Server is started in new(), so always available if created
+        true
+    }
+}
+
+#[cfg(feature = "server-runner")]
+fn run_push_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> RunResult {
+    use dvs_core::Manifest;
+
+    // Load manifest to find objects to push
+    let dvs_dir = repo.root().join(".dvs");
+    let manifest_path = dvs_dir.join("manifest.json");
+
+    if !manifest_path.exists() {
+        return RunResult::failure(1, "No manifest found - run init and add first".to_string(), None);
+    }
+
+    let manifest = match Manifest::load(&manifest_path) {
+        Ok(m) => m,
+        Err(e) => return RunResult::failure(1, format!("Failed to load manifest: {}", e), None),
+    };
+
+    // Load config
+    let config = match dvs_core::Config::load_from_dir(repo.root()) {
+        Ok(c) => c,
+        Err(e) => return RunResult::failure(1, format!("Failed to load config: {}", e), None),
+    };
+
+    let local_store = dvs_core::LocalStore::new(config.storage_dir.clone());
+
+    // Push each unique object
+    let mut pushed = 0;
+    let mut skipped = 0;
+    for oid in manifest.unique_oids() {
+        // Check if already on server
+        match server.object_exists(oid.algo.prefix(), &oid.hex) {
+            Ok(true) => {
+                skipped += 1;
+                continue;
+            }
+            Ok(false) => {}
+            Err(e) => return RunResult::failure(1, format!("Failed to check object {}: {}", oid, e), None),
+        }
+
+        // Read object from local storage to temp file
+        let obj_path = local_store.object_path(&oid);
+        if !obj_path.exists() {
+            return RunResult::failure(1, format!("Object not found locally: {}", oid), None);
+        }
+
+        let data = match std::fs::read(&obj_path) {
+            Ok(d) => d,
+            Err(e) => return RunResult::failure(1, format!("Failed to read object {}: {}", oid, e), None),
+        };
+
+        // Push to server
+        match server.put_object(oid.algo.prefix(), &oid.hex, &data) {
+            Ok(_) => pushed += 1,
+            Err(e) => return RunResult::failure(1, format!("Failed to push {}: {}", oid, e), None),
+        }
+    }
+
+    // Return success with snapshot
+    match WorkspaceSnapshot::capture(repo) {
+        Ok(snapshot) => {
+            let mut result = RunResult::success(snapshot);
+            result.stdout = format!("Pushed {} objects ({} already existed)", pushed, skipped);
+            result
+        }
+        Err(e) => RunResult::failure(1, format!("Snapshot error: {}", e), None),
+    }
+}
+
+#[cfg(feature = "server-runner")]
+fn run_pull_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> RunResult {
+    use dvs_core::{Manifest, ObjectStore as _};
+
+    // Load manifest to find objects to pull
+    let dvs_dir = repo.root().join(".dvs");
+    let manifest_path = dvs_dir.join("manifest.json");
+
+    if !manifest_path.exists() {
+        return RunResult::failure(1, "No manifest found".to_string(), None);
+    }
+
+    let manifest = match Manifest::load(&manifest_path) {
+        Ok(m) => m,
+        Err(e) => return RunResult::failure(1, format!("Failed to load manifest: {}", e), None),
+    };
+
+    // Load config
+    let config = match dvs_core::Config::load_from_dir(repo.root()) {
+        Ok(c) => c,
+        Err(e) => return RunResult::failure(1, format!("Failed to load config: {}", e), None),
+    };
+
+    let local_store = dvs_core::LocalStore::new(config.storage_dir.clone());
+
+    // Pull each unique object
+    let mut pulled = 0;
+    let mut skipped = 0;
+    for oid in manifest.unique_oids() {
+        // Check if already exists locally
+        if local_store.has(&oid).unwrap_or(false) {
+            skipped += 1;
+            continue;
+        }
+
+        // Fetch from server
+        let data = match server.get_object(oid.algo.prefix(), &oid.hex) {
+            Ok(d) => d,
+            Err(e) => return RunResult::failure(1, format!("Failed to pull {}: {}", oid, e), None),
+        };
+
+        // Write to temp file then copy to local store
+        let obj_path = local_store.object_path(&oid);
+        if let Some(parent) = obj_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return RunResult::failure(1, format!("Failed to create dir: {}", e), None);
+            }
+        }
+
+        if let Err(e) = std::fs::write(&obj_path, &data) {
+            return RunResult::failure(1, format!("Failed to store {}: {}", oid, e), None);
+        }
+
+        pulled += 1;
+    }
+
+    // Return success with snapshot
+    match WorkspaceSnapshot::capture(repo) {
+        Ok(snapshot) => {
+            let mut result = RunResult::success(snapshot);
+            result.stdout = format!("Pulled {} objects ({} already existed)", pulled, skipped);
+            result
+        }
+        Err(e) => RunResult::failure(1, format!("Snapshot error: {}", e), None),
+    }
+}
+
 #[cfg(all(test, feature = "cli-runner"))]
 mod cli_tests {
     use super::*;
@@ -643,5 +1037,95 @@ mod cli_tests {
             "Conformance test failed: {:?}",
             result
         );
+    }
+}
+
+#[cfg(all(test, feature = "server-runner"))]
+mod server_tests {
+    use super::*;
+    use dvs_core::ObjectStore;
+
+    #[test]
+    fn test_server_start_stop() {
+        let server = TestServer::start().expect("Failed to start server");
+        assert!(!server.url.is_empty());
+        assert!(server.port > 0);
+        // Server will be stopped on drop
+    }
+
+    #[test]
+    fn test_server_put_get_object() {
+        let server = TestServer::start().expect("Failed to start server");
+
+        // Create a test object
+        let data = b"hello world test data";
+        let hash = blake3::hash(data).to_hex().to_string();
+
+        // Initially should not exist
+        assert!(!server.object_exists("blake3", &hash).unwrap());
+
+        // Put the object
+        let created = server.put_object("blake3", &hash, data).unwrap();
+        assert!(created, "Should report as newly created");
+
+        // Now should exist
+        assert!(server.object_exists("blake3", &hash).unwrap());
+
+        // Get should return the same data
+        let retrieved = server.get_object("blake3", &hash).unwrap();
+        assert_eq!(retrieved, data);
+
+        // Put again should report as already existing
+        let created = server.put_object("blake3", &hash, data).unwrap();
+        assert!(!created, "Should report as already existing");
+    }
+
+    #[test]
+    fn test_server_runner_delegates_init_add() {
+        // ServerRunner delegates init/add/get/status to CoreRunner
+        let runner = ServerRunner::new().expect("Failed to create server runner");
+        let repo = TestRepo::new().expect("Failed to create test repo");
+
+        // Initialize
+        let init = Op::init(".dvs-storage");
+        let result = runner.run(&repo, &init);
+        assert!(result.success, "Init failed: {}", result.stderr);
+
+        // Create and add a file
+        repo.write_file("data.txt", b"test content for server").unwrap();
+        let add = Op::add(&["data.txt"]);
+        let result = runner.run(&repo, &add);
+        assert!(result.success, "Add failed: {}", result.stderr);
+
+        // Verify file was tracked
+        let snapshot = result.snapshot.unwrap();
+        assert!(snapshot.is_tracked(&PathBuf::from("data.txt")));
+    }
+
+    #[test]
+    fn test_server_object_roundtrip() {
+        // Test that objects can be pushed to and pulled from the server
+        let server = TestServer::start().expect("Failed to start server");
+
+        // Create multiple test objects
+        let test_objects = vec![
+            (b"hello world".as_slice(), "blake3"),
+            (b"test data 123".as_slice(), "blake3"),
+            (b"another object".as_slice(), "blake3"),
+        ];
+
+        for (data, algo) in &test_objects {
+            let hash = blake3::hash(data).to_hex().to_string();
+
+            // Put object
+            server.put_object(algo, &hash, data).expect("Put failed");
+
+            // Verify it exists
+            assert!(server.object_exists(algo, &hash).unwrap());
+
+            // Get and verify content matches
+            let retrieved = server.get_object(algo, &hash).expect("Get failed");
+            assert_eq!(&retrieved[..], *data);
+        }
     }
 }

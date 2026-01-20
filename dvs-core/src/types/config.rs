@@ -61,6 +61,15 @@ impl Config {
         self.hash_algo.unwrap_or_else(crate::helpers::hash::default_algorithm)
     }
 
+    /// Load configuration from a directory.
+    ///
+    /// Looks for the config file (dvs.yaml, dvs.toml, or dvs.json depending
+    /// on feature flags) in the given directory.
+    pub fn load_from_dir(dir: &std::path::Path) -> Result<Self, crate::DvsError> {
+        let config_path = dir.join(Self::config_filename());
+        Self::load(&config_path)
+    }
+
     /// Load configuration from a file.
     ///
     /// Format is determined by feature flags:
