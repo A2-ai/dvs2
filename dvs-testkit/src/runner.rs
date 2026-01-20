@@ -1085,7 +1085,6 @@ mod cli_tests {
 #[cfg(all(test, feature = "server-runner"))]
 mod server_tests {
     use super::*;
-    use dvs_core::ObjectStore;
 
     #[test]
     fn test_server_start_stop() {
