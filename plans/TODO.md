@@ -221,7 +221,7 @@ Issues identified during code review (see `reviews/` directory for details).
 
 ### High Priority
 
-- [ ] **Storage layout mismatch** - External storage uses `{prefix}/{suffix}` but merge/server use `{algo}/{prefix}/{suffix}`. Breaks interop across modules. (`dvs-core/src/helpers/hash.rs:314-320`, `dvs-core/src/ops/merge_repo.rs:343-379`)
+- [x] **Storage layout mismatch** - ~~External storage uses `{prefix}/{suffix}` but merge/server use `{algo}/{prefix}/{suffix}`. Breaks interop across modules.~~ Fixed: Updated `storage_path_for_hash()` to use `{algo}/{prefix}/{suffix}` layout consistently across all modules (add, get, status, merge, server).
 
 - [ ] **Manifest not wired to add** - `dvs add` doesn't update `dvs.lock`, so push/pull/materialize require manual manifest management. (`dvs-core/src/ops/add.rs:109-123`, `dvs-core/src/ops/push.rs:72-103`)
 

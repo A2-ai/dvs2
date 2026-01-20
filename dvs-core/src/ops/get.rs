@@ -158,8 +158,12 @@ fn get_single_file(backend: &Backend, path: &Path, config: &Config) -> GetResult
         );
     }
 
-    // Get storage path
-    let storage_path = hash::storage_path_for_hash(&config.storage_dir, &metadata.blake3_checksum);
+    // Get storage path (using algorithm from metadata)
+    let storage_path = hash::storage_path_for_hash(
+        &config.storage_dir,
+        metadata.hash_algo,
+        &metadata.blake3_checksum,
+    );
 
     // Check if file exists in storage
     if !storage_path.exists() {
@@ -258,11 +262,12 @@ mod tests {
         let content = b"col1,col2\n1,2\n";
         fs::write(&test_file, content).unwrap();
 
-        // Compute hash
+        // Compute hash (using default algorithm)
+        let algo = hash::default_algorithm();
         let checksum = hash::get_file_hash(&test_file).unwrap();
 
-        // Store in storage
-        let storage_path = hash::storage_path_for_hash(&storage_dir, &checksum);
+        // Store in storage (with algo prefix)
+        let storage_path = hash::storage_path_for_hash(&storage_dir, algo, &checksum);
         copy::copy_to_storage(&test_file, &storage_path, None, None).unwrap();
 
         // Create metadata
@@ -302,11 +307,12 @@ mod tests {
         let content = b"test content";
         fs::write(&test_file, content).unwrap();
 
-        // Compute hash
+        // Compute hash (using default algorithm)
+        let algo = hash::default_algorithm();
         let checksum = hash::get_file_hash(&test_file).unwrap();
 
-        // Store in storage
-        let storage_path = hash::storage_path_for_hash(&storage_dir, &checksum);
+        // Store in storage (with algo prefix)
+        let storage_path = hash::storage_path_for_hash(&storage_dir, algo, &checksum);
         copy::copy_to_storage(&test_file, &storage_path, None, None).unwrap();
 
         // Create metadata

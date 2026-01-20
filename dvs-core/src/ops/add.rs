@@ -323,7 +323,7 @@ fn add_single_file(
     };
 
     // Check if file already exists in storage with same hash
-    let storage_path = hash::storage_path_for_hash(&config.storage_dir, &checksum);
+    let storage_path = hash::storage_path_for_hash(&config.storage_dir, hash_algo, &checksum);
     let metadata_format = config.metadata_format();
     let metadata_path = Metadata::metadata_path_for_format(path, metadata_format);
 
@@ -507,8 +507,12 @@ mod tests {
         let meta_path = Metadata::metadata_path(&test_file);
         assert!(meta_path.exists());
 
-        // Verify storage file exists
-        let storage_path = hash::storage_path_for_hash(&storage_dir, &result.blake3_checksum);
+        // Verify storage file exists (uses default algorithm from config)
+        let storage_path = hash::storage_path_for_hash(
+            &storage_dir,
+            config.hash_algorithm(),
+            &result.blake3_checksum,
+        );
         assert!(storage_path.exists());
 
         let _ = fs::remove_dir_all(&temp_dir);

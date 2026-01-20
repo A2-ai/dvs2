@@ -244,8 +244,12 @@ fn status_single_file(backend: &Backend, path: &Path, config: &Config) -> Status
         }
     };
 
-    // Verify file exists in storage
-    let storage_path = hash::storage_path_for_hash(&config.storage_dir, &metadata.blake3_checksum);
+    // Verify file exists in storage (using algorithm from metadata)
+    let storage_path = hash::storage_path_for_hash(
+        &config.storage_dir,
+        metadata.hash_algo,
+        &metadata.blake3_checksum,
+    );
     if !storage_path.exists() && status != FileStatus::Unsynced {
         // Storage file missing - this is an error condition
         return StatusResult::error(
@@ -331,10 +335,11 @@ mod tests {
         let content = b"test content";
         fs::write(&test_file, content).unwrap();
 
+        let algo = hash::default_algorithm();
         let checksum = hash::get_file_hash(&test_file).unwrap();
 
-        // Store in storage
-        let storage_path = hash::storage_path_for_hash(&storage_dir, &checksum);
+        // Store in storage (with algo prefix)
+        let storage_path = hash::storage_path_for_hash(&storage_dir, algo, &checksum);
         copy::copy_to_storage(&test_file, &storage_path, None, None).unwrap();
 
         // Create metadata
@@ -359,8 +364,9 @@ mod tests {
         let test_file = temp_dir.join("missing.csv");
         let checksum = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
-        // Store something in storage
-        let storage_path = hash::storage_path_for_hash(&storage_dir, checksum);
+        // Store something in storage (with algo prefix)
+        let algo = hash::default_algorithm();
+        let storage_path = hash::storage_path_for_hash(&storage_dir, algo, checksum);
         fs::create_dir_all(storage_path.parent().unwrap()).unwrap();
         fs::write(&storage_path, b"content").unwrap();
 
@@ -385,10 +391,11 @@ mod tests {
         // Create a file with one content
         let test_file = temp_dir.join("data.csv");
         fs::write(&test_file, b"original content").unwrap();
+        let algo = hash::default_algorithm();
         let original_checksum = hash::get_file_hash(&test_file).unwrap();
 
-        // Store in storage
-        let storage_path = hash::storage_path_for_hash(&storage_dir, &original_checksum);
+        // Store in storage (with algo prefix)
+        let storage_path = hash::storage_path_for_hash(&storage_dir, algo, &original_checksum);
         copy::copy_to_storage(&test_file, &storage_path, None, None).unwrap();
 
         // Create metadata
@@ -413,12 +420,13 @@ mod tests {
         let (temp_dir, storage_dir) = setup_test_repo("find_all_tracked_files");
 
         // Create some tracked files
+        let algo = hash::default_algorithm();
         for name in ["file1.csv", "file2.csv", "file3.txt"] {
             let path = temp_dir.join(name);
             fs::write(&path, "content").unwrap();
 
             let checksum = hash::get_file_hash(&path).unwrap();
-            let storage_path = hash::storage_path_for_hash(&storage_dir, &checksum);
+            let storage_path = hash::storage_path_for_hash(&storage_dir, algo, &checksum);
             copy::copy_to_storage(&path, &storage_path, None, None).unwrap();
 
             let metadata = Metadata::new(checksum, 7, None, "tester".to_string());
