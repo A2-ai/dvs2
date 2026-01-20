@@ -77,18 +77,24 @@ fn expand_globs_tracked(backend: &Backend, patterns: &[PathBuf]) -> Result<Vec<P
                 pattern.clone()
             };
 
-            // We need to find .dvs files and convert back to data paths
-            let meta_pattern = format!("{}.dvs", full_pattern.display());
-            match glob(&meta_pattern) {
-                Ok(paths) => {
-                    for entry in paths.flatten() {
-                        if let Some(data_path) = Metadata::data_path(&entry) {
-                            files.push(data_path);
+            // We need to find .dvs and .dvs.toml files and convert back to data paths
+            // Search for both JSON and TOML metadata files
+            for ext in &[".dvs", ".dvs.toml"] {
+                let meta_pattern = format!("{}{}", full_pattern.display(), ext);
+                match glob(&meta_pattern) {
+                    Ok(paths) => {
+                        for entry in paths.flatten() {
+                            if let Some(data_path) = Metadata::data_path(&entry) {
+                                // Avoid duplicates if both formats exist
+                                if !files.contains(&data_path) {
+                                    files.push(data_path);
+                                }
+                            }
                         }
                     }
-                }
-                Err(_) => {
-                    return Err(DvsError::invalid_glob(pattern_str.to_string()));
+                    Err(_) => {
+                        return Err(DvsError::invalid_glob(pattern_str.to_string()));
+                    }
                 }
             }
         } else {
@@ -129,15 +135,14 @@ fn get_single_file(backend: &Backend, path: &Path, config: &Config) -> GetResult
         }
     };
 
-    // Load metadata
-    let metadata_path = Metadata::metadata_path(path);
-    let metadata = match Metadata::load(&metadata_path) {
+    // Load metadata (tries TOML first, then JSON)
+    let metadata = match Metadata::load_for_data_file(path) {
         Ok(m) => m,
         Err(_) => {
             return GetResult::error(
                 path.display().to_string(),
                 "metadata_not_found".to_string(),
-                format!("Metadata not found: {}", metadata_path.display()),
+                format!("Metadata not found for: {}", path.display()),
             );
         }
     };
@@ -174,8 +179,8 @@ fn get_single_file(backend: &Backend, path: &Path, config: &Config) -> GetResult
         );
     }
 
-    // Verify the copy
-    match hash::verify_hash(path, &metadata.blake3_checksum) {
+    // Verify the copy using the algorithm stored in metadata
+    match hash::verify_hash_with_algo(path, &metadata.blake3_checksum, metadata.hash_algo) {
         Ok(true) => GetResult::success(
             relative_path,
             path.to_path_buf(),
@@ -205,7 +210,8 @@ fn file_matches_metadata(local_path: &Path, metadata: &Metadata) -> Result<bool,
         return Ok(false);
     }
 
-    hash::verify_hash(local_path, &metadata.blake3_checksum)
+    // Use the algorithm stored in metadata for verification
+    hash::verify_hash_with_algo(local_path, &metadata.blake3_checksum, metadata.hash_algo)
 }
 
 #[cfg(test)]

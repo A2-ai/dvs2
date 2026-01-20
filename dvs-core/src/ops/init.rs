@@ -81,10 +81,11 @@ pub fn init_with_backend(
     // Save the new configuration
     config.save(&config_path)?;
 
-    // Add *.dvs to .gitignore if we're in a git repo
+    // Add *.dvs and *.dvs.toml to .gitignore if we're in a git repo
     if let Backend::Git(_) = backend {
         let gitignore_path = repo_root.join(".gitignore");
         add_to_gitignore(&gitignore_path, "*.dvs")?;
+        add_to_gitignore(&gitignore_path, "*.dvs.toml")?;
     }
 
     Ok(config)

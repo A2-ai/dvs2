@@ -108,7 +108,10 @@ fn handle_object_request(
 
     match method {
         "HEAD" => {
-            // Check if object exists
+            // Check if object exists - requires Read permission if auth enabled
+            let auth_header = get_auth_header(request);
+            require_permission_from_header(&state.config.auth, auth_header, Permission::Read)?;
+
             if state.storage.exists(&oid)? {
                 let obj_path = state.storage.get_path(&oid)?;
                 let metadata = fs::metadata(&obj_path).map_err(|e| {
@@ -124,7 +127,10 @@ fn handle_object_request(
         }
 
         "GET" => {
-            // Download object
+            // Download object - requires Read permission if auth enabled
+            let auth_header = get_auth_header(request);
+            require_permission_from_header(&state.config.auth, auth_header, Permission::Read)?;
+
             let data = state.storage.get(&oid)?;
             Ok(Response::from_data(data)
                 .with_header(content_type_header("application/octet-stream")))
@@ -163,6 +169,15 @@ fn handle_object_request(
                         .with_status_code(StatusCode(413)));
                 }
                 body.extend_from_slice(&buf[..n]);
+            }
+
+            // Verify that the uploaded data actually hashes to the claimed OID
+            let computed_hash = dvs_core::hash_bytes(&body, oid.algo).map_err(|e| {
+                ServerError::StorageError(format!("failed to compute hash: {e}"))
+            })?;
+            if computed_hash != oid.hex {
+                return Ok(Response::from_string("Hash mismatch: payload does not match claimed OID")
+                    .with_status_code(StatusCode(400)));
             }
 
             state.storage.put(&oid, &body)?;
