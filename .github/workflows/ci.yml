@@ -162,19 +162,29 @@ jobs:
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
           working-directory: dvsR
+      - name: Build R package
+        run: R CMD build dvsR
+      - name: Resolve R package tarball
+        run: |
+          set -euo pipefail
+          TARBALL="$(ls -1 dvsR_*.tar.gz | head -n 1)"
+          echo "R_PKG_TARBALL=${TARBALL}" >> "$GITHUB_ENV"
       - name: R CMD check (NOT_CRAN unset)
         if: matrix.not_cran == 'unset'
-        working-directory: dvsR
-        run: env -u NOT_CRAN R CMD check --as-cran --no-manual .
+        run: env -u NOT_CRAN R CMD check --as-cran --no-manual "${R_PKG_TARBALL}"
       - name: R CMD check (NOT_CRAN set)
         if: matrix.not_cran == 'set'
-        working-directory: dvsR
         env:
           NOT_CRAN: "true"
-        run: R CMD check --as-cran --no-manual .
+        run: R CMD check --as-cran --no-manual "${R_PKG_TARBALL}"
       - name: Upload R CMD check results
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: r-cmd-check-${{ matrix.r-version }}-${{ matrix.not_cran }}
-          path: dvsR/*.Rcheck
+          path: |
+            *.Rcheck
+            dvsR/*.Rcheck
+            dvsR/.*.Rcheck
+          include-hidden-files: true
+          if-no-files-found: warn
