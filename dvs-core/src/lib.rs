@@ -28,7 +28,7 @@ pub use types::{AuthConfig, CacheConfig, LocalConfig};
 
 // Re-export operations at crate root
 pub use ops::{
-    add, add_with_backend, get, get_with_backend, init, init_with_backend, status,
+    add, add_with_backend, add_with_format, get, get_with_backend, init, init_with_backend, status,
     status_with_backend,
 };
 pub use ops::{log, log_entry, log_entry_with_backend, log_with_backend, LogEntry};

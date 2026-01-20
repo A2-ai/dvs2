@@ -37,15 +37,19 @@ pub fn run(
     metadata_format: Option<String>,
 ) -> Result<()> {
     // Parse and validate metadata format if provided
-    if let Some(ref fmt) = metadata_format {
-        if dvs_core::MetadataFormat::from_str(fmt).is_none() {
-            return Err(super::CliError::InvalidArg(format!(
-                "Invalid metadata format '{}'. Use 'json' or 'toml'.",
-                fmt
-            )));
+    let format_override = if let Some(ref fmt) = metadata_format {
+        match dvs_core::MetadataFormat::from_str(fmt) {
+            Some(format) => Some(format),
+            None => {
+                return Err(super::CliError::InvalidArg(format!(
+                    "Invalid metadata format '{}'. Use 'json' or 'toml'.",
+                    fmt
+                )));
+            }
         }
-        // Note: Format is controlled by config; CLI override for future enhancement
-    }
+    } else {
+        None
+    };
 
     // Resolve all file paths
     let resolved_files: Vec<PathBuf> = files
@@ -53,8 +57,8 @@ pub fn run(
         .map(|f| paths::resolve_path(f))
         .collect::<Result<Vec<_>>>()?;
 
-    // Call dvs-core add
-    let results = dvs_core::add(&resolved_files, message.as_deref())?;
+    // Call dvs-core add with format override if specified
+    let results = dvs_core::add_with_format(&resolved_files, message.as_deref(), format_override)?;
 
     // Collect results
     let mut success_count = 0;

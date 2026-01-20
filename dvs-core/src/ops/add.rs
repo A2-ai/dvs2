@@ -30,16 +30,36 @@ use std::path::{Path, PathBuf};
 /// * `BatchError` - Multiple explicit paths don't exist
 pub fn add(files: &[PathBuf], message: Option<&str>) -> Result<Vec<AddResult>, DvsError> {
     let backend = detect_backend_cwd()?;
-    add_with_backend(&backend, files, message)
+    add_with_backend(&backend, files, message, None)
+}
+
+/// Add files with a specific metadata format override.
+///
+/// Use this when you want to override the config's default metadata format.
+pub fn add_with_format(
+    files: &[PathBuf],
+    message: Option<&str>,
+    metadata_format: Option<MetadataFormat>,
+) -> Result<Vec<AddResult>, DvsError> {
+    let backend = detect_backend_cwd()?;
+    add_with_backend(&backend, files, message, metadata_format)
 }
 
 /// Add files with a specific backend.
 ///
 /// Use this when you already have a backend reference.
+///
+/// # Arguments
+///
+/// * `backend` - The repository backend
+/// * `files` - Files to add (paths or glob patterns)
+/// * `message` - Optional message describing this version
+/// * `metadata_format` - Optional format override (uses config default if None)
 pub fn add_with_backend(
     backend: &Backend,
     files: &[PathBuf],
     message: Option<&str>,
+    metadata_format: Option<MetadataFormat>,
 ) -> Result<Vec<AddResult>, DvsError> {
     let repo_root = backend.root();
 
@@ -86,7 +106,7 @@ pub fn add_with_backend(
     let mut manifest_updated = false;
 
     for path in expanded_files {
-        let result = add_single_file(backend, &path, message, &config);
+        let result = add_single_file(backend, &path, message, &config, metadata_format);
 
         // Track paths that were actually added/updated
         if result.outcome == Outcome::Copied || result.outcome == Outcome::Present {
@@ -310,6 +330,7 @@ fn add_single_file(
     path: &Path,
     message: Option<&str>,
     config: &Config,
+    format_override: Option<MetadataFormat>,
 ) -> AddResult {
     let repo_root = backend.root();
 
@@ -361,7 +382,8 @@ fn add_single_file(
 
     // Check if file already exists in storage with same hash
     let storage_path = hash::storage_path_for_hash(&config.storage_dir, hash_algo, &checksum);
-    let metadata_format = config.metadata_format();
+    // Use format override if provided, otherwise use config default
+    let metadata_format = format_override.unwrap_or_else(|| config.metadata_format());
     let metadata_path = Metadata::metadata_path_for_format(path, metadata_format);
 
     // Check if already present with same hash (check both JSON and TOML formats)
@@ -534,7 +556,7 @@ mod tests {
         let config = Config::new(storage_dir.clone(), None, None);
 
         // Add the file
-        let result = add_single_file(&backend, &test_file, Some("test message"), &config);
+        let result = add_single_file(&backend, &test_file, Some("test message"), &config, None);
 
         assert_eq!(result.outcome, Outcome::Copied);
         assert!(!result.blake3_checksum.is_empty());
@@ -568,11 +590,11 @@ mod tests {
         let config = Config::new(storage_dir.clone(), None, None);
 
         // Add the file first time
-        let result1 = add_single_file(&backend, &test_file, None, &config);
+        let result1 = add_single_file(&backend, &test_file, None, &config, None);
         assert_eq!(result1.outcome, Outcome::Copied);
 
         // Add the same file again (unchanged)
-        let result2 = add_single_file(&backend, &test_file, None, &config);
+        let result2 = add_single_file(&backend, &test_file, None, &config, None);
         assert_eq!(result2.outcome, Outcome::Present);
 
         let _ = fs::remove_dir_all(&temp_dir);
@@ -586,7 +608,7 @@ mod tests {
         let config = Config::new(storage_dir, None, None);
 
         let nonexistent = temp_dir.join("nonexistent.txt");
-        let result = add_single_file(&backend, &nonexistent, None, &config);
+        let result = add_single_file(&backend, &nonexistent, None, &config, None);
 
         assert_eq!(result.outcome, Outcome::Error);
         assert!(result.error_message.unwrap().contains("not found"));
@@ -609,7 +631,7 @@ mod tests {
         // Add files using the full add_with_backend function
         let backend = crate::detect_backend(&temp_dir).unwrap();
         let files = vec![PathBuf::from("file1.txt"), PathBuf::from("file2.txt")];
-        let results = add_with_backend(&backend, &files, Some("test add")).unwrap();
+        let results = add_with_backend(&backend, &files, Some("test add"), None).unwrap();
 
         // Verify both files were added
         assert_eq!(results.len(), 2);
@@ -653,6 +675,7 @@ mod tests {
             &backend,
             &[PathBuf::from("file1.txt")],
             Some("first add"),
+            None,
         )
         .unwrap();
         assert_eq!(results[0].outcome, Outcome::Copied);
@@ -666,6 +689,7 @@ mod tests {
             &backend,
             &[PathBuf::from("file1.txt")],
             Some("second add"),
+            None,
         )
         .unwrap();
         assert_eq!(results[0].outcome, Outcome::Copied);

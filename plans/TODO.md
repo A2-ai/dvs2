@@ -231,7 +231,7 @@ Issues identified during code review (see `reviews/` directory for details).
 
 ### Medium Priority
 
-- [ ] **`dvs add --metadata-format` is no-op** - Flag is validated but never applied. (`dvs-cli/src/commands/add.rs:16-34`)
+- [x] **`dvs add --metadata-format` is no-op** - ~~Flag is validated but never applied.~~ Fixed: Added `add_with_format()` function to dvs-core that accepts optional `MetadataFormat` override. CLI now parses `--metadata-format` and passes it through to override config's default. (`dvs-core/src/ops/add.rs`, `dvs-cli/src/commands/add.rs`)
 
 - [ ] **`dvs config set` lacks validation** - `storage_dir` and `group` values aren't validated (existence, permissions, group presence). (`dvs-cli/src/commands/config.rs:110-151`)
 
