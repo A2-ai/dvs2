@@ -12,7 +12,7 @@ use fs_err as fs;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
-use commands::{init, add, get, status, push, pull, materialize, log, rollback, install, git_status};
+use commands::{init, add, get, status, push, pull, materialize, log, rollback, install, uninstall, git_status};
 use output::Output;
 
 /// DVS - Data Version System
@@ -161,6 +161,21 @@ pub enum Command {
         shell: Vec<String>,
     },
 
+    /// Uninstall git-status-dvs shim and shell completions
+    Uninstall {
+        /// Directory where git-status-dvs shim was installed
+        #[arg(long, value_name = "DIR")]
+        uninstall_dir: Option<PathBuf>,
+
+        /// Only remove shell completions (skip shim)
+        #[arg(long)]
+        completions_only: bool,
+
+        /// Shells to remove completions for (bash, zsh, fish, powershell)
+        #[arg(long, value_name = "SHELL")]
+        shell: Vec<String>,
+    },
+
     /// Combined git status and DVS status
     #[command(name = "git-status")]
     GitStatus {
@@ -263,6 +278,9 @@ fn main() -> ExitCode {
         }
         Command::Install { install_dir, completions_only, shell } => {
             install::run(&output, install_dir, completions_only, shell)
+        }
+        Command::Uninstall { uninstall_dir, completions_only, shell } => {
+            uninstall::run(&output, uninstall_dir, completions_only, shell)
         }
         Command::GitStatus { args } => {
             git_status::run(&output, args)
