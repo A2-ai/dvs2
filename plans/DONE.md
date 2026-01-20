@@ -1014,3 +1014,215 @@ Added `dvs config` subcommand for viewing and editing DVS configuration settings
 - Updates `generated_by` field on save to track DVS version
 - Validates values: octal for permissions, valid algorithms, valid formats
 - Error messages list valid keys/values on invalid input
+
+## Plan 045: Track DVS Build/Version in Generated Configs
+
+Added build-time version tracking to DVS so generated config files record which DVS build created them.
+
+### build.rs - Build-time version capture
+
+- [x] `DVS_VERSION` - Package version from Cargo.toml
+- [x] `DVS_COMMIT_SHA` - Git commit SHA (first 8 chars) or "unknown"
+- [x] `DVS_VERSION_STRING` - Combined "version (commit)" format
+
+### types/config.rs - GeneratedBy tracking
+
+- [x] `GeneratedBy` struct with dvs_version, commit_sha fields
+- [x] `GeneratedBy::current()` - Create from build-time constants
+- [x] `Config::generated_by` field (Option for backward compatibility)
+- [x] Auto-populated on `dvs init`
+- [x] Updated on `dvs config set`
+
+### CLI version display
+
+- [x] `dvs --version` shows "dvs 0.0.0-9000 (abc12345)"
+
+### Summary
+
+- Version tracking in generated configs for provenance
+- Build-time Git commit capture via build.rs
+- CLI shows version with commit hash
+
+## Plan 043: Replace Axum/Tower with tiny_http for dvs-server
+
+Migrated dvs-server from async axum/tower stack to synchronous tiny_http for minimal dependencies and simpler code.
+
+### lib.rs - Server entry point
+
+- [x] `start_server()` - Blocking server loop using `tiny_http::Server`
+- [x] `start_server_background()` - Returns `ServerHandle` for testing
+- [x] `ServerHandle::handle_one()` - Process single request (for tests)
+- [x] `ServerHandle::url()` - Get server URL
+
+### api.rs - Request handling
+
+- [x] `handle_request()` - Routes requests to appropriate handlers
+- [x] `handle_object_request()` - CAS object operations (HEAD/GET/PUT/DELETE)
+- [x] `handle_health()`, `handle_status()` - Health endpoints
+- [x] `handle_cors_preflight()` - CORS OPTIONS handling
+- [x] `add_cors_headers()` - Add CORS headers to responses
+- [x] Manual request body reading with size limits
+- [x] JSON response helpers
+
+### auth.rs - Header-based auth helpers
+
+- [x] `extract_auth_from_header(Option<&str>)` - Parse auth from header value
+- [x] `require_auth_from_header()` - Require auth when enabled
+- [x] `require_permission_from_header()` - Check permission from header
+
+### Dependencies removed
+
+- [x] axum
+- [x] tower
+- [x] tower-http
+- [x] tokio (from dvs-server)
+
+### Summary
+
+- **14 dvs-server tests passing**
+- Synchronous request handling via tiny_http
+- Much smaller dependency tree
+- Simpler testing with `ServerHandle::handle_one()`
+
+## Plan 044: Dependency Feature Matrix + Lightweight Defaults
+
+Changed dvs-core default configuration format from YAML to TOML and made heavy dependencies opt-in.
+
+### Config format changes
+
+- [x] `toml-config` feature enabled by default
+- [x] `yaml-config` feature still available, not default
+- [x] Default config file: `dvs.toml` (was `dvs.yaml`)
+- [x] `Config::config_filename()` returns appropriate filename
+
+### Feature flag updates
+
+- [x] `git2-backend` now opt-in (CLI enables it by default)
+- [x] `rayon` dependency removed (was unused)
+- [x] dvs-cli enables `git2-backend` and `yaml-config` for full compatibility
+
+### testkit updates
+
+- [x] Uses `Config::config_filename()` for portable tests
+- [x] Server-runner uses thread-based tiny_http server
+
+### Summary
+
+- TOML as default config format (smaller dependency)
+- git2 opt-in for crates that don't need libgit2
+- CLI still has full functionality with all features
+
+## Plan 041: TOML Metadata Files
+
+Added TOML as an alternative format for `.dvs` metadata files alongside JSON.
+
+### types/metadata.rs - Multi-format support
+
+- [x] `MetadataFormat` enum (Json, Toml) with file extensions
+- [x] `Metadata::load_for_data_file()` - Load metadata for a data file (tries both formats)
+- [x] `Metadata::save_with_format()` - Save with explicit format
+- [x] `metadata_path_toml()` - Returns `.dvs.toml` path
+- [x] TOML preferred if both `.dvs` and `.dvs.toml` exist
+
+### types/config.rs - Default format config
+
+- [x] `metadata_format: Option<MetadataFormat>` field
+- [x] `Config::metadata_format()` - Returns configured or default format
+- [x] Default: JSON for backward compatibility
+
+### CLI integration
+
+- [x] `dvs add --metadata-format <json|toml>` flag
+- [x] Validates format against config
+
+### Summary
+
+- TOML metadata files use `.dvs.toml` extension
+- JSON metadata files use `.dvs` extension
+- Config option to set default format
+- Backward compatible: JSON is default
+
+## Plan 046: Merge One DVS Repository into Another
+
+Implemented `dvs merge-repo <source>` command to import tracked files, metadata, and objects from another DVS repository.
+
+### dvs-core/src/ops/merge_repo.rs - Core merge logic
+
+- [x] `ConflictMode` enum (Abort, Skip, Overwrite)
+- [x] `MergeOptions` struct with prefix, conflict_mode, verify, dry_run
+- [x] `MergeResult` struct with files_merged, files_skipped, objects_copied, objects_existed, conflicts
+- [x] `merge_repo()` - Merge with backend auto-detection
+- [x] `merge_repo_with_backend()` - Full implementation:
+  - Load source/dest configs
+  - Find all tracked files in both repos
+  - Detect path conflicts
+  - Handle conflicts according to mode
+  - Copy metadata files (with optional prefix)
+  - Copy missing objects from source storage
+  - Record merge in dest reflog
+- [x] 8 unit tests covering all merge scenarios
+
+### types/reflog.rs - Merge operation type
+
+- [x] `ReflogOp::Merge` variant for recording merge operations
+
+### types/error.rs - Merge conflict error
+
+- [x] `ErrorKind::MergeConflict { paths }` variant
+- [x] `DvsError::merge_conflict()` constructor
+
+### dvs-cli/src/commands/merge_repo.rs - CLI command
+
+- [x] `MergeRepoOptions` struct
+- [x] `run()` - Parse options, call core merge, display results
+- [x] `--prefix <path>` - Place imports under subdirectory
+- [x] `--conflict <mode>` - abort/skip/overwrite
+- [x] `--verify` - Verify object hashes during copy
+- [x] `--dry-run` - Show what would be merged
+
+### Summary
+
+- `dvs merge-repo <source>` imports files from another DVS repo
+- Conflict handling: abort (default), skip, or overwrite
+- Optional prefix to place imports under a subdirectory
+- Optional hash verification during object copy
+- Dry-run mode to preview merge
+- **163 dvs-core tests passing** (8 new merge tests)
+
+## dvs-server Enhancements
+
+Additional server features implemented as incremental improvements.
+
+### DELETE endpoint
+
+- [x] `DELETE /objects/{algo}/{hash}` - Delete object from storage
+- [x] Returns 204 No Content on success, 404 if not found
+- [x] Requires Delete permission when auth enabled
+
+### Authentication wiring
+
+- [x] PUT handler checks Write permission via `require_permission_from_header()`
+- [x] DELETE handler checks Delete permission
+- [x] `get_auth_header()` helper extracts Authorization header
+
+### CORS support
+
+- [x] `cors_enabled` config option
+- [x] `cors_origins` list for allowed origins (empty = allow all)
+- [x] OPTIONS preflight handling with Access-Control-* headers
+- [x] Origin validation against configured list
+- [x] CORS headers added to all responses when enabled
+
+### Request body size limits
+
+- [x] `max_upload_size` config option (default 100MB)
+- [x] Content-Length check before reading body
+- [x] Streaming read with running total check
+- [x] Returns 413 Payload Too Large if exceeded
+
+### Summary
+
+- Full CRUD support for CAS objects (HEAD/GET/PUT/DELETE)
+- Configurable CORS for browser-based clients
+- Request size limits to prevent resource exhaustion
+- **14 dvs-server tests passing**

@@ -151,33 +151,38 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ## Configuration Options
 
-### dvs.yaml (repository config)
+### dvs.yaml / dvs.toml (repository config)
 
-- [ ] `storage_dir` - Path to content-addressable storage
-- [ ] `permissions` - File permissions (octal, e.g., 0640)
-- [ ] `group` - Unix group for files
-- [ ] `hash_algorithm` - Default hash algorithm (blake3, sha256, xxh3)
+- [x] `storage_dir` - Path to content-addressable storage
+- [x] `permissions` - File permissions (octal, e.g., 0640)
+- [x] `group` - Unix group for files
+- [x] `hash_algo` - Default hash algorithm (blake3, sha256, xxh3)
+- [x] `metadata_format` - Metadata file format (json, toml)
+- [x] `generated_by` - Version tracking (auto-populated by dvs init)
 
-### .dvs/config.toml (local config)
+### .dvs/config.toml (local config) - Not yet implemented
 
 - [ ] `base_url` - Default remote URL for push/pull
 - [ ] `auth.token` - Bearer token for authentication
 - [ ] `cache.max_size` - Maximum cache size
 
-### Daemon config
+### Daemon config - Not yet implemented
 
 - [ ] `watch_paths` - Directories to watch
 - [ ] `debounce_ms` - Delay before processing changes
 - [ ] `auto_add` - Enable auto-add for new files
 - [ ] `auto_sync` - Enable auto-sync for changes
 
-### Server config
+### Server config (ServerConfig struct)
 
-- [ ] `host` - Bind address
-- [ ] `port` - Listen port
-- [ ] `storage_root` - Storage directory
-- [ ] `auth.enabled` - Enable authentication
-- [ ] `auth.api_keys` - List of API keys
+- [x] `host` - Bind address
+- [x] `port` - Listen port
+- [x] `storage_root` - Storage directory
+- [x] `auth.enabled` - Enable authentication
+- [x] `auth.api_keys` - List of API keys
+- [x] `max_upload_size` - Maximum upload size in bytes
+- [x] `cors_enabled` - Enable CORS
+- [x] `cors_origins` - Allowed CORS origins
 
 ---
 
