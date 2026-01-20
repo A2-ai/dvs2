@@ -10,7 +10,7 @@ mod outcome;
 mod reflog;
 
 pub use config::{Config, GeneratedBy};
-pub use error::DvsError;
+pub use error::{DvsError, ErrorKind};
 pub use file_info::FileInfo;
 pub use manifest::{Compression, Manifest, ManifestEntry};
 pub use metadata::{Metadata, MetadataFormat};

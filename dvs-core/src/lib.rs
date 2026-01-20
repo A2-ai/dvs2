@@ -15,9 +15,13 @@ pub mod types;
 
 // Re-export commonly used types at crate root
 pub use types::{
-    AddResult, Compression, Config, DvsError, FileInfo, FileStatus, GeneratedBy, GetResult,
-    HashAlgo, Manifest, ManifestEntry, Metadata, MetadataFormat, Oid, Outcome, StatusResult,
+    AddResult, Compression, Config, DvsError, ErrorKind, FileInfo, FileStatus, GeneratedBy,
+    GetResult, HashAlgo, Manifest, ManifestEntry, Metadata, MetadataFormat, Oid, Outcome,
+    StatusResult,
 };
+
+// Re-export reflog types for detailed log analysis
+pub use types::{MetadataEntry, ReflogEntry, ReflogOp, WorkspaceState};
 
 // Re-export operations at crate root
 pub use ops::{
@@ -42,6 +46,15 @@ pub use helpers::backend::{
 
 // Re-export store types for testing
 pub use helpers::store::{LocalStore, ObjectStore};
+
+// Re-export hash utilities for advanced use
+pub use helpers::hash::{
+    create_hasher, default_algorithm, get_file_hash, get_file_hash_with_algo, hash_bytes,
+    verify_hash, verify_hash_with_algo, Hasher,
+};
+
+// Re-export layout for .dvs/ directory access
+pub use helpers::layout::Layout;
 
 // Re-export version information
 pub use helpers::version::{commit_sha, version, version_string, DvsVersion, VERSION_STRING};
