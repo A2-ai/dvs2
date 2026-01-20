@@ -223,11 +223,11 @@ Issues identified during code review (see `reviews/` directory for details).
 
 - [x] **Storage layout mismatch** - ~~External storage uses `{prefix}/{suffix}` but merge/server use `{algo}/{prefix}/{suffix}`. Breaks interop across modules.~~ Fixed: Updated `storage_path_for_hash()` to use `{algo}/{prefix}/{suffix}` layout consistently across all modules (add, get, status, merge, server).
 
-- [ ] **Manifest not wired to add** - `dvs add` doesn't update `dvs.lock`, so push/pull/materialize require manual manifest management. (`dvs-core/src/ops/add.rs:109-123`, `dvs-core/src/ops/push.rs:72-103`)
+- [x] **Manifest not wired to add** - ~~`dvs add` doesn't update `dvs.lock`, so push/pull/materialize require manual manifest management.~~ Fixed: `dvs add` now creates/updates `dvs.lock` with ManifestEntry for each successfully tracked file (Outcome::Copied or Outcome::Present).
 
-- [ ] **CLI file-specific remote ops path resolution** - File arguments to push/pull/materialize resolve to absolute paths, but manifest lookup expects repo-relative paths. (`dvs-cli/src/commands/push.rs:10-21`, `dvs-cli/src/commands/pull.rs:10-21`)
+- [x] **CLI file-specific remote ops path resolution** - ~~File arguments to push/pull/materialize resolve to absolute paths, but manifest lookup expects repo-relative paths.~~ Fixed: `push_files`, `pull_files`, and `materialize_files` now convert absolute paths to repo-relative using `pathdiff::diff_paths()` before manifest lookup.
 
-- [ ] **Rollback doesn't preserve metadata format** - Rollback always writes JSON (`.dvs`), potentially overwriting TOML metadata. (`dvs-core/src/ops/rollback.rs:176-199`)
+- [x] **Rollback doesn't preserve metadata format** - ~~Rollback always writes JSON (`.dvs`), potentially overwriting TOML metadata.~~ Fixed: Added `format` field to `MetadataEntry` (with serde default for backward compatibility), updated workspace state capture to detect and record metadata format, and updated rollback to use `save_with_format()` and clean up alternate-format files. (`dvs-core/src/types/reflog.rs`, `dvs-core/src/ops/add.rs`, `dvs-core/src/ops/rollback.rs`)
 
 ### Medium Priority
 

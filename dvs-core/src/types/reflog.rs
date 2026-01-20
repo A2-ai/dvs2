@@ -4,24 +4,37 @@
 //! - `WorkspaceState`: A snapshot of DVS-tracked state
 //! - `ReflogEntry`: A log entry recording state changes
 
-use super::{Manifest, Metadata};
+use super::{Manifest, Metadata, MetadataFormat};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// A metadata entry with its associated path.
+/// A metadata entry with its associated path and format.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetadataEntry {
     /// Repo-relative path to the data file.
     pub path: PathBuf,
     /// The metadata for this file.
     pub meta: Metadata,
+    /// Format of the metadata file (for preserving format on rollback).
+    /// Defaults to JSON for backward compatibility with existing snapshots.
+    #[serde(default)]
+    pub format: MetadataFormat,
 }
 
 impl MetadataEntry {
-    /// Create a new metadata entry.
+    /// Create a new metadata entry with default (JSON) format.
     pub fn new(path: PathBuf, meta: Metadata) -> Self {
-        Self { path, meta }
+        Self {
+            path,
+            meta,
+            format: MetadataFormat::default(),
+        }
+    }
+
+    /// Create a new metadata entry with explicit format.
+    pub fn with_format(path: PathBuf, meta: Metadata, format: MetadataFormat) -> Self {
+        Self { path, meta, format }
     }
 }
 

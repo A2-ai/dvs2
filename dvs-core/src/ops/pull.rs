@@ -185,16 +185,34 @@ pub fn pull_files(files: &[PathBuf], remote_url: Option<&str>) -> Result<PullSum
     layout.init()?;
 
     let mut summary = PullSummary::default();
+    let repo_root = backend.root();
 
     // Find OIDs for requested files
     for file in files {
-        let entry = match manifest.get(file) {
+        // Convert absolute paths to repo-relative for manifest lookup
+        let relative_path = if file.is_absolute() {
+            match pathdiff::diff_paths(file, repo_root) {
+                Some(rel) => rel,
+                None => {
+                    summary.failed += 1;
+                    summary.results.push(PullResult::error(
+                        Oid::blake3("0".repeat(64)),
+                        format!("File is outside repository: {}", file.display()),
+                    ));
+                    continue;
+                }
+            }
+        } else {
+            file.clone()
+        };
+
+        let entry = match manifest.get(&relative_path) {
             Some(e) => e,
             None => {
                 summary.failed += 1;
                 summary.results.push(PullResult::error(
                     Oid::blake3("0".repeat(64)), // placeholder
-                    format!("File not in manifest: {}", file.display()),
+                    format!("File not in manifest: {}", relative_path.display()),
                 ));
                 continue;
             }
