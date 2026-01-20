@@ -13,6 +13,7 @@ pub mod materialize;
 pub mod log;
 pub mod rollback;
 pub mod install;
+pub mod uninstall;
 pub mod git_status;
 
 use std::io;

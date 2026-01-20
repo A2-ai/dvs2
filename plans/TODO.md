@@ -32,7 +32,7 @@
 
 - [x] **Plan 041: TOML Metadata Files** - Added TOML as alternative metadata format for `.dvs` files. Implemented `MetadataFormat` enum (Json, Toml), multi-format load/save methods (`load_for_data_file()`, `save_with_format()`), `.dvs.toml` file extension for TOML metadata, config option `metadata_format` to control default, and CLI `--metadata-format` flag validation. TOML files (`.dvs.toml`) are preferred if both formats exist.
 
-- [x] **Plan 042: Git Subcommand + Shell Completion Install** - Added `dvs install` command for installing git-status-dvs shim and shell completions. Added `dvs git-status` command that runs `git status` followed by `dvs status`. Install command supports `--install-dir` for custom location, `--completions-only` to skip shim, and `--shell` to specify shells (bash, zsh, fish, powershell). Uses `clap_complete` for completion generation.
+- [x] **Plan 042: Git Subcommand + Shell Completion Install** - Added `dvs install` command for installing git-status-dvs shim and shell completions, and `dvs uninstall` command to remove them. Added `dvs git-status` command that runs `git status` followed by `dvs status`. Install/uninstall commands support `--install-dir`/`--uninstall-dir` for custom location, `--completions-only` to skip shim, and `--shell` to specify shells (bash, zsh, fish, powershell). Uses `clap_complete` for completion generation.
 
 ### In Progress
 
