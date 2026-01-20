@@ -53,12 +53,12 @@ pub fn init_with_backend(
     // Create or validate storage directory
     setup_storage_directory(storage_dir, permissions)?;
 
-    // Create the configuration
+    // Create the configuration with version info
     let config = Config::new(
         storage_dir.to_path_buf(),
         permissions,
         group.map(|s| s.to_string()),
-    );
+    ).with_version_info();
 
     // Check for existing configuration
     let config_path = config_helper::config_path(repo_root);

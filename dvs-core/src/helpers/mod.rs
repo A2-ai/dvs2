@@ -13,3 +13,4 @@ pub mod parse;
 pub mod reflog;
 pub mod repo;
 pub mod store;
+pub mod version;
