@@ -34,6 +34,37 @@
   - [ ] Implement `ServerRunner` for HTTP endpoints (blocked by Plan 027)
   - [ ] Implement `DaemonRunner` for daemon IPC
 
+### Pending Plans (Documented, Status Unknown)
+
+- [ ] **Plan 001: Decoupling Architecture** - `plans/001-decoupling-architecture.md`
+- [ ] **Plan 002: Vendor Crates Inclusion** - `plans/002-vendor-crates-inclusion.md`
+- [ ] **Plan 004: miniextendr-api Inclusion** - `plans/004-miniextendr-api-inclusion.md`
+- [ ] **Plan 005: miniextendr-macros Inclusion** - `plans/005-miniextendr-macros-inclusion.md`
+- [ ] **Plan 006: miniextendr-lint Inclusion** - `plans/006-miniextendr-lint-inclusion.md`
+- [ ] **Plan 007: ahash Inclusion** - `plans/007-ahash-inclusion.md`
+- [ ] **Plan 008: cfg-if Inclusion** - `plans/008-cfg-if-inclusion.md`
+- [ ] **Plan 009: getrandom Inclusion** - `plans/009-getrandom-inclusion.md`
+- [ ] **Plan 010: libc Inclusion** - `plans/010-libc-inclusion.md`
+- [ ] **Plan 011: once_cell Inclusion** - `plans/011-once_cell-inclusion.md`
+- [ ] **Plan 012: proc-macro2 Inclusion** - `plans/012-proc-macro2-inclusion.md`
+- [ ] **Plan 013: quote Inclusion** - `plans/013-quote-inclusion.md`
+- [ ] **Plan 014: syn Inclusion** - `plans/014-syn-inclusion.md`
+- [ ] **Plan 015: unicode-ident Inclusion** - `plans/015-unicode-ident-inclusion.md`
+- [ ] **Plan 016: version_check Inclusion** - `plans/016-version_check-inclusion.md`
+- [ ] **Plan 017: r-efi Inclusion** - `plans/017-r-efi-inclusion.md`
+- [ ] **Plan 018: wasip2 Inclusion** - `plans/018-wasip2-inclusion.md`
+- [ ] **Plan 019: wit-bindgen Inclusion** - `plans/019-wit-bindgen-inclusion.md`
+- [ ] **Plan 020: zerocopy Inclusion** - `plans/020-zerocopy-inclusion.md`
+- [ ] **Plan 021: zerocopy-derive Inclusion** - `plans/021-zerocopy-derive-inclusion.md`
+- [ ] **Plan 030: Temporal SCD Snapshots for Tabular Data** - `plans/030-temporal-scd-snapshots.md`
+- [ ] **Plan 031: Slice Timestamp (As-Of) Views** - `plans/031-slice-ts-asof.md`
+- [ ] **Plan 032: Temporal Interlace for Aligned Joins** - `plans/032-temporal-interlace.md`
+- [ ] **Plan 033: Audit Logs + Missing Range Detection** - `plans/033-audit-logs-missing-ranges.md`
+- [ ] **Plan 034: Concurrency Locks for Dataset Updates** - `plans/034-concurrency-locks.md`
+- [ ] **Plan 035: Feature Store + Derived Dataset Framework** - `plans/035-feature-store-derived.md`
+- [ ] **Plan 036: Remote Snapshot Sources (HTTP/GitHub)** - `plans/036-remote-snapshot-sources.md`
+- [ ] **Plan 040: Proc-macro Usage Audit** - `plans/040-proc-macro-usage-audit.md`
+
 ### Future Plans (Not Yet Written)
 
 - [ ] **Plan 027: Server HTTP CAS endpoints** - Implement the HTTP CAS server endpoints (HEAD/GET/PUT for objects) in dvs-server to support remote storage.
@@ -145,9 +176,8 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ## Misc.
 
-- [ ] **Optional dvs-core dependencies**: Currently only hash algorithms (blake3/xxh3/sha256) and rayon are optional. Making all dependencies optional would allow sibling crates (dvs-cli, dvsR, dvs-server, dvs-daemon) to opt-in only to what they need. Key dependencies to make optional:
-  - `git2` - for Git-backed workspaces
-  - `walkdir`, `glob` - for file discovery
-  - `chrono` - for timestamps
-  - `serde_yaml` - for config files
-  - etc.
+- [ ] **Optional dvs-core dependencies (Plan 041)**: Making dependencies optional so sibling crates can opt-in.
+  - [x] `git2` - via `git2-backend` feature (default on), CLI fallback always available
+  - [x] `memmap2` - via `mmap` feature (default on), streaming fallback always available
+  - [ ] `serde_yaml` - via `yaml-config` feature
+  - [ ] `walkdir` - via `walkdir` feature
