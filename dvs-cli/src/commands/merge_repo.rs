@@ -32,10 +32,7 @@ pub fn run(output: &Output, options: MergeRepoOptions) -> Result<()> {
         output.println("Dry run - no changes will be made:");
     }
 
-    output.println(&format!(
-        "Merging from {}...",
-        options.source.display()
-    ));
+    output.println(&format!("Merging from {}...", options.source.display()));
 
     let result = dvs_core::merge_repo(&options.source, merge_options)?;
 
@@ -48,11 +45,7 @@ fn display_result(output: &Output, result: &MergeResult, dry_run: bool) {
     let action = if dry_run { "Would merge" } else { "Merged" };
 
     if result.files_merged > 0 {
-        output.println(&format!(
-            "{} {} file(s):",
-            action,
-            result.files_merged
-        ));
+        output.println(&format!("{} {} file(s):", action, result.files_merged));
         for path in &result.merged_paths {
             output.println(&format!("  + {}", path.display()));
         }
@@ -68,8 +61,7 @@ fn display_result(output: &Output, result: &MergeResult, dry_run: bool) {
     if !dry_run && (result.objects_copied > 0 || result.objects_existed > 0) {
         output.println(&format!(
             "Objects: {} copied, {} already existed",
-            result.objects_copied,
-            result.objects_existed
+            result.objects_copied, result.objects_existed
         ));
     }
 

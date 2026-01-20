@@ -57,11 +57,14 @@ impl FileInfo {
         };
 
         if !absolute_path.exists() {
-            return Err(DvsError::file_not_found(absolute_path.display().to_string()));
+            return Err(DvsError::file_not_found(
+                absolute_path.display().to_string(),
+            ));
         }
 
-        let metadata = std::fs::metadata(&absolute_path)
-            .map_err(|e| DvsError::storage_error(format!("failed to stat {}: {e}", path.display())))?;
+        let metadata = std::fs::metadata(&absolute_path).map_err(|e| {
+            DvsError::storage_error(format!("failed to stat {}: {e}", path.display()))
+        })?;
 
         let size = metadata.len();
         let blake3_checksum = get_file_hash(&absolute_path)?;
@@ -128,9 +131,8 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "test").unwrap();
 
-        let info =
-            FileInfo::from_path_with_relative(&file_path, PathBuf::from("custom/path.txt"))
-                .unwrap();
+        let info = FileInfo::from_path_with_relative(&file_path, PathBuf::from("custom/path.txt"))
+            .unwrap();
 
         assert_eq!(info.relative_path, PathBuf::from("custom/path.txt"));
     }

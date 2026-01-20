@@ -1269,3 +1269,45 @@ Various incremental improvements to code quality and public API surface.
 - dvs-cli: 12 tests
 - dvs-testkit: 22 tests (+ 4 sandbox-blocked)
 - **Total: 220 tests passing**
+
+## Integration Tests with Temp Directories and Git Repos
+
+Added comprehensive integration tests to dvs-testkit that exercise full end-to-end workflows using temp directories and real git repos.
+
+### New test file: `dvs-testkit/src/integration.rs`
+
+**Full workflow tests:**
+- `test_full_workflow_single_file` - init → add → delete → get → status
+- `test_full_workflow_multiple_files` - Multiple files in different directories
+- `test_full_workflow_add_modify_add` - Add, modify, re-add verifies hash changes
+
+**Git integration tests:**
+- `test_workflow_with_git_repo` - Verifies DVS works correctly with git repos
+- `test_workflow_dvs_only_workspace` - Verifies DVS-only workspaces (no git)
+
+**Edge case tests:**
+- `test_add_same_file_twice` - Idempotent add behavior
+- `test_get_without_delete` - Get when file still exists
+- `test_status_empty_repo` - Status on empty initialized repo
+- `test_add_empty_file` - Empty file handling
+- `test_add_binary_file` - Binary file with null bytes
+- `test_add_large_file_simulation` - 1MB file roundtrip
+- `test_nested_directory_structure` - Deeply nested paths
+- `test_special_characters_in_filename` - Spaces, dashes, dots in filenames
+
+**Batch operation behavior tests:**
+- `test_add_nonexistent_file` - Verifies batch success with per-file errors
+- `test_get_nonexistent_file` - Same for get
+- `test_add_without_init` - Fails when DVS not initialized
+
+**Storage verification tests:**
+- `test_storage_directory_structure` - Verifies storage objects created
+- `test_content_addressable_deduplication` - Identical content shares storage
+
+### Updated test counts
+
+- dvs-core: 162 tests
+- dvs-server: 20 tests
+- dvs-cli: 12 tests
+- dvs-testkit: 36 tests (+14 new integration tests)
+- **Total: 230 tests passing**

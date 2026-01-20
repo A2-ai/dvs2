@@ -51,13 +51,14 @@ check *args:
 doc *args:
     cargo doc --manifest-path={{quote(workspace_manifest)}} --workspace --no-deps {{args}}
 
+# TODO: add rpkg_manfiest to `doc-private`
 # Generate documentation including private items (for internal review)
 doc-private *args:
     cargo doc --manifest-path={{quote(workspace_manifest)}} --workspace --document-private-items --no-deps {{args}}
-
 # Check documentation for warnings (treats warnings as errors)
 doc-check:
     RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path={{quote(workspace_manifest)}} --workspace --document-private-items --no-deps
+    RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path={{quote(rpkg_manifest)}} --document-private-items --no-deps
 
 # Open documentation in browser
 doc-open: doc

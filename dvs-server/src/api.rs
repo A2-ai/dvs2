@@ -222,7 +222,10 @@ fn get_origin_header(request: &Request) -> Option<&str> {
 }
 
 /// Handle CORS preflight (OPTIONS) request.
-fn handle_cors_preflight(state: &AppState, request: &Request) -> Response<std::io::Cursor<Vec<u8>>> {
+fn handle_cors_preflight(
+    state: &AppState,
+    request: &Request,
+) -> Response<std::io::Cursor<Vec<u8>>> {
     let mut response = Response::from_data(vec![]).with_status_code(StatusCode(204));
 
     // Add CORS headers
