@@ -831,6 +831,7 @@ impl InterfaceRunner for ServerRunner {
 #[cfg(feature = "server-runner")]
 fn run_push_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> RunResult {
     use dvs_core::Manifest;
+    use fs_err as fs;
 
     // Load manifest to find objects to push
     let dvs_dir = repo.root().join(".dvs");
@@ -883,7 +884,7 @@ fn run_push_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> Ru
             return RunResult::failure(1, format!("Object not found locally: {}", oid), None);
         }
 
-        let data = match std::fs::read(&obj_path) {
+        let data = match fs::read(&obj_path) {
             Ok(d) => d,
             Err(e) => {
                 return RunResult::failure(1, format!("Failed to read object {}: {}", oid, e), None)
@@ -911,6 +912,7 @@ fn run_push_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> Ru
 #[cfg(feature = "server-runner")]
 fn run_pull_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> RunResult {
     use dvs_core::{Manifest, ObjectStore as _};
+    use fs_err as fs;
 
     // Load manifest to find objects to pull
     let dvs_dir = repo.root().join(".dvs");
@@ -952,12 +954,12 @@ fn run_pull_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> Ru
         // Write to temp file then copy to local store
         let obj_path = local_store.object_path(oid);
         if let Some(parent) = obj_path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
+            if let Err(e) = fs::create_dir_all(parent) {
                 return RunResult::failure(1, format!("Failed to create dir: {}", e), None);
             }
         }
 
-        if let Err(e) = std::fs::write(&obj_path, &data) {
+        if let Err(e) = fs::write(&obj_path, &data) {
             return RunResult::failure(1, format!("Failed to store {}: {}", oid, e), None);
         }
 

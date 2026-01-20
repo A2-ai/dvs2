@@ -1,5 +1,6 @@
 //! File information types.
 
+use fs_err as fs;
 use std::path::{Path, PathBuf};
 
 use crate::helpers::file::metadata_path_for;
@@ -62,7 +63,7 @@ impl FileInfo {
             ));
         }
 
-        let metadata = std::fs::metadata(&absolute_path).map_err(|e| {
+        let metadata = fs::metadata(&absolute_path).map_err(|e| {
             DvsError::storage_error(format!("failed to stat {}: {e}", path.display()))
         })?;
 
@@ -106,7 +107,7 @@ mod tests {
     fn test_file_info_from_path() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
-        let mut file = std::fs::File::create(&file_path).unwrap();
+        let mut file = fs::File::create(&file_path).unwrap();
         writeln!(file, "hello world").unwrap();
         drop(file);
 
@@ -129,7 +130,7 @@ mod tests {
     fn test_file_info_with_relative() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
-        std::fs::write(&file_path, "test").unwrap();
+        fs::write(&file_path, "test").unwrap();
 
         let info = FileInfo::from_path_with_relative(&file_path, PathBuf::from("custom/path.txt"))
             .unwrap();

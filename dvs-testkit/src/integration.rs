@@ -8,6 +8,7 @@
 mod tests {
     use crate::repo::TestRepo;
     use crate::runner::{CoreRunner, InterfaceRunner, Op};
+    use fs_err as fs;
     use std::path::PathBuf;
 
     // ============================================================================
@@ -34,7 +35,7 @@ mod tests {
         assert!(repo.file_exists("data.csv.dvs") || repo.file_exists("data.csv.dvs.toml"));
 
         // 4. Delete original and get
-        std::fs::remove_file(repo.path("data.csv")).unwrap();
+        fs::remove_file(repo.path("data.csv")).unwrap();
         assert!(!repo.file_exists("data.csv"));
 
         let result = runner.run(&repo, &Op::get(&["data.csv"]));
@@ -273,7 +274,7 @@ mod tests {
         assert!(result.success, "Add binary failed: {}", result.stderr);
 
         // Delete and restore
-        std::fs::remove_file(repo.path("binary.bin")).unwrap();
+        fs::remove_file(repo.path("binary.bin")).unwrap();
         let result = runner.run(&repo, &Op::get(&["binary.bin"]));
         assert!(result.success, "Get binary failed: {}", result.stderr);
 
@@ -298,7 +299,7 @@ mod tests {
         assert!(result.success, "Add large failed: {}", result.stderr);
 
         // Delete and restore
-        std::fs::remove_file(repo.path("large.bin")).unwrap();
+        fs::remove_file(repo.path("large.bin")).unwrap();
         let result = runner.run(&repo, &Op::get(&["large.bin"]));
         assert!(result.success, "Get large failed: {}", result.stderr);
 
