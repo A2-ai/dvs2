@@ -1,10 +1,33 @@
 //! DVS materialize command.
 
+use serde::Serialize;
 use std::path::PathBuf;
 
 use super::Result;
 use crate::output::Output;
 use crate::paths;
+
+/// JSON output for materialize command.
+#[derive(Serialize)]
+struct MaterializeOutput {
+    files: Vec<MaterializeFileEntry>,
+    summary: MaterializeSummary,
+}
+
+#[derive(Serialize)]
+struct MaterializeFileEntry {
+    path: String,
+    outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MaterializeSummary {
+    materialized: usize,
+    up_to_date: usize,
+    failed: usize,
+}
 
 /// Run the materialize command.
 pub fn run(output: &Output, files: Vec<PathBuf>) -> Result<()> {
@@ -20,24 +43,53 @@ pub fn run(output: &Output, files: Vec<PathBuf>) -> Result<()> {
         dvs_core::materialize_files(&resolved_files)?
     };
 
-    // Output results
+    // Collect results for JSON
+    let mut file_entries = Vec::new();
+
     for result in &summary.results {
-        if result.is_error() {
-            let msg = result.error.as_deref().unwrap_or("unknown error");
-            output.error(&format!(
-                "Error materializing {}: {}",
-                result.path.display(),
-                msg
-            ));
+        let (outcome, error) = if result.is_error() {
+            ("error", result.error.clone())
         } else if result.materialized {
-            output.success(&format!("Materialized: {}", result.path.display()));
+            ("materialized", None)
         } else {
-            output.info(&format!("Up to date: {}", result.path.display()));
+            ("up_to_date", None)
+        };
+
+        file_entries.push(MaterializeFileEntry {
+            path: result.path.display().to_string(),
+            outcome: outcome.to_string(),
+            error,
+        });
+
+        // Human-readable output
+        if !output.is_json() {
+            if result.is_error() {
+                let msg = result.error.as_deref().unwrap_or("unknown error");
+                output.error(&format!(
+                    "Error materializing {}: {}",
+                    result.path.display(),
+                    msg
+                ));
+            } else if result.materialized {
+                output.success(&format!("Materialized: {}", result.path.display()));
+            } else {
+                output.info(&format!("Up to date: {}", result.path.display()));
+            }
         }
     }
 
-    // Summary
-    if !output.is_quiet() {
+    // Output
+    if output.is_json() {
+        let json_output = MaterializeOutput {
+            files: file_entries,
+            summary: MaterializeSummary {
+                materialized: summary.materialized,
+                up_to_date: summary.up_to_date,
+                failed: summary.failed,
+            },
+        };
+        output.json(&json_output);
+    } else if !output.is_quiet() {
         output.info(&format!(
             "Summary: {} materialized, {} up to date, {} failed",
             summary.materialized, summary.up_to_date, summary.failed

@@ -160,11 +160,15 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 - [x] `metadata_format` - Metadata file format (json, toml)
 - [x] `generated_by` - Version tracking (auto-populated by dvs init)
 
-### .dvs/config.toml (local config) - Not yet implemented
+### .dvs/config.toml (local config)
 
-- [ ] `base_url` - Default remote URL for push/pull
-- [ ] `auth.token` - Bearer token for authentication
-- [ ] `cache.max_size` - Maximum cache size
+- [x] `base_url` - Default remote URL for push/pull
+- [x] `auth.token` - Bearer token for authentication
+- [x] `cache.max_size` - Maximum cache size
+
+Implemented in `dvs-core/src/types/local_config.rs` with `LocalConfig`, `AuthConfig`, and `CacheConfig` structs.
+
+**Wiring:** `push` and `pull` operations now check LocalConfig for `base_url` as a fallback (priority: explicit `--remote` > LocalConfig > manifest).
 
 ### Daemon config - Not yet implemented
 
@@ -188,7 +192,7 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ## Testing
 
-- [x] Unit tests for dvs-core types (162 tests passing)
+- [x] Unit tests for dvs-core types (168 tests passing)
 - [x] Unit tests for dvs-core helpers
 - [x] Unit tests for dvs-core operations
 - [x] Unit tests for dvs-server (20 tests: storage, auth, config)

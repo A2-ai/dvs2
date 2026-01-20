@@ -105,6 +105,8 @@ impl ObjectStore for LocalStore {
 pub struct HttpStore {
     /// Base URL for the HTTP CAS.
     base_url: String,
+    /// Optional bearer token for authentication.
+    auth_token: Option<String>,
 }
 
 impl HttpStore {
@@ -112,12 +114,35 @@ impl HttpStore {
     pub fn new(base_url: String) -> Self {
         // Remove trailing slash
         let base_url = base_url.trim_end_matches('/').to_string();
-        Self { base_url }
+        Self {
+            base_url,
+            auth_token: None,
+        }
+    }
+
+    /// Create a new HTTP store with authentication.
+    pub fn with_auth(base_url: String, auth_token: Option<String>) -> Self {
+        let base_url = base_url.trim_end_matches('/').to_string();
+        Self {
+            base_url,
+            auth_token,
+        }
     }
 
     /// Get the URL for an OID.
     pub fn object_url(&self, oid: &Oid) -> String {
         format!("{}/objects/{}/{}", self.base_url, oid.algo, oid.hex)
+    }
+
+    /// Get the auth header args for curl if auth_token is set.
+    fn auth_args(&self) -> Vec<String> {
+        match &self.auth_token {
+            Some(token) => vec![
+                "-H".to_string(),
+                format!("Authorization: Bearer {}", token),
+            ],
+            None => vec![],
+        }
     }
 }
 
@@ -125,10 +150,20 @@ impl ObjectStore for HttpStore {
     fn has(&self, oid: &Oid) -> StoreResult<bool> {
         let url = self.object_url(oid);
 
-        // Use a simple HTTP HEAD request via curl or similar
-        // For now, we'll use std::process::Command to call curl
+        // Build curl args with optional auth
+        let mut args = vec![
+            "-s".to_string(),
+            "-o".to_string(),
+            "/dev/null".to_string(),
+            "-w".to_string(),
+            "%{http_code}".to_string(),
+            "-I".to_string(),
+        ];
+        args.extend(self.auth_args());
+        args.push(url);
+
         let output = std::process::Command::new("curl")
-            .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "-I", &url])
+            .args(&args)
             .output()
             .map_err(|e| DvsError::storage_error(format!("Failed to execute curl: {}", e)))?;
 
@@ -146,9 +181,18 @@ impl ObjectStore for HttpStore {
             fs::create_dir_all(parent)?;
         }
 
-        // Download using curl
+        // Build curl args with optional auth
+        let mut args = vec![
+            "-s".to_string(),
+            "-f".to_string(),
+            "-o".to_string(),
+            dest.to_string_lossy().to_string(),
+        ];
+        args.extend(self.auth_args());
+        args.push(url.clone());
+
         let status = std::process::Command::new("curl")
-            .args(["-s", "-f", "-o", &dest.to_string_lossy(), &url])
+            .args(&args)
             .status()
             .map_err(|e| DvsError::storage_error(format!("Failed to execute curl: {}", e)))?;
 
@@ -169,17 +213,20 @@ impl ObjectStore for HttpStore {
 
         let url = self.object_url(oid);
 
-        // Upload using curl
+        // Build curl args with optional auth
+        let mut args = vec![
+            "-s".to_string(),
+            "-f".to_string(),
+            "-X".to_string(),
+            "PUT".to_string(),
+            "--data-binary".to_string(),
+            format!("@{}", src.to_string_lossy()),
+        ];
+        args.extend(self.auth_args());
+        args.push(url.clone());
+
         let status = std::process::Command::new("curl")
-            .args([
-                "-s",
-                "-f",
-                "-X",
-                "PUT",
-                "--data-binary",
-                &format!("@{}", src.to_string_lossy()),
-                &url,
-            ])
+            .args(&args)
             .status()
             .map_err(|e| DvsError::storage_error(format!("Failed to execute curl: {}", e)))?;
 

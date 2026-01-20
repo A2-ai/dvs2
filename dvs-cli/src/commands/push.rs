@@ -1,10 +1,33 @@
 //! DVS push command.
 
+use serde::Serialize;
 use std::path::PathBuf;
 
 use super::Result;
 use crate::output::Output;
 use crate::paths;
+
+/// JSON output for push command.
+#[derive(Serialize)]
+struct PushOutput {
+    objects: Vec<PushObjectEntry>,
+    summary: PushSummary,
+}
+
+#[derive(Serialize)]
+struct PushObjectEntry {
+    oid: String,
+    outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PushSummary {
+    uploaded: usize,
+    already_present: usize,
+    failed: usize,
+}
 
 /// Run the push command.
 pub fn run(output: &Output, remote: Option<String>, files: Vec<PathBuf>) -> Result<()> {
@@ -20,20 +43,49 @@ pub fn run(output: &Output, remote: Option<String>, files: Vec<PathBuf>) -> Resu
         dvs_core::push_files(&resolved_files, remote.as_deref())?
     };
 
-    // Output results
+    // Collect results for JSON
+    let mut object_entries = Vec::new();
+
     for result in &summary.results {
-        if result.is_error() {
-            let msg = result.error.as_deref().unwrap_or("unknown error");
-            output.error(&format!("Error pushing {}: {}", result.oid, msg));
+        let (outcome, error) = if result.is_error() {
+            ("error", result.error.clone())
         } else if result.uploaded {
-            output.success(&format!("Uploaded: {}", result.oid));
+            ("uploaded", None)
         } else {
-            output.info(&format!("Already present: {}", result.oid));
+            ("already_present", None)
+        };
+
+        object_entries.push(PushObjectEntry {
+            oid: result.oid.to_string(),
+            outcome: outcome.to_string(),
+            error,
+        });
+
+        // Human-readable output
+        if !output.is_json() {
+            if result.is_error() {
+                let msg = result.error.as_deref().unwrap_or("unknown error");
+                output.error(&format!("Error pushing {}: {}", result.oid, msg));
+            } else if result.uploaded {
+                output.success(&format!("Uploaded: {}", result.oid));
+            } else {
+                output.info(&format!("Already present: {}", result.oid));
+            }
         }
     }
 
-    // Summary
-    if !output.is_quiet() {
+    // Output
+    if output.is_json() {
+        let json_output = PushOutput {
+            objects: object_entries,
+            summary: PushSummary {
+                uploaded: summary.uploaded,
+                already_present: summary.present,
+                failed: summary.failed,
+            },
+        };
+        output.json(&json_output);
+    } else if !output.is_quiet() {
         output.info(&format!(
             "Summary: {} uploaded, {} already present, {} failed",
             summary.uploaded, summary.present, summary.failed

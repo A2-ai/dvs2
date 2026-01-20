@@ -1,10 +1,21 @@
 //! DVS init command.
 
+use serde::Serialize;
 use std::path::PathBuf;
 
 use super::{CliError, Result};
 use crate::output::Output;
 use crate::paths;
+
+/// JSON output for init command.
+#[derive(Serialize)]
+struct InitOutput {
+    storage_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permissions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group: Option<String>,
+}
 
 /// Run the init command.
 pub fn run(
@@ -26,18 +37,28 @@ pub fn run(
     // Call dvs-core init
     let config = dvs_core::init(&storage_dir, permissions, group.as_deref())?;
 
-    // Output success message
-    output.success(&format!(
-        "Initialized DVS with storage at: {}",
-        config.storage_dir.display()
-    ));
+    // JSON output
+    if output.is_json() {
+        let json_output = InitOutput {
+            storage_dir: config.storage_dir.display().to_string(),
+            permissions: config.permissions.map(|p| format!("{:o}", p)),
+            group: config.group.clone(),
+        };
+        output.json(&json_output);
+    } else {
+        // Human-readable output
+        output.success(&format!(
+            "Initialized DVS with storage at: {}",
+            config.storage_dir.display()
+        ));
 
-    if let Some(perms) = config.permissions {
-        output.info(&format!("File permissions: {:o}", perms));
-    }
+        if let Some(perms) = config.permissions {
+            output.info(&format!("File permissions: {:o}", perms));
+        }
 
-    if let Some(ref grp) = config.group {
-        output.info(&format!("Group: {}", grp));
+        if let Some(ref grp) = config.group {
+            output.info(&format!("Group: {}", grp));
+        }
     }
 
     Ok(())

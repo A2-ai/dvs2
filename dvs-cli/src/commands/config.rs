@@ -2,12 +2,49 @@
 //!
 //! View and edit DVS configuration settings.
 
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use dvs_core::{Config, HashAlgo, MetadataFormat};
 
 use super::{CliError, Result};
 use crate::output::Output;
+
+/// JSON output for config show command.
+#[derive(Serialize)]
+struct ConfigShowOutput {
+    storage_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permissions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group: Option<String>,
+    hash_algo: String,
+    metadata_format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generated_by: Option<GeneratedByOutput>,
+}
+
+#[derive(Serialize)]
+struct GeneratedByOutput {
+    version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit: Option<String>,
+}
+
+/// JSON output for config get command.
+#[derive(Serialize)]
+struct ConfigGetOutput {
+    key: String,
+    value: String,
+}
+
+/// JSON output for config set command.
+#[derive(Serialize)]
+struct ConfigSetOutput {
+    key: String,
+    value: String,
+    success: bool,
+}
 
 /// Config subcommand action.
 pub enum ConfigAction {
@@ -46,35 +83,50 @@ pub fn run(output: &Output, action: ConfigAction) -> Result<()> {
 fn show_config(output: &Output, config_path: &Path) -> Result<()> {
     let config = Config::load(config_path)?;
 
-    output.println(&format!("storage_dir: {}", config.storage_dir.display()));
-
-    if let Some(perms) = config.permissions {
-        output.println(&format!("permissions: {:o}", perms));
+    if output.is_json() {
+        let json_output = ConfigShowOutput {
+            storage_dir: config.storage_dir.display().to_string(),
+            permissions: config.permissions.map(|p| format!("{:o}", p)),
+            group: config.group.clone(),
+            hash_algo: format_hash_algo(config.hash_algorithm()),
+            metadata_format: format_metadata_format(config.metadata_format()),
+            generated_by: config.generated_by.as_ref().map(|g| GeneratedByOutput {
+                version: g.version.clone(),
+                commit: g.commit.clone(),
+            }),
+        };
+        output.json(&json_output);
     } else {
-        output.println("permissions: (not set)");
-    }
+        output.println(&format!("storage_dir: {}", config.storage_dir.display()));
 
-    if let Some(ref group) = config.group {
-        output.println(&format!("group: {}", group));
-    } else {
-        output.println("group: (not set)");
-    }
+        if let Some(perms) = config.permissions {
+            output.println(&format!("permissions: {:o}", perms));
+        } else {
+            output.println("permissions: (not set)");
+        }
 
-    output.println(&format!(
-        "hash_algo: {}",
-        format_hash_algo(config.hash_algorithm())
-    ));
+        if let Some(ref group) = config.group {
+            output.println(&format!("group: {}", group));
+        } else {
+            output.println("group: (not set)");
+        }
 
-    output.println(&format!(
-        "metadata_format: {}",
-        format_metadata_format(config.metadata_format())
-    ));
+        output.println(&format!(
+            "hash_algo: {}",
+            format_hash_algo(config.hash_algorithm())
+        ));
 
-    if let Some(ref gen) = config.generated_by {
-        output.println("generated_by:");
-        output.println(&format!("  version: {}", gen.version));
-        if let Some(ref commit) = gen.commit {
-            output.println(&format!("  commit: {}", commit));
+        output.println(&format!(
+            "metadata_format: {}",
+            format_metadata_format(config.metadata_format())
+        ));
+
+        if let Some(ref gen) = config.generated_by {
+            output.println("generated_by:");
+            output.println(&format!("  version: {}", gen.version));
+            if let Some(ref commit) = gen.commit {
+                output.println(&format!("  commit: {}", commit));
+            }
         }
     }
 
@@ -103,7 +155,14 @@ fn get_config(output: &Output, config_path: &Path, key: &str) -> Result<()> {
         }
     };
 
-    output.println(&value);
+    if output.is_json() {
+        output.json(&ConfigGetOutput {
+            key: key.to_string(),
+            value: value.clone(),
+        });
+    } else {
+        output.println(&value);
+    }
     Ok(())
 }
 
@@ -149,7 +208,15 @@ fn set_config(output: &Output, config_path: &Path, key: &str, value: &str) -> Re
     // Save
     config.save(config_path)?;
 
-    output.success(&format!("Set {} = {}", key, value));
+    if output.is_json() {
+        output.json(&ConfigSetOutput {
+            key: key.to_string(),
+            value: value.to_string(),
+            success: true,
+        });
+    } else {
+        output.success(&format!("Set {} = {}", key, value));
+    }
     Ok(())
 }
 
