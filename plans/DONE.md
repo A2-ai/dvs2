@@ -926,3 +926,50 @@ Implemented HTTP Content-Addressable Storage (CAS) server endpoints in `dvs-serv
 - API key authentication with permission-based access control
 - Atomic, idempotent object storage
 - Health and status endpoints for monitoring
+
+## Plan 042: Git Subcommand + Shell Completion Install
+
+Added `dvs install` and `dvs uninstall` commands for managing the Git subcommand shim and shell completions.
+
+### commands/install.rs - Install command
+
+- [x] `Shell` enum (Bash, Zsh, Fish, PowerShell) with completion paths
+- [x] `find_bin_dir()` - Find writable user bin directory (~/.local/bin, ~/bin)
+- [x] `generate_shim_script()` - Generate git-status-dvs shim script
+- [x] `run()` - Install shim and/or completions
+- [x] Shell completion generation via `clap_complete`
+- [x] `--install-dir` flag for custom install location
+- [x] `--completions-only` flag to skip shim installation
+- [x] `--shell` flag to specify target shells
+- [x] 2 unit tests
+
+### commands/uninstall.rs - Uninstall command
+
+- [x] `Shell` enum with default completion directories
+- [x] `find_shim()` - Locate installed git-status-dvs shim
+- [x] `run()` - Remove shim and/or completions
+- [x] `--uninstall-dir` flag for custom uninstall location
+- [x] `--completions-only` flag to skip shim removal
+- [x] `--shell` flag to specify target shells
+- [x] 1 unit test
+
+### commands/git_status.rs - Combined status command
+
+- [x] `run()` - Run `git status` followed by `dvs status`
+- [x] Pass-through of additional arguments to git status
+- [x] Combined exit code (non-zero if either fails)
+
+### main.rs additions
+
+- [x] `Install` command variant with install_dir, completions_only, shell options
+- [x] `Uninstall` command variant with uninstall_dir, completions_only, shell options
+- [x] `GitStatus` command variant with trailing args
+- [x] `build_cli()` function for clap completion generation
+
+### Summary
+
+- `dvs install` - Install git-status-dvs shim and shell completions
+- `dvs uninstall` - Remove git-status-dvs shim and shell completions
+- `dvs git-status` - Run combined git status and DVS status
+- Supported shells: bash, zsh, fish, powershell
+- Default install locations: ~/.local/bin for shim, shell-specific dirs for completions
