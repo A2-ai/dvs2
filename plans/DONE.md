@@ -973,3 +973,44 @@ Added `dvs install` and `dvs uninstall` commands for managing the Git subcommand
 - `dvs git-status` - Run combined git status and DVS status
 - Supported shells: bash, zsh, fish, powershell
 - Default install locations: ~/.local/bin for shim, shell-specific dirs for completions
+
+## Plan 047: dvs config Command
+
+Added `dvs config` subcommand for viewing and editing DVS configuration settings.
+
+### commands/config.rs - Config command implementation
+
+- [x] `ConfigAction` enum (Show, Get, Set) for subcommand dispatch
+- [x] `VALID_KEYS` constant listing all valid config keys
+- [x] `run()` - Main entry point, finds repo root and dispatches to action
+- [x] `show_config()` - Display all configuration values
+- [x] `get_config()` - Get a specific config value by key
+- [x] `set_config()` - Set a config value with validation
+- [x] `parse_permissions()` - Parse octal permissions (with optional 0o prefix)
+- [x] `parse_hash_algo()` - Parse hash algorithm (blake3, sha256, xxh3)
+- [x] `parse_metadata_format()` - Parse metadata format (json, toml)
+- [x] `format_hash_algo()`, `format_metadata_format()` - Display formatting
+- [x] 3 unit tests for parsing functions
+
+### main.rs additions
+
+- [x] `ConfigCommand` enum with Show, Get { key }, Set { key, value } variants
+- [x] `Command::Config(ConfigCommand)` variant
+- [x] Match arm to dispatch to `config::run()` with `ConfigAction`
+
+### Config keys supported
+
+- `storage_dir` - Path to storage directory
+- `permissions` - File permissions (octal, e.g., 664)
+- `group` - Linux group for stored files
+- `hash_algo` - Hash algorithm (blake3, sha256, xxh3)
+- `metadata_format` - Metadata file format (json, toml)
+
+### Summary
+
+- `dvs config show` - Display all configuration values
+- `dvs config get <key>` - Get a specific config value
+- `dvs config set <key> <value>` - Set a config value with validation
+- Updates `generated_by` field on save to track DVS version
+- Validates values: octal for permissions, valid algorithms, valid formats
+- Error messages list valid keys/values on invalid input

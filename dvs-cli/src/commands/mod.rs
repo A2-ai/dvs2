@@ -4,6 +4,7 @@
 //! to dvs-core for actual DVS logic.
 
 pub mod add;
+pub mod config;
 pub mod get;
 pub mod git_status;
 pub mod init;
