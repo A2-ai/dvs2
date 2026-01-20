@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
-use crate::runner::{Op, OpKind};
+use crate::runner::Op;
 use crate::snapshot::ObjectPresence;
 
 /// A test scenario for conformance testing.
@@ -245,6 +245,7 @@ impl ScenarioBuilder {
 }
 
 /// Standard scenarios for conformance testing.
+#[allow(dead_code)]
 pub mod standard {
     use super::*;
 

@@ -150,7 +150,7 @@ impl TestRepo {
         let files = self.list_files()?;
         Ok(files
             .into_iter()
-            .filter(|p| p.extension().map_or(false, |e| e == "dvs"))
+            .filter(|p| p.extension().is_some_and(|e| e == "dvs"))
             .collect())
     }
 

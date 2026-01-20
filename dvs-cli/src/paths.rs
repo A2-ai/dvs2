@@ -41,9 +41,9 @@ pub fn resolve_path(path: &Path) -> Result<PathBuf> {
     let path_str = path.to_string_lossy();
 
     // Expand tilde
-    let expanded = if path_str.starts_with("~/") {
+    let expanded = if let Some(rest) = path_str.strip_prefix("~/") {
         if let Some(home) = home_dir() {
-            home.join(&path_str[2..])
+            home.join(rest)
         } else {
             path.to_path_buf()
         }
@@ -70,7 +70,7 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var("HOME")
         .ok()
         .map(PathBuf::from)
-        .or_else(|| {
+        .or({
             // Fall back to platform-specific methods
             #[cfg(unix)]
             {

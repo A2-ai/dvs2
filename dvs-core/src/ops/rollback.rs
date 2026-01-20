@@ -65,17 +65,6 @@ impl RollbackResult {
             error: None,
         }
     }
-
-    fn error(message: String) -> Self {
-        Self {
-            success: false,
-            from_state: None,
-            to_state: String::new(),
-            restored_files: Vec::new(),
-            removed_files: Vec::new(),
-            error: Some(message),
-        }
-    }
 }
 
 /// Rollback to a previous state.

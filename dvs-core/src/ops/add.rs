@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use fs_err as fs;
 use glob::glob;
-use crate::{AddResult, Config, Metadata, MetadataFormat, Outcome, DvsError, Backend, RepoBackend, detect_backend_cwd};
+use crate::{AddResult, Config, Metadata, Outcome, DvsError, Backend, RepoBackend, detect_backend_cwd};
 use crate::types::{ReflogOp, MetadataEntry, WorkspaceState};
 use crate::helpers::{config as config_helper, copy, file, hash};
 use crate::helpers::layout::Layout;

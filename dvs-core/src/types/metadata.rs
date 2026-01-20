@@ -32,6 +32,10 @@ impl MetadataFormat {
     }
 
     /// Parse format from string.
+    ///
+    /// Returns `None` for unrecognized formats rather than an error,
+    /// intentionally differing from `std::str::FromStr`.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "json" => Some(MetadataFormat::Json),
@@ -236,16 +240,16 @@ impl Metadata {
         let filename = metadata_path.file_name()?.to_string_lossy();
 
         // Check for .dvs.toml first (longer extension)
-        if filename.ends_with(".dvs.toml") {
+        if let Some(stripped) = filename.strip_suffix(".dvs.toml") {
             let mut path = metadata_path.to_path_buf();
-            path.set_file_name(&filename[..filename.len() - 9]); // strip ".dvs.toml"
+            path.set_file_name(stripped);
             return Some(path);
         }
 
         // Then check for .dvs
-        if filename.ends_with(".dvs") {
+        if let Some(stripped) = filename.strip_suffix(".dvs") {
             let mut path = metadata_path.to_path_buf();
-            path.set_file_name(&filename[..filename.len() - 4]); // strip ".dvs"
+            path.set_file_name(stripped);
             return Some(path);
         }
 

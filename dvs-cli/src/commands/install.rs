@@ -10,6 +10,7 @@ use super::Result;
 
 /// Shell types for completion generation.
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::enum_variant_names)]
 pub enum Shell {
     Bash,
     Zsh,
@@ -40,7 +41,7 @@ impl Shell {
     }
 
     /// Convert to clap_complete shell type.
-    fn to_clap_shell(&self) -> clap_complete::Shell {
+    fn to_clap_shell(self) -> clap_complete::Shell {
         match self {
             Shell::Bash => clap_complete::Shell::Bash,
             Shell::Zsh => clap_complete::Shell::Zsh,
@@ -96,7 +97,7 @@ fn is_writable(path: &std::path::Path) -> bool {
 /// Get the path to the current dvs executable.
 fn dvs_executable_path() -> Result<PathBuf> {
     std::env::current_exe()
-        .map_err(|e| super::CliError::Io(e))
+        .map_err(super::CliError::Io)
 }
 
 /// Generate the git-status-dvs shim script.
@@ -149,7 +150,7 @@ pub fn run(
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o755);
-            std::fs::set_permissions(&shim_path, perms)?;
+            fs::set_permissions(&shim_path, perms)?;
         }
 
         output.success(&format!("Installed: {}", shim_path.display()));
@@ -157,7 +158,7 @@ pub fn run(
 
         // Check if bin_dir is in PATH
         if let Ok(path_var) = std::env::var("PATH") {
-            let in_path = path_var.split(':').any(|p| PathBuf::from(p) == bin_dir);
+            let in_path = path_var.split(':').any(|p| bin_dir == std::path::Path::new(p));
             if !in_path {
                 output.info(&format!(
                     "Note: {} is not in your PATH. Add it to use 'git status-dvs'.",

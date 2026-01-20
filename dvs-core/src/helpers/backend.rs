@@ -57,7 +57,7 @@ pub enum Backend {
 
 impl Backend {
     /// Get a reference to the underlying backend trait object.
-    pub fn as_ref(&self) -> &dyn RepoBackend {
+    pub fn as_backend(&self) -> &dyn RepoBackend {
         match self {
             Backend::Git(b) => b,
             Backend::Dvs(b) => b,

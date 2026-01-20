@@ -96,7 +96,7 @@ fn find_tracked_files_walkdir(repo_root: &Path) -> Result<Vec<PathBuf>, DvsError
         }
 
         // Check if this is a .dvs file
-        if path.extension().map_or(false, |ext| ext == "dvs") {
+        if path.extension().is_some_and(|ext| ext == "dvs") {
             if let Some(data_path) = Metadata::data_path(path) {
                 files.push(data_path);
             }
@@ -128,7 +128,7 @@ fn find_tracked_files_recursive(repo_root: &Path) -> Result<Vec<PathBuf>, DvsErr
 
             if path.is_dir() {
                 recurse(&path, files)?;
-            } else if path.extension().map_or(false, |ext| ext == "dvs") {
+            } else if path.extension().is_some_and(|ext| ext == "dvs") {
                 // This is a .dvs metadata file
                 if let Some(data_path) = Metadata::data_path(&path) {
                     files.push(data_path);

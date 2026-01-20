@@ -4,6 +4,7 @@
 //! `{algo}/{prefix}/{suffix}` path format compatible with dvs-core.
 
 use std::path::PathBuf;
+use fs_err as fs;
 use dvs_core::Oid;
 use crate::ServerError;
 
@@ -61,7 +62,7 @@ impl LocalStorage {
     /// Creates the root directory if it doesn't exist.
     pub fn new(root: PathBuf) -> Result<Self, ServerError> {
         if !root.exists() {
-            std::fs::create_dir_all(&root).map_err(|e| {
+            fs::create_dir_all(&root).map_err(|e| {
                 ServerError::StorageError(format!("failed to create storage root: {e}"))
             })?;
         }
@@ -88,7 +89,7 @@ impl LocalStorage {
     fn ensure_parent_dirs(&self, path: &std::path::Path) -> Result<(), ServerError> {
         if let Some(parent) = path.parent() {
             if !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(|e| {
+                fs::create_dir_all(parent).map_err(|e| {
                     ServerError::StorageError(format!("failed to create directory: {e}"))
                 })?;
             }
@@ -114,7 +115,7 @@ impl StorageBackend for LocalStorage {
 
     fn get(&self, oid: &Oid) -> Result<Vec<u8>, ServerError> {
         let path = self.get_path(oid)?;
-        std::fs::read(&path).map_err(|e| {
+        fs::read(&path).map_err(|e| {
             ServerError::StorageError(format!("failed to read object {oid}: {e}"))
         })
     }
@@ -131,13 +132,13 @@ impl StorageBackend for LocalStorage {
 
         // Write to temp file then rename for atomicity
         let temp_path = path.with_extension("tmp");
-        std::fs::write(&temp_path, data).map_err(|e| {
+        fs::write(&temp_path, data).map_err(|e| {
             ServerError::StorageError(format!("failed to write object {oid}: {e}"))
         })?;
 
-        std::fs::rename(&temp_path, &path).map_err(|e| {
+        fs::rename(&temp_path, &path).map_err(|e| {
             // Clean up temp file on rename failure
-            let _ = std::fs::remove_file(&temp_path);
+            let _ = fs::remove_file(&temp_path);
             ServerError::StorageError(format!("failed to commit object {oid}: {e}"))
         })?;
 
@@ -147,7 +148,7 @@ impl StorageBackend for LocalStorage {
     fn delete(&self, oid: &Oid) -> Result<(), ServerError> {
         let path = self.oid_to_path(oid);
         if path.exists() {
-            std::fs::remove_file(&path).map_err(|e| {
+            fs::remove_file(&path).map_err(|e| {
                 ServerError::StorageError(format!("failed to delete object {oid}: {e}"))
             })?;
         }
@@ -162,7 +163,7 @@ impl StorageBackend for LocalStorage {
             if !dir.is_dir() {
                 return Ok(());
             }
-            for entry in std::fs::read_dir(dir)? {
+            for entry in fs::read_dir(dir)? {
                 let entry = entry?;
                 let path = entry.path();
                 if path.is_dir() {
@@ -208,19 +209,19 @@ mod tests {
     #[test]
     fn test_local_storage_new() {
         let temp_dir = std::env::temp_dir().join("dvs-server-test-storage");
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
 
         let storage = LocalStorage::new(temp_dir.clone()).unwrap();
         assert!(temp_dir.exists());
         assert_eq!(storage.root(), &temp_dir);
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn test_local_storage_put_get() {
         let temp_dir = std::env::temp_dir().join("dvs-server-test-put-get");
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
 
         let storage = LocalStorage::new(temp_dir.clone()).unwrap();
         let data = b"hello world";
@@ -238,13 +239,13 @@ mod tests {
         // Idempotent put
         storage.put(&oid, data).unwrap();
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn test_local_storage_delete() {
         let temp_dir = std::env::temp_dir().join("dvs-server-test-delete");
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
 
         let storage = LocalStorage::new(temp_dir.clone()).unwrap();
         let data = b"to be deleted";
@@ -260,13 +261,13 @@ mod tests {
         // Delete non-existent is OK
         storage.delete(&oid).unwrap();
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn test_local_storage_stats() {
         let temp_dir = std::env::temp_dir().join("dvs-server-test-stats");
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
 
         let storage = LocalStorage::new(temp_dir.clone()).unwrap();
 
@@ -288,7 +289,7 @@ mod tests {
         assert_eq!(stats.object_count, 2);
         assert_eq!(stats.bytes_used, (data1.len() + data2.len()) as u64);
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

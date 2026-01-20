@@ -142,6 +142,18 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Prepare dvsR Rust crate
+        working-directory: dvsR
+        run: |
+          set -euo pipefail
+          # Extract vendored sources from tarball
+          tar -xJf inst/vendor.tar.xz -C src
+          # Copy Cargo.toml from template (no substitutions needed)
+          cp src/rust/Cargo.toml.in src/rust/Cargo.toml
+          # Generate document.rs from template with substitutions
+          sed -e 's/@CARGO_STATICLIB_NAME@/dvsr/g' \
+              -e 's/@PACKAGE_TARNAME_RS_UPPERCASE@/DVSR/g' \
+              src/rust/document.rs.in > src/rust/document.rs
       - name: Cargo check (warnings as errors)
         env:
           RUSTFLAGS: "-D warnings"

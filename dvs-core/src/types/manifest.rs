@@ -9,10 +9,11 @@ use serde::{Deserialize, Serialize};
 use super::oid::Oid;
 
 /// Compression algorithm for stored objects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Compression {
     /// No compression.
+    #[default]
     None,
     /// Zstandard compression.
     Zstd,
@@ -20,12 +21,6 @@ pub enum Compression {
     Gzip,
     /// LZ4 compression.
     Lz4,
-}
-
-impl Default for Compression {
-    fn default() -> Self {
-        Compression::None
-    }
 }
 
 /// A single entry in the manifest.
