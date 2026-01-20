@@ -41,3 +41,6 @@ pub use ops::{rollback, rollback_with_backend, RollbackTarget, RollbackResult};
 
 // Re-export backend types
 pub use helpers::backend::{Backend, RepoBackend, GitBackend, DvsBackend, detect_backend, detect_backend_cwd};
+
+// Re-export store types for testing
+pub use helpers::store::{LocalStore, ObjectStore};

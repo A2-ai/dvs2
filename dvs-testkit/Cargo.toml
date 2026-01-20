@@ -43,8 +43,16 @@ tempfile = "3.24"
 assert_cmd = { version = "2.0", optional = true }
 predicates = { version = "3.1", optional = true }
 
+# Server runner dependencies
+dvs-server = { path = "../dvs-server", optional = true }
+tokio = { workspace = true, optional = true }
+reqwest = { version = "0.12", features = ["blocking"], optional = true }
+axum = { workspace = true, optional = true }
+
 [features]
 default = []
 cli-runner = ["dep:assert_cmd", "dep:predicates"]
+server-runner = ["dep:dvs-server", "dep:tokio", "dep:reqwest", "dep:axum"]
 
 [dev-dependencies]
+blake3.workspace = true

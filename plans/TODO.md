@@ -25,6 +25,7 @@
 - [x] **Plan 027: Server HTTP CAS Endpoints** - Implemented HTTP CAS (Content-Addressable Storage) server in `dvs-server`. Includes `HEAD/GET/PUT /objects/{algo}/{hash}` endpoints, `LocalStorage` backend with `{root}/{algo}/{prefix}/{suffix}` layout, API key authentication with permissions (Read/Write/Delete/Admin), and `start_server()` for binding and serving.
 
 ### In Progress
+
 - [ ] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
   harness to verify CLI/R/other interfaces produce the same effects.
   - [x] Created `dvs-testkit` crate with `TestRepo`, `WorkspaceSnapshot`
@@ -32,9 +33,15 @@
   - [x] Created standard scenarios (init/add/get/status)
   - [x] Implemented `CliRunner` (feature-gated with `cli-runner`)
   - [x] Wired conformance tests into CI (via `--all-features`)
-  - [ ] Implement `RRunner` for dvsR (blocked by Plan 028)
-  - [ ] Implement `ServerRunner` for HTTP endpoints (blocked by Plan 027)
-  - [ ] Implement `DaemonRunner` for daemon IPC
+  - [x] Implemented `ServerRunner` for HTTP endpoints (feature: `server-runner`)
+  - [ ] Implement `RRunner` for dvsR (blocked by Plan 028: R Package Bindings)
+    - Needs: dvsR package with working Rust bindings via miniextendr
+    - Will spawn R subprocess, execute dvsR functions, capture results
+    - Feature: `r-runner` with optional deps on subprocess execution
+  - [ ] Implement `DaemonRunner` for daemon IPC (blocked by dvs-daemon implementation)
+    - Needs: dvs-daemon with IPC interface (Unix socket or named pipe)
+    - Will connect to running daemon, send commands, verify responses
+    - Feature: `daemon-runner` with optional deps on dvs-daemon
 
 ### Pending Plans (Documented, Status Unknown)
 
@@ -67,10 +74,17 @@
 - [ ] **Plan 036: Remote Snapshot Sources (HTTP/GitHub)** - `plans/036-remote-snapshot-sources.md`
 - [ ] **Plan 040: Proc-macro Usage Audit** - `plans/040-proc-macro-usage-audit.md`
 - [ ] **Plan 041: TOML Metadata Files** - `plans/041-toml-metadata-files.md`
+- [ ] **Plan 042: Git Subcommand + Shell Completion Install** - `plans/042-git-subcommand-install.md`
+- [ ] **Plan 043: Replace Axum/Tower with tiny_http for dvs-server** - `plans/043-tiny-http-server.md`
 
 ### Future Plans (Not Yet Written)
 
-- [ ] **Plan 028: R Package Bindings** - Wire dvsR package to dvs-core operations (init, add, get, status, push, pull, materialize).
+- [ ] **Plan 028: R Package Bindings** - Wire dvsR package to dvs-core operations via miniextendr.
+  - Wire `dvs_init()`, `dvs_add()`, `dvs_get()`, `dvs_status()` to dvs-core
+  - Wire `dvs_push()`, `dvs_pull()`, `dvs_materialize()` to dvs-core
+  - R-friendly error handling (convert `DvsError` to R errors with `error_type()`)
+  - R-friendly return types (data.frames for status, lists for results)
+  - Blocks: Plan 039 `RRunner` implementation
 
 ---
 
@@ -161,6 +175,7 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 - [x] Unit tests for dvs-core helpers
 - [x] Unit tests for dvs-core operations
 - [x] Unit tests for dvs-server (14 tests: storage, auth)
+- [x] Unit tests for dvs-testkit (22 tests: TestRepo, WorkspaceSnapshot, CoreRunner, CliRunner, ServerRunner)
 - [ ] Integration tests with temp directories
 - [ ] Integration tests with real git repos
 - [ ] dvs-daemon IPC tests
@@ -179,7 +194,7 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 - [ ] Garbage collection for orphaned objects
 - [ ] Web UI for server
 
-## Misc.
+## Misc
 
 - [x] **Optional dvs-core dependencies (Plan 041)**: Making dependencies optional so sibling crates can opt-in.
   - [x] `git2` - via `git2-backend` feature (default on), CLI fallback always available
