@@ -1,8 +1,11 @@
 //! DVS push operation - upload objects to remote storage.
 
+use crate::helpers::{
+    layout::Layout,
+    store::{HttpStore, LocalStore, ObjectStore},
+};
+use crate::{detect_backend_cwd, Backend, DvsError, Manifest, Oid, RepoBackend};
 use std::path::PathBuf;
-use crate::{DvsError, Manifest, Oid, Backend, RepoBackend, detect_backend_cwd};
-use crate::helpers::{layout::Layout, store::{ObjectStore, LocalStore, HttpStore}};
 
 /// Result of a push operation for a single object.
 #[derive(Debug, Clone)]
@@ -93,8 +96,16 @@ pub fn push_with_backend(
     for oid in oids {
         let result = push_single_object(oid, &local_store, &remote_store, &layout);
         match &result {
-            PushResult { uploaded: true, error: None, .. } => summary.uploaded += 1,
-            PushResult { uploaded: false, error: None, .. } => summary.present += 1,
+            PushResult {
+                uploaded: true,
+                error: None,
+                ..
+            } => summary.uploaded += 1,
+            PushResult {
+                uploaded: false,
+                error: None,
+                ..
+            } => summary.present += 1,
             PushResult { error: Some(_), .. } => summary.failed += 1,
         }
         summary.results.push(result);
@@ -134,10 +145,7 @@ fn push_single_object(
 }
 
 /// Push specific files by path.
-pub fn push_files(
-    files: &[PathBuf],
-    remote_url: Option<&str>,
-) -> Result<PushSummary, DvsError> {
+pub fn push_files(files: &[PathBuf], remote_url: Option<&str>) -> Result<PushSummary, DvsError> {
     let backend = detect_backend_cwd()?;
     let layout = Layout::new(backend.root().to_path_buf());
 
@@ -176,8 +184,16 @@ pub fn push_files(
 
         let result = push_single_object(&entry.oid, &local_store, &remote_store, &layout);
         match &result {
-            PushResult { uploaded: true, error: None, .. } => summary.uploaded += 1,
-            PushResult { uploaded: false, error: None, .. } => summary.present += 1,
+            PushResult {
+                uploaded: true,
+                error: None,
+                ..
+            } => summary.uploaded += 1,
+            PushResult {
+                uploaded: false,
+                error: None,
+                ..
+            } => summary.present += 1,
             PushResult { error: Some(_), .. } => summary.failed += 1,
         }
         summary.results.push(result);

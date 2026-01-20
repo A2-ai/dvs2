@@ -1,21 +1,23 @@
 //! High-level DVS operations.
 
-mod init;
 mod add;
 mod get;
-mod status;
-mod push;
-mod pull;
-mod materialize;
+mod init;
 mod log;
+mod materialize;
+mod pull;
+mod push;
 mod rollback;
+mod status;
 
-pub use init::{init, init_with_backend};
 pub use add::{add, add_with_backend};
 pub use get::{get, get_with_backend};
+pub use init::{init, init_with_backend};
+pub use log::{log, log_entry, log_entry_with_backend, log_with_backend, LogEntry};
+pub use materialize::{
+    materialize, materialize_files, materialize_with_backend, MaterializeResult, MaterializeSummary,
+};
+pub use pull::{pull, pull_files, pull_with_backend, PullResult, PullSummary};
+pub use push::{push, push_files, push_with_backend, PushResult, PushSummary};
+pub use rollback::{rollback, rollback_with_backend, RollbackResult, RollbackTarget};
 pub use status::{status, status_with_backend};
-pub use push::{push, push_with_backend, push_files, PushResult, PushSummary};
-pub use pull::{pull, pull_with_backend, pull_files, PullResult, PullSummary};
-pub use materialize::{materialize, materialize_with_backend, materialize_files, MaterializeResult, MaterializeSummary};
-pub use log::{log, log_with_backend, log_entry, log_entry_with_backend, LogEntry};
-pub use rollback::{rollback, rollback_with_backend, RollbackTarget, RollbackResult};

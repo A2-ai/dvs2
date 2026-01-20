@@ -1,10 +1,10 @@
 //! DVS configuration types.
 
-use fs_err as fs;
-use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
 use crate::HashAlgo;
 use crate::MetadataFormat;
+use fs_err as fs;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Metadata about which DVS build generated this configuration.
 ///
@@ -138,7 +138,8 @@ impl Config {
 
     /// Get the configured hash algorithm, or the default.
     pub fn hash_algorithm(&self) -> HashAlgo {
-        self.hash_algo.unwrap_or_else(crate::helpers::hash::default_algorithm)
+        self.hash_algo
+            .unwrap_or_else(crate::helpers::hash::default_algorithm)
     }
 
     /// Get the configured metadata format, or the default (JSON).

@@ -2,16 +2,12 @@
 
 use std::path::PathBuf;
 
+use super::Result;
 use crate::output::Output;
 use crate::paths;
-use super::Result;
 
 /// Run the pull command.
-pub fn run(
-    output: &Output,
-    remote: Option<String>,
-    files: Vec<PathBuf>,
-) -> Result<()> {
+pub fn run(output: &Output, remote: Option<String>, files: Vec<PathBuf>) -> Result<()> {
     let summary = if files.is_empty() {
         // Pull all objects from manifest
         dvs_core::pull(remote.as_deref())?

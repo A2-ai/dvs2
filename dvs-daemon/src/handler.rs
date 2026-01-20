@@ -1,7 +1,7 @@
 //! Event handler for processing file system events.
 
+use crate::{watcher::FileEvent, DaemonError};
 use std::path::Path;
-use crate::{DaemonError, watcher::FileEvent};
 
 /// Handler for processing file system events.
 pub struct EventHandler {

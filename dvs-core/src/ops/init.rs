@@ -1,9 +1,9 @@
 //! DVS initialization operation.
 
+use crate::helpers::{config as config_helper, copy};
+use crate::{detect_backend_cwd, Backend, Config, DvsError, RepoBackend};
 use fs_err as fs;
 use std::path::Path;
-use crate::{Config, DvsError, Backend, RepoBackend, detect_backend_cwd};
-use crate::helpers::{config as config_helper, copy};
 
 /// Initialize DVS for a project.
 ///
@@ -58,7 +58,8 @@ pub fn init_with_backend(
         storage_dir.to_path_buf(),
         permissions,
         group.map(|s| s.to_string()),
-    ).with_version_info();
+    )
+    .with_version_info();
 
     // Check for existing configuration
     let config_path = config_helper::config_path(repo_root);

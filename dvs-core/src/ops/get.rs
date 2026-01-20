@@ -1,9 +1,11 @@
 //! DVS get operation.
 
-use std::path::{Path, PathBuf};
-use glob::glob;
-use crate::{GetResult, Config, Metadata, Outcome, DvsError, Backend, RepoBackend, detect_backend_cwd};
 use crate::helpers::{config as config_helper, copy, hash};
+use crate::{
+    detect_backend_cwd, Backend, Config, DvsError, GetResult, Metadata, Outcome, RepoBackend,
+};
+use glob::glob;
+use std::path::{Path, PathBuf};
 
 /// Retrieve files from DVS storage.
 ///
@@ -29,10 +31,7 @@ pub fn get(files: &[PathBuf]) -> Result<Vec<GetResult>, DvsError> {
 /// Retrieve files with a specific backend.
 ///
 /// Use this when you already have a backend reference.
-pub fn get_with_backend(
-    backend: &Backend,
-    files: &[PathBuf],
-) -> Result<Vec<GetResult>, DvsError> {
+pub fn get_with_backend(backend: &Backend, files: &[PathBuf]) -> Result<Vec<GetResult>, DvsError> {
     let repo_root = backend.root();
 
     // Load configuration
@@ -201,10 +200,7 @@ fn get_single_file(backend: &Backend, path: &Path, config: &Config) -> GetResult
 }
 
 /// Check if local file matches metadata hash.
-fn file_matches_metadata(
-    local_path: &Path,
-    metadata: &Metadata,
-) -> Result<bool, DvsError> {
+fn file_matches_metadata(local_path: &Path, metadata: &Metadata) -> Result<bool, DvsError> {
     if !local_path.exists() {
         return Ok(false);
     }
@@ -222,7 +218,12 @@ mod tests {
 
     fn setup_test_repo(test_name: &str) -> (PathBuf, PathBuf) {
         let unique_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let temp_dir = std::env::temp_dir().join(format!("dvs-test-get-{}-{}-{}", std::process::id(), test_name, unique_id));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "dvs-test-get-{}-{}-{}",
+            std::process::id(),
+            test_name,
+            unique_id
+        ));
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 
@@ -235,7 +236,9 @@ mod tests {
 
         // Create config file
         let config = Config::new(storage_dir.clone(), None, None);
-        config.save(&temp_dir.join(Config::config_filename())).unwrap();
+        config
+            .save(&temp_dir.join(Config::config_filename()))
+            .unwrap();
 
         (temp_dir, storage_dir)
     }
@@ -301,12 +304,7 @@ mod tests {
         copy::copy_to_storage(&test_file, &storage_path, None, None).unwrap();
 
         // Create metadata
-        let metadata = Metadata::new(
-            checksum,
-            content.len() as u64,
-            None,
-            "tester".to_string(),
-        );
+        let metadata = Metadata::new(checksum, content.len() as u64, None, "tester".to_string());
         metadata.save(&Metadata::metadata_path(&test_file)).unwrap();
 
         // Get when file already exists with correct content
@@ -330,7 +328,11 @@ mod tests {
         let result = get_single_file(&backend, &test_file, &config);
 
         assert_eq!(result.outcome, Outcome::Error);
-        assert!(result.error.as_ref().unwrap().contains("metadata_not_found"));
+        assert!(result
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("metadata_not_found"));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

@@ -1,7 +1,7 @@
 //! IPC (Inter-Process Communication) for daemon control.
 
-use std::path::PathBuf;
 use crate::DaemonError;
+use std::path::PathBuf;
 
 /// Commands that can be sent to the daemon.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -63,7 +63,10 @@ impl DaemonClient {
     }
 
     /// Send a command to the daemon.
-    pub async fn send_command(&mut self, _command: DaemonCommand) -> Result<DaemonResponse, DaemonError> {
+    pub async fn send_command(
+        &mut self,
+        _command: DaemonCommand,
+    ) -> Result<DaemonResponse, DaemonError> {
         todo!("Send command to daemon")
     }
 

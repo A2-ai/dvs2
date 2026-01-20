@@ -4,11 +4,11 @@
 //! - `SnapshotStore`: Save and load workspace state snapshots
 //! - `Reflog`: Manage HEAD ref and append-only log of state changes
 
-use std::io::{BufRead, BufReader, Write};
 use fs_err as fs;
+use std::io::{BufRead, BufReader, Write};
 
 use crate::helpers::layout::Layout;
-use crate::types::{WorkspaceState, ReflogEntry, ReflogOp};
+use crate::types::{ReflogEntry, ReflogOp, WorkspaceState};
 use crate::DvsError;
 
 /// Snapshot store for workspace state persistence.
@@ -372,8 +372,26 @@ mod tests {
         let (_temp, layout) = setup_temp_layout();
         let reflog = Reflog::new(&layout);
 
-        reflog.record("a".to_string(), ReflogOp::Init, None, None, "s1".to_string(), vec![]).unwrap();
-        reflog.record("a".to_string(), ReflogOp::Add, None, Some("s1".to_string()), "s2".to_string(), vec![]).unwrap();
+        reflog
+            .record(
+                "a".to_string(),
+                ReflogOp::Init,
+                None,
+                None,
+                "s1".to_string(),
+                vec![],
+            )
+            .unwrap();
+        reflog
+            .record(
+                "a".to_string(),
+                ReflogOp::Add,
+                None,
+                Some("s1".to_string()),
+                "s2".to_string(),
+                vec![],
+            )
+            .unwrap();
 
         // Index 0 = most recent
         let entry = reflog.get_by_index(0).unwrap().unwrap();

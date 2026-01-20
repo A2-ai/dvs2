@@ -4,13 +4,12 @@
 //! The backend handles repo root detection, path normalization, ignore
 //! file handling, and optional branch information.
 
-use std::path::{Path, PathBuf};
-use crate::DvsError;
-use super::ignore::{
-    add_gitignore_pattern, load_gitignore_patterns,
-    add_dvsignore_pattern, load_dvs_ignore_patterns,
-};
 use super::git_ops::select_git_backend;
+use super::ignore::{
+    add_dvsignore_pattern, add_gitignore_pattern, load_dvs_ignore_patterns, load_gitignore_patterns,
+};
+use crate::DvsError;
+use std::path::{Path, PathBuf};
 
 /// Backend trait for repository/workspace operations.
 ///
@@ -408,13 +407,25 @@ mod tests {
         let _ = fs::create_dir_all(&temp_dir);
 
         #[cfg(feature = "yaml-config")]
-        fs::write(temp_dir.join(Config::config_filename()), "storage_dir: /tmp/storage").unwrap();
+        fs::write(
+            temp_dir.join(Config::config_filename()),
+            "storage_dir: /tmp/storage",
+        )
+        .unwrap();
 
         #[cfg(all(feature = "toml-config", not(feature = "yaml-config")))]
-        fs::write(temp_dir.join(Config::config_filename()), "storage_dir = \"/tmp/storage\"").unwrap();
+        fs::write(
+            temp_dir.join(Config::config_filename()),
+            "storage_dir = \"/tmp/storage\"",
+        )
+        .unwrap();
 
         #[cfg(all(not(feature = "yaml-config"), not(feature = "toml-config")))]
-        fs::write(temp_dir.join(Config::config_filename()), r#"{"storage_dir": "/tmp/storage"}"#).unwrap();
+        fs::write(
+            temp_dir.join(Config::config_filename()),
+            r#"{"storage_dir": "/tmp/storage"}"#,
+        )
+        .unwrap();
 
         let root = DvsBackend::find_root(&temp_dir);
         assert!(root.is_some());

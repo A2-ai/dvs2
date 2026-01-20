@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use crate::snapshot::{WorkspaceSnapshot, ObjectPresence};
+use crate::snapshot::{ObjectPresence, WorkspaceSnapshot};
 
 /// Difference between two workspace snapshots.
 #[derive(Debug, Clone, Default)]
@@ -56,7 +56,11 @@ impl std::fmt::Display for Mismatch {
             Mismatch::ExtraTrackedFile { path } => {
                 write!(f, "Extra tracked file: {}", path.display())
             }
-            Mismatch::ChecksumMismatch { path, expected, actual } => {
+            Mismatch::ChecksumMismatch {
+                path,
+                expected,
+                actual,
+            } => {
                 write!(
                     f,
                     "Checksum mismatch for {}: expected {}, got {}",
@@ -68,9 +72,20 @@ impl std::fmt::Display for Mismatch {
             Mismatch::MissingStorageObject { path } => {
                 write!(f, "Missing storage object for: {}", path.display())
             }
-            Mismatch::MissingConfig => write!(f, "Missing config ({})", dvs_core::Config::config_filename()),
-            Mismatch::UnexpectedConfig => write!(f, "Unexpected config ({})", dvs_core::Config::config_filename()),
-            Mismatch::GitignoreMismatch { expected_has_dvs, actual_has_dvs } => {
+            Mismatch::MissingConfig => write!(
+                f,
+                "Missing config ({})",
+                dvs_core::Config::config_filename()
+            ),
+            Mismatch::UnexpectedConfig => write!(
+                f,
+                "Unexpected config ({})",
+                dvs_core::Config::config_filename()
+            ),
+            Mismatch::GitignoreMismatch {
+                expected_has_dvs,
+                actual_has_dvs,
+            } => {
                 write!(
                     f,
                     "Gitignore *.dvs pattern: expected {}, got {}",
@@ -252,7 +267,10 @@ mod tests {
 
         let diff = SnapshotDiff::compare(&s1, &s2);
         assert_eq!(diff.len(), 1);
-        assert!(matches!(&diff.mismatches[0], Mismatch::ChecksumMismatch { .. }));
+        assert!(matches!(
+            &diff.mismatches[0],
+            Mismatch::ChecksumMismatch { .. }
+        ));
     }
 
     #[test]

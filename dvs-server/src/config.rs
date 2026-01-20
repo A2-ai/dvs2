@@ -1,7 +1,7 @@
 //! Server configuration.
 
+use crate::{auth::AuthConfig, ServerError};
 use std::path::PathBuf;
-use crate::{ServerError, auth::AuthConfig};
 
 /// Configuration for the DVS server.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

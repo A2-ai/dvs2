@@ -2,9 +2,9 @@
 
 use std::path::PathBuf;
 
+use super::Result;
 use crate::output::Output;
 use crate::paths;
-use super::Result;
 
 /// Run the add command.
 pub fn run(
@@ -46,12 +46,19 @@ pub fn run(
             }
             dvs_core::Outcome::Present => {
                 skip_count += 1;
-                output.info(&format!("Already tracked: {}", result.relative_path.display()));
+                output.info(&format!(
+                    "Already tracked: {}",
+                    result.relative_path.display()
+                ));
             }
             dvs_core::Outcome::Error => {
                 error_count += 1;
                 let msg = result.error_message.as_deref().unwrap_or("unknown error");
-                output.error(&format!("Error: {} - {}", result.relative_path.display(), msg));
+                output.error(&format!(
+                    "Error: {} - {}",
+                    result.relative_path.display(),
+                    msg
+                ));
             }
         }
     }

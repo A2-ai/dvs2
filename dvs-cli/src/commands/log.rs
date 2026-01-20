@@ -24,7 +24,10 @@ pub fn run(output: &Output, limit: Option<usize>) -> Result<()> {
         let ts = e.ts.format("%Y-%m-%d %H:%M:%S");
 
         let line = if let Some(ref msg) = e.message {
-            format!("@{{{}}}: {} {} {} - {}", entry.index, e.op, state_short, ts, msg)
+            format!(
+                "@{{{}}}: {} {} {} - {}",
+                entry.index, e.op, state_short, ts, msg
+            )
         } else {
             format!("@{{{}}}: {} {} {}", entry.index, e.op, state_short, ts)
         };

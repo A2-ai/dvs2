@@ -41,7 +41,7 @@ clippy *args:
 
 # Format workspace code
 fmt *args:
-    cargo fmt --manifest-path={{quote(workspace_manifest)}} {{args}}
+    cargo fmt --manifest-path={{quote(workspace_manifest)}} --all {{args}}
 
 # Check workspace without building
 check *args:
@@ -142,7 +142,7 @@ fmt-all: fmt
 
 # Check formatting for all Rust code
 fmt-check-all:
-    cargo fmt --manifest-path={{quote(workspace_manifest)}} -- --check
+    cargo fmt --manifest-path={{quote(workspace_manifest)}} --all -- --check
     cargo fmt --manifest-path={{quote(rpkg_manifest)}} -- --check
 
 # Alias fmt-check to fmt-check-all (default)

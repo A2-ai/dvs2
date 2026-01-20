@@ -6,10 +6,10 @@
 //!
 //! When loading, the TOML file is preferred if it exists.
 
+use crate::HashAlgo;
+use chrono::{DateTime, Utc};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
-use crate::HashAlgo;
 
 /// Format for metadata files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -128,7 +128,8 @@ impl Metadata {
     /// parses as TOML; if it ends with `.dvs`, parses as JSON.
     pub fn load(path: &std::path::Path) -> Result<Self, crate::DvsError> {
         let contents = fs::read_to_string(path)?;
-        let filename = path.file_name()
+        let filename = path
+            .file_name()
             .map(|f| f.to_string_lossy())
             .unwrap_or_default();
 
@@ -168,7 +169,9 @@ impl Metadata {
 
     #[cfg(not(feature = "toml-config"))]
     pub fn from_toml(_contents: &str) -> Result<Self, crate::DvsError> {
-        Err(crate::DvsError::config("TOML metadata support requires the toml-config feature"))
+        Err(crate::DvsError::config(
+            "TOML metadata support requires the toml-config feature",
+        ))
     }
 
     /// Save metadata to a file.
@@ -177,7 +180,8 @@ impl Metadata {
     /// - `.dvs.toml` -> TOML format
     /// - `.dvs` -> JSON format
     pub fn save(&self, path: &std::path::Path) -> Result<(), crate::DvsError> {
-        let filename = path.file_name()
+        let filename = path
+            .file_name()
             .map(|f| f.to_string_lossy())
             .unwrap_or_default();
 
@@ -205,7 +209,9 @@ impl Metadata {
 
     #[cfg(not(feature = "toml-config"))]
     pub fn save_toml(&self, _path: &std::path::Path) -> Result<(), crate::DvsError> {
-        Err(crate::DvsError::config("TOML metadata support requires the toml-config feature"))
+        Err(crate::DvsError::config(
+            "TOML metadata support requires the toml-config feature",
+        ))
     }
 
     /// Save metadata with a specific format.
@@ -363,20 +369,19 @@ mod tests {
         let _ = fs::create_dir_all(&temp_dir);
 
         let data_path = temp_dir.join("data.csv");
-        let metadata = Metadata::new(
-            "hash123".to_string(),
-            1024,
-            None,
-            "user".to_string(),
-        );
+        let metadata = Metadata::new("hash123".to_string(), 1024, None, "user".to_string());
 
         // Save as JSON
-        let json_path = metadata.save_with_format(&data_path, MetadataFormat::Json).unwrap();
+        let json_path = metadata
+            .save_with_format(&data_path, MetadataFormat::Json)
+            .unwrap();
         assert_eq!(json_path, temp_dir.join("data.csv.dvs"));
         assert!(json_path.exists());
 
         // Save as TOML
-        let toml_path = metadata.save_with_format(&data_path, MetadataFormat::Toml).unwrap();
+        let toml_path = metadata
+            .save_with_format(&data_path, MetadataFormat::Toml)
+            .unwrap();
         assert_eq!(toml_path, temp_dir.join("data.csv.dvs.toml"));
         assert!(toml_path.exists());
 
@@ -394,11 +399,15 @@ mod tests {
 
         // Create JSON metadata
         let json_metadata = Metadata::new("json_hash".to_string(), 100, None, "user".to_string());
-        json_metadata.save_with_format(&data_path, MetadataFormat::Json).unwrap();
+        json_metadata
+            .save_with_format(&data_path, MetadataFormat::Json)
+            .unwrap();
 
         // Create TOML metadata with different hash
         let toml_metadata = Metadata::new("toml_hash".to_string(), 200, None, "user".to_string());
-        toml_metadata.save_with_format(&data_path, MetadataFormat::Toml).unwrap();
+        toml_metadata
+            .save_with_format(&data_path, MetadataFormat::Toml)
+            .unwrap();
 
         // Load should prefer TOML
         let loaded = Metadata::load_for_data_file(&data_path).unwrap();
@@ -424,7 +433,10 @@ mod tests {
         assert_eq!(json_path, std::path::PathBuf::from("/data/file.csv.dvs"));
 
         let toml_path = Metadata::metadata_path_for_format(&data, MetadataFormat::Toml);
-        assert_eq!(toml_path, std::path::PathBuf::from("/data/file.csv.dvs.toml"));
+        assert_eq!(
+            toml_path,
+            std::path::PathBuf::from("/data/file.csv.dvs.toml")
+        );
     }
 
     #[test]
@@ -446,12 +458,7 @@ mod tests {
 
     #[test]
     fn test_metadata_no_message() {
-        let metadata = Metadata::new(
-            "hash".to_string(),
-            100,
-            None,
-            "user".to_string(),
-        );
+        let metadata = Metadata::new("hash".to_string(), 100, None, "user".to_string());
         assert_eq!(metadata.message, "");
     }
 

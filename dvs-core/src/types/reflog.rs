@@ -4,10 +4,10 @@
 //! - `WorkspaceState`: A snapshot of DVS-tracked state
 //! - `ReflogEntry`: A log entry recording state changes
 
-use std::path::PathBuf;
+use super::{Manifest, Metadata};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use super::{Manifest, Metadata};
+use std::path::PathBuf;
 
 /// A metadata entry with its associated path.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -203,10 +203,7 @@ mod tests {
 
     #[test]
     fn test_metadata_entry() {
-        let entry = MetadataEntry::new(
-            PathBuf::from("data/file.csv"),
-            test_metadata(),
-        );
+        let entry = MetadataEntry::new(PathBuf::from("data/file.csv"), test_metadata());
         assert_eq!(entry.path, PathBuf::from("data/file.csv"));
     }
 

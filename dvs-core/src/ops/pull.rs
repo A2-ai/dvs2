@@ -1,8 +1,11 @@
 //! DVS pull operation - download objects from remote storage.
 
+use crate::helpers::{
+    layout::Layout,
+    store::{HttpStore, LocalStore, ObjectStore},
+};
+use crate::{detect_backend_cwd, Backend, DvsError, Manifest, Oid, RepoBackend};
 use std::path::PathBuf;
-use crate::{DvsError, Manifest, Oid, Backend, RepoBackend, detect_backend_cwd};
-use crate::helpers::{layout::Layout, store::{ObjectStore, LocalStore, HttpStore}};
 
 /// Result of a pull operation for a single object.
 #[derive(Debug, Clone)]
@@ -96,8 +99,16 @@ pub fn pull_with_backend(
     for oid in oids {
         let result = pull_single_object(oid, &local_store, &remote_store, &layout);
         match &result {
-            PullResult { downloaded: true, error: None, .. } => summary.downloaded += 1,
-            PullResult { downloaded: false, error: None, .. } => summary.cached += 1,
+            PullResult {
+                downloaded: true,
+                error: None,
+                ..
+            } => summary.downloaded += 1,
+            PullResult {
+                downloaded: false,
+                error: None,
+                ..
+            } => summary.cached += 1,
             PullResult { error: Some(_), .. } => summary.failed += 1,
         }
         summary.results.push(result);
@@ -127,10 +138,7 @@ fn pull_single_object(
 }
 
 /// Pull specific files by path.
-pub fn pull_files(
-    files: &[PathBuf],
-    remote_url: Option<&str>,
-) -> Result<PullSummary, DvsError> {
+pub fn pull_files(files: &[PathBuf], remote_url: Option<&str>) -> Result<PullSummary, DvsError> {
     let backend = detect_backend_cwd()?;
     let layout = Layout::new(backend.root().to_path_buf());
 
@@ -172,8 +180,16 @@ pub fn pull_files(
 
         let result = pull_single_object(&entry.oid, &local_store, &remote_store, &layout);
         match &result {
-            PullResult { downloaded: true, error: None, .. } => summary.downloaded += 1,
-            PullResult { downloaded: false, error: None, .. } => summary.cached += 1,
+            PullResult {
+                downloaded: true,
+                error: None,
+                ..
+            } => summary.downloaded += 1,
+            PullResult {
+                downloaded: false,
+                error: None,
+                ..
+            } => summary.cached += 1,
             PullResult { error: Some(_), .. } => summary.failed += 1,
         }
         summary.results.push(result);

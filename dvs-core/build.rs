@@ -13,8 +13,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../.git/HEAD");
 
     // Set DVS_VERSION (use env var if set, otherwise Cargo.toml version)
-    let version = std::env::var("DVS_VERSION")
-        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
+    let version =
+        std::env::var("DVS_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
     println!("cargo:rustc-env=DVS_VERSION={}", version);
 
     // Set DVS_COMMIT_SHA (use env var if set, otherwise try git)

@@ -1,9 +1,9 @@
 //! Object store abstraction for remote/local content-addressable storage.
 
+use crate::types::Oid;
+use crate::DvsError;
 use fs_err as fs;
 use std::path::{Path, PathBuf};
-use crate::DvsError;
-use crate::types::Oid;
 
 /// Result type for store operations.
 pub type StoreResult<T> = Result<T, DvsError>;
@@ -346,6 +346,9 @@ mod tests {
         let oid = Oid::new(HashAlgo::Blake3, "abc".to_string() + &"0".repeat(61));
         let url = store.object_url(&oid);
 
-        assert_eq!(url, format!("https://example.com/dvcs/objects/blake3/{}", oid.hex));
+        assert_eq!(
+            url,
+            format!("https://example.com/dvcs/objects/blake3/{}", oid.hex)
+        );
     }
 }

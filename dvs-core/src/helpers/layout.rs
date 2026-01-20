@@ -6,10 +6,10 @@
 //! - `state/` - materialization state, locks, etc.
 //! - `locks/` - lock files for concurrent operations
 
+use crate::types::{HashAlgo, Manifest, Oid};
+use crate::DvsError;
 use fs_err as fs;
 use std::path::{Path, PathBuf};
-use crate::DvsError;
-use crate::types::{Oid, HashAlgo, Manifest};
 
 /// The local DVS directory name.
 pub const DVS_DIR: &str = ".dvs";
@@ -255,19 +255,37 @@ mod tests {
         let layout = Layout::new(PathBuf::from("/repo"));
 
         assert_eq!(layout.dvs_dir(), PathBuf::from("/repo/.dvs"));
-        assert_eq!(layout.config_path(), PathBuf::from("/repo/.dvs/config.toml"));
+        assert_eq!(
+            layout.config_path(),
+            PathBuf::from("/repo/.dvs/config.toml")
+        );
         assert_eq!(layout.cache_dir(), PathBuf::from("/repo/.dvs/cache"));
-        assert_eq!(layout.objects_dir(), PathBuf::from("/repo/.dvs/cache/objects"));
+        assert_eq!(
+            layout.objects_dir(),
+            PathBuf::from("/repo/.dvs/cache/objects")
+        );
         assert_eq!(layout.state_dir(), PathBuf::from("/repo/.dvs/state"));
         assert_eq!(layout.locks_dir(), PathBuf::from("/repo/.dvs/locks"));
         assert_eq!(layout.manifest_path(), PathBuf::from("/repo/dvs.lock"));
         // Reflog paths
         assert_eq!(layout.refs_dir(), PathBuf::from("/repo/.dvs/refs"));
         assert_eq!(layout.logs_dir(), PathBuf::from("/repo/.dvs/logs"));
-        assert_eq!(layout.snapshots_dir(), PathBuf::from("/repo/.dvs/state/snapshots"));
-        assert_eq!(layout.head_ref_path(), PathBuf::from("/repo/.dvs/refs/HEAD"));
-        assert_eq!(layout.head_log_path(), PathBuf::from("/repo/.dvs/logs/refs/HEAD"));
-        assert_eq!(layout.snapshot_path("abc123"), PathBuf::from("/repo/.dvs/state/snapshots/abc123.json"));
+        assert_eq!(
+            layout.snapshots_dir(),
+            PathBuf::from("/repo/.dvs/state/snapshots")
+        );
+        assert_eq!(
+            layout.head_ref_path(),
+            PathBuf::from("/repo/.dvs/refs/HEAD")
+        );
+        assert_eq!(
+            layout.head_log_path(),
+            PathBuf::from("/repo/.dvs/logs/refs/HEAD")
+        );
+        assert_eq!(
+            layout.snapshot_path("abc123"),
+            PathBuf::from("/repo/.dvs/state/snapshots/abc123.json")
+        );
     }
 
     #[test]

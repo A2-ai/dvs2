@@ -3,10 +3,10 @@
 //! Provides content-addressable storage for DVS objects using the
 //! `{algo}/{prefix}/{suffix}` path format compatible with dvs-core.
 
-use std::path::PathBuf;
-use fs_err as fs;
-use dvs_core::Oid;
 use crate::ServerError;
+use dvs_core::Oid;
+use fs_err as fs;
+use std::path::PathBuf;
 
 /// Storage backend trait for file storage operations.
 ///
@@ -79,10 +79,7 @@ impl LocalStorage {
     /// Returns `{root}/{algo}/{prefix}/{suffix}` where prefix is first 2 chars.
     fn oid_to_path(&self, oid: &Oid) -> PathBuf {
         let (prefix, suffix) = oid.storage_path_components();
-        self.root
-            .join(oid.algo.prefix())
-            .join(prefix)
-            .join(suffix)
+        self.root.join(oid.algo.prefix()).join(prefix).join(suffix)
     }
 
     /// Ensure parent directories exist for a path.
@@ -115,9 +112,8 @@ impl StorageBackend for LocalStorage {
 
     fn get(&self, oid: &Oid) -> Result<Vec<u8>, ServerError> {
         let path = self.get_path(oid)?;
-        fs::read(&path).map_err(|e| {
-            ServerError::StorageError(format!("failed to read object {oid}: {e}"))
-        })
+        fs::read(&path)
+            .map_err(|e| ServerError::StorageError(format!("failed to read object {oid}: {e}")))
     }
 
     fn put(&self, oid: &Oid, data: &[u8]) -> Result<(), ServerError> {
@@ -132,9 +128,8 @@ impl StorageBackend for LocalStorage {
 
         // Write to temp file then rename for atomicity
         let temp_path = path.with_extension("tmp");
-        fs::write(&temp_path, data).map_err(|e| {
-            ServerError::StorageError(format!("failed to write object {oid}: {e}"))
-        })?;
+        fs::write(&temp_path, data)
+            .map_err(|e| ServerError::StorageError(format!("failed to write object {oid}: {e}")))?;
 
         fs::rename(&temp_path, &path).map_err(|e| {
             // Clean up temp file on rename failure
@@ -176,9 +171,8 @@ impl StorageBackend for LocalStorage {
             Ok(())
         }
 
-        walk_dir(&self.root, &mut stats).map_err(|e| {
-            ServerError::StorageError(format!("failed to compute stats: {e}"))
-        })?;
+        walk_dir(&self.root, &mut stats)
+            .map_err(|e| ServerError::StorageError(format!("failed to compute stats: {e}")))?;
 
         Ok(stats)
     }
@@ -196,9 +190,7 @@ pub fn validate_oid(oid_str: &str) -> bool {
 /// This is used when the algo and hash come from separate URL path segments.
 pub fn parse_oid(algo: &str, hash: &str) -> Result<Oid, ServerError> {
     let oid_str = format!("{algo}:{hash}");
-    Oid::parse(&oid_str).map_err(|e| {
-        ServerError::StorageError(format!("invalid OID format: {e}"))
-    })
+    Oid::parse(&oid_str).map_err(|e| ServerError::StorageError(format!("invalid OID format: {e}")))
 }
 
 #[cfg(test)]

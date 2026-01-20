@@ -5,13 +5,13 @@
 //! With the `mmap` feature enabled, files >= 16KB use memory-mapped I/O for performance.
 //! Without the `mmap` feature, all files use streaming reads.
 
+use crate::{DvsError, HashAlgo};
 use fs_err as fs;
 use fs_err::File;
-use std::io::Read;
-use std::path::{Path, PathBuf};
 #[cfg(feature = "mmap")]
 use memmap2::Mmap;
-use crate::{DvsError, HashAlgo};
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 /// Hash threshold for memory-mapped I/O (16KB).
 ///
@@ -90,7 +90,7 @@ mod blake3_impl {
 }
 
 #[cfg(feature = "blake3")]
-pub use blake3_impl::{Blake3Hasher, hash_blake3};
+pub use blake3_impl::{hash_blake3, Blake3Hasher};
 
 // ============================================================================
 // XXH3 hasher (feature: xxh3)
@@ -109,9 +109,7 @@ mod xxh3_impl {
     impl Xxh3Hasher {
         /// Create a new XXH3 hasher.
         pub fn new() -> Self {
-            Self {
-                inner: Xxh3::new(),
-            }
+            Self { inner: Xxh3::new() }
         }
     }
 
@@ -142,7 +140,7 @@ mod xxh3_impl {
 }
 
 #[cfg(feature = "xxh3")]
-pub use xxh3_impl::{Xxh3Hasher, hash_xxh3};
+pub use xxh3_impl::{hash_xxh3, Xxh3Hasher};
 
 // ============================================================================
 // SHA-256 hasher (feature: sha256)
@@ -151,7 +149,7 @@ pub use xxh3_impl::{Xxh3Hasher, hash_xxh3};
 #[cfg(feature = "sha256")]
 mod sha256_impl {
     use super::*;
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     /// SHA-256 streaming hasher.
     pub struct Sha256Hasher {
@@ -196,7 +194,7 @@ mod sha256_impl {
 }
 
 #[cfg(feature = "sha256")]
-pub use sha256_impl::{Sha256Hasher, hash_sha256};
+pub use sha256_impl::{hash_sha256, Sha256Hasher};
 
 // ============================================================================
 // Multi-algorithm file hashing
@@ -328,7 +326,11 @@ pub fn verify_hash(path: &Path, expected_hash: &str) -> Result<bool, DvsError> {
 }
 
 /// Verify that a file matches the expected hash using a specific algorithm.
-pub fn verify_hash_with_algo(path: &Path, expected_hash: &str, algo: HashAlgo) -> Result<bool, DvsError> {
+pub fn verify_hash_with_algo(
+    path: &Path,
+    expected_hash: &str,
+    algo: HashAlgo,
+) -> Result<bool, DvsError> {
     let actual_hash = get_file_hash_with_algo(path, algo)?;
     Ok(actual_hash == expected_hash)
 }

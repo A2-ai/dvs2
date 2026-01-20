@@ -4,8 +4,8 @@
 
 use std::process::Command;
 
-use crate::output::Output;
 use super::Result;
+use crate::output::Output;
 
 /// Run the git-status command.
 ///
@@ -17,10 +17,7 @@ pub fn run(output: &Output, git_args: Vec<String>) -> Result<()> {
     let mut any_failed = false;
 
     // Run git status
-    let git_result = Command::new("git")
-        .arg("status")
-        .args(&git_args)
-        .status();
+    let git_result = Command::new("git").arg("status").args(&git_args).status();
 
     match git_result {
         Ok(status) => {
@@ -50,7 +47,9 @@ pub fn run(output: &Output, git_args: Vec<String>) -> Result<()> {
     }
 
     if any_failed {
-        Err(super::CliError::InvalidArg("One or more status commands failed".to_string()))
+        Err(super::CliError::InvalidArg(
+            "One or more status commands failed".to_string(),
+        ))
     } else {
         Ok(())
     }

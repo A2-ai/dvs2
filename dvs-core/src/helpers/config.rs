@@ -1,8 +1,8 @@
 //! Configuration loading and validation utilities.
 
+use crate::{Config, DvsError};
 use fs_err as fs;
 use std::path::{Path, PathBuf};
-use crate::{Config, DvsError};
 
 /// Find the repository root (directory containing .git or DVS config file).
 ///

@@ -1,13 +1,15 @@
 //! DVS add operation.
 
-use std::path::{Path, PathBuf};
+use crate::helpers::layout::Layout;
+use crate::helpers::reflog::{current_actor, Reflog, SnapshotStore};
+use crate::helpers::{config as config_helper, copy, file, hash};
+use crate::types::{MetadataEntry, ReflogOp, WorkspaceState};
+use crate::{
+    detect_backend_cwd, AddResult, Backend, Config, DvsError, Metadata, Outcome, RepoBackend,
+};
 use fs_err as fs;
 use glob::glob;
-use crate::{AddResult, Config, Metadata, Outcome, DvsError, Backend, RepoBackend, detect_backend_cwd};
-use crate::types::{ReflogOp, MetadataEntry, WorkspaceState};
-use crate::helpers::{config as config_helper, copy, file, hash};
-use crate::helpers::layout::Layout;
-use crate::helpers::reflog::{SnapshotStore, Reflog, current_actor};
+use std::path::{Path, PathBuf};
 
 /// Add files to DVS tracking.
 ///
@@ -140,7 +142,10 @@ fn capture_metadata_walkdir(repo_root: &Path) -> Result<Vec<MetadataEntry>, DvsE
         };
 
         let path = entry.path();
-        let filename = path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default();
+        let filename = path
+            .file_name()
+            .map(|f| f.to_string_lossy())
+            .unwrap_or_default();
         // Check for both .dvs (JSON) and .dvs.toml (TOML) files
         let is_metadata = filename.ends_with(".dvs") || filename.ends_with(".dvs.toml");
         if path.is_file() && is_metadata {
@@ -162,7 +167,11 @@ fn capture_metadata_walkdir(repo_root: &Path) -> Result<Vec<MetadataEntry>, DvsE
 /// Capture metadata using recursive fs::read_dir (fallback when walkdir disabled).
 #[cfg(not(feature = "walkdir"))]
 fn capture_metadata_recursive(repo_root: &Path) -> Result<Vec<MetadataEntry>, DvsError> {
-    fn recurse(dir: &Path, repo_root: &Path, entries: &mut Vec<MetadataEntry>) -> Result<(), DvsError> {
+    fn recurse(
+        dir: &Path,
+        repo_root: &Path,
+        entries: &mut Vec<MetadataEntry>,
+    ) -> Result<(), DvsError> {
         let dir_entries = match fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => return Ok(()), // Skip unreadable directories
@@ -180,7 +189,10 @@ fn capture_metadata_recursive(repo_root: &Path) -> Result<Vec<MetadataEntry>, Dv
             if path.is_dir() {
                 recurse(&path, repo_root, entries)?;
             } else {
-                let filename = path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default();
+                let filename = path
+                    .file_name()
+                    .map(|f| f.to_string_lossy())
+                    .unwrap_or_default();
                 // Check for both .dvs (JSON) and .dvs.toml (TOML) files
                 let is_metadata = filename.ends_with(".dvs") || filename.ends_with(".dvs.toml");
                 if is_metadata {
@@ -379,10 +391,7 @@ fn add_single_file(
 }
 
 /// Rollback metadata and storage on error.
-fn rollback_add(
-    metadata_path: &Path,
-    storage_path: &Path,
-) -> Result<(), DvsError> {
+fn rollback_add(metadata_path: &Path, storage_path: &Path) -> Result<(), DvsError> {
     // Remove metadata file if it was created
     if metadata_path.exists() {
         fs::remove_file(metadata_path)?;
@@ -406,7 +415,12 @@ mod tests {
 
     fn setup_test_repo(test_name: &str) -> (PathBuf, PathBuf) {
         let unique_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let temp_dir = std::env::temp_dir().join(format!("dvs-test-add-{}-{}-{}", std::process::id(), test_name, unique_id));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "dvs-test-add-{}-{}-{}",
+            std::process::id(),
+            test_name,
+            unique_id
+        ));
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 
@@ -419,7 +433,9 @@ mod tests {
 
         // Create config file
         let config = Config::new(storage_dir.clone(), None, None);
-        config.save(&temp_dir.join(Config::config_filename())).unwrap();
+        config
+            .save(&temp_dir.join(Config::config_filename()))
+            .unwrap();
 
         (temp_dir, storage_dir)
     }

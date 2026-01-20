@@ -1,9 +1,9 @@
 //! DVS materialize operation - copy cached objects to working tree.
 
+use crate::helpers::layout::{Layout, MaterializedState};
+use crate::{detect_backend_cwd, Backend, DvsError, Manifest, Oid, RepoBackend};
 use fs_err as fs;
 use std::path::PathBuf;
-use crate::{DvsError, Manifest, Oid, Backend, RepoBackend, detect_backend_cwd};
-use crate::helpers::layout::{Layout, MaterializedState};
 
 /// Result of a materialize operation for a single file.
 #[derive(Debug, Clone)]
@@ -84,16 +84,19 @@ pub fn materialize_with_backend(backend: &Backend) -> Result<MaterializeSummary,
     let mut summary = MaterializeSummary::default();
 
     for entry in &manifest.entries {
-        let result = materialize_single_file(
-            &entry.path,
-            &entry.oid,
-            &layout,
-            &mut state,
-            backend.root(),
-        );
+        let result =
+            materialize_single_file(&entry.path, &entry.oid, &layout, &mut state, backend.root());
         match &result {
-            MaterializeResult { materialized: true, error: None, .. } => summary.materialized += 1,
-            MaterializeResult { materialized: false, error: None, .. } => summary.up_to_date += 1,
+            MaterializeResult {
+                materialized: true,
+                error: None,
+                ..
+            } => summary.materialized += 1,
+            MaterializeResult {
+                materialized: false,
+                error: None,
+                ..
+            } => summary.up_to_date += 1,
             MaterializeResult { error: Some(_), .. } => summary.failed += 1,
         }
         summary.results.push(result);
@@ -160,9 +163,7 @@ fn materialize_single_file(
 }
 
 /// Materialize specific files by path.
-pub fn materialize_files(
-    files: &[PathBuf],
-) -> Result<MaterializeSummary, DvsError> {
+pub fn materialize_files(files: &[PathBuf]) -> Result<MaterializeSummary, DvsError> {
     let backend = detect_backend_cwd()?;
     let layout = Layout::new(backend.root().to_path_buf());
 
@@ -193,16 +194,19 @@ pub fn materialize_files(
             }
         };
 
-        let result = materialize_single_file(
-            &entry.path,
-            &entry.oid,
-            &layout,
-            &mut state,
-            backend.root(),
-        );
+        let result =
+            materialize_single_file(&entry.path, &entry.oid, &layout, &mut state, backend.root());
         match &result {
-            MaterializeResult { materialized: true, error: None, .. } => summary.materialized += 1,
-            MaterializeResult { materialized: false, error: None, .. } => summary.up_to_date += 1,
+            MaterializeResult {
+                materialized: true,
+                error: None,
+                ..
+            } => summary.materialized += 1,
+            MaterializeResult {
+                materialized: false,
+                error: None,
+                ..
+            } => summary.up_to_date += 1,
             MaterializeResult { error: Some(_), .. } => summary.failed += 1,
         }
         summary.results.push(result);

@@ -1,7 +1,7 @@
 //! Daemon configuration.
 
-use std::path::PathBuf;
 use crate::DaemonError;
+use std::path::PathBuf;
 
 /// Configuration for the DVS daemon.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

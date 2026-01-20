@@ -7,13 +7,13 @@
 //! - `GET /health` - Health check
 //! - `GET /status` - Server status
 
+use fs_err as fs;
 use std::sync::Arc;
 use std::time::Instant;
-use fs_err as fs;
-use tiny_http::{Request, Response, StatusCode, Header};
+use tiny_http::{Header, Request, Response, StatusCode};
 
-use crate::{ServerError, ServerConfig};
-use crate::storage::{LocalStorage, StorageBackend, parse_oid};
+use crate::storage::{parse_oid, LocalStorage, StorageBackend};
+use crate::{ServerConfig, ServerError};
 
 /// Application state shared across handlers.
 pub struct AppState {
@@ -58,8 +58,7 @@ pub fn handle_request(state: &AppState, mut request: Request) -> Result<(), Serv
         }
 
         // 404 for unknown routes
-        _ => Ok(Response::from_string("Not Found")
-            .with_status_code(StatusCode(404))),
+        _ => Ok(Response::from_string("Not Found").with_status_code(StatusCode(404))),
     };
 
     // Send response
@@ -67,7 +66,9 @@ pub fn handle_request(state: &AppState, mut request: Request) -> Result<(), Serv
         Ok(resp) => request.respond(resp).map_err(ServerError::IoError),
         Err(e) => {
             let error_response = error_to_response(&e);
-            request.respond(error_response).map_err(ServerError::IoError)
+            request
+                .respond(error_response)
+                .map_err(ServerError::IoError)
         }
     }
 }
@@ -106,8 +107,7 @@ fn handle_object_request(
                     .with_status_code(StatusCode(200))
                     .with_header(content_length_header(metadata.len())))
             } else {
-                Ok(Response::from_data(vec![])
-                    .with_status_code(StatusCode(404)))
+                Ok(Response::from_data(vec![]).with_status_code(StatusCode(404)))
             }
         }
 
@@ -129,16 +129,13 @@ fn handle_object_request(
             state.storage.put(&oid, &body)?;
 
             if already_exists {
-                Ok(Response::from_data(vec![])
-                    .with_status_code(StatusCode(200)))
+                Ok(Response::from_data(vec![]).with_status_code(StatusCode(200)))
             } else {
-                Ok(Response::from_data(vec![])
-                    .with_status_code(StatusCode(201)))
+                Ok(Response::from_data(vec![]).with_status_code(StatusCode(201)))
             }
         }
 
-        _ => Ok(Response::from_string("Method Not Allowed")
-            .with_status_code(StatusCode(405))),
+        _ => Ok(Response::from_string("Method Not Allowed").with_status_code(StatusCode(405))),
     }
 }
 

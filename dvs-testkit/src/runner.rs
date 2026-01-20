@@ -1,7 +1,7 @@
 //! Interface runner trait and implementations.
 
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 use crate::repo::TestRepo;
 use crate::snapshot::WorkspaceSnapshot;
@@ -171,16 +171,17 @@ impl InterfaceRunner for CoreRunner {
             OpKind::Add => run_add_core(repo, &op.args),
             OpKind::Get => run_get_core(repo, &op.args),
             OpKind::Status => run_status_core(repo, &op.args),
-            _ => Err(format!("Operation {:?} not implemented for core runner", op.kind)),
+            _ => Err(format!(
+                "Operation {:?} not implemented for core runner",
+                op.kind
+            )),
         };
 
         match result {
-            Ok(()) => {
-                match WorkspaceSnapshot::capture(repo) {
-                    Ok(snapshot) => RunResult::success(snapshot),
-                    Err(e) => RunResult::failure(1, format!("Snapshot error: {}", e), None),
-                }
-            }
+            Ok(()) => match WorkspaceSnapshot::capture(repo) {
+                Ok(snapshot) => RunResult::success(snapshot),
+                Err(e) => RunResult::failure(1, format!("Snapshot error: {}", e), None),
+            },
             Err(msg) => RunResult::failure(1, msg, None),
         }
     }
@@ -275,9 +276,7 @@ impl CliRunner {
 
     /// Create a CLI runner with a specific binary path.
     pub fn with_binary(path: PathBuf) -> Self {
-        Self {
-            binary_path: path,
-        }
+        Self { binary_path: path }
     }
 
     /// Find the dvs binary.
@@ -296,7 +295,9 @@ impl CliRunner {
                 // Otherwise, try to find it relative to the workspace
                 // CARGO_MANIFEST_DIR points to dvs-testkit, so go up one level
                 if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-                    let workspace_root = PathBuf::from(manifest_dir).parent().map(|p| p.to_path_buf());
+                    let workspace_root = PathBuf::from(manifest_dir)
+                        .parent()
+                        .map(|p| p.to_path_buf());
                     if let Some(root) = workspace_root {
                         // Try debug build first
                         let debug_path = root.join("target/debug/dvs");
@@ -404,11 +405,7 @@ impl InterfaceRunner for CliRunner {
         let output = match cmd.output() {
             Ok(o) => o,
             Err(e) => {
-                return RunResult::failure(
-                    -1,
-                    format!("Failed to execute command: {}", e),
-                    None,
-                );
+                return RunResult::failure(-1, format!("Failed to execute command: {}", e), None);
             }
         };
 
@@ -610,12 +607,12 @@ pub struct TestServer {
 impl TestServer {
     /// Start a new test server on a random available port.
     pub fn start() -> Result<Self, String> {
-        use dvs_server::{ServerConfig, AuthConfig};
+        use dvs_server::{AuthConfig, ServerConfig};
         use std::sync::atomic::AtomicBool;
 
         // Create temp storage directory
-        let storage_dir = tempfile::TempDir::new()
-            .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+        let storage_dir =
+            tempfile::TempDir::new().map_err(|e| format!("Failed to create temp dir: {}", e))?;
 
         // Find an available port
         let port = Self::find_available_port()?;
@@ -668,7 +665,8 @@ impl TestServer {
     fn find_available_port() -> Result<u16, String> {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")
             .map_err(|e| format!("Failed to bind: {}", e))?;
-        Ok(listener.local_addr()
+        Ok(listener
+            .local_addr()
             .map_err(|e| format!("Failed to get addr: {}", e))?
             .port())
     }
@@ -697,7 +695,9 @@ impl TestServer {
     pub fn object_exists(&self, algo: &str, hash: &str) -> Result<bool, String> {
         let url = format!("{}/{}/{}", self.objects_url(), algo, hash);
         let client = reqwest::blocking::Client::new();
-        let resp = client.head(&url).send()
+        let resp = client
+            .head(&url)
+            .send()
             .map_err(|e| format!("HEAD request failed: {}", e))?;
         Ok(resp.status().is_success())
     }
@@ -706,7 +706,9 @@ impl TestServer {
     pub fn get_object(&self, algo: &str, hash: &str) -> Result<Vec<u8>, String> {
         let url = format!("{}/{}/{}", self.objects_url(), algo, hash);
         let client = reqwest::blocking::Client::new();
-        let resp = client.get(&url).send()
+        let resp = client
+            .get(&url)
+            .send()
             .map_err(|e| format!("GET request failed: {}", e))?;
 
         if !resp.status().is_success() {
@@ -722,7 +724,8 @@ impl TestServer {
     pub fn put_object(&self, algo: &str, hash: &str, data: &[u8]) -> Result<bool, String> {
         let url = format!("{}/{}/{}", self.objects_url(), algo, hash);
         let client = reqwest::blocking::Client::new();
-        let resp = client.put(&url)
+        let resp = client
+            .put(&url)
             .body(data.to_vec())
             .send()
             .map_err(|e| format!("PUT request failed: {}", e))?;
@@ -740,7 +743,8 @@ impl TestServer {
 impl Drop for TestServer {
     fn drop(&mut self) {
         // Signal shutdown
-        self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         // Give thread time to exit
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -833,7 +837,11 @@ fn run_push_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> Ru
     let manifest_path = dvs_dir.join("manifest.json");
 
     if !manifest_path.exists() {
-        return RunResult::failure(1, "No manifest found - run init and add first".to_string(), None);
+        return RunResult::failure(
+            1,
+            "No manifest found - run init and add first".to_string(),
+            None,
+        );
     }
 
     let manifest = match Manifest::load(&manifest_path) {
@@ -860,7 +868,13 @@ fn run_push_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> Ru
                 continue;
             }
             Ok(false) => {}
-            Err(e) => return RunResult::failure(1, format!("Failed to check object {}: {}", oid, e), None),
+            Err(e) => {
+                return RunResult::failure(
+                    1,
+                    format!("Failed to check object {}: {}", oid, e),
+                    None,
+                )
+            }
         }
 
         // Read object from local storage to temp file
@@ -871,7 +885,9 @@ fn run_push_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> Ru
 
         let data = match std::fs::read(&obj_path) {
             Ok(d) => d,
-            Err(e) => return RunResult::failure(1, format!("Failed to read object {}: {}", oid, e), None),
+            Err(e) => {
+                return RunResult::failure(1, format!("Failed to read object {}: {}", oid, e), None)
+            }
         };
 
         // Push to server
@@ -970,7 +986,9 @@ mod cli_tests {
         if runner.is_available() {
             Some(runner)
         } else {
-            eprintln!("Skipping CLI test: dvs binary not built. Run `cargo build -p dvs-cli` first.");
+            eprintln!(
+                "Skipping CLI test: dvs binary not built. Run `cargo build -p dvs-cli` first."
+            );
             None
         }
     }
@@ -981,7 +999,9 @@ mod cli_tests {
         // Note: This test may fail if the CLI isn't built yet.
         // Run `cargo build -p dvs-cli` first, or use `cargo test --workspace`.
         if !runner.is_available() {
-            eprintln!("CLI binary not available - skipping test (build with `cargo build -p dvs-cli`)");
+            eprintln!(
+                "CLI binary not available - skipping test (build with `cargo build -p dvs-cli`)"
+            );
             return;
         }
         assert!(runner.is_available());
@@ -998,7 +1018,11 @@ mod cli_tests {
         let op = Op::init(".dvs-storage");
         let result = runner.run(&repo, &op);
 
-        assert!(result.success, "CLI init failed: {}\nstdout: {}", result.stderr, result.stdout);
+        assert!(
+            result.success,
+            "CLI init failed: {}\nstdout: {}",
+            result.stderr, result.stdout
+        );
         assert!(result.snapshot.is_some());
         assert!(result.snapshot.unwrap().is_initialized());
     }
@@ -1023,7 +1047,11 @@ mod cli_tests {
         let add = Op::add(&["data.csv"]);
         let result = runner.run(&repo, &add);
 
-        assert!(result.success, "CLI add failed: {}\nstdout: {}", result.stderr, result.stdout);
+        assert!(
+            result.success,
+            "CLI add failed: {}\nstdout: {}",
+            result.stderr, result.stdout
+        );
 
         let snapshot = result.snapshot.unwrap();
         assert_eq!(snapshot.tracked_count(), 1);
@@ -1050,11 +1078,7 @@ mod cli_tests {
             &[Op::init(".dvs-storage"), Op::add(&["test.txt"])],
         );
 
-        assert!(
-            result.passed(),
-            "Conformance test failed: {:?}",
-            result
-        );
+        assert!(result.passed(), "Conformance test failed: {:?}", result);
     }
 }
 
@@ -1110,7 +1134,8 @@ mod server_tests {
         assert!(result.success, "Init failed: {}", result.stderr);
 
         // Create and add a file
-        repo.write_file("data.txt", b"test content for server").unwrap();
+        repo.write_file("data.txt", b"test content for server")
+            .unwrap();
         let add = Op::add(&["data.txt"]);
         let result = runner.run(&repo, &add);
         assert!(result.success, "Add failed: {}", result.stderr);

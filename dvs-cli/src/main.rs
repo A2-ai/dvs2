@@ -6,13 +6,15 @@ mod commands;
 mod output;
 mod paths;
 
+use fs_err as fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use fs_err as fs;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
-use commands::{init, add, get, status, push, pull, materialize, log, rollback, install, uninstall, git_status};
+use commands::{
+    add, get, git_status, init, install, log, materialize, pull, push, rollback, status, uninstall,
+};
 use output::Output;
 
 /// DVS - Data Version System
@@ -218,73 +220,65 @@ fn main() -> ExitCode {
 
     // Execute the command
     let result: commands::Result<()> = match cli.command {
-        Command::Init { storage_dir, permissions, group } => {
-            init::run(&output, storage_dir, permissions, group)
-        }
-        Command::Add { files, message, metadata_format } => {
-            add::run(&output, files, message, metadata_format)
-        }
-        Command::Get { files } => {
-            get::run(&output, files)
-        }
-        Command::Status { files } => {
-            status::run(&output, files)
-        }
-        Command::Push { remote, files } => {
-            push::run(&output, remote, files)
-        }
-        Command::Pull { remote, files } => {
-            pull::run(&output, remote, files)
-        }
-        Command::Materialize { files } => {
-            materialize::run(&output, files)
-        }
-        Command::Log { limit } => {
-            log::run(&output, limit)
-        }
-        Command::Rollback { target, force, no_materialize } => {
-            rollback::run(&output, target, force, !no_materialize)
-        }
-        Command::Fs(fs_cmd) => {
-            match fs_cmd {
-                FsCommand::Pwd => {
-                    match std::env::current_dir() {
-                        Ok(cwd) => {
-                            output.println(&cwd.display().to_string());
-                            Ok(())
-                        }
-                        Err(e) => Err(commands::CliError::Io(e)),
-                    }
+        Command::Init {
+            storage_dir,
+            permissions,
+            group,
+        } => init::run(&output, storage_dir, permissions, group),
+        Command::Add {
+            files,
+            message,
+            metadata_format,
+        } => add::run(&output, files, message, metadata_format),
+        Command::Get { files } => get::run(&output, files),
+        Command::Status { files } => status::run(&output, files),
+        Command::Push { remote, files } => push::run(&output, remote, files),
+        Command::Pull { remote, files } => pull::run(&output, remote, files),
+        Command::Materialize { files } => materialize::run(&output, files),
+        Command::Log { limit } => log::run(&output, limit),
+        Command::Rollback {
+            target,
+            force,
+            no_materialize,
+        } => rollback::run(&output, target, force, !no_materialize),
+        Command::Fs(fs_cmd) => match fs_cmd {
+            FsCommand::Pwd => match std::env::current_dir() {
+                Ok(cwd) => {
+                    output.println(&cwd.display().to_string());
+                    Ok(())
                 }
-                FsCommand::Ls { path } => {
-                    let target = path.unwrap_or_else(|| PathBuf::from("."));
-                    match fs::read_dir(&target) {
-                        Ok(entries) => {
-                            for entry in entries.flatten() {
-                                let name = entry.file_name();
-                                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                                if is_dir {
-                                    output.println(&format!("{}/", name.to_string_lossy()));
-                                } else {
-                                    output.println(&name.to_string_lossy());
-                                }
+                Err(e) => Err(commands::CliError::Io(e)),
+            },
+            FsCommand::Ls { path } => {
+                let target = path.unwrap_or_else(|| PathBuf::from("."));
+                match fs::read_dir(&target) {
+                    Ok(entries) => {
+                        for entry in entries.flatten() {
+                            let name = entry.file_name();
+                            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                            if is_dir {
+                                output.println(&format!("{}/", name.to_string_lossy()));
+                            } else {
+                                output.println(&name.to_string_lossy());
                             }
-                            Ok(())
                         }
-                        Err(e) => Err(commands::CliError::Io(e)),
+                        Ok(())
                     }
+                    Err(e) => Err(commands::CliError::Io(e)),
                 }
             }
-        }
-        Command::Install { install_dir, completions_only, shell } => {
-            install::run(&output, install_dir, completions_only, shell)
-        }
-        Command::Uninstall { uninstall_dir, completions_only, shell } => {
-            uninstall::run(&output, uninstall_dir, completions_only, shell)
-        }
-        Command::GitStatus { args } => {
-            git_status::run(&output, args)
-        }
+        },
+        Command::Install {
+            install_dir,
+            completions_only,
+            shell,
+        } => install::run(&output, install_dir, completions_only, shell),
+        Command::Uninstall {
+            uninstall_dir,
+            completions_only,
+            shell,
+        } => uninstall::run(&output, uninstall_dir, completions_only, shell),
+        Command::GitStatus { args } => git_status::run(&output, args),
     };
 
     match result {

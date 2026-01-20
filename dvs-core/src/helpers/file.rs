@@ -1,8 +1,8 @@
 //! File metadata utilities.
 
+use crate::{DvsError, Metadata};
 use fs_err as fs;
 use std::path::Path;
-use crate::{Metadata, DvsError};
 
 /// Save metadata to a `.dvs` file.
 pub fn save_metadata(metadata: &Metadata, path: &Path) -> Result<(), DvsError> {

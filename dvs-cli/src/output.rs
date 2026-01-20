@@ -40,7 +40,10 @@ impl Output {
         if !self.quiet {
             match self.format {
                 OutputFormat::Human => println!("\x1b[32m{}\x1b[0m", msg),
-                OutputFormat::Json => println!("{{\"type\":\"success\",\"message\":\"{}\"}}", escape_json(msg)),
+                OutputFormat::Json => println!(
+                    "{{\"type\":\"success\",\"message\":\"{}\"}}",
+                    escape_json(msg)
+                ),
             }
         }
     }
@@ -50,7 +53,9 @@ impl Output {
         if !self.quiet {
             match self.format {
                 OutputFormat::Human => println!("{}", msg),
-                OutputFormat::Json => println!("{{\"type\":\"info\",\"message\":\"{}\"}}", escape_json(msg)),
+                OutputFormat::Json => {
+                    println!("{{\"type\":\"info\",\"message\":\"{}\"}}", escape_json(msg))
+                }
             }
         }
     }
@@ -60,7 +65,10 @@ impl Output {
         if !self.quiet {
             match self.format {
                 OutputFormat::Human => eprintln!("\x1b[33m{}\x1b[0m", msg),
-                OutputFormat::Json => eprintln!("{{\"type\":\"warning\",\"message\":\"{}\"}}", escape_json(msg)),
+                OutputFormat::Json => eprintln!(
+                    "{{\"type\":\"warning\",\"message\":\"{}\"}}",
+                    escape_json(msg)
+                ),
             }
         }
     }
@@ -69,7 +77,10 @@ impl Output {
     pub fn error(&self, msg: &str) {
         match self.format {
             OutputFormat::Human => eprintln!("\x1b[31merror: {}\x1b[0m", msg),
-            OutputFormat::Json => eprintln!("{{\"type\":\"error\",\"message\":\"{}\"}}", escape_json(msg)),
+            OutputFormat::Json => eprintln!(
+                "{{\"type\":\"error\",\"message\":\"{}\"}}",
+                escape_json(msg)
+            ),
         }
     }
 }

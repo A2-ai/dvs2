@@ -2,9 +2,9 @@
 
 use std::path::PathBuf;
 
+use super::{CliError, Result};
 use crate::output::Output;
 use crate::paths;
-use super::{CliError, Result};
 
 /// Run the init command.
 pub fn run(
