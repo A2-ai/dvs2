@@ -47,6 +47,22 @@ fmt *args:
 check *args:
     cargo check --manifest-path={{quote(workspace_manifest)}} --workspace {{args}}
 
+# Generate documentation for workspace crates (public items only)
+doc *args:
+    cargo doc --manifest-path={{quote(workspace_manifest)}} --workspace --no-deps {{args}}
+
+# Generate documentation including private items (for internal review)
+doc-private *args:
+    cargo doc --manifest-path={{quote(workspace_manifest)}} --workspace --document-private-items --no-deps {{args}}
+
+# Check documentation for warnings (treats warnings as errors)
+doc-check:
+    RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path={{quote(workspace_manifest)}} --workspace --document-private-items --no-deps
+
+# Open documentation in browser
+doc-open: doc
+    cargo doc --manifest-path={{quote(workspace_manifest)}} --workspace --no-deps --open
+
 # Check for std::fs usage in workspace Rust sources
 # Allows std::fs::Permissions and std::fs::Metadata (types that fs-err doesn't re-export)
 check-std-fs:
@@ -154,6 +170,10 @@ fmt-check: fmt-check-all
 
 # Run clippy on everything
 clippy-all: clippy rpkg-clippy
+
+# Run all CI checks (format, clippy, tests, std-fs lint)
+ci: fmt-check clippy check-std-fs test
+    @echo "All CI checks passed!"
 
 # ============================================================================
 # Version management

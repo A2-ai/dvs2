@@ -135,11 +135,11 @@ pub struct ReflogEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 
-    /// Previous state ID (state:<id> format), None for first entry.
+    /// Previous state ID (`state:{id}` format), None for first entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old: Option<String>,
 
-    /// New state ID (state:<id> format).
+    /// New state ID (`state:{id}` format).
     pub new: String,
 
     /// Paths affected by this operation.
