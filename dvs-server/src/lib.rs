@@ -1,6 +1,7 @@
 //! DVS Server - HTTP API for remote DVS storage access.
 //!
-//! This crate provides a RESTful HTTP server for accessing DVS storage remotely.
+//! This crate provides a lightweight HTTP server for accessing DVS storage remotely.
+//! Uses `tiny_http` for minimal dependencies.
 //!
 //! ## CAS Endpoints
 //!
@@ -18,10 +19,9 @@
 //! ```rust,no_run
 //! use dvs_server::{ServerConfig, start_server};
 //!
-//! #[tokio::main]
-//! async fn main() {
+//! fn main() {
 //!     let config = ServerConfig::default();
-//!     start_server(config).await.unwrap();
+//!     start_server(config).unwrap();
 //! }
 //! ```
 
@@ -30,8 +30,8 @@ pub mod auth;
 pub mod storage;
 pub mod config;
 
-pub use api::{create_router, AppState};
-pub use auth::{AuthConfig, ApiKey, Permission, AuthContext};
+pub use api::AppState;
+pub use auth::{AuthConfig, ApiKey, Permission, AuthContext, extract_auth_from_header, require_auth_from_header, require_permission_from_header};
 pub use storage::{StorageBackend, LocalStorage, StorageStats};
 pub use config::ServerConfig;
 
@@ -70,22 +70,63 @@ pub enum ServerError {
 /// Start the HTTP server with the given configuration.
 ///
 /// This will bind to the configured host:port and serve the CAS API.
-/// The function runs until the server is shut down.
-pub async fn start_server(config: ServerConfig) -> Result<(), ServerError> {
+/// The function runs until the server is shut down (blocking).
+pub fn start_server(config: ServerConfig) -> Result<(), ServerError> {
     let bind_addr = config.bind_address();
 
     let state = AppState::new(config)?;
-    let app = create_router(state);
 
-    let listener = tokio::net::TcpListener::bind(&bind_addr)
-        .await
+    let server = tiny_http::Server::http(&bind_addr)
         .map_err(|e| ServerError::ConfigError(format!("failed to bind to {bind_addr}: {e}")))?;
 
-    tracing::info!("DVS server listening on {}", bind_addr);
+    eprintln!("DVS server listening on {}", bind_addr);
 
-    axum::serve(listener, app)
-        .await
-        .map_err(ServerError::IoError)?;
+    // Handle requests in a loop
+    for request in server.incoming_requests() {
+        if let Err(e) = api::handle_request(&state, request) {
+            eprintln!("Error handling request: {}", e);
+        }
+    }
 
     Ok(())
+}
+
+/// Start the server and return a handle for shutdown.
+///
+/// This is useful for testing - returns the server and a function to stop it.
+pub fn start_server_background(config: ServerConfig) -> Result<(String, ServerHandle), ServerError> {
+    let bind_addr = config.bind_address();
+    let state = AppState::new(config)?;
+
+    let server = tiny_http::Server::http(&bind_addr)
+        .map_err(|e| ServerError::ConfigError(format!("failed to bind to {bind_addr}: {e}")))?;
+
+    let url = format!("http://{}", bind_addr);
+
+    Ok((url, ServerHandle { server, state }))
+}
+
+/// Handle to a running server.
+pub struct ServerHandle {
+    server: tiny_http::Server,
+    state: AppState,
+}
+
+impl ServerHandle {
+    /// Process a single request (for testing).
+    pub fn handle_one(&self) -> Result<bool, ServerError> {
+        match self.server.try_recv() {
+            Ok(Some(request)) => {
+                api::handle_request(&self.state, request)?;
+                Ok(true)
+            }
+            Ok(None) => Ok(false),
+            Err(e) => Err(ServerError::IoError(std::io::Error::other(e.to_string()))),
+        }
+    }
+
+    /// Get the server URL.
+    pub fn url(&self) -> String {
+        format!("http://{}", self.server.server_addr())
+    }
 }

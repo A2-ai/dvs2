@@ -159,26 +159,22 @@ pub fn validate_api_key(config: &AuthConfig, key: &str) -> Result<AuthContext, S
     Err(ServerError::AuthError("invalid API key".to_string()))
 }
 
-/// Extract authentication from request headers.
+/// Extract authentication from a header value.
 ///
-/// Looks for `Authorization: Bearer <key>` header.
+/// Looks for `Bearer <key>` format.
 ///
 /// Returns:
 /// - `Ok(Some(ctx))` if valid auth found
 /// - `Ok(None)` if no auth header present
 /// - `Err(_)` if auth header present but invalid
-pub fn extract_auth(
+pub fn extract_auth_from_header(
     config: &AuthConfig,
-    headers: &axum::http::HeaderMap,
+    auth_header: Option<&str>,
 ) -> Result<Option<AuthContext>, ServerError> {
-    let auth_header = match headers.get(axum::http::header::AUTHORIZATION) {
+    let auth_str = match auth_header {
         Some(h) => h,
         None => return Ok(None),
     };
-
-    let auth_str = auth_header
-        .to_str()
-        .map_err(|_| ServerError::AuthError("invalid authorization header".to_string()))?;
 
     // Check for Bearer token
     if let Some(key) = auth_str.strip_prefix("Bearer ") {
@@ -193,15 +189,15 @@ pub fn extract_auth(
 ///
 /// If auth is enabled and no valid auth context provided, returns an error.
 /// If auth is disabled, returns an anonymous context.
-pub fn require_auth(
+pub fn require_auth_from_header(
     config: &AuthConfig,
-    headers: &axum::http::HeaderMap,
+    auth_header: Option<&str>,
 ) -> Result<AuthContext, ServerError> {
     if !config.enabled {
         return Ok(AuthContext::anonymous());
     }
 
-    match extract_auth(config, headers)? {
+    match extract_auth_from_header(config, auth_header)? {
         Some(ctx) => Ok(ctx),
         None => Err(ServerError::AuthError("authentication required".to_string())),
     }
@@ -210,12 +206,12 @@ pub fn require_auth(
 /// Require a specific permission for a request.
 ///
 /// First authenticates the request, then checks for the required permission.
-pub fn require_permission(
+pub fn require_permission_from_header(
     config: &AuthConfig,
-    headers: &axum::http::HeaderMap,
+    auth_header: Option<&str>,
     permission: Permission,
 ) -> Result<AuthContext, ServerError> {
-    let ctx = require_auth(config, headers)?;
+    let ctx = require_auth_from_header(config, auth_header)?;
 
     if ctx.has_permission(permission) {
         Ok(ctx)
@@ -230,7 +226,6 @@ pub fn require_permission(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderMap;
 
     #[test]
     fn test_auth_config_default() {
@@ -287,41 +282,28 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_auth() {
+    fn test_extract_auth_from_header() {
         let config = AuthConfig::with_keys(vec![
             ApiKey::read_write("secret", "Test"),
         ]);
 
         // No auth header
-        let headers = HeaderMap::new();
-        let result = extract_auth(&config, &headers).unwrap();
+        let result = extract_auth_from_header(&config, None).unwrap();
         assert!(result.is_none());
 
         // Valid Bearer token
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            axum::http::header::AUTHORIZATION,
-            "Bearer secret".parse().unwrap(),
-        );
-        let ctx = extract_auth(&config, &headers).unwrap().unwrap();
+        let ctx = extract_auth_from_header(&config, Some("Bearer secret")).unwrap().unwrap();
         assert_eq!(ctx.identity, "Test");
 
         // Invalid Bearer token
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            axum::http::header::AUTHORIZATION,
-            "Bearer wrong".parse().unwrap(),
-        );
-        let err = extract_auth(&config, &headers);
+        let err = extract_auth_from_header(&config, Some("Bearer wrong"));
         assert!(err.is_err());
     }
 
     #[test]
     fn test_require_auth_disabled() {
         let config = AuthConfig::disabled();
-        let headers = HeaderMap::new();
-
-        let ctx = require_auth(&config, &headers).unwrap();
+        let ctx = require_auth_from_header(&config, None).unwrap();
         assert_eq!(ctx.identity, "anonymous");
     }
 
@@ -332,17 +314,11 @@ mod tests {
         ]);
 
         // No auth header when required
-        let headers = HeaderMap::new();
-        let err = require_auth(&config, &headers);
+        let err = require_auth_from_header(&config, None);
         assert!(err.is_err());
 
         // Valid auth header
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            axum::http::header::AUTHORIZATION,
-            "Bearer key".parse().unwrap(),
-        );
-        let ctx = require_auth(&config, &headers).unwrap();
+        let ctx = require_auth_from_header(&config, Some("Bearer key")).unwrap();
         assert_eq!(ctx.identity, "User");
     }
 
@@ -352,18 +328,12 @@ mod tests {
             ApiKey::read_only("reader", "Reader"),
         ]);
 
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            axum::http::header::AUTHORIZATION,
-            "Bearer reader".parse().unwrap(),
-        );
-
         // Has Read permission
-        let ctx = require_permission(&config, &headers, Permission::Read).unwrap();
+        let ctx = require_permission_from_header(&config, Some("Bearer reader"), Permission::Read).unwrap();
         assert!(ctx.can_read());
 
         // Lacks Write permission
-        let err = require_permission(&config, &headers, Permission::Write);
+        let err = require_permission_from_header(&config, Some("Bearer reader"), Permission::Write);
         assert!(err.is_err());
     }
 }

@@ -1,26 +1,20 @@
-//! HTTP API routes and handlers.
+//! HTTP API request handling.
 //!
-//! Provides CAS (Content-Addressable Storage) endpoints for DVS objects:
+//! Provides routing and handlers for CAS (Content-Addressable Storage) endpoints:
 //! - `HEAD /objects/{algo}/{hash}` - Check if object exists
 //! - `GET /objects/{algo}/{hash}` - Download object
 //! - `PUT /objects/{algo}/{hash}` - Upload object
+//! - `GET /health` - Health check
+//! - `GET /status` - Server status
 
-use axum::{
-    Router,
-    body::Bytes,
-    extract::{Path, State},
-    http::{header, StatusCode},
-    response::{IntoResponse, Response},
-    routing::{get, head, put},
-    Json,
-};
 use std::sync::Arc;
 use std::time::Instant;
-use crate::{ServerError, config::ServerConfig};
+use tiny_http::{Request, Response, StatusCode, Header};
+
+use crate::{ServerError, ServerConfig};
 use crate::storage::{LocalStorage, StorageBackend, parse_oid};
 
 /// Application state shared across handlers.
-#[derive(Clone)]
 pub struct AppState {
     /// Server configuration.
     pub config: Arc<ServerConfig>,
@@ -42,127 +36,173 @@ impl AppState {
     }
 }
 
-/// Create the API router with all routes.
-pub fn create_router(state: AppState) -> Router {
-    Router::new()
-        // CAS object endpoints
-        .route("/objects/{algo}/{hash}", head(check_object))
-        .route("/objects/{algo}/{hash}", get(get_object))
-        .route("/objects/{algo}/{hash}", put(put_object))
-        // Health and status
-        .route("/health", get(health_check))
-        .route("/status", get(server_status))
-        .with_state(state)
-}
-
-// ============================================================================
-// CAS Object Operations
-// ============================================================================
-
-/// Path parameters for object endpoints.
-#[derive(Debug, serde::Deserialize)]
-pub struct ObjectPath {
-    /// Hash algorithm (blake3, sha256, xxh3).
-    algo: String,
-    /// Hex-encoded hash value.
-    hash: String,
-}
-
-/// HEAD /objects/{algo}/{hash} - Check if object exists.
+/// Handle an incoming HTTP request.
 ///
-/// Returns 200 OK if exists, 404 Not Found otherwise.
-/// Response includes Content-Length header with object size.
-pub async fn check_object(
-    State(state): State<AppState>,
-    Path(params): Path<ObjectPath>,
-) -> Result<Response, ServerError> {
-    let oid = parse_oid(&params.algo, &params.hash)?;
+/// Routes the request to the appropriate handler based on method and path.
+pub fn handle_request(state: &AppState, mut request: Request) -> Result<(), ServerError> {
+    let method = request.method().to_string();
+    let url = request.url().to_string();
 
-    if state.storage.exists(&oid)? {
-        // Get the object size for Content-Length header
-        let path = state.storage.get_path(&oid)?;
-        let metadata = std::fs::metadata(&path).map_err(|e| {
-            ServerError::StorageError(format!("failed to get metadata: {e}"))
-        })?;
+    // Route based on path
+    let response = match (method.as_str(), url.as_str()) {
+        // Health check
+        ("GET", "/health") => handle_health(),
 
-        Ok((
-            StatusCode::OK,
-            [(header::CONTENT_LENGTH, metadata.len().to_string())],
-        ).into_response())
-    } else {
-        Ok(StatusCode::NOT_FOUND.into_response())
+        // Server status
+        ("GET", "/status") => handle_status(state),
+
+        // CAS object operations
+        (method, path) if path.starts_with("/objects/") => {
+            handle_object_request(state, method, path, &mut request)
+        }
+
+        // 404 for unknown routes
+        _ => Ok(Response::from_string("Not Found")
+            .with_status_code(StatusCode(404))),
+    };
+
+    // Send response
+    match response {
+        Ok(resp) => request.respond(resp).map_err(ServerError::IoError),
+        Err(e) => {
+            let error_response = error_to_response(&e);
+            request.respond(error_response).map_err(ServerError::IoError)
+        }
     }
 }
 
-/// GET /objects/{algo}/{hash} - Download object.
-///
-/// Returns the raw object bytes with Content-Type: application/octet-stream.
-pub async fn get_object(
-    State(state): State<AppState>,
-    Path(params): Path<ObjectPath>,
-) -> Result<Response, ServerError> {
-    let oid = parse_oid(&params.algo, &params.hash)?;
-
-    let data = state.storage.get(&oid)?;
-
-    Ok((
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/octet-stream"),
-            (header::CONTENT_LENGTH, &data.len().to_string()),
-        ],
-        data,
-    ).into_response())
+/// Parse object path: /objects/{algo}/{hash}
+fn parse_object_path(path: &str) -> Option<(&str, &str)> {
+    let path = path.strip_prefix("/objects/")?;
+    let mut parts = path.splitn(2, '/');
+    let algo = parts.next()?;
+    let hash = parts.next()?;
+    // Strip query string if present
+    let hash = hash.split('?').next()?;
+    Some((algo, hash))
 }
 
-/// PUT /objects/{algo}/{hash} - Upload object.
-///
-/// Stores the request body as the object. Idempotent - re-uploading
-/// the same content is a no-op.
-///
-/// Returns 201 Created for new objects, 200 OK if already exists.
-pub async fn put_object(
-    State(state): State<AppState>,
-    Path(params): Path<ObjectPath>,
-    body: Bytes,
-) -> Result<Response, ServerError> {
-    let oid = parse_oid(&params.algo, &params.hash)?;
+/// Handle requests to /objects/{algo}/{hash}
+fn handle_object_request(
+    state: &AppState,
+    method: &str,
+    path: &str,
+    request: &mut Request,
+) -> Result<Response<std::io::Cursor<Vec<u8>>>, ServerError> {
+    let (algo, hash) = parse_object_path(path)
+        .ok_or_else(|| ServerError::NotFound("invalid object path".to_string()))?;
 
-    let already_exists = state.storage.exists(&oid)?;
-    state.storage.put(&oid, &body)?;
+    let oid = parse_oid(algo, hash)?;
 
-    if already_exists {
-        Ok(StatusCode::OK.into_response())
-    } else {
-        Ok(StatusCode::CREATED.into_response())
+    match method {
+        "HEAD" => {
+            // Check if object exists
+            if state.storage.exists(&oid)? {
+                let obj_path = state.storage.get_path(&oid)?;
+                let metadata = std::fs::metadata(&obj_path).map_err(|e| {
+                    ServerError::StorageError(format!("failed to get metadata: {e}"))
+                })?;
+
+                Ok(Response::from_data(vec![])
+                    .with_status_code(StatusCode(200))
+                    .with_header(content_length_header(metadata.len())))
+            } else {
+                Ok(Response::from_data(vec![])
+                    .with_status_code(StatusCode(404)))
+            }
+        }
+
+        "GET" => {
+            // Download object
+            let data = state.storage.get(&oid)?;
+            Ok(Response::from_data(data)
+                .with_header(content_type_header("application/octet-stream")))
+        }
+
+        "PUT" => {
+            // Upload object
+            let already_exists = state.storage.exists(&oid)?;
+
+            // Read request body
+            let mut body = Vec::new();
+            request.as_reader().read_to_end(&mut body)?;
+
+            state.storage.put(&oid, &body)?;
+
+            if already_exists {
+                Ok(Response::from_data(vec![])
+                    .with_status_code(StatusCode(200)))
+            } else {
+                Ok(Response::from_data(vec![])
+                    .with_status_code(StatusCode(201)))
+            }
+        }
+
+        _ => Ok(Response::from_string("Method Not Allowed")
+            .with_status_code(StatusCode(405))),
     }
 }
 
-// ============================================================================
-// Health and Status
-// ============================================================================
-
-/// GET /health - Health check endpoint.
-pub async fn health_check() -> impl IntoResponse {
-    Json(HealthResponse { status: "ok".to_string() })
+/// Handle GET /health
+fn handle_health() -> Result<Response<std::io::Cursor<Vec<u8>>>, ServerError> {
+    let body = serde_json::json!({ "status": "ok" });
+    Ok(json_response(200, &body))
 }
 
-/// GET /status - Server status.
-pub async fn server_status(
-    State(state): State<AppState>,
-) -> Result<Json<StatusResponse>, ServerError> {
+/// Handle GET /status
+fn handle_status(state: &AppState) -> Result<Response<std::io::Cursor<Vec<u8>>>, ServerError> {
     let stats = state.storage.stats()?;
 
-    Ok(Json(StatusResponse {
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        storage_used: stats.bytes_used,
-        object_count: stats.object_count,
-        uptime_secs: state.start_time.elapsed().as_secs(),
-    }))
+    let body = serde_json::json!({
+        "version": dvs_core::VERSION_STRING,
+        "storage_used": stats.bytes_used,
+        "object_count": stats.object_count,
+        "uptime_secs": state.start_time.elapsed().as_secs(),
+    });
+
+    Ok(json_response(200, &body))
 }
 
 // ============================================================================
-// Response Types
+// Response Helpers
+// ============================================================================
+
+/// Create a JSON response.
+fn json_response(status: u16, body: &serde_json::Value) -> Response<std::io::Cursor<Vec<u8>>> {
+    let json = serde_json::to_string(body).unwrap_or_else(|_| "{}".to_string());
+    Response::from_string(json)
+        .with_status_code(StatusCode(status))
+        .with_header(content_type_header("application/json"))
+}
+
+/// Create Content-Type header.
+fn content_type_header(content_type: &str) -> Header {
+    Header::from_bytes("Content-Type", content_type).unwrap()
+}
+
+/// Create Content-Length header.
+fn content_length_header(length: u64) -> Header {
+    Header::from_bytes("Content-Length", length.to_string()).unwrap()
+}
+
+/// Convert ServerError to HTTP response.
+fn error_to_response(error: &ServerError) -> Response<std::io::Cursor<Vec<u8>>> {
+    let (status, message) = match error {
+        ServerError::NotFound(_) => (404, error.to_string()),
+        ServerError::AuthError(_) => (401, error.to_string()),
+        ServerError::NotAuthorized(_) => (403, error.to_string()),
+        ServerError::StorageError(_) => (500, error.to_string()),
+        ServerError::DvsError(_) => (500, error.to_string()),
+        ServerError::IoError(_) => (500, error.to_string()),
+        ServerError::ConfigError(_) => (500, error.to_string()),
+    };
+
+    let body = serde_json::json!({ "error": message });
+    json_response(status, &body)
+}
+
+// ============================================================================
+// Response Types (kept for compatibility)
 // ============================================================================
 
 /// Response for health check.
@@ -183,24 +223,4 @@ pub struct StatusResponse {
     pub object_count: u64,
     /// Uptime in seconds.
     pub uptime_secs: u64,
-}
-
-// ============================================================================
-// Error Handling
-// ============================================================================
-
-impl IntoResponse for ServerError {
-    fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            ServerError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
-            ServerError::AuthError(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
-            ServerError::NotAuthorized(_) => (StatusCode::FORBIDDEN, self.to_string()),
-            ServerError::StorageError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-            ServerError::DvsError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-            ServerError::IoError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-            ServerError::ConfigError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-        };
-
-        (status, Json(serde_json::json!({ "error": message }))).into_response()
-    }
 }
