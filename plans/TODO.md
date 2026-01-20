@@ -64,6 +64,7 @@
 - [ ] **Plan 035: Feature Store + Derived Dataset Framework** - `plans/035-feature-store-derived.md`
 - [ ] **Plan 036: Remote Snapshot Sources (HTTP/GitHub)** - `plans/036-remote-snapshot-sources.md`
 - [ ] **Plan 040: Proc-macro Usage Audit** - `plans/040-proc-macro-usage-audit.md`
+- [ ] **Plan 041: TOML Metadata Files** - `plans/041-toml-metadata-files.md`
 
 ### Future Plans (Not Yet Written)
 
@@ -180,4 +181,5 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
   - [x] `git2` - via `git2-backend` feature (default on), CLI fallback always available
   - [x] `memmap2` - via `mmap` feature (default on), streaming fallback always available
   - [x] `walkdir` - via `walkdir` feature (default on), recursive fs::read_dir fallback
-  - [-] `serde_yaml` - skipped: deeply integrated "dvs.yaml" filename throughout codebase
+  - [x] `serde_yaml` - via `yaml-config` feature (default on), JSON fallback uses `dvs.json`
+  - [x] `toml` - via `toml-config` feature, uses `dvs.toml` when enabled (without yaml-config)

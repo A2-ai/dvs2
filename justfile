@@ -25,19 +25,19 @@ default:
 
 # Build the workspace (dvs-core, dvs-cli)
 build *args:
-    cargo build --manifest-path={{quote(workspace_manifest)}} {{args}}
+    cargo build --manifest-path={{quote(workspace_manifest)}} --workspace {{args}}
 
 # Build workspace in release mode
 build-release *args:
-    cargo build --manifest-path={{quote(workspace_manifest)}} --release {{args}}
+    cargo build --manifest-path={{quote(workspace_manifest)}} --workspace --release {{args}}
 
 # Run tests for workspace crates
 test *args:
-    cargo test --manifest-path={{quote(workspace_manifest)}} {{args}}
+    cargo test --manifest-path={{quote(workspace_manifest)}} --workspace {{args}}
 
 # Run clippy on workspace
 clippy *args:
-    cargo clippy --manifest-path={{quote(workspace_manifest)}} {{args}}
+    cargo clippy --manifest-path={{quote(workspace_manifest)}} --workspace {{args}}
 
 # Format workspace code
 fmt *args:
@@ -45,12 +45,13 @@ fmt *args:
 
 # Check workspace without building
 check *args:
-    cargo check --manifest-path={{quote(workspace_manifest)}} {{args}}
+    cargo check --manifest-path={{quote(workspace_manifest)}} --workspace {{args}}
 
 # Check for std::fs usage in workspace Rust sources
 # Allows std::fs::Permissions and std::fs::Metadata (types that fs-err doesn't re-export)
 check-std-fs:
     @! rg -nP -g '*.rs' -e 'std::fs(?!::(Permissions|Metadata)\b)' -e 'std::\s*\{[^}]*\bfs\b[^}]*\}' dvs-core dvs-cli dvs-daemon dvs-server
+
 
 # Run any cargo subcommand against the workspace
 cargo subcmd *args:
@@ -74,23 +75,23 @@ vendor:
 
 # Build the R package Rust library
 rpkg-build *args:
-    cargo build --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cargo build --manifest-path={{quote(rpkg_manifest)}} --workspace {{args}}
 
 # Build R package Rust library in release mode
 rpkg-build-release *args:
-    cargo build --manifest-path={{quote(rpkg_manifest)}} --release {{args}}
+    cargo build --manifest-path={{quote(rpkg_manifest)}} --workspace --release {{args}}
 
 # Run tests for R package Rust code
 rpkg-test *args:
-    cargo test --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cargo test --manifest-path={{quote(rpkg_manifest)}} --workspace {{args}}
 
 # Run clippy on R package Rust code
 rpkg-clippy *args:
-    cargo clippy --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cargo clippy --manifest-path={{quote(rpkg_manifest)}} --workspace {{args}}
 
 # Check R package Rust code without building
 rpkg-check *args:
-    cargo check --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cargo check --manifest-path={{quote(rpkg_manifest)}} --workspace {{args}}
 
 # Run any cargo subcommand against the R package manifest
 rpkg-cargo subcmd *args:

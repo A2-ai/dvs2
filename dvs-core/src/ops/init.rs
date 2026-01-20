@@ -7,7 +7,7 @@ use crate::helpers::{config as config_helper, copy};
 
 /// Initialize DVS for a project.
 ///
-/// Creates `dvs.yaml` configuration file and validates/creates the storage directory.
+/// Creates the configuration file and validates/creates the storage directory.
 ///
 /// # Arguments
 ///
@@ -80,7 +80,7 @@ pub fn init_with_backend(
     // Save the new configuration
     config.save(&config_path)?;
 
-    // Add dvs.yaml to .gitignore if we're in a git repo and it exists
+    // Add *.dvs to .gitignore if we're in a git repo
     if let Backend::Git(_) = backend {
         let gitignore_path = repo_root.join(".gitignore");
         add_to_gitignore(&gitignore_path, "*.dvs")?;

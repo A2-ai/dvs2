@@ -296,9 +296,9 @@ mod tests {
         let storage_dir = temp_dir.join("storage");
         fs::create_dir_all(&storage_dir).unwrap();
 
-        // Create dvs.yaml
+        // Create config file
         let config = Config::new(storage_dir.clone(), None, None);
-        config.save(&temp_dir.join("dvs.yaml")).unwrap();
+        config.save(&temp_dir.join(Config::config_filename())).unwrap();
 
         (temp_dir, storage_dir)
     }

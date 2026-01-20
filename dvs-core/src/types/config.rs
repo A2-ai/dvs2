@@ -5,7 +5,12 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use crate::HashAlgo;
 
-/// DVS project configuration, stored in `dvs.yaml`.
+/// DVS project configuration.
+///
+/// Stored in one of:
+/// - `dvs.yaml` (with `yaml-config` feature, default)
+/// - `dvs.toml` (with `toml-config` feature, without `yaml-config`)
+/// - `dvs.json` (fallback when neither feature is enabled)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Path to the external storage directory.
@@ -56,23 +61,83 @@ impl Config {
         self.hash_algo.unwrap_or_else(crate::helpers::hash::default_algorithm)
     }
 
-    /// Load configuration from a YAML file.
+    /// Load configuration from a file.
+    ///
+    /// Format is determined by feature flags:
+    /// - `yaml-config`: YAML format (default)
+    /// - `toml-config` (without yaml-config): TOML format
+    /// - Neither: JSON format (fallback)
     pub fn load(path: &std::path::Path) -> Result<Self, crate::DvsError> {
         let contents = fs::read_to_string(path)?;
-        let config: Config = serde_yaml::from_str(&contents)?;
-        Ok(config)
+
+        #[cfg(feature = "yaml-config")]
+        {
+            let config: Config = serde_yaml::from_str(&contents)?;
+            Ok(config)
+        }
+
+        #[cfg(all(feature = "toml-config", not(feature = "yaml-config")))]
+        {
+            let config: Config = toml::from_str(&contents)?;
+            Ok(config)
+        }
+
+        #[cfg(all(not(feature = "yaml-config"), not(feature = "toml-config")))]
+        {
+            let config: Config = serde_json::from_str(&contents)?;
+            Ok(config)
+        }
     }
 
-    /// Save configuration to a YAML file.
+    /// Save configuration to a file.
+    ///
+    /// Format is determined by feature flags:
+    /// - `yaml-config`: YAML format (default)
+    /// - `toml-config` (without yaml-config): TOML format
+    /// - Neither: JSON format (fallback)
     pub fn save(&self, path: &std::path::Path) -> Result<(), crate::DvsError> {
-        let yaml = serde_yaml::to_string(self)?;
-        fs::write(path, yaml)?;
+        #[cfg(feature = "yaml-config")]
+        {
+            let yaml = serde_yaml::to_string(self)?;
+            fs::write(path, yaml)?;
+        }
+
+        #[cfg(all(feature = "toml-config", not(feature = "yaml-config")))]
+        {
+            let toml_str = toml::to_string_pretty(self)?;
+            fs::write(path, toml_str)?;
+        }
+
+        #[cfg(all(not(feature = "yaml-config"), not(feature = "toml-config")))]
+        {
+            let json = serde_json::to_string_pretty(self)?;
+            fs::write(path, json)?;
+        }
+
         Ok(())
     }
 
     /// Get the default config file name.
+    ///
+    /// Returns filename based on feature flags:
+    /// - `yaml-config`: "dvs.yaml" (default)
+    /// - `toml-config` (without yaml-config): "dvs.toml"
+    /// - Neither: "dvs.json" (fallback)
     pub const fn config_filename() -> &'static str {
-        "dvs.yaml"
+        #[cfg(feature = "yaml-config")]
+        {
+            "dvs.yaml"
+        }
+
+        #[cfg(all(feature = "toml-config", not(feature = "yaml-config")))]
+        {
+            "dvs.toml"
+        }
+
+        #[cfg(all(not(feature = "yaml-config"), not(feature = "toml-config")))]
+        {
+            "dvs.json"
+        }
     }
 }
 
@@ -97,7 +162,7 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("dvs-test-config-roundtrip");
         let _ = fs::create_dir_all(&temp_dir);
 
-        let config_path = temp_dir.join("dvs.yaml");
+        let config_path = temp_dir.join(Config::config_filename());
         let config = Config::new(
             PathBuf::from("/my/storage"),
             Some(0o660),
@@ -122,10 +187,17 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("dvs-test-config-minimal");
         let _ = fs::create_dir_all(&temp_dir);
 
-        let config_path = temp_dir.join("dvs.yaml");
+        let config_path = temp_dir.join(Config::config_filename());
 
-        // Write minimal YAML
+        // Write minimal config in appropriate format
+        #[cfg(feature = "yaml-config")]
         fs::write(&config_path, "storage_dir: /storage\n").unwrap();
+
+        #[cfg(all(feature = "toml-config", not(feature = "yaml-config")))]
+        fs::write(&config_path, "storage_dir = \"/storage\"\n").unwrap();
+
+        #[cfg(all(not(feature = "yaml-config"), not(feature = "toml-config")))]
+        fs::write(&config_path, r#"{"storage_dir": "/storage"}"#).unwrap();
 
         // Load
         let loaded = Config::load(&config_path).unwrap();

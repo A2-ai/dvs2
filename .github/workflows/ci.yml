@@ -80,11 +80,15 @@ jobs:
           # Minimal features (just blake3)
           cargo test -p dvs-core --no-default-features --features blake3
           # Without git2-backend (CLI fallback)
-          cargo test -p dvs-core --no-default-features --features "blake3,mmap,walkdir"
+          cargo test -p dvs-core --no-default-features --features "blake3,mmap,walkdir,yaml-config"
           # Without mmap (streaming fallback)
-          cargo test -p dvs-core --no-default-features --features "blake3,git2-backend,walkdir"
+          cargo test -p dvs-core --no-default-features --features "blake3,git2-backend,walkdir,yaml-config"
           # Without walkdir (recursive fallback)
-          cargo test -p dvs-core --no-default-features --features "blake3,git2-backend,mmap"
+          cargo test -p dvs-core --no-default-features --features "blake3,git2-backend,mmap,yaml-config"
+          # Without yaml-config (JSON config fallback)
+          cargo test -p dvs-core --no-default-features --features "blake3,git2-backend,mmap,walkdir"
+          # With toml-config instead of yaml-config
+          cargo test -p dvs-core --no-default-features --features "blake3,git2-backend,mmap,walkdir,toml-config"
       - name: Docs (warnings as errors)
         env:
           RUSTDOCFLAGS: "-D warnings"
