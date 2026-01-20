@@ -11,7 +11,7 @@ mod push;
 mod rollback;
 mod status;
 
-pub use add::{add, add_with_backend};
+pub use add::{add, add_with_backend, add_with_format};
 pub use get::{get, get_with_backend};
 pub use init::{init, init_with_backend};
 pub use log::{log, log_entry, log_entry_with_backend, log_with_backend, LogEntry};

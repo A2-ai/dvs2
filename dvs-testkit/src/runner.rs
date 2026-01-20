@@ -217,6 +217,7 @@ fn run_add_core(repo: &TestRepo, args: &[String]) -> Result<(), String> {
         &repo.backend(),
         &paths,
         None, // message
+        None, // metadata_format override
     )
     .map_err(|e| format!("add failed: {}", e))?;
 
