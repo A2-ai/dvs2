@@ -62,3 +62,6 @@ git2 = "0.20"
 
 # CLI (used by: dvs-cli)
 clap_complete = "4.5"
+
+# Testing (used by: all crates)
+tempfile = "3"

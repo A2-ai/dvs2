@@ -27,9 +27,11 @@ fs-err.workspace = true
 # Serialization (for API)
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 
 # Error handling
 thiserror.workspace = true
 
 [dev-dependencies]
 blake3.workspace = true
+tempfile.workspace = true
