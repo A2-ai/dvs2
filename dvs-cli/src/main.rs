@@ -13,7 +13,8 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser, Subcommand};
 
 use commands::{
-    add, get, git_status, init, install, log, materialize, pull, push, rollback, status, uninstall,
+    add, config, get, git_status, init, install, log, materialize, pull, push, rollback, status,
+    uninstall,
 };
 use output::Output;
 
@@ -68,6 +69,10 @@ pub enum Command {
         #[arg(long, value_name = "GROUP")]
         group: Option<String>,
     },
+
+    /// View or edit DVS configuration
+    #[command(subcommand)]
+    Config(ConfigCommand),
 
     /// Add files to DVS tracking
     Add {
@@ -188,6 +193,27 @@ pub enum Command {
 }
 
 #[derive(Subcommand)]
+pub enum ConfigCommand {
+    /// Show all configuration values
+    Show,
+
+    /// Get a specific configuration value
+    Get {
+        /// Configuration key (storage_dir, permissions, group, hash_algo, metadata_format)
+        key: String,
+    },
+
+    /// Set a configuration value
+    Set {
+        /// Configuration key
+        key: String,
+
+        /// New value
+        value: String,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum FsCommand {
     /// Print current working directory
     Pwd,
@@ -279,6 +305,14 @@ fn main() -> ExitCode {
             shell,
         } => uninstall::run(&output, uninstall_dir, completions_only, shell),
         Command::GitStatus { args } => git_status::run(&output, args),
+        Command::Config(cfg_cmd) => {
+            let action = match cfg_cmd {
+                ConfigCommand::Show => config::ConfigAction::Show,
+                ConfigCommand::Get { key } => config::ConfigAction::Get { key },
+                ConfigCommand::Set { key, value } => config::ConfigAction::Set { key, value },
+            };
+            config::run(&output, action)
+        }
     };
 
     match result {

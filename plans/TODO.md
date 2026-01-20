@@ -34,6 +34,8 @@
 
 - [x] **Plan 042: Git Subcommand + Shell Completion Install** - Added `dvs install` command for installing git-status-dvs shim and shell completions, and `dvs uninstall` command to remove them. Added `dvs git-status` command that runs `git status` followed by `dvs status`. Install/uninstall commands support `--install-dir`/`--uninstall-dir` for custom location, `--completions-only` to skip shim, and `--shell` to specify shells (bash, zsh, fish, powershell). Uses `clap_complete` for completion generation.
 
+- [x] **Plan 047: dvs config Command** - Added `dvs config` subcommand for viewing and editing DVS configuration. Includes `dvs config show` (display all values), `dvs config get <key>` (get specific value), and `dvs config set <key> <value>` (set value). Supports keys: storage_dir, permissions, group, hash_algo, metadata_format. Validates values (octal permissions, valid hash algorithms, valid metadata formats). Updates generated_by on save.
+
 ### In Progress
 
 - [ ] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
@@ -107,7 +109,7 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 - [x] `dvs materialize [files...]` subcommand - calls `dvs_core::materialize()`
 - [x] `dvs log [-n N]` subcommand - view reflog history
 - [x] `dvs rollback [--force] [--no-materialize] <target>` subcommand - rollback to previous state
-- [ ] `dvs config` subcommand - show/edit configuration
+- [x] `dvs config` subcommand - show/edit configuration
 - [ ] `dvs daemon` subcommand - start/stop/status daemon
 - [ ] Progress bars for large file operations
 
@@ -221,3 +223,7 @@ This ensures the CLI binary is built with the same features (yaml-config) as the
   - [x] `walkdir` - via `walkdir` feature (default on), recursive fs::read_dir fallback
   - [x] `serde_yaml` - via `yaml-config` feature (default on), JSON fallback uses `dvs.json`
   - [x] `toml` - via `toml-config` feature, uses `dvs.toml` when enabled (without yaml-config)
+- [ ] The r-package should be named `dvs`, it is just that the _directory_
+  is named `dvsR` for convenience.
+- [ ] add a `install-rpkg` recipe that installs `dvsR`/`{dvs}`, to also mimic
+  `just install-cli` as well.
