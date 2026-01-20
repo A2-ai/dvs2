@@ -308,6 +308,7 @@ impl From<serde_json::Error> for DvsError {
     }
 }
 
+#[cfg(feature = "git2-backend")]
 impl From<git2::Error> for DvsError {
     fn from(e: git2::Error) -> Self {
         Self::new(ErrorKind::GitError {

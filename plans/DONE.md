@@ -793,3 +793,62 @@ Migrated all error construction from enum variant syntax to constructor methods:
 - Constructor methods provide cleaner error creation API
 - Removed thiserror and anyhow dependencies from dvs-core
 - Downstream crates unchanged (thiserror `#[from]` still works)
+
+## Plan 041: Optional dvs-core Dependencies
+
+Made dvs-core dependencies optional via feature flags so sibling crates can opt-in only to what they need, reducing binary size and compile times.
+
+### Feature flags implemented
+
+- [x] `git2-backend` (default) - libgit2 via git2 crate
+  - Gated `Git2Ops` struct and implementation in `helpers/git_ops.rs`
+  - Gated `From<git2::Error>` conversion in `types/error.rs`
+  - `select_git_backend()` returns CLI backend when feature disabled
+  - Falls back to `GitCliOps` (system git CLI) always available
+
+- [x] `mmap` (default) - memory-mapped I/O via memmap2 crate
+  - Gated `hash_file_mmap()` function in `helpers/hash.rs`
+  - `MMAP_THRESHOLD` set to `u64::MAX` when disabled (never uses mmap)
+  - Falls back to streaming read for all file sizes
+
+- [x] `walkdir` (default) - directory walking via walkdir crate
+  - Gated `find_tracked_files_walkdir()` in `ops/status.rs`
+  - Gated `capture_metadata_walkdir()` in `ops/add.rs`
+  - Falls back to recursive `fs::read_dir()` implementation
+
+- [-] `yaml-config` - SKIPPED: "dvs.yaml" filename deeply integrated (20+ references)
+
+### Cargo.toml changes
+
+```toml
+[features]
+default = ["blake3", "git2-backend", "mmap", "walkdir"]
+blake3 = ["dep:blake3"]
+xxh3 = ["dep:xxhash-rust"]
+sha256 = ["dep:sha2"]
+all-hashes = ["blake3", "xxh3", "sha256"]
+git2-backend = ["dep:git2"]
+mmap = ["dep:memmap2"]
+walkdir = ["dep:walkdir"]
+
+[dependencies]
+git2 = { workspace = true, optional = true }
+memmap2 = { workspace = true, optional = true }
+walkdir = { workspace = true, optional = true }
+```
+
+### CI test matrix
+
+Added feature combination tests to `.github/workflows/ci.yml`:
+- Minimal features (blake3 only): 135 tests pass
+- Without git2-backend (CLI fallback): 135 tests pass
+- Without mmap (streaming fallback): 142 tests pass
+- Without walkdir (recursive fallback): 142 tests pass
+
+### Summary
+
+- **142 tests passing** with default features
+- Three optional backend features with always-available fallbacks
+- CI validates all feature combinations compile and pass tests
+- Sibling crates can use `default-features = false` to opt out
+- No breaking changes to public API
