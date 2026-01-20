@@ -7,6 +7,7 @@ mod output;
 mod paths;
 
 use fs_err as fs;
+use serde::Serialize;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -17,6 +18,45 @@ use commands::{
     rollback, status, uninstall,
 };
 use output::Output;
+
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum OutputFormat {
+    #[default]
+    Human,
+    Json,
+}
+
+/// Output destination for CLI output.
+#[derive(Clone, Debug)]
+pub enum OutputDest {
+    /// Don't redirect output (write to stdout, default)
+    Inherit,
+    /// Discard output (like /dev/null)
+    Null,
+    /// Feed output through a pipe before discarding (avoids /dev/null detection)
+    Pipe,
+    /// Write to a file path
+    File(PathBuf),
+}
+
+impl Default for OutputDest {
+    fn default() -> Self {
+        Self::Inherit
+    }
+}
+
+impl std::str::FromStr for OutputDest {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "inherit" | "stdout" | "-" => Self::Inherit,
+            "null" | "/dev/null" => Self::Null,
+            "pipe" => Self::Pipe,
+            path => Self::File(PathBuf::from(path)),
+        })
+    }
+}
 
 /// DVS - Data Version System
 ///
@@ -39,19 +79,27 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "human")]
     format: OutputFormat,
 
+    /// Output destination.
+    ///
+    /// `inherit`: Don't redirect output (write to stdout, the default).
+    /// `null`:    Redirect output to `/dev/null`.
+    /// `pipe`:    Feed output through a pipe before discarding (avoids `/dev/null` detection).
+    /// `<FILE>`:  Write output to the given file.
+    #[arg(
+        short,
+        long,
+        global = true,
+        default_value = "inherit",
+        value_name = "WHERE"
+    )]
+    output: OutputDest,
+
     /// Suppress non-error output
     #[arg(short, long, global = true)]
     quiet: bool,
 
     #[command(subcommand)]
     command: Command,
-}
-
-#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
-pub enum OutputFormat {
-    #[default]
-    Human,
-    Json,
 }
 
 #[derive(Subcommand)]
@@ -248,6 +296,26 @@ pub enum FsCommand {
     },
 }
 
+/// JSON output for fs pwd command.
+#[derive(Serialize)]
+struct PwdOutput {
+    path: String,
+}
+
+/// JSON output for fs ls command.
+#[derive(Serialize)]
+struct LsOutput {
+    path: String,
+    entries: Vec<LsEntry>,
+}
+
+#[derive(Serialize)]
+struct LsEntry {
+    name: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+}
+
 /// Build the CLI command for completion generation.
 pub fn build_cli() -> clap::Command {
     Cli::command()
@@ -257,7 +325,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     // Create output handler
-    let output = Output::new(cli.format, cli.quiet);
+    let output = Output::new(cli.format, cli.output, cli.quiet);
 
     // Change working directory if requested
     if let Some(ref cwd) = cli.cwd {
@@ -293,7 +361,13 @@ fn main() -> ExitCode {
         Command::Fs(fs_cmd) => match fs_cmd {
             FsCommand::Pwd => match std::env::current_dir() {
                 Ok(cwd) => {
-                    output.println(&cwd.display().to_string());
+                    if output.is_json() {
+                        output.json(&PwdOutput {
+                            path: cwd.display().to_string(),
+                        });
+                    } else {
+                        output.println(&cwd.display().to_string());
+                    }
                     Ok(())
                 }
                 Err(e) => Err(commands::CliError::Io(e)),
@@ -301,15 +375,32 @@ fn main() -> ExitCode {
             FsCommand::Ls { path } => {
                 let target = path.unwrap_or_else(|| PathBuf::from("."));
                 match fs::read_dir(&target) {
-                    Ok(entries) => {
-                        for entry in entries.flatten() {
-                            let name = entry.file_name();
+                    Ok(dir_entries) => {
+                        let mut entries = Vec::new();
+                        for entry in dir_entries.flatten() {
+                            let name = entry.file_name().to_string_lossy().to_string();
                             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                            if is_dir {
-                                output.println(&format!("{}/", name.to_string_lossy()));
-                            } else {
-                                output.println(&name.to_string_lossy());
+                            let entry_type = if is_dir { "directory" } else { "file" };
+
+                            entries.push(LsEntry {
+                                name: name.clone(),
+                                entry_type: entry_type.to_string(),
+                            });
+
+                            if !output.is_json() {
+                                if is_dir {
+                                    output.println(&format!("{}/", name));
+                                } else {
+                                    output.println(&name);
+                                }
                             }
+                        }
+
+                        if output.is_json() {
+                            output.json(&LsOutput {
+                                path: target.display().to_string(),
+                                entries,
+                            });
                         }
                         Ok(())
                     }

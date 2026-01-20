@@ -1,10 +1,33 @@
 //! DVS add command.
 
+use serde::Serialize;
 use std::path::PathBuf;
 
 use super::Result;
 use crate::output::Output;
 use crate::paths;
+
+/// JSON output for add command.
+#[derive(Serialize)]
+struct AddOutput {
+    files: Vec<AddFileEntry>,
+    summary: AddSummary,
+}
+
+#[derive(Serialize)]
+struct AddFileEntry {
+    path: String,
+    outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AddSummary {
+    added: usize,
+    already_tracked: usize,
+    errors: usize,
+}
 
 /// Run the add command.
 pub fn run(
@@ -33,38 +56,70 @@ pub fn run(
     // Call dvs-core add
     let results = dvs_core::add(&resolved_files, message.as_deref())?;
 
-    // Output results
+    // Collect results
     let mut success_count = 0;
     let mut skip_count = 0;
     let mut error_count = 0;
+    let mut file_entries = Vec::new();
 
     for result in &results {
-        match result.outcome {
+        let (outcome_str, error) = match result.outcome {
             dvs_core::Outcome::Copied => {
                 success_count += 1;
-                output.success(&format!("Added: {}", result.relative_path.display()));
+                ("added", None)
             }
             dvs_core::Outcome::Present => {
                 skip_count += 1;
-                output.info(&format!(
-                    "Already tracked: {}",
-                    result.relative_path.display()
-                ));
+                ("already_tracked", None)
             }
             dvs_core::Outcome::Error => {
                 error_count += 1;
-                let msg = result.error_message.as_deref().unwrap_or("unknown error");
-                output.error(&format!(
-                    "Error: {} - {}",
-                    result.relative_path.display(),
-                    msg
-                ));
+                ("error", result.error_message.clone())
+            }
+        };
+
+        file_entries.push(AddFileEntry {
+            path: result.relative_path.display().to_string(),
+            outcome: outcome_str.to_string(),
+            error,
+        });
+
+        // Human-readable output
+        if !output.is_json() {
+            match result.outcome {
+                dvs_core::Outcome::Copied => {
+                    output.success(&format!("Added: {}", result.relative_path.display()));
+                }
+                dvs_core::Outcome::Present => {
+                    output.info(&format!(
+                        "Already tracked: {}",
+                        result.relative_path.display()
+                    ));
+                }
+                dvs_core::Outcome::Error => {
+                    let msg = result.error_message.as_deref().unwrap_or("unknown error");
+                    output.error(&format!(
+                        "Error: {} - {}",
+                        result.relative_path.display(),
+                        msg
+                    ));
+                }
             }
         }
     }
 
-    // Summary
-    if !output.is_quiet() {
+    // Output
+    if output.is_json() {
+        let json_output = AddOutput {
+            files: file_entries,
+            summary: AddSummary {
+                added: success_count,
+                already_tracked: skip_count,
+                errors: error_count,
+            },
+        };
+        output.json(&json_output);
+    } else if !output.is_quiet() {
         output.info(&format!(
             "Summary: {} added, {} already tracked, {} errors",
             success_count, skip_count, error_count

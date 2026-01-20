@@ -23,6 +23,9 @@ pub use types::{
 // Re-export reflog types for detailed log analysis
 pub use types::{MetadataEntry, ReflogEntry, ReflogOp, WorkspaceState};
 
+// Re-export local config types
+pub use types::{AuthConfig, CacheConfig, LocalConfig};
+
 // Re-export operations at crate root
 pub use ops::{
     add, add_with_backend, get, get_with_backend, init, init_with_backend, status,

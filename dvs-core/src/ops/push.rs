@@ -4,7 +4,7 @@ use crate::helpers::{
     layout::Layout,
     store::{HttpStore, LocalStore, ObjectStore},
 };
-use crate::{detect_backend_cwd, Backend, DvsError, Manifest, Oid, RepoBackend};
+use crate::{detect_backend_cwd, Backend, DvsError, LocalConfig, Manifest, Oid, RepoBackend};
 use std::path::PathBuf;
 
 /// Result of a push operation for a single object.
@@ -78,15 +78,26 @@ pub fn push_with_backend(
     }
     let manifest = Manifest::load(&manifest_path)?;
 
-    // Determine remote URL
+    // Load local config for default base_url
+    let local_config = LocalConfig::load(&layout.config_path())?;
+
+    // Determine remote URL (priority: explicit > local config > manifest)
     let url = remote_url
         .map(|s| s.to_string())
+        .or_else(|| local_config.base_url().map(|s| s.to_string()))
         .or(manifest.base_url.clone())
-        .ok_or_else(|| DvsError::config_error("No remote URL specified and none in manifest"))?;
+        .ok_or_else(|| {
+            DvsError::config_error(
+                "No remote URL specified. Use --remote or set base_url in .dvs/config.toml",
+            )
+        })?;
+
+    // Get auth token from local config
+    let auth_token = local_config.auth_token().map(|s| s.to_string());
 
     // Create stores
     let local_store = LocalStore::new(layout.objects_dir());
-    let remote_store = HttpStore::new(url);
+    let remote_store = HttpStore::with_auth(url, auth_token);
 
     // Get unique OIDs
     let oids = manifest.unique_oids();
@@ -156,15 +167,26 @@ pub fn push_files(files: &[PathBuf], remote_url: Option<&str>) -> Result<PushSum
     }
     let manifest = Manifest::load(&manifest_path)?;
 
-    // Determine remote URL
+    // Load local config for default base_url
+    let local_config = LocalConfig::load(&layout.config_path())?;
+
+    // Determine remote URL (priority: explicit > local config > manifest)
     let url = remote_url
         .map(|s| s.to_string())
+        .or_else(|| local_config.base_url().map(|s| s.to_string()))
         .or(manifest.base_url.clone())
-        .ok_or_else(|| DvsError::config_error("No remote URL specified and none in manifest"))?;
+        .ok_or_else(|| {
+            DvsError::config_error(
+                "No remote URL specified. Use --remote or set base_url in .dvs/config.toml",
+            )
+        })?;
+
+    // Get auth token from local config
+    let auth_token = local_config.auth_token().map(|s| s.to_string());
 
     // Create stores
     let local_store = LocalStore::new(layout.objects_dir());
-    let remote_store = HttpStore::new(url);
+    let remote_store = HttpStore::with_auth(url, auth_token);
 
     let mut summary = PushSummary::default();
 

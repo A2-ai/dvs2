@@ -1,9 +1,24 @@
 //! `dvs merge-repo` command implementation.
 
+use serde::Serialize;
+use std::path::PathBuf;
+
 use super::Result;
 use crate::output::Output;
 use dvs_core::{ConflictMode, MergeOptions, MergeResult};
-use std::path::PathBuf;
+
+/// JSON output for merge-repo command.
+#[derive(Serialize)]
+struct MergeRepoOutput {
+    dry_run: bool,
+    files_merged: usize,
+    files_skipped: usize,
+    objects_copied: usize,
+    objects_existed: usize,
+    merged_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    conflicts: Vec<String>,
+}
 
 /// Options for the merge-repo command.
 pub struct MergeRepoOptions {
@@ -28,15 +43,36 @@ pub fn run(output: &Output, options: MergeRepoOptions) -> Result<()> {
         dry_run: options.dry_run,
     };
 
-    if options.dry_run {
-        output.println("Dry run - no changes will be made:");
+    if !output.is_json() {
+        if options.dry_run {
+            output.println("Dry run - no changes will be made:");
+        }
+        output.println(&format!("Merging from {}...", options.source.display()));
     }
-
-    output.println(&format!("Merging from {}...", options.source.display()));
 
     let result = dvs_core::merge_repo(&options.source, merge_options)?;
 
-    display_result(output, &result, options.dry_run);
+    if output.is_json() {
+        output.json(&MergeRepoOutput {
+            dry_run: options.dry_run,
+            files_merged: result.files_merged,
+            files_skipped: result.files_skipped,
+            objects_copied: result.objects_copied,
+            objects_existed: result.objects_existed,
+            merged_paths: result
+                .merged_paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
+            conflicts: result
+                .conflicts
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
+        });
+    } else {
+        display_result(output, &result, options.dry_run);
+    }
 
     Ok(())
 }
