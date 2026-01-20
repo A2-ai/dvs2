@@ -26,6 +26,10 @@
 
 - [x] **Plan 045: Track DVS Build/Version in Generated Configs** - Added build-time version tracking to DVS. Implemented `build.rs` in dvs-core that sets `DVS_VERSION`, `DVS_COMMIT_SHA`, and `DVS_VERSION_STRING`. Added `GeneratedBy` struct to `Config` for recording which DVS build created a config file. CLI now shows version with commit hash (e.g., `dvs 0.0.0-9000 (abc12345)`).
 
+- [x] **Plan 043: Replace Axum/Tower with tiny_http for dvs-server** - Migrated dvs-server from async axum/tower stack to synchronous tiny_http. Rewrote api.rs and lib.rs to use tiny_http handlers, updated auth.rs with `*_from_header` functions that accept `Option<&str>` instead of `axum::http::HeaderMap`, updated dvs-testkit server-runner to use thread-based server with `ServerHandle::handle_one()`, removed axum/tower/tower-http from workspace dependencies. All 14 dvs-server tests pass, all 18 dvs-testkit tests pass.
+
+- [x] **Plan 044: Dependency Feature Matrix + Lightweight Defaults** - Changed dvs-core default config from YAML to TOML, made `git2-backend` opt-in, removed unused `rayon` dependency, updated dvs-cli to enable `git2-backend` by default, added yaml-config/toml-config feature passthroughs, updated testkit to use `Config::config_filename()`, replaced axum/tower with tiny_http (Plan 043), updated testkit server-runner.
+
 ### In Progress
 
 - [ ] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
@@ -77,19 +81,6 @@
 - [ ] **Plan 040: Proc-macro Usage Audit** - `plans/040-proc-macro-usage-audit.md`
 - [ ] **Plan 041: TOML Metadata Files** - `plans/041-toml-metadata-files.md`
 - [ ] **Plan 042: Git Subcommand + Shell Completion Install** - `plans/042-git-subcommand-install.md`
-- [ ] **Plan 043: Replace Axum/Tower with tiny_http for dvs-server** - `plans/043-tiny-http-server.md`
-
-### Partially Implemented Plans
-
-- [ ] **Plan 044: Dependency Feature Matrix + Lightweight Defaults** - `plans/044-dependency-feature-matrix.md`
-  - [x] Changed dvs-core default config format from YAML to TOML (`toml-config`)
-  - [x] Made `git2-backend` opt-in (removed from default features)
-  - [x] Removed unused `rayon` dependency from dvs-core
-  - [x] Updated dvs-cli to enable `git2-backend` by default
-  - [x] Added `yaml-config` and `toml-config` feature passthroughs to dvs-cli
-  - [x] Updated dvs-testkit to use `Config::config_filename()` for portability
-  - [ ] Replace axum/tower with tiny_http (see Plan 043)
-  - [ ] Update testkit server-runner to use ureq instead of reqwest
 
 ### Future Plans (Not Yet Written)
 

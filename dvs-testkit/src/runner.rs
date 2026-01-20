@@ -594,12 +594,14 @@ pub struct TestServer {
     pub url: String,
     /// The port the server is listening on.
     pub port: u16,
-    /// Server handle for shutdown.
-    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-    /// Runtime handle.
-    runtime: tokio::runtime::Runtime,
+    /// Server handle for non-blocking request processing.
+    handle: std::sync::Arc<dvs_server::ServerHandle>,
+    /// Background thread for serving requests.
+    _server_thread: Option<std::thread::JoinHandle<()>>,
     /// Storage directory.
     _storage_dir: tempfile::TempDir,
+    /// Shutdown flag.
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(feature = "server-runner")]
@@ -607,6 +609,7 @@ impl TestServer {
     /// Start a new test server on a random available port.
     pub fn start() -> Result<Self, String> {
         use dvs_server::{ServerConfig, AuthConfig};
+        use std::sync::atomic::AtomicBool;
 
         // Create temp storage directory
         let storage_dir = tempfile::TempDir::new()
@@ -614,7 +617,6 @@ impl TestServer {
 
         // Find an available port
         let port = Self::find_available_port()?;
-        let url = format!("http://127.0.0.1:{}", port);
 
         // Create server config
         let config = ServerConfig {
@@ -628,52 +630,35 @@ impl TestServer {
             log_level: "warn".to_string(),
         };
 
-        // Create runtime
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .map_err(|e| format!("Failed to create runtime: {}", e))?;
+        // Start server in background mode
+        let (url, handle) = dvs_server::start_server_background(config)
+            .map_err(|e| format!("Failed to start server: {}", e))?;
 
-        // Create shutdown channel
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let handle = std::sync::Arc::new(handle);
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
 
-        // Start server in background
-        let server_url = url.clone();
-        runtime.spawn(async move {
-            let state = match dvs_server::AppState::new(config) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Failed to create server state: {}", e);
-                    return;
-                }
-            };
-            let app = dvs_server::create_router(state);
-
-            let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
-                Ok(l) => l,
-                Err(e) => {
-                    eprintln!("Failed to bind: {}", e);
-                    return;
-                }
-            };
-
-            // Use select to handle graceful shutdown
-            tokio::select! {
-                _ = axum::serve(listener, app) => {}
-                _ = shutdown_rx => {}
+        // Spawn background thread to process requests
+        let handle_clone = handle.clone();
+        let shutdown_clone = shutdown.clone();
+        let server_thread = std::thread::spawn(move || {
+            while !shutdown_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                // Process any pending requests
+                let _ = handle_clone.handle_one();
+                // Small sleep to prevent busy-waiting
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
         });
 
         // Wait for server to be ready
-        Self::wait_for_server(&server_url)?;
+        Self::wait_for_server(&url)?;
 
         Ok(Self {
             url,
             port,
-            shutdown_tx: Some(shutdown_tx),
-            runtime,
+            handle,
+            _server_thread: Some(server_thread),
             _storage_dir: storage_dir,
+            shutdown,
         })
     }
 
@@ -752,11 +737,9 @@ impl TestServer {
 #[cfg(feature = "server-runner")]
 impl Drop for TestServer {
     fn drop(&mut self) {
-        // Send shutdown signal
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
-        // Give server time to shutdown
+        // Signal shutdown
+        self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        // Give thread time to exit
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }

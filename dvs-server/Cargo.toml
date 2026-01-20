@@ -18,16 +18,8 @@ rust-version.workspace = true
 [dependencies]
 dvs-core.workspace = true
 
-# Async runtime
-tokio.workspace = true
-
-# HTTP server
-axum.workspace = true
-tower.workspace = true
-tower-http.workspace = true
-
-# Logging
-tracing.workspace = true
+# HTTP server (lightweight)
+tiny_http.workspace = true
 
 # Serialization (for API)
 serde.workspace = true

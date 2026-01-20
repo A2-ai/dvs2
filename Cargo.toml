@@ -52,10 +52,7 @@ notify = "8"
 tokio = { version = "1", features = ["full"] }
 
 # HTTP server (used by: dvs-server)
-axum = "0.8"
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
-tracing = "0.1"
+tiny_http = "0.12"
 
 # Utilities (used by: dvs-core)
 chrono = { version = "0.4", features = ["serde"] }

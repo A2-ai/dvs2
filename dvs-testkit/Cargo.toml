@@ -45,14 +45,12 @@ predicates = { version = "3.1", optional = true }
 
 # Server runner dependencies
 dvs-server = { path = "../dvs-server", optional = true }
-tokio = { workspace = true, optional = true }
 reqwest = { version = "0.13", features = ["blocking"], optional = true }
-axum = { workspace = true, optional = true }
 
 [features]
 default = []
 cli-runner = ["dep:assert_cmd", "dep:predicates"]
-server-runner = ["dep:dvs-server", "dep:tokio", "dep:reqwest", "dep:axum"]
+server-runner = ["dep:dvs-server", "dep:reqwest"]
 
 [dev-dependencies]
 blake3.workspace = true
