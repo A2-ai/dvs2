@@ -2,7 +2,7 @@
 //!
 //! View and edit DVS configuration settings.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use dvs_core::{Config, HashAlgo, MetadataFormat};
 
@@ -43,7 +43,7 @@ pub fn run(output: &Output, action: ConfigAction) -> Result<()> {
 }
 
 /// Show all configuration values.
-fn show_config(output: &Output, config_path: &PathBuf) -> Result<()> {
+fn show_config(output: &Output, config_path: &Path) -> Result<()> {
     let config = Config::load(config_path)?;
 
     output.println(&format!("storage_dir: {}", config.storage_dir.display()));
@@ -76,7 +76,7 @@ fn show_config(output: &Output, config_path: &PathBuf) -> Result<()> {
 }
 
 /// Get a specific configuration value.
-fn get_config(output: &Output, config_path: &PathBuf, key: &str) -> Result<()> {
+fn get_config(output: &Output, config_path: &Path, key: &str) -> Result<()> {
     let config = Config::load(config_path)?;
 
     let value = match key {
@@ -102,7 +102,7 @@ fn get_config(output: &Output, config_path: &PathBuf, key: &str) -> Result<()> {
 }
 
 /// Set a configuration value.
-fn set_config(output: &Output, config_path: &PathBuf, key: &str, value: &str) -> Result<()> {
+fn set_config(output: &Output, config_path: &Path, key: &str, value: &str) -> Result<()> {
     let mut config = Config::load(config_path)?;
 
     match key {
