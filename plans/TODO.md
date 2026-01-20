@@ -76,6 +76,7 @@
 - [ ] **Plan 041: TOML Metadata Files** - `plans/041-toml-metadata-files.md`
 - [ ] **Plan 042: Git Subcommand + Shell Completion Install** - `plans/042-git-subcommand-install.md`
 - [ ] **Plan 043: Replace Axum/Tower with tiny_http for dvs-server** - `plans/043-tiny-http-server.md`
+- [ ] **Plan 044: Dependency Feature Matrix + Lightweight Defaults** - `plans/044-dependency-feature-matrix.md`
 
 ### Future Plans (Not Yet Written)
 
