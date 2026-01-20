@@ -136,3 +136,4 @@ a heading in DONE.md. Also update the plan status in TODO.md.
 
 - **No backward compatibility**: We do not care about backward compatibility for now. Feel free to make breaking changes to APIs, file formats, and configurations as needed.
 - **DVS naming**: Always use "DVS" or "dvs" (Data Version System). Never use "DVC" which is a different project.
+- **Use `fs_err` instead of `std::fs`**: All filesystem operations in dvs-core, dvs-cli, dvs-daemon, and dvs-server must use `fs_err` instead of `std::fs` for better error messages. The only exceptions are `std::fs::Permissions` and `std::fs::Metadata` types (which `fs_err` doesn't re-export). This is enforced by `just check-std-fs` lint.
