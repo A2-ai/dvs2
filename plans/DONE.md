@@ -1225,4 +1225,47 @@ Additional server features implemented as incremental improvements.
 - Full CRUD support for CAS objects (HEAD/GET/PUT/DELETE)
 - Configurable CORS for browser-based clients
 - Request size limits to prevent resource exhaustion
-- **14 dvs-server tests passing**
+- **20 dvs-server tests passing** (14 storage/auth + 6 config)
+
+## Code Cleanup and API Improvements
+
+Various incremental improvements to code quality and public API surface.
+
+### Dead code removal
+
+- [x] Removed `dvs-core/src/helpers/repo.rs` (functionality in backend.rs/git_ops.rs)
+- [x] Removed `dvs-core/src/helpers/parse.rs` (glob expansion in ops/add.rs)
+- [x] Removed `dvs-core/src/helpers/cache.rs` (never implemented stub)
+
+### FileInfo::from_path implementation
+
+- [x] `FileInfo::from_path()` - Compute file info including blake3 hash
+- [x] `FileInfo::from_path_with_relative()` - Same with explicit relative path
+- [x] 3 unit tests for FileInfo functionality
+
+### ServerConfig implementation
+
+- [x] `ServerConfig::load()` - Load from TOML file
+- [x] `ServerConfig::save()` - Save to TOML file
+- [x] `ServerConfig::validate()` - Validate port, host, storage, upload size
+- [x] 6 unit tests for config functionality
+
+### Public API exports (dvs-core lib.rs)
+
+- [x] `ErrorKind` - For advanced error pattern matching
+- [x] `ReflogEntry`, `ReflogOp`, `WorkspaceState`, `MetadataEntry` - Reflog types
+- [x] `Hasher` trait and hash functions - `create_hasher`, `get_file_hash`, etc.
+- [x] `Layout` - For .dvs/ directory structure access
+
+### Clippy fixes
+
+- [x] Fixed `&PathBuf` -> `&Path` in dvs-cli/src/commands/config.rs (3 instances)
+- [x] Removed unused import in dvs-testkit/src/runner.rs
+
+### Test count summary
+
+- dvs-core: 166 tests
+- dvs-server: 20 tests
+- dvs-cli: 12 tests
+- dvs-testkit: 22 tests (+ 4 sandbox-blocked)
+- **Total: 220 tests passing**
