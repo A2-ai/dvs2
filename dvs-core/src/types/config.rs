@@ -4,6 +4,7 @@ use fs_err as fs;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use crate::HashAlgo;
+use crate::MetadataFormat;
 
 /// Metadata about which DVS build generated this configuration.
 ///
@@ -82,6 +83,11 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash_algo: Option<HashAlgo>,
 
+    /// Metadata file format (JSON or TOML).
+    /// Defaults to JSON for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_format: Option<MetadataFormat>,
+
     /// Metadata about which DVS build generated this config.
     /// Automatically populated by `dvs init`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,6 +105,7 @@ impl Config {
             permissions,
             group,
             hash_algo: None,
+            metadata_format: None,
             generated_by: None,
         }
     }
@@ -115,6 +122,7 @@ impl Config {
             permissions,
             group,
             hash_algo: Some(hash_algo),
+            metadata_format: None,
             generated_by: None,
         }
     }
@@ -131,6 +139,11 @@ impl Config {
     /// Get the configured hash algorithm, or the default.
     pub fn hash_algorithm(&self) -> HashAlgo {
         self.hash_algo.unwrap_or_else(crate::helpers::hash::default_algorithm)
+    }
+
+    /// Get the configured metadata format, or the default (JSON).
+    pub fn metadata_format(&self) -> MetadataFormat {
+        self.metadata_format.unwrap_or_default()
     }
 
     /// Load configuration from a directory.

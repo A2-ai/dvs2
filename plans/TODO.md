@@ -30,6 +30,8 @@
 
 - [x] **Plan 044: Dependency Feature Matrix + Lightweight Defaults** - Changed dvs-core default config from YAML to TOML, made `git2-backend` opt-in, removed unused `rayon` dependency, updated dvs-cli to enable `git2-backend` by default, added yaml-config/toml-config feature passthroughs, updated testkit to use `Config::config_filename()`, replaced axum/tower with tiny_http (Plan 043), updated testkit server-runner.
 
+- [x] **Plan 041: TOML Metadata Files** - Added TOML as alternative metadata format for `.dvs` files. Implemented `MetadataFormat` enum (Json, Toml), multi-format load/save methods (`load_for_data_file()`, `save_with_format()`), `.dvs.toml` file extension for TOML metadata, config option `metadata_format` to control default, and CLI `--metadata-format` flag validation. TOML files (`.dvs.toml`) are preferred if both formats exist.
+
 ### In Progress
 
 - [ ] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
@@ -79,7 +81,6 @@
 - [ ] **Plan 035: Feature Store + Derived Dataset Framework** - `plans/035-feature-store-derived.md`
 - [ ] **Plan 036: Remote Snapshot Sources (HTTP/GitHub)** - `plans/036-remote-snapshot-sources.md`
 - [ ] **Plan 040: Proc-macro Usage Audit** - `plans/040-proc-macro-usage-audit.md`
-- [ ] **Plan 041: TOML Metadata Files** - `plans/041-toml-metadata-files.md`
 - [ ] **Plan 042: Git Subcommand + Shell Completion Install** - `plans/042-git-subcommand-install.md`
 
 ### Future Plans (Not Yet Written)
@@ -176,7 +177,7 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ## Testing
 
-- [x] Unit tests for dvs-core types (142 tests passing)
+- [x] Unit tests for dvs-core types (151 tests passing)
 - [x] Unit tests for dvs-core helpers
 - [x] Unit tests for dvs-core operations
 - [x] Unit tests for dvs-server (14 tests: storage, auth)

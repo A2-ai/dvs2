@@ -12,6 +12,8 @@ pub mod pull;
 pub mod materialize;
 pub mod log;
 pub mod rollback;
+pub mod install;
+pub mod git_status;
 
 use std::io;
 use thiserror::Error;
