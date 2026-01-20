@@ -24,6 +24,8 @@
 
 - [x] **Plan 027: Server HTTP CAS Endpoints** - Implemented HTTP CAS (Content-Addressable Storage) server in `dvs-server`. Includes `HEAD/GET/PUT /objects/{algo}/{hash}` endpoints, `LocalStorage` backend with `{root}/{algo}/{prefix}/{suffix}` layout, API key authentication with permissions (Read/Write/Delete/Admin), and `start_server()` for binding and serving.
 
+- [x] **Plan 045: Track DVS Build/Version in Generated Configs** - Added build-time version tracking to DVS. Implemented `build.rs` in dvs-core that sets `DVS_VERSION`, `DVS_COMMIT_SHA`, and `DVS_VERSION_STRING`. Added `GeneratedBy` struct to `Config` for recording which DVS build created a config file. CLI now shows version with commit hash (e.g., `dvs 0.0.0-9000 (abc12345)`).
+
 ### In Progress
 
 - [ ] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
@@ -76,7 +78,6 @@
 - [ ] **Plan 041: TOML Metadata Files** - `plans/041-toml-metadata-files.md`
 - [ ] **Plan 042: Git Subcommand + Shell Completion Install** - `plans/042-git-subcommand-install.md`
 - [ ] **Plan 043: Replace Axum/Tower with tiny_http for dvs-server** - `plans/043-tiny-http-server.md`
-- [ ] **Plan 045: Track DVS Build/Version in Generated Configs** - `plans/045-config-version-descriptor.md`
 
 ### Partially Implemented Plans
 

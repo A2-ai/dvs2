@@ -21,7 +21,7 @@ use output::Output;
 /// Uses content-addressable storage with blake3 hashing.
 #[derive(Parser)]
 #[command(name = "dvs")]
-#[command(author, version, about, long_about = None)]
+#[command(author, version = dvs_core::VERSION_STRING, about, long_about = None)]
 #[command(propagate_version = true)]
 pub struct Cli {
     /// Change to this directory before running the command

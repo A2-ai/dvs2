@@ -16,6 +16,7 @@ pub mod helpers;
 // Re-export commonly used types at crate root
 pub use types::{
     Config,
+    GeneratedBy,
     Metadata,
     FileInfo,
     AddResult,
@@ -44,3 +45,6 @@ pub use helpers::backend::{Backend, RepoBackend, GitBackend, DvsBackend, detect_
 
 // Re-export store types for testing
 pub use helpers::store::{LocalStore, ObjectStore};
+
+// Re-export version information
+pub use helpers::version::{version, version_string, commit_sha, DvsVersion, VERSION_STRING};
