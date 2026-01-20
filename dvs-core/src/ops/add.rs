@@ -3,7 +3,7 @@
 use crate::helpers::layout::Layout;
 use crate::helpers::reflog::{current_actor, Reflog, SnapshotStore};
 use crate::helpers::{config as config_helper, copy, file, hash};
-use crate::types::{MetadataEntry, ReflogOp, WorkspaceState};
+use crate::types::{Manifest, ManifestEntry, MetadataEntry, MetadataFormat, Oid, ReflogOp, WorkspaceState};
 use crate::{
     detect_backend_cwd, AddResult, Backend, Config, DvsError, Metadata, Outcome, RepoBackend,
 };
@@ -51,6 +51,14 @@ pub fn add_with_backend(
     let snapshot_store = SnapshotStore::new(&layout);
     let reflog = Reflog::new(&layout);
 
+    // Load or create manifest (dvs.lock)
+    let manifest_path = layout.manifest_path();
+    let mut manifest = if manifest_path.exists() {
+        Manifest::load(&manifest_path)?
+    } else {
+        Manifest::new()
+    };
+
     // Capture state before add
     let old_state = capture_workspace_state(backend)?;
     let old_state_id = if !old_state.is_empty() {
@@ -75,14 +83,29 @@ pub fn add_with_backend(
     // Process each file
     let mut results = Vec::with_capacity(expanded_files.len());
     let mut changed_paths = Vec::new();
+    let mut manifest_updated = false;
 
     for path in expanded_files {
         let result = add_single_file(backend, &path, message, &config);
+
         // Track paths that were actually added/updated
-        if result.outcome == Outcome::Copied {
-            changed_paths.push(result.relative_path.clone());
+        if result.outcome == Outcome::Copied || result.outcome == Outcome::Present {
+            // Update manifest entry for successfully tracked files
+            let oid = Oid::new(config.hash_algorithm(), result.blake3_checksum.clone());
+            let entry = ManifestEntry::new(result.relative_path.clone(), oid, result.size);
+            manifest.upsert(entry);
+            manifest_updated = true;
+
+            if result.outcome == Outcome::Copied {
+                changed_paths.push(result.relative_path.clone());
+            }
         }
         results.push(result);
+    }
+
+    // Save manifest if updated
+    if manifest_updated {
+        manifest.save(&manifest_path)?;
     }
 
     // Record state change in reflog if anything changed
@@ -147,14 +170,22 @@ fn capture_metadata_walkdir(repo_root: &Path) -> Result<Vec<MetadataEntry>, DvsE
             .map(|f| f.to_string_lossy())
             .unwrap_or_default();
         // Check for both .dvs (JSON) and .dvs.toml (TOML) files
-        let is_metadata = filename.ends_with(".dvs") || filename.ends_with(".dvs.toml");
-        if path.is_file() && is_metadata {
-            // Load metadata
-            if let Ok(meta) = Metadata::load(path) {
-                // Get the relative path to the data file
-                if let Some(data_path) = Metadata::data_path(path) {
-                    if let Some(relative) = pathdiff::diff_paths(&data_path, repo_root) {
-                        metadata_entries.push(MetadataEntry::new(relative, meta));
+        let format = if filename.ends_with(".dvs.toml") {
+            Some(MetadataFormat::Toml)
+        } else if filename.ends_with(".dvs") {
+            Some(MetadataFormat::Json)
+        } else {
+            None
+        };
+        if let Some(format) = format {
+            if path.is_file() {
+                // Load metadata
+                if let Ok(meta) = Metadata::load(path) {
+                    // Get the relative path to the data file
+                    if let Some(data_path) = Metadata::data_path(path) {
+                        if let Some(relative) = pathdiff::diff_paths(&data_path, repo_root) {
+                            metadata_entries.push(MetadataEntry::with_format(relative, meta, format));
+                        }
                     }
                 }
             }
@@ -194,14 +225,20 @@ fn capture_metadata_recursive(repo_root: &Path) -> Result<Vec<MetadataEntry>, Dv
                     .map(|f| f.to_string_lossy())
                     .unwrap_or_default();
                 // Check for both .dvs (JSON) and .dvs.toml (TOML) files
-                let is_metadata = filename.ends_with(".dvs") || filename.ends_with(".dvs.toml");
-                if is_metadata {
+                let format = if filename.ends_with(".dvs.toml") {
+                    Some(MetadataFormat::Toml)
+                } else if filename.ends_with(".dvs") {
+                    Some(MetadataFormat::Json)
+                } else {
+                    None
+                };
+                if let Some(format) = format {
                     // Load metadata
                     if let Ok(meta) = Metadata::load(&path) {
                         // Get the relative path to the data file
                         if let Some(data_path) = Metadata::data_path(&path) {
                             if let Some(relative) = pathdiff::diff_paths(&data_path, repo_root) {
-                                entries.push(MetadataEntry::new(relative, meta));
+                                entries.push(MetadataEntry::with_format(relative, meta, format));
                             }
                         }
                     }
@@ -553,6 +590,91 @@ mod tests {
 
         assert_eq!(result.outcome, Outcome::Error);
         assert!(result.error_message.unwrap().contains("not found"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_add_updates_manifest() {
+        let (temp_dir, _storage_dir) = setup_test_repo("add_updates_manifest");
+
+        // Create test files
+        fs::write(temp_dir.join("file1.txt"), "content one").unwrap();
+        fs::write(temp_dir.join("file2.txt"), "content two").unwrap();
+
+        // Create .dvs directory for layout
+        let layout = Layout::new(temp_dir.clone());
+        layout.init().unwrap();
+
+        // Add files using the full add_with_backend function
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let files = vec![PathBuf::from("file1.txt"), PathBuf::from("file2.txt")];
+        let results = add_with_backend(&backend, &files, Some("test add")).unwrap();
+
+        // Verify both files were added
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].outcome, Outcome::Copied);
+        assert_eq!(results[1].outcome, Outcome::Copied);
+
+        // Verify manifest was created and contains entries
+        let manifest_path = layout.manifest_path();
+        assert!(manifest_path.exists(), "dvs.lock should be created");
+
+        let manifest = Manifest::load(&manifest_path).unwrap();
+        assert_eq!(manifest.len(), 2, "Manifest should have 2 entries");
+
+        // Verify entries have correct paths
+        assert!(manifest.get(std::path::Path::new("file1.txt")).is_some());
+        assert!(manifest.get(std::path::Path::new("file2.txt")).is_some());
+
+        // Verify entries have correct OIDs
+        let entry1 = manifest.get(std::path::Path::new("file1.txt")).unwrap();
+        assert_eq!(entry1.bytes, 11); // "content one".len()
+        assert!(!entry1.oid.hex.is_empty());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_add_updates_existing_manifest() {
+        let (temp_dir, _storage_dir) = setup_test_repo("add_updates_existing_manifest");
+
+        // Create test file
+        fs::write(temp_dir.join("file1.txt"), "original content").unwrap();
+
+        // Create .dvs directory for layout
+        let layout = Layout::new(temp_dir.clone());
+        layout.init().unwrap();
+
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+
+        // First add
+        let results = add_with_backend(
+            &backend,
+            &[PathBuf::from("file1.txt")],
+            Some("first add"),
+        )
+        .unwrap();
+        assert_eq!(results[0].outcome, Outcome::Copied);
+
+        let manifest = Manifest::load(&layout.manifest_path()).unwrap();
+        let original_oid = manifest.get(std::path::Path::new("file1.txt")).unwrap().oid.clone();
+
+        // Modify file and add again
+        fs::write(temp_dir.join("file1.txt"), "modified content").unwrap();
+        let results = add_with_backend(
+            &backend,
+            &[PathBuf::from("file1.txt")],
+            Some("second add"),
+        )
+        .unwrap();
+        assert_eq!(results[0].outcome, Outcome::Copied);
+
+        // Verify manifest was updated with new OID
+        let manifest = Manifest::load(&layout.manifest_path()).unwrap();
+        let new_entry = manifest.get(std::path::Path::new("file1.txt")).unwrap();
+        assert_ne!(new_entry.oid, original_oid, "OID should have changed");
+        assert_eq!(manifest.len(), 1, "Should still have only 1 entry");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

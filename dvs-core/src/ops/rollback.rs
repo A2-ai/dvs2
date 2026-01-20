@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::helpers::layout::Layout;
 use crate::helpers::reflog::{current_actor, Reflog, SnapshotStore};
-use crate::types::ReflogOp;
+use crate::types::{MetadataFormat, ReflogOp};
 use crate::{detect_backend_cwd, Backend, DvsError, Metadata, RepoBackend};
 
 /// Target for rollback - either a state ID or reflog index.
@@ -176,15 +176,26 @@ pub fn rollback_with_backend(
     // Restore each metadata entry from target state
     for entry in &target_state.metadata {
         let data_path = repo_root.join(&entry.path);
-        let meta_path = Metadata::metadata_path(&data_path);
 
         // Create parent directory if needed
-        if let Some(parent) = meta_path.parent() {
+        if let Some(parent) = data_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        // Save metadata
-        entry.meta.save(&meta_path)?;
+        // Save metadata in the original format
+        entry.meta.save_with_format(&data_path, entry.format)?;
+
+        // If restoring TOML format, remove any existing JSON file (and vice versa)
+        let other_format = if entry.format == MetadataFormat::Toml {
+            MetadataFormat::Json
+        } else {
+            MetadataFormat::Toml
+        };
+        let other_path = Metadata::metadata_path_for_format(&data_path, other_format);
+        if other_path.exists() {
+            let _ = fs::remove_file(&other_path);
+        }
+
         restored_files.push(entry.path.clone());
     }
 
@@ -193,7 +204,8 @@ pub fn rollback_with_backend(
         for entry in &current.metadata {
             if !target_paths.contains(&entry.path) {
                 let data_path = repo_root.join(&entry.path);
-                let meta_path = Metadata::metadata_path(&data_path);
+                // Use the format from the current state entry
+                let meta_path = Metadata::metadata_path_for_format(&data_path, entry.format);
                 if meta_path.exists() {
                     fs::remove_file(&meta_path)?;
                     removed_files.push(entry.path.clone());

@@ -179,16 +179,35 @@ pub fn materialize_files(files: &[PathBuf]) -> Result<MaterializeSummary, DvsErr
     let mut state = MaterializedState::load(&state_path)?;
 
     let mut summary = MaterializeSummary::default();
+    let repo_root = backend.root();
 
     for file in files {
-        let entry = match manifest.get(file) {
+        // Convert absolute paths to repo-relative for manifest lookup
+        let relative_path = if file.is_absolute() {
+            match pathdiff::diff_paths(file, repo_root) {
+                Some(rel) => rel,
+                None => {
+                    summary.failed += 1;
+                    summary.results.push(MaterializeResult::error(
+                        file.clone(),
+                        Oid::blake3("0".repeat(64)),
+                        format!("File is outside repository: {}", file.display()),
+                    ));
+                    continue;
+                }
+            }
+        } else {
+            file.clone()
+        };
+
+        let entry = match manifest.get(&relative_path) {
             Some(e) => e,
             None => {
                 summary.failed += 1;
                 summary.results.push(MaterializeResult::error(
-                    file.clone(),
+                    relative_path.clone(),
                     Oid::blake3("0".repeat(64)), // placeholder
-                    format!("File not in manifest: {}", file.display()),
+                    format!("File not in manifest: {}", relative_path.display()),
                 ));
                 continue;
             }

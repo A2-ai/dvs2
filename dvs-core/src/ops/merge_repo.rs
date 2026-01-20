@@ -7,7 +7,7 @@ use crate::helpers::config as config_helper;
 use crate::helpers::hash::verify_hash_with_algo;
 use crate::helpers::layout::Layout;
 use crate::helpers::reflog::{current_actor, Reflog, SnapshotStore};
-use crate::types::{MetadataEntry, ReflogOp, WorkspaceState};
+use crate::types::{MetadataEntry, MetadataFormat, ReflogOp, WorkspaceState};
 use crate::{detect_backend, detect_backend_cwd, Backend, DvsError, Metadata, Oid, RepoBackend};
 use fs_err as fs;
 use std::collections::HashSet;
@@ -406,7 +406,9 @@ fn capture_workspace_state(backend: &Backend) -> Result<WorkspaceState, DvsError
     for rel_path in tracked_files {
         let abs_path = repo_root.join(&rel_path);
         if let Ok(meta) = Metadata::load_for_data_file(&abs_path) {
-            metadata_entries.push(MetadataEntry::new(rel_path, meta));
+            // Detect the format of the existing metadata file
+            let format = Metadata::find_existing_format(&abs_path).unwrap_or(MetadataFormat::Json);
+            metadata_entries.push(MetadataEntry::with_format(rel_path, meta, format));
         }
     }
 
