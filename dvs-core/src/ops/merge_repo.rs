@@ -126,9 +126,7 @@ pub fn merge_repo_with_backend(
     }
 
     // Find all tracked files in dest for conflict detection
-    let dest_files: HashSet<PathBuf> = find_all_tracked_files(dest_root)?
-        .into_iter()
-        .collect();
+    let dest_files: HashSet<PathBuf> = find_all_tracked_files(dest_root)?.into_iter().collect();
 
     // Process files and detect conflicts
     let mut result = MergeResult::default();
@@ -174,17 +172,22 @@ pub fn merge_repo_with_backend(
     // If we have conflicts in Abort mode, fail now
     if !result.conflicts.is_empty() && options.conflict_mode == ConflictMode::Abort {
         return Err(DvsError::merge_conflict(
-            result.conflicts.iter()
+            result
+                .conflicts
+                .iter()
                 .map(|p| p.display().to_string())
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(", "),
         ));
     }
 
     // If dry run, return early with planned changes
     if options.dry_run {
         result.files_merged = files_to_merge.len();
-        result.merged_paths = files_to_merge.iter().map(|(_, dest, _)| dest.clone()).collect();
+        result.merged_paths = files_to_merge
+            .iter()
+            .map(|(_, dest, _)| dest.clone())
+            .collect();
         result.objects_copied = objects_to_copy.len();
         return Ok(result);
     }
@@ -214,7 +217,8 @@ pub fn merge_repo_with_backend(
 
     // Copy metadata files
     for (source_rel, dest_rel, source_meta) in &files_to_merge {
-        let source_meta_path = source_root.join(Metadata::metadata_path(&source_root.join(source_rel)));
+        let source_meta_path =
+            source_root.join(Metadata::metadata_path(&source_root.join(source_rel)));
         let dest_data_abs = dest_root.join(dest_rel);
 
         // Create parent directories if needed
@@ -416,11 +420,8 @@ mod tests {
     use std::io::Write;
 
     fn setup_test_repo(name: &str) -> PathBuf {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "dvs-test-merge-{}-{}",
-            name,
-            std::process::id()
-        ));
+        let temp_dir =
+            std::env::temp_dir().join(format!("dvs-test-merge-{}-{}", name, std::process::id()));
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 
@@ -489,12 +490,9 @@ mod tests {
         let source_backend = detect_backend(&source).unwrap();
         let dest_backend = detect_backend(&dest).unwrap();
 
-        let result = merge_repo_with_backend(
-            &source_backend,
-            &dest_backend,
-            MergeOptions::default(),
-        )
-        .unwrap();
+        let result =
+            merge_repo_with_backend(&source_backend, &dest_backend, MergeOptions::default())
+                .unwrap();
 
         assert_eq!(result.files_merged, 1);
         assert_eq!(result.files_skipped, 0);
@@ -655,12 +653,9 @@ mod tests {
         let source_backend = detect_backend(&source).unwrap();
         let dest_backend = detect_backend(&dest).unwrap();
 
-        let result = merge_repo_with_backend(
-            &source_backend,
-            &dest_backend,
-            MergeOptions::default(),
-        )
-        .unwrap();
+        let result =
+            merge_repo_with_backend(&source_backend, &dest_backend, MergeOptions::default())
+                .unwrap();
 
         assert_eq!(result.files_merged, 0);
 

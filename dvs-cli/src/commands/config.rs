@@ -60,9 +60,15 @@ fn show_config(output: &Output, config_path: &Path) -> Result<()> {
         output.println("group: (not set)");
     }
 
-    output.println(&format!("hash_algo: {}", format_hash_algo(config.hash_algorithm())));
+    output.println(&format!(
+        "hash_algo: {}",
+        format_hash_algo(config.hash_algorithm())
+    ));
 
-    output.println(&format!("metadata_format: {}", format_metadata_format(config.metadata_format())));
+    output.println(&format!(
+        "metadata_format: {}",
+        format_metadata_format(config.metadata_format())
+    ));
 
     if let Some(ref gen) = config.generated_by {
         output.println("generated_by:");
@@ -216,9 +222,18 @@ mod tests {
 
     #[test]
     fn test_parse_hash_algo() {
-        assert!(matches!(parse_hash_algo("blake3").unwrap(), HashAlgo::Blake3));
-        assert!(matches!(parse_hash_algo("BLAKE3").unwrap(), HashAlgo::Blake3));
-        assert!(matches!(parse_hash_algo("sha256").unwrap(), HashAlgo::Sha256));
+        assert!(matches!(
+            parse_hash_algo("blake3").unwrap(),
+            HashAlgo::Blake3
+        ));
+        assert!(matches!(
+            parse_hash_algo("BLAKE3").unwrap(),
+            HashAlgo::Blake3
+        ));
+        assert!(matches!(
+            parse_hash_algo("sha256").unwrap(),
+            HashAlgo::Sha256
+        ));
         assert!(matches!(parse_hash_algo("xxh3").unwrap(), HashAlgo::Xxh3));
         assert!(parse_hash_algo("invalid").is_err());
     }

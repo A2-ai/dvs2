@@ -188,12 +188,13 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ## Testing
 
-- [x] Unit tests for dvs-core types (166 tests passing)
+- [x] Unit tests for dvs-core types (162 tests passing)
 - [x] Unit tests for dvs-core helpers
 - [x] Unit tests for dvs-core operations
 - [x] Unit tests for dvs-server (20 tests: storage, auth, config)
-- [x] Unit tests for dvs-testkit (22 tests: TestRepo, WorkspaceSnapshot, CoreRunner, CliRunner, ServerRunner)
-- [ ] Integration tests with temp directories
+- [x] Unit tests for dvs-testkit (36 tests: TestRepo, WorkspaceSnapshot, CoreRunner, CliRunner, ServerRunner, integration)
+- [x] Integration tests with temp directories (14 tests in dvs-testkit/src/integration.rs)
+- [x] Integration tests with real git repos (TestRepo uses git2::Repository::init)
 
 ### Test workflow note
 
@@ -204,8 +205,6 @@ cargo build -p dvs-cli --all-features && cargo test --all-features
 ```
 
 This ensures the CLI binary is built with the same features (yaml-config) as the testkit.
-
-- [ ] Integration tests with real git repos
 - [ ] dvs-daemon IPC tests
 - [ ] dvs-server HTTP integration tests
 - [ ] dvsR testthat tests

@@ -32,11 +32,9 @@ pub use ops::{log, log_entry, log_entry_with_backend, log_with_backend, LogEntry
 pub use ops::{
     materialize, materialize_files, materialize_with_backend, MaterializeResult, MaterializeSummary,
 };
+pub use ops::{merge_repo, merge_repo_with_backend, ConflictMode, MergeOptions, MergeResult};
 pub use ops::{pull, pull_files, pull_with_backend, PullResult, PullSummary};
 pub use ops::{push, push_files, push_with_backend, PushResult, PushSummary};
-pub use ops::{
-    merge_repo, merge_repo_with_backend, ConflictMode, MergeOptions, MergeResult,
-};
 pub use ops::{rollback, rollback_with_backend, RollbackResult, RollbackTarget};
 
 // Re-export backend types

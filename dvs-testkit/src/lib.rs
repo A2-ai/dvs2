@@ -41,6 +41,7 @@
 //! ```
 
 mod diff;
+mod integration;
 mod repo;
 mod runner;
 mod scenario;
