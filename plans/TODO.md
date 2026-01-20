@@ -215,6 +215,46 @@ This ensures the CLI binary is built with the same features (yaml-config) as the
 
 ---
 
+## Known Issues / Technical Debt
+
+Issues identified during code review (see `reviews/` directory for details).
+
+### High Priority
+
+- [ ] **Storage layout mismatch** - External storage uses `{prefix}/{suffix}` but merge/server use `{algo}/{prefix}/{suffix}`. Breaks interop across modules. (`dvs-core/src/helpers/hash.rs:314-320`, `dvs-core/src/ops/merge_repo.rs:343-379`)
+
+- [ ] **Manifest not wired to add** - `dvs add` doesn't update `dvs.lock`, so push/pull/materialize require manual manifest management. (`dvs-core/src/ops/add.rs:109-123`, `dvs-core/src/ops/push.rs:72-103`)
+
+- [ ] **CLI file-specific remote ops path resolution** - File arguments to push/pull/materialize resolve to absolute paths, but manifest lookup expects repo-relative paths. (`dvs-cli/src/commands/push.rs:10-21`, `dvs-cli/src/commands/pull.rs:10-21`)
+
+- [ ] **Rollback doesn't preserve metadata format** - Rollback always writes JSON (`.dvs`), potentially overwriting TOML metadata. (`dvs-core/src/ops/rollback.rs:176-199`)
+
+### Medium Priority
+
+- [ ] **`dvs add --metadata-format` is no-op** - Flag is validated but never applied. (`dvs-cli/src/commands/add.rs:16-34`)
+
+- [ ] **`dvs config set` lacks validation** - `storage_dir` and `group` values aren't validated (existence, permissions, group presence). (`dvs-cli/src/commands/config.rs:110-151`)
+
+- [ ] **No CLI for `.dvs/config.toml`** - Users must hand-edit local config for `base_url`/`auth_token`.
+
+- [ ] **Rollback `materialize=true` not implemented** - Only restores metadata, never materializes data files. (`dvs-core/src/ops/rollback.rs:205-209`)
+
+### Low Priority
+
+- [ ] **HttpStore relies on curl subprocess** - No timeouts or rich error reporting; requires `curl` on PATH. (`dvs-core/src/helpers/store.rs:149-235`)
+
+- [ ] **Backend normalize doesn't canonicalize** - Only joins with `current_dir`, may mis-handle symlinks/`..`. (`dvs-core/src/helpers/backend.rs:160-171`)
+
+### Test Gaps
+
+- [ ] Add tests for non-default hash algorithms (sha256/xxh3) across add/get/status
+- [ ] Add tests for `.dvs.toml` interoperability in get/status/rollback/merge
+- [ ] Add tests for manifest-based flows (push/pull/materialize)
+- [ ] Add server auth enforcement tests for GET/HEAD
+- [ ] Add server hash verification tests for PUT
+
+---
+
 ## Future Features
 
 - [ ] Remote storage backends (S3, GCS, Azure)

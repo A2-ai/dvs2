@@ -96,10 +96,14 @@ fn find_tracked_files_walkdir(repo_root: &Path) -> Result<Vec<PathBuf>, DvsError
             continue;
         }
 
-        // Check if this is a .dvs file
-        if path.extension().is_some_and(|ext| ext == "dvs") {
+        // Check if this is a .dvs or .dvs.toml metadata file
+        let filename = path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default();
+        if filename.ends_with(".dvs") || filename.ends_with(".dvs.toml") {
             if let Some(data_path) = Metadata::data_path(path) {
-                files.push(data_path);
+                // Avoid duplicates if both formats exist
+                if !files.contains(&data_path) {
+                    files.push(data_path);
+                }
             }
         }
     }
@@ -129,10 +133,16 @@ fn find_tracked_files_recursive(repo_root: &Path) -> Result<Vec<PathBuf>, DvsErr
 
             if path.is_dir() {
                 recurse(&path, files)?;
-            } else if path.extension().is_some_and(|ext| ext == "dvs") {
-                // This is a .dvs metadata file
-                if let Some(data_path) = Metadata::data_path(&path) {
-                    files.push(data_path);
+            } else {
+                // Check if this is a .dvs or .dvs.toml metadata file
+                let filename = path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default();
+                if filename.ends_with(".dvs") || filename.ends_with(".dvs.toml") {
+                    if let Some(data_path) = Metadata::data_path(&path) {
+                        // Avoid duplicates if both formats exist
+                        if !files.contains(&data_path) {
+                            files.push(data_path);
+                        }
+                    }
                 }
             }
         }
@@ -161,18 +171,23 @@ fn expand_patterns(backend: &Backend, patterns: &[PathBuf]) -> Result<Vec<PathBu
                 pattern.clone()
             };
 
-            // Look for .dvs files
-            let meta_pattern = format!("{}.dvs", full_pattern.display());
-            match glob(&meta_pattern) {
-                Ok(paths) => {
-                    for entry in paths.flatten() {
-                        if let Some(data_path) = Metadata::data_path(&entry) {
-                            files.push(data_path);
+            // Look for .dvs and .dvs.toml files
+            for ext in &[".dvs", ".dvs.toml"] {
+                let meta_pattern = format!("{}{}", full_pattern.display(), ext);
+                match glob(&meta_pattern) {
+                    Ok(paths) => {
+                        for entry in paths.flatten() {
+                            if let Some(data_path) = Metadata::data_path(&entry) {
+                                // Avoid duplicates if both formats exist
+                                if !files.contains(&data_path) {
+                                    files.push(data_path);
+                                }
+                            }
                         }
                     }
-                }
-                Err(_) => {
-                    return Err(DvsError::invalid_glob(pattern_str.to_string()));
+                    Err(_) => {
+                        return Err(DvsError::invalid_glob(pattern_str.to_string()));
+                    }
                 }
             }
         } else {
@@ -205,15 +220,14 @@ fn status_single_file(backend: &Backend, path: &Path, config: &Config) -> Status
         }
     };
 
-    // Load metadata
-    let metadata_path = Metadata::metadata_path(path);
-    let metadata = match Metadata::load(&metadata_path) {
+    // Load metadata (tries TOML first, then JSON)
+    let metadata = match Metadata::load_for_data_file(path) {
         Ok(m) => m,
         Err(_) => {
             return StatusResult::error(
                 path.display().to_string(),
                 "metadata_not_found".to_string(),
-                format!("Metadata not found: {}", metadata_path.display()),
+                format!("Metadata not found for: {}", path.display()),
             );
         }
     };
@@ -264,8 +278,8 @@ fn determine_status(local_path: &Path, metadata: &Metadata) -> Result<FileStatus
         return Ok(FileStatus::Absent);
     }
 
-    // Compare hashes
-    match hash::verify_hash(local_path, &metadata.blake3_checksum) {
+    // Compare hashes using the algorithm stored in metadata
+    match hash::verify_hash_with_algo(local_path, &metadata.blake3_checksum, metadata.hash_algo) {
         Ok(true) => Ok(FileStatus::Current),
         Ok(false) => Ok(FileStatus::Unsynced),
         Err(e) => Err(e),
