@@ -68,8 +68,8 @@ impl std::fmt::Display for Mismatch {
             Mismatch::MissingStorageObject { path } => {
                 write!(f, "Missing storage object for: {}", path.display())
             }
-            Mismatch::MissingConfig => write!(f, "Missing config (dvs.yaml)"),
-            Mismatch::UnexpectedConfig => write!(f, "Unexpected config (dvs.yaml)"),
+            Mismatch::MissingConfig => write!(f, "Missing config ({})", dvs_core::Config::config_filename()),
+            Mismatch::UnexpectedConfig => write!(f, "Unexpected config ({})", dvs_core::Config::config_filename()),
             Mismatch::GitignoreMismatch { expected_has_dvs, actual_has_dvs } => {
                 write!(
                     f,

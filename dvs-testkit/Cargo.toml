@@ -56,3 +56,5 @@ server-runner = ["dep:dvs-server", "dep:tokio", "dep:reqwest", "dep:axum"]
 
 [dev-dependencies]
 blake3.workspace = true
+# Ensure CLI binary is built for cli-runner tests
+dvs-cli = { path = "../dvs-cli" }

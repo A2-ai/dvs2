@@ -71,9 +71,9 @@ impl TestRepo {
         self.root.join(".dvs")
     }
 
-    /// Get the dvs.yaml config path.
+    /// Get the config path (dvs.toml or dvs.yaml depending on features).
     pub fn config_path(&self) -> PathBuf {
-        self.root.join("dvs.yaml")
+        self.root.join(dvs_core::Config::config_filename())
     }
 
     /// Get the dvs.lock manifest path.
