@@ -80,7 +80,6 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 /// Normalize a path by resolving . and .. components.
-#[allow(dead_code)]
 pub fn normalize_path(path: &Path) -> PathBuf {
     let mut components = Vec::new();
 
