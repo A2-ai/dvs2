@@ -13,7 +13,7 @@ use crate::DvsError;
 
 /// Snapshot store for workspace state persistence.
 ///
-/// Snapshots are stored as JSON files in `.dvs/state/snapshots/<id>.json`.
+/// Snapshots are stored as JSON files in `.dvs/state/snapshots/{id}.json`.
 pub struct SnapshotStore<'a> {
     layout: &'a Layout,
 }
