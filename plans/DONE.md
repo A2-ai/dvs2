@@ -816,13 +816,22 @@ Made dvs-core dependencies optional via feature flags so sibling crates can opt-
   - Gated `capture_metadata_walkdir()` in `ops/add.rs`
   - Falls back to recursive `fs::read_dir()` implementation
 
-- [-] `yaml-config` - SKIPPED: "dvs.yaml" filename deeply integrated (20+ references)
+- [x] `yaml-config` (default) - YAML config format via serde_yaml crate
+  - Gated `Config::load()/save()` format selection in `types/config.rs`
+  - Gated `Config::config_filename()` returns "dvs.yaml"
+  - Gated `From<serde_yaml::Error>` conversion in `types/error.rs`
+  - Falls back to TOML or JSON when disabled
+
+- [x] `toml-config` - TOML config format via toml crate (TOML spec 1.1.0)
+  - Uses `dvs.toml` config file when enabled (without yaml-config)
+  - Gated `From<toml::de::Error>` and `From<toml::ser::Error>` conversions
+  - Falls back to JSON config (`dvs.json`) when neither yaml-config nor toml-config
 
 ### Cargo.toml changes
 
 ```toml
 [features]
-default = ["blake3", "git2-backend", "mmap", "walkdir"]
+default = ["blake3", "git2-backend", "mmap", "walkdir", "yaml-config"]
 blake3 = ["dep:blake3"]
 xxh3 = ["dep:xxhash-rust"]
 sha256 = ["dep:sha2"]
@@ -830,25 +839,31 @@ all-hashes = ["blake3", "xxh3", "sha256"]
 git2-backend = ["dep:git2"]
 mmap = ["dep:memmap2"]
 walkdir = ["dep:walkdir"]
+yaml-config = ["dep:serde_yaml"]
+toml-config = ["dep:toml"]
 
 [dependencies]
 git2 = { workspace = true, optional = true }
 memmap2 = { workspace = true, optional = true }
 walkdir = { workspace = true, optional = true }
+serde_yaml = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
 ```
 
 ### CI test matrix
 
 Added feature combination tests to `.github/workflows/ci.yml`:
 - Minimal features (blake3 only): 135 tests pass
-- Without git2-backend (CLI fallback): 135 tests pass
+- Without git2-backend (CLI fallback): 142 tests pass
 - Without mmap (streaming fallback): 142 tests pass
 - Without walkdir (recursive fallback): 142 tests pass
+- Without yaml-config (JSON config fallback): 142 tests pass
+- With toml-config instead of yaml-config: 142 tests pass
 
 ### Summary
 
 - **142 tests passing** with default features
-- Three optional backend features with always-available fallbacks
+- Five optional backend features with always-available fallbacks
 - CI validates all feature combinations compile and pass tests
 - Sibling crates can use `default-features = false` to opt out
 - No breaking changes to public API

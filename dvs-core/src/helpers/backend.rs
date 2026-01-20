@@ -201,8 +201,8 @@ impl RepoBackend for GitBackend {
 
 /// DVS-only workspace backend.
 ///
-/// Uses `dvs.yaml` or `.dvs/` for root detection, `.dvsignore` and `.ignore`
-/// for ignore handling. Does not provide branch information.
+/// Uses config file (`dvs.yaml` or `dvs.json`) or `.dvs/` for root detection,
+/// `.dvsignore` and `.ignore` for ignore handling. Does not provide branch information.
 #[derive(Debug)]
 pub struct DvsBackend {
     root: PathBuf,
@@ -216,11 +216,12 @@ impl DvsBackend {
 
     /// Find DVS workspace root by walking up from the given path.
     ///
-    /// Looks for `dvs.yaml` or `.dvs/` directory.
+    /// Looks for config file (`dvs.yaml` or `dvs.json`) or `.dvs/` directory.
     pub fn find_root(start: &Path) -> Option<PathBuf> {
+        use crate::Config;
         let mut current = start.to_path_buf();
         loop {
-            if current.join("dvs.yaml").exists() || current.join(".dvs").is_dir() {
+            if current.join(Config::config_filename()).exists() || current.join(".dvs").is_dir() {
                 return Some(current);
             }
             if !current.pop() {
@@ -288,7 +289,7 @@ impl RepoBackend for DvsBackend {
 ///
 /// Detection order:
 /// 1. Git repository (looks for `.git`)
-/// 2. DVS workspace (looks for `dvs.yaml` or `.dvs/`)
+/// 2. DVS workspace (looks for config file or `.dvs/`)
 ///
 /// # Errors
 ///
@@ -400,10 +401,20 @@ mod tests {
 
     #[test]
     fn test_dvs_find_root_with_dvs_yaml() {
-        // Create a temp directory with dvs.yaml
+        use crate::Config;
+
+        // Create a temp directory with config file
         let temp_dir = std::env::temp_dir().join("dvs-test-find-root");
         let _ = fs::create_dir_all(&temp_dir);
-        fs::write(temp_dir.join("dvs.yaml"), "storage_dir: /tmp/storage").unwrap();
+
+        #[cfg(feature = "yaml-config")]
+        fs::write(temp_dir.join(Config::config_filename()), "storage_dir: /tmp/storage").unwrap();
+
+        #[cfg(all(feature = "toml-config", not(feature = "yaml-config")))]
+        fs::write(temp_dir.join(Config::config_filename()), "storage_dir = \"/tmp/storage\"").unwrap();
+
+        #[cfg(all(not(feature = "yaml-config"), not(feature = "toml-config")))]
+        fs::write(temp_dir.join(Config::config_filename()), r#"{"storage_dir": "/tmp/storage"}"#).unwrap();
 
         let root = DvsBackend::find_root(&temp_dir);
         assert!(root.is_some());

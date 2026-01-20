@@ -90,9 +90,9 @@ mod tests {
         let layout = Layout::new(root.to_path_buf());
         layout.init().unwrap();
 
-        // Create dvs.yaml
+        // Create config file
         let config = crate::Config::new(root.join("storage"), None, None);
-        config.save(&root.join("dvs.yaml")).unwrap();
+        config.save(&root.join(crate::Config::config_filename())).unwrap();
 
         let backend = crate::detect_backend(root).unwrap();
         (temp, backend)

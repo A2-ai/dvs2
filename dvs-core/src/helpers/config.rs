@@ -4,7 +4,7 @@ use fs_err as fs;
 use std::path::{Path, PathBuf};
 use crate::{Config, DvsError};
 
-/// Find the repository root (directory containing .git or dvs.yaml).
+/// Find the repository root (directory containing .git or DVS config file).
 ///
 /// Searches from the current directory upward.
 pub fn find_repo_root() -> Result<PathBuf, DvsError> {
@@ -22,7 +22,7 @@ pub fn find_repo_root_from(start: &Path) -> Result<PathBuf, DvsError> {
             return Ok(current);
         }
 
-        // Check for dvs.yaml (DVS workspace without Git)
+        // Check for DVS config file (DVS workspace without Git)
         if current.join(Config::config_filename()).exists() {
             return Ok(current);
         }
@@ -42,7 +42,7 @@ pub fn find_repo_root_from(start: &Path) -> Result<PathBuf, DvsError> {
     }
 }
 
-/// Load configuration from dvs.yaml.
+/// Load configuration from the config file.
 pub fn load_config(repo_root: &Path) -> Result<Config, DvsError> {
     let config_path = config_path(repo_root);
 
@@ -53,7 +53,7 @@ pub fn load_config(repo_root: &Path) -> Result<Config, DvsError> {
     Config::load(&config_path)
 }
 
-/// Save configuration to dvs.yaml.
+/// Save configuration to the config file.
 pub fn save_config(config: &Config, repo_root: &Path) -> Result<(), DvsError> {
     let config_path = config_path(repo_root);
     config.save(&config_path)
@@ -111,7 +111,7 @@ pub fn create_storage_dir(storage_dir: &Path) -> Result<(), DvsError> {
     })
 }
 
-/// Get the path to dvs.yaml in the repository.
+/// Get the path to the config file in the repository.
 pub fn config_path(repo_root: &Path) -> PathBuf {
     repo_root.join(Config::config_filename())
 }
@@ -158,7 +158,7 @@ mod tests {
     fn test_config_path() {
         let repo_root = PathBuf::from("/project");
         let path = config_path(&repo_root);
-        assert_eq!(path, PathBuf::from("/project/dvs.yaml"));
+        assert_eq!(path, repo_root.join(Config::config_filename()));
     }
 
     #[test]
@@ -169,9 +169,17 @@ mod tests {
         // Not initialized initially
         assert!(!is_initialized(&temp_dir));
 
-        // Create dvs.yaml
-        let config_file = temp_dir.join("dvs.yaml");
+        // Create config file
+        let config_file = temp_dir.join(Config::config_filename());
+
+        #[cfg(feature = "yaml-config")]
         fs::write(&config_file, "storage_dir: /storage").unwrap();
+
+        #[cfg(all(feature = "toml-config", not(feature = "yaml-config")))]
+        fs::write(&config_file, "storage_dir = \"/storage\"").unwrap();
+
+        #[cfg(all(not(feature = "yaml-config"), not(feature = "toml-config")))]
+        fs::write(&config_file, r#"{"storage_dir": "/storage"}"#).unwrap();
 
         // Now initialized
         assert!(is_initialized(&temp_dir));

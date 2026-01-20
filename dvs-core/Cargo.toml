@@ -20,7 +20,7 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [features]
-default = ["blake3", "git2-backend", "mmap", "walkdir"]
+default = ["blake3", "git2-backend", "mmap", "walkdir", "yaml-config"]
 blake3 = ["dep:blake3"]
 xxh3 = ["dep:xxhash-rust"]
 sha256 = ["dep:sha2"]
@@ -29,12 +29,16 @@ all-hashes = ["blake3", "xxh3", "sha256"]
 git2-backend = ["dep:git2"]
 mmap = ["dep:memmap2"]
 walkdir = ["dep:walkdir"]
+# Config format (mutually exclusive, yaml-config takes precedence)
+yaml-config = ["dep:serde_yaml"]
+toml-config = ["dep:toml"]
 
 [dependencies]
 # Serialization
 serde.workspace = true
-serde_yaml.workspace = true
+serde_yaml = { workspace = true, optional = true }
 serde_json.workspace = true
+toml = { workspace = true, optional = true }
 
 # Hashing (mmap is optional optimization)
 memmap2 = { workspace = true, optional = true }

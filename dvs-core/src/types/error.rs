@@ -14,7 +14,7 @@ use std::path::PathBuf;
 pub enum ErrorKind {
     /// Not in a git repository.
     NotInGitRepo,
-    /// DVS not initialized (dvs.yaml not found).
+    /// DVS not initialized (config file not found).
     NotInitialized,
     /// File not found.
     FileNotFound { path: PathBuf },
@@ -50,6 +50,8 @@ pub enum ErrorKind {
     YamlError { message: String },
     /// JSON parsing error.
     JsonError { message: String },
+    /// TOML parsing error.
+    TomlError { message: String },
     /// I/O error.
     IoError { message: String },
     /// Generic not found error.
@@ -80,6 +82,7 @@ impl ErrorKind {
             ErrorKind::BatchError { .. } => "batch_error",
             ErrorKind::YamlError { .. } => "yaml_error",
             ErrorKind::JsonError { .. } => "json_error",
+            ErrorKind::TomlError { .. } => "toml_error",
             ErrorKind::IoError { .. } => "io_error",
             ErrorKind::NotFound { .. } => "not_found",
         }
@@ -90,7 +93,7 @@ impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ErrorKind::NotInGitRepo => write!(f, "not in a git repository"),
-            ErrorKind::NotInitialized => write!(f, "dvs.yaml not found - run dvs_init first"),
+            ErrorKind::NotInitialized => write!(f, "config file not found - run dvs init first"),
             ErrorKind::FileNotFound { path } => write!(f, "file not found: {}", path.display()),
             ErrorKind::MetadataNotFound { path } => {
                 write!(f, "metadata not found: {}", path.display())
@@ -118,7 +121,7 @@ impl fmt::Display for ErrorKind {
             ErrorKind::ConfigMismatch => {
                 write!(
                     f,
-                    "config already exists with different settings - edit dvs.yaml manually"
+                    "config already exists with different settings - edit config file manually"
                 )
             }
             ErrorKind::GitError { message } => write!(f, "git error: {}", message),
@@ -127,6 +130,7 @@ impl fmt::Display for ErrorKind {
             ErrorKind::BatchError { message } => write!(f, "batch validation failed: {}", message),
             ErrorKind::YamlError { message } => write!(f, "yaml error: {}", message),
             ErrorKind::JsonError { message } => write!(f, "json error: {}", message),
+            ErrorKind::TomlError { message } => write!(f, "toml error: {}", message),
             ErrorKind::IoError { message } => write!(f, "io error: {}", message),
             ErrorKind::NotFound { message } => write!(f, "{}", message),
         }
@@ -292,6 +296,7 @@ impl From<std::io::Error> for DvsError {
     }
 }
 
+#[cfg(feature = "yaml-config")]
 impl From<serde_yaml::Error> for DvsError {
     fn from(e: serde_yaml::Error) -> Self {
         Self::new(ErrorKind::YamlError {
@@ -303,6 +308,24 @@ impl From<serde_yaml::Error> for DvsError {
 impl From<serde_json::Error> for DvsError {
     fn from(e: serde_json::Error) -> Self {
         Self::new(ErrorKind::JsonError {
+            message: e.to_string(),
+        })
+    }
+}
+
+#[cfg(feature = "toml-config")]
+impl From<toml::de::Error> for DvsError {
+    fn from(e: toml::de::Error) -> Self {
+        Self::new(ErrorKind::TomlError {
+            message: e.to_string(),
+        })
+    }
+}
+
+#[cfg(feature = "toml-config")]
+impl From<toml::ser::Error> for DvsError {
+    fn from(e: toml::ser::Error) -> Self {
+        Self::new(ErrorKind::TomlError {
             message: e.to_string(),
         })
     }
