@@ -491,6 +491,7 @@ version = "0.0.0-9000"
 dependencies = [
  "blake3",
  "dvs-core",
+ "fs-err",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

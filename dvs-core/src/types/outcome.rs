@@ -194,6 +194,7 @@ impl GetResult {
 
 impl StatusResult {
     /// Create a successful status result.
+    #[allow(clippy::too_many_arguments)]
     pub fn success(
         relative_path: PathBuf,
         absolute_path: PathBuf,

@@ -19,10 +19,8 @@
 //! ```rust,no_run
 //! use dvs_server::{ServerConfig, start_server};
 //!
-//! fn main() {
-//!     let config = ServerConfig::default();
-//!     start_server(config).unwrap();
-//! }
+//! let config = ServerConfig::default();
+//! start_server(config).unwrap();
 //! ```
 
 pub mod api;

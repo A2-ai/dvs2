@@ -32,6 +32,8 @@
 
 - [x] **Plan 041: TOML Metadata Files** - Added TOML as alternative metadata format for `.dvs` files. Implemented `MetadataFormat` enum (Json, Toml), multi-format load/save methods (`load_for_data_file()`, `save_with_format()`), `.dvs.toml` file extension for TOML metadata, config option `metadata_format` to control default, and CLI `--metadata-format` flag validation. TOML files (`.dvs.toml`) are preferred if both formats exist.
 
+- [x] **Plan 042: Git Subcommand + Shell Completion Install** - Added `dvs install` command for installing git-status-dvs shim and shell completions. Added `dvs git-status` command that runs `git status` followed by `dvs status`. Install command supports `--install-dir` for custom location, `--completions-only` to skip shim, and `--shell` to specify shells (bash, zsh, fish, powershell). Uses `clap_complete` for completion generation.
+
 ### In Progress
 
 - [ ] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
@@ -80,8 +82,8 @@
 - [ ] **Plan 034: Concurrency Locks for Dataset Updates** - `plans/034-concurrency-locks.md`
 - [ ] **Plan 035: Feature Store + Derived Dataset Framework** - `plans/035-feature-store-derived.md`
 - [ ] **Plan 036: Remote Snapshot Sources (HTTP/GitHub)** - `plans/036-remote-snapshot-sources.md`
+- [ ] **Plan 046: Merge One DVS Repository into Another** - `plans/046-repo-merge.md`
 - [ ] **Plan 040: Proc-macro Usage Audit** - `plans/040-proc-macro-usage-audit.md`
-- [ ] **Plan 042: Git Subcommand + Shell Completion Install** - `plans/042-git-subcommand-install.md`
 
 ### Future Plans (Not Yet Written)
 

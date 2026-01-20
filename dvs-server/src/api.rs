@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 use std::time::Instant;
+use fs_err as fs;
 use tiny_http::{Request, Response, StatusCode, Header};
 
 use crate::{ServerError, ServerConfig};
@@ -74,9 +75,7 @@ pub fn handle_request(state: &AppState, mut request: Request) -> Result<(), Serv
 /// Parse object path: /objects/{algo}/{hash}
 fn parse_object_path(path: &str) -> Option<(&str, &str)> {
     let path = path.strip_prefix("/objects/")?;
-    let mut parts = path.splitn(2, '/');
-    let algo = parts.next()?;
-    let hash = parts.next()?;
+    let (algo, hash) = path.split_once('/')?;
     // Strip query string if present
     let hash = hash.split('?').next()?;
     Some((algo, hash))
@@ -99,7 +98,7 @@ fn handle_object_request(
             // Check if object exists
             if state.storage.exists(&oid)? {
                 let obj_path = state.storage.get_path(&oid)?;
-                let metadata = std::fs::metadata(&obj_path).map_err(|e| {
+                let metadata = fs::metadata(&obj_path).map_err(|e| {
                     ServerError::StorageError(format!("failed to get metadata: {e}"))
                 })?;
 

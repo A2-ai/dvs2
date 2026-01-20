@@ -40,7 +40,7 @@ impl FileInfo {
     }
 
     /// Get file info for a path.
-    pub fn from_path(path: &std::path::Path) -> Result<Self, crate::DvsError> {
+    pub fn from_path(_path: &std::path::Path) -> Result<Self, crate::DvsError> {
         todo!("Get file info from path")
     }
 }

@@ -284,6 +284,7 @@ impl CliRunner {
     fn find_binary() -> PathBuf {
         // Use assert_cmd's cargo_bin to find/build the binary
         // This handles workspace builds correctly
+        #[allow(deprecated)]
         match assert_cmd::cargo::cargo_bin("dvs") {
             path if path.exists() => path,
             _ => {
@@ -595,6 +596,7 @@ pub struct TestServer {
     /// The port the server is listening on.
     pub port: u16,
     /// Server handle for non-blocking request processing.
+    #[allow(dead_code)]
     handle: std::sync::Arc<dvs_server::ServerHandle>,
     /// Background thread for serving requests.
     _server_thread: Option<std::thread::JoinHandle<()>>,
@@ -862,7 +864,7 @@ fn run_push_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> Ru
         }
 
         // Read object from local storage to temp file
-        let obj_path = local_store.object_path(&oid);
+        let obj_path = local_store.object_path(oid);
         if !obj_path.exists() {
             return RunResult::failure(1, format!("Object not found locally: {}", oid), None);
         }
@@ -920,7 +922,7 @@ fn run_pull_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> Ru
     let mut skipped = 0;
     for oid in manifest.unique_oids() {
         // Check if already exists locally
-        if local_store.has(&oid).unwrap_or(false) {
+        if local_store.has(oid).unwrap_or(false) {
             skipped += 1;
             continue;
         }
@@ -932,7 +934,7 @@ fn run_pull_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> Ru
         };
 
         // Write to temp file then copy to local store
-        let obj_path = local_store.object_path(&oid);
+        let obj_path = local_store.object_path(oid);
         if let Some(parent) = obj_path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 return RunResult::failure(1, format!("Failed to create dir: {}", e), None);

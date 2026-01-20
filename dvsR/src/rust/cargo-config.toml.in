@@ -1,4 +1,8 @@
-@CARGO_SOURCE_REPLACE@
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "@VENDOR_OUT_CARGO@"
 
 [build]
 target-dir = "@CARGO_TARGET_DIR@"

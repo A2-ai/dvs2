@@ -21,6 +21,9 @@ dvs-core.workspace = true
 # HTTP server (lightweight)
 tiny_http.workspace = true
 
+# Filesystem with better error messages
+fs-err.workspace = true
+
 # Serialization (for API)
 serde.workspace = true
 serde_json.workspace = true
