@@ -273,7 +273,7 @@ Issues identified during code review (see `reviews/` directory for details).
   - [x] `walkdir` - via `walkdir` feature (default on), recursive fs::read_dir fallback
   - [x] `serde_yaml` - via `yaml-config` feature (default on), JSON fallback uses `dvs.json`
   - [x] `toml` - via `toml-config` feature, uses `dvs.toml` when enabled (without yaml-config)
-- [ ] The r-package should be named `dvs`, it is just that the _directory_
+- [x] The r-package should be named `dvs`, it is just that the _directory_
   is named `dvsR` for convenience.
 - [x] add a `install-rpkg` recipe that installs `dvsR`/`{dvs}`, to also mimic
   `just install-cli` as well.

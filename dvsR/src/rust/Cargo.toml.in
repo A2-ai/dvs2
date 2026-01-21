@@ -1,5 +1,5 @@
 [package]
-name = "dvsr"
+name = "dvs"
 version = "0.0.0-9000"
 edition = "2021"
 publish = false

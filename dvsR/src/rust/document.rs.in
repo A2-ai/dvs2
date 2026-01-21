@@ -14,7 +14,7 @@ fn main() {
         .write(true)
         .truncate(true)
         .create(true)
-        .open("dvsr_wrappers.R")
+        .open("dvs_wrappers.R")
         .unwrap();
 
     // Write "do not edit" header with lintr guards
