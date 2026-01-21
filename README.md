@@ -54,6 +54,65 @@ dvs log [-n N]
 dvs rollback <target>
 ```
 
-## Developer notes
+## Development
 
-- [ ] Vendoring mechanism for `miniextendr`-crates
+### Building
+
+```bash
+# Build workspace (dvs-core, dvs-cli)
+just build
+
+# Build R package
+just rpkg-build
+
+# Build everything
+just build-all
+```
+
+### Testing
+
+```bash
+# Run workspace tests
+just test
+
+# Run R package Rust tests
+just rpkg-test
+
+# Run all tests
+just test-all
+```
+
+### R Package Maintenance
+
+The R package (`dvsR`) uses vendored miniextendr crates for CRAN compliance. When developing with a local miniextendr checkout, use these commands to keep vendored sources up to date:
+
+```bash
+# Automatic staleness detection (recommended)
+# Re-vendors only if miniextendr sources have changed
+just rpkg-vendor-detect
+
+# Force re-vendor (always updates vendored crates)
+just rpkg-vendor-force
+
+# Custom miniextendr path
+just rpkg-vendor-with-staleness /path/to/miniextendr
+
+# Configure R package (generates Cargo.toml, Makevars, etc.)
+just rpkg-configure
+
+# Install R package
+just rpkg-install
+```
+
+### Code Quality
+
+```bash
+# Format code
+just fmt
+
+# Run clippy
+just clippy
+
+# Run all CI checks
+just ci
+```

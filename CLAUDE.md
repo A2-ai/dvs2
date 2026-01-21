@@ -113,6 +113,7 @@ just rpkg-install       # Install R package
 just rpkg-document      # Generate R wrappers
 just rpkg-clean         # Clean build artifacts
 just rpkg-vendor-force  # Force re-vendor after miniextendr changes
+just rpkg-vendor-detect # Re-vendor if miniextendr sources changed
 
 # Combined
 just build-all          # Build everything
@@ -125,11 +126,14 @@ The R package vendors miniextendr crates for CRAN compliance. When you modify mi
 
 **After modifying miniextendr sources:**
 ```bash
+# Automatic staleness detection (recommended)
+just rpkg-vendor-detect
+
 # Force re-vendor (always updates)
 just rpkg-vendor-force
 
-# Or with automatic staleness detection
-MINIEXTENDR_SOURCE_DIR=/Users/elea/Documents/GitHub/miniextendr just vendor
+# Custom miniextendr path
+just rpkg-vendor-with-staleness /path/to/miniextendr
 ```
 
 **Environment variables:**
