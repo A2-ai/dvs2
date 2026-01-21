@@ -8,12 +8,15 @@
 
 use crate::HashAlgo;
 use chrono::{DateTime, Utc};
+#[cfg(feature = "serde")]
 use fs_err as fs;
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 /// Format for metadata files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum MetadataFormat {
     /// JSON format (default): `file.ext.dvs`
     #[default]
@@ -46,7 +49,8 @@ impl MetadataFormat {
 }
 
 /// Metadata stored in `.dvs` files alongside tracked data files.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Metadata {
     /// Hash of the file contents (hex string).
     /// Field name kept as `blake3_checksum` for backward compatibility.
@@ -59,7 +63,7 @@ pub struct Metadata {
     pub add_time: DateTime<Utc>,
 
     /// User-provided message describing this version.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub message: String,
 
     /// Username of the person who added this file.
@@ -67,16 +71,18 @@ pub struct Metadata {
 
     /// Hash algorithm used for this file.
     /// Defaults to Blake3 for backward compatibility with existing metadata.
-    #[serde(default = "default_hash_algo", skip_serializing_if = "is_blake3")]
+    #[cfg_attr(feature = "serde", serde(default = "default_hash_algo", skip_serializing_if = "is_blake3"))]
     pub hash_algo: HashAlgo,
 }
 
 /// Default hash algorithm for backward compatibility.
+#[cfg(feature = "serde")]
 fn default_hash_algo() -> HashAlgo {
     HashAlgo::Blake3
 }
 
 /// Check if algorithm is Blake3 (for skip_serializing_if).
+#[cfg(feature = "serde")]
 fn is_blake3(algo: &HashAlgo) -> bool {
     *algo == HashAlgo::Blake3
 }
@@ -126,6 +132,7 @@ impl Metadata {
     ///
     /// Tries to load from the given path. If the path ends with `.dvs.toml`,
     /// parses as TOML; if it ends with `.dvs`, parses as JSON.
+    #[cfg(feature = "serde")]
     pub fn load(path: &std::path::Path) -> Result<Self, crate::DvsError> {
         let contents = fs::read_to_string(path)?;
         let filename = path
@@ -144,6 +151,7 @@ impl Metadata {
     ///
     /// This is the preferred way to load metadata when you have the data file path.
     /// It automatically checks for `.dvs.toml` first (if it exists), then `.dvs`.
+    #[cfg(feature = "serde")]
     pub fn load_for_data_file(data_path: &std::path::Path) -> Result<Self, crate::DvsError> {
         let toml_path = Self::metadata_path_for_format(data_path, MetadataFormat::Toml);
         if toml_path.exists() {
@@ -155,19 +163,20 @@ impl Metadata {
     }
 
     /// Parse metadata from JSON string.
+    #[cfg(feature = "serde")]
     pub fn from_json(contents: &str) -> Result<Self, crate::DvsError> {
         let metadata: Metadata = serde_json::from_str(contents)?;
         Ok(metadata)
     }
 
     /// Parse metadata from TOML string.
-    #[cfg(feature = "toml-config")]
+    #[cfg(all(feature = "serde", feature = "toml-config"))]
     pub fn from_toml(contents: &str) -> Result<Self, crate::DvsError> {
         let metadata: Metadata = toml::from_str(contents)?;
         Ok(metadata)
     }
 
-    #[cfg(not(feature = "toml-config"))]
+    #[cfg(all(feature = "serde", not(feature = "toml-config")))]
     pub fn from_toml(_contents: &str) -> Result<Self, crate::DvsError> {
         Err(crate::DvsError::config(
             "TOML metadata support requires the toml-config feature",
@@ -179,6 +188,7 @@ impl Metadata {
     /// Format is determined by the file extension:
     /// - `.dvs.toml` -> TOML format
     /// - `.dvs` -> JSON format
+    #[cfg(feature = "serde")]
     pub fn save(&self, path: &std::path::Path) -> Result<(), crate::DvsError> {
         let filename = path
             .file_name()
@@ -193,6 +203,7 @@ impl Metadata {
     }
 
     /// Save metadata in JSON format.
+    #[cfg(feature = "serde")]
     pub fn save_json(&self, path: &std::path::Path) -> Result<(), crate::DvsError> {
         let json = serde_json::to_string_pretty(self)?;
         fs::write(path, json)?;
@@ -200,14 +211,14 @@ impl Metadata {
     }
 
     /// Save metadata in TOML format.
-    #[cfg(feature = "toml-config")]
+    #[cfg(all(feature = "serde", feature = "toml-config"))]
     pub fn save_toml(&self, path: &std::path::Path) -> Result<(), crate::DvsError> {
         let toml_str = toml::to_string_pretty(self)?;
         fs::write(path, toml_str)?;
         Ok(())
     }
 
-    #[cfg(not(feature = "toml-config"))]
+    #[cfg(all(feature = "serde", not(feature = "toml-config")))]
     pub fn save_toml(&self, _path: &std::path::Path) -> Result<(), crate::DvsError> {
         Err(crate::DvsError::config(
             "TOML metadata support requires the toml-config feature",
@@ -215,6 +226,7 @@ impl Metadata {
     }
 
     /// Save metadata with a specific format.
+    #[cfg(feature = "serde")]
     pub fn save_with_format(
         &self,
         data_path: &std::path::Path,
@@ -299,6 +311,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_metadata_roundtrip_json() {
         let temp_dir = std::env::temp_dir().join("dvs-test-metadata-roundtrip-json");
         let _ = fs::create_dir_all(&temp_dir);
@@ -329,7 +342,7 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
-    #[cfg(feature = "toml-config")]
+    #[cfg(all(feature = "serde", feature = "toml-config"))]
     #[test]
     fn test_metadata_roundtrip_toml() {
         let temp_dir = std::env::temp_dir().join("dvs-test-metadata-roundtrip-toml");
@@ -362,7 +375,7 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
-    #[cfg(feature = "toml-config")]
+    #[cfg(all(feature = "serde", feature = "toml-config"))]
     #[test]
     fn test_metadata_save_with_format() {
         let temp_dir = std::env::temp_dir().join("dvs-test-metadata-save-format");
@@ -389,7 +402,7 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
-    #[cfg(feature = "toml-config")]
+    #[cfg(all(feature = "serde", feature = "toml-config"))]
     #[test]
     fn test_load_for_data_file_prefers_toml() {
         let temp_dir = std::env::temp_dir().join("dvs-test-load-prefers-toml");

@@ -3,43 +3,50 @@
 //! This config stores user-specific settings that shouldn't be committed
 //! to version control, such as authentication tokens and default remotes.
 
+#[cfg(feature = "toml-config")]
 use crate::DvsError;
+#[cfg(feature = "toml-config")]
 use fs_err as fs;
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "toml-config")]
 use std::path::Path;
 
 /// Local configuration stored in `.dvs/config.toml`.
 ///
 /// This is separate from the repository config (`dvs.toml`/`dvs.yaml`)
 /// and contains user-specific settings like auth tokens.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct LocalConfig {
     /// Default remote URL for push/pull operations.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub base_url: Option<String>,
 
     /// Authentication settings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub auth: Option<AuthConfig>,
 
     /// Cache settings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub cache: Option<CacheConfig>,
 }
 
 /// Authentication configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AuthConfig {
     /// Bearer token for authentication.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub token: Option<String>,
 }
 
 /// Cache configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CacheConfig {
     /// Maximum cache size in bytes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub max_size: Option<u64>,
 }
 
@@ -52,6 +59,7 @@ impl LocalConfig {
     /// Load config from a TOML file.
     ///
     /// Returns default config if file doesn't exist.
+    #[cfg(feature = "toml-config")]
     pub fn load(path: &Path) -> Result<Self, DvsError> {
         if !path.exists() {
             return Ok(Self::default());
@@ -64,6 +72,7 @@ impl LocalConfig {
     }
 
     /// Save config to a TOML file.
+    #[cfg(feature = "toml-config")]
     pub fn save(&self, path: &Path) -> Result<(), DvsError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -173,6 +182,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "toml-config")]
     fn test_local_config_roundtrip() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config_path = temp_dir.path().join("config.toml");
@@ -191,12 +201,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "toml-config")]
     fn test_local_config_load_nonexistent() {
         let config = LocalConfig::load(Path::new("/nonexistent/config.toml")).unwrap();
         assert!(config.is_empty());
     }
 
     #[test]
+    #[cfg(feature = "toml-config")]
     fn test_local_config_toml_format() {
         let mut config = LocalConfig::new();
         config.set_base_url(Some("https://example.com".to_string()));

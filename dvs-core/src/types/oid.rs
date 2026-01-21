@@ -1,12 +1,14 @@
 //! Object ID (content hash with algorithm prefix).
 
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
 
 /// Hash algorithm for content identification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum HashAlgo {
     /// BLAKE3 hash (64 hex chars).
     Blake3,
@@ -151,6 +153,7 @@ impl FromStr for Oid {
 }
 
 // Custom serde implementation to serialize as "algo:hex" string
+#[cfg(feature = "serde")]
 impl Serialize for Oid {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -160,6 +163,7 @@ impl Serialize for Oid {
     }
 }
 
+#[cfg(feature = "serde")]
 impl<'de> Deserialize<'de> for Oid {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -229,6 +233,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_oid_serde_roundtrip() {
         let oid = Oid::blake3("a".repeat(64));
         let json = serde_json::to_string(&oid).unwrap();

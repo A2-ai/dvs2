@@ -21,7 +21,7 @@ path = "src/lib.rs"
 
 [features]
 # Lightweight defaults: TOML config, no git2 (CLI fallback available)
-default = ["blake3", "mmap", "walkdir", "toml-config"]
+default = ["blake3", "mmap", "walkdir", "toml-config", "serde"]
 blake3 = ["dep:blake3"]
 xxh3 = ["dep:xxhash-rust"]
 sha256 = ["dep:sha2"]
@@ -30,15 +30,17 @@ all-hashes = ["blake3", "xxh3", "sha256"]
 git2-backend = ["dep:git2"]
 mmap = ["dep:memmap2"]
 walkdir = ["dep:walkdir"]
+# Serialization (required for config/metadata/manifest persistence)
+serde = ["dep:serde", "dep:serde_json"]
 # Config format (mutually exclusive, yaml-config takes precedence)
-yaml-config = ["dep:serde_yaml"]
-toml-config = ["dep:toml"]
+yaml-config = ["serde", "dep:serde_yaml"]
+toml-config = ["serde", "dep:toml"]
 
 [dependencies]
-# Serialization
-serde.workspace = true
+# Serialization (optional)
+serde = { workspace = true, optional = true }
 serde_yaml = { workspace = true, optional = true }
-serde_json.workspace = true
+serde_json = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 
 # Hashing (mmap is optional optimization)
