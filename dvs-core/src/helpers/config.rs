@@ -43,6 +43,7 @@ pub fn find_repo_root_from(start: &Path) -> Result<PathBuf, DvsError> {
 }
 
 /// Load configuration from the config file.
+#[cfg(any(feature = "yaml-config", feature = "toml-config", feature = "serde"))]
 pub fn load_config(repo_root: &Path) -> Result<Config, DvsError> {
     let config_path = config_path(repo_root);
 
@@ -54,6 +55,7 @@ pub fn load_config(repo_root: &Path) -> Result<Config, DvsError> {
 }
 
 /// Save configuration to the config file.
+#[cfg(any(feature = "yaml-config", feature = "toml-config", feature = "serde"))]
 pub fn save_config(config: &Config, repo_root: &Path) -> Result<(), DvsError> {
     let config_path = config_path(repo_root);
     config.save(&config_path)

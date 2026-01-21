@@ -323,6 +323,7 @@ impl From<serde_yaml::Error> for DvsError {
     }
 }
 
+#[cfg(feature = "serde")]
 impl From<serde_json::Error> for DvsError {
     fn from(e: serde_json::Error) -> Self {
         Self::new(ErrorKind::JsonError {

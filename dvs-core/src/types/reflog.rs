@@ -6,11 +6,13 @@
 
 use super::{Manifest, Metadata, MetadataFormat};
 use chrono::{DateTime, Utc};
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// A metadata entry with its associated path and format.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct MetadataEntry {
     /// Repo-relative path to the data file.
     pub path: PathBuf,
@@ -18,7 +20,7 @@ pub struct MetadataEntry {
     pub meta: Metadata,
     /// Format of the metadata file (for preserving format on rollback).
     /// Defaults to JSON for backward compatibility with existing snapshots.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub format: MetadataFormat,
 }
 
@@ -42,13 +44,14 @@ impl MetadataEntry {
 ///
 /// Captures the DVS-tracked state at a point in time, including
 /// the manifest and all metadata files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct WorkspaceState {
     /// Schema version.
     pub version: u32,
 
     /// The manifest contents (dvs.lock), if present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub manifest: Option<Manifest>,
 
     /// Metadata entries, sorted by path for deterministic hashing.
@@ -89,6 +92,7 @@ impl WorkspaceState {
     ///
     /// Uses a deterministic serialization to ensure the same state
     /// always produces the same hash.
+    #[cfg(feature = "serde")]
     pub fn to_canonical_json(&self) -> Result<String, crate::DvsError> {
         // Use serde_json with sorted keys for determinism
         let json = serde_json::to_string(self)?;
@@ -96,6 +100,7 @@ impl WorkspaceState {
     }
 
     /// Compute the state ID (blake3 hash of canonical JSON).
+    #[cfg(feature = "serde")]
     pub fn compute_id(&self) -> Result<String, crate::DvsError> {
         let json = self.to_canonical_json()?;
         crate::helpers::hash::hash_bytes(json.as_bytes(), crate::HashAlgo::Blake3)
@@ -103,8 +108,9 @@ impl WorkspaceState {
 }
 
 /// Operation type for reflog entries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum ReflogOp {
     /// Files were added or updated.
     Add,
@@ -133,7 +139,8 @@ impl std::fmt::Display for ReflogOp {
 /// A single entry in the reflog.
 ///
 /// Records a state transition in JSONL format.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ReflogEntry {
     /// Timestamp of the operation.
     pub ts: DateTime<Utc>,
@@ -145,18 +152,18 @@ pub struct ReflogEntry {
     pub op: ReflogOp,
 
     /// Optional message describing the change.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub message: Option<String>,
 
     /// Previous state ID (`state:{id}` format), None for first entry.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub old: Option<String>,
 
     /// New state ID (`state:{id}` format).
     pub new: String,
 
     /// Paths affected by this operation.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
     pub paths: Vec<PathBuf>,
 }
 
@@ -192,12 +199,14 @@ impl ReflogEntry {
     }
 
     /// Serialize to a single JSONL line.
+    #[cfg(feature = "serde")]
     pub fn to_jsonl(&self) -> Result<String, crate::DvsError> {
         let json = serde_json::to_string(self)?;
         Ok(json)
     }
 
     /// Parse from a JSONL line.
+    #[cfg(feature = "serde")]
     pub fn from_jsonl(line: &str) -> Result<Self, crate::DvsError> {
         let entry: ReflogEntry = serde_json::from_str(line)?;
         Ok(entry)
@@ -245,6 +254,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_workspace_state_compute_id() {
         let state = WorkspaceState::empty();
         let id = state.compute_id().unwrap();
@@ -292,6 +302,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_reflog_entry_jsonl_roundtrip() {
         let entry = ReflogEntry::new(
             "bob".to_string(),

@@ -5,11 +5,13 @@ use fs_err as fs;
 use std::path::Path;
 
 /// Save metadata to a `.dvs` file.
+#[cfg(feature = "serde")]
 pub fn save_metadata(metadata: &Metadata, path: &Path) -> Result<(), DvsError> {
     metadata.save(path)
 }
 
 /// Load metadata from a `.dvs` file.
+#[cfg(feature = "serde")]
 pub fn load_metadata(path: &Path) -> Result<Metadata, DvsError> {
     Metadata::load(path)
 }

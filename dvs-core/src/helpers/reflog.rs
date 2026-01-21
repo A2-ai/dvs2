@@ -5,9 +5,11 @@
 //! - `Reflog`: Manage HEAD ref and append-only log of state changes
 
 use fs_err as fs;
+#[cfg(feature = "serde")]
 use std::io::{BufRead, BufReader, Write};
 
 use crate::helpers::layout::Layout;
+#[cfg(feature = "serde")]
 use crate::types::{ReflogEntry, ReflogOp, WorkspaceState};
 use crate::DvsError;
 
@@ -27,6 +29,7 @@ impl<'a> SnapshotStore<'a> {
     /// Save a workspace state and return its ID.
     ///
     /// The snapshot is only written if it doesn't already exist.
+    #[cfg(feature = "serde")]
     pub fn save(&self, state: &WorkspaceState) -> Result<String, DvsError> {
         let id = state.compute_id()?;
         let path = self.layout.snapshot_path(&id);
@@ -42,6 +45,7 @@ impl<'a> SnapshotStore<'a> {
     }
 
     /// Load a workspace state by ID.
+    #[cfg(feature = "serde")]
     pub fn load(&self, id: &str) -> Result<WorkspaceState, DvsError> {
         let path = self.layout.snapshot_path(id);
         if !path.exists() {
@@ -121,6 +125,7 @@ impl<'a> Reflog<'a> {
     }
 
     /// Append an entry to the reflog.
+    #[cfg(feature = "serde")]
     pub fn append(&self, entry: &ReflogEntry) -> Result<(), DvsError> {
         let path = self.layout.head_log_path();
         if let Some(parent) = path.parent() {
@@ -140,6 +145,7 @@ impl<'a> Reflog<'a> {
     }
 
     /// Read all reflog entries, oldest first.
+    #[cfg(feature = "serde")]
     pub fn read_all(&self) -> Result<Vec<ReflogEntry>, DvsError> {
         let path = self.layout.head_log_path();
         if !path.exists() {
@@ -163,6 +169,7 @@ impl<'a> Reflog<'a> {
     }
 
     /// Read reflog entries in reverse order (newest first).
+    #[cfg(feature = "serde")]
     pub fn read_recent(&self) -> Result<Vec<ReflogEntry>, DvsError> {
         let mut entries = self.read_all()?;
         entries.reverse();
@@ -170,6 +177,7 @@ impl<'a> Reflog<'a> {
     }
 
     /// Get the most recent N entries.
+    #[cfg(feature = "serde")]
     pub fn recent(&self, n: usize) -> Result<Vec<ReflogEntry>, DvsError> {
         let entries = self.read_recent()?;
         Ok(entries.into_iter().take(n).collect())
@@ -180,6 +188,7 @@ impl<'a> Reflog<'a> {
     /// This is a high-level method that:
     /// 1. Updates HEAD to the new state ID
     /// 2. Appends a reflog entry
+    #[cfg(feature = "serde")]
     pub fn record(
         &self,
         actor: String,
@@ -207,17 +216,20 @@ impl<'a> Reflog<'a> {
     }
 
     /// Get entry by index (0 = most recent).
+    #[cfg(feature = "serde")]
     pub fn get_by_index(&self, index: usize) -> Result<Option<ReflogEntry>, DvsError> {
         let entries = self.read_recent()?;
         Ok(entries.into_iter().nth(index))
     }
 
     /// Count total entries.
+    #[cfg(feature = "serde")]
     pub fn len(&self) -> Result<usize, DvsError> {
         Ok(self.read_all()?.len())
     }
 
     /// Check if reflog is empty.
+    #[cfg(feature = "serde")]
     pub fn is_empty(&self) -> Result<bool, DvsError> {
         Ok(self.len()? == 0)
     }
@@ -231,6 +243,7 @@ pub fn current_actor() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "serde")]
     use std::path::PathBuf;
 
     fn setup_temp_layout() -> (tempfile::TempDir, Layout) {
@@ -241,6 +254,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_snapshot_store_save_load() {
         let (_temp, layout) = setup_temp_layout();
         let store = SnapshotStore::new(&layout);
@@ -258,6 +272,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_snapshot_store_exists() {
         let (_temp, layout) = setup_temp_layout();
         let store = SnapshotStore::new(&layout);
@@ -271,6 +286,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_snapshot_store_list() {
         let (_temp, layout) = setup_temp_layout();
         let store = SnapshotStore::new(&layout);
@@ -301,6 +317,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_reflog_append_read() {
         let (_temp, layout) = setup_temp_layout();
         let reflog = Reflog::new(&layout);
@@ -342,6 +359,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_reflog_record() {
         let (_temp, layout) = setup_temp_layout();
         let reflog = Reflog::new(&layout);
@@ -368,6 +386,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_reflog_get_by_index() {
         let (_temp, layout) = setup_temp_layout();
         let reflog = Reflog::new(&layout);

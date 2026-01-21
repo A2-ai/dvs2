@@ -3,14 +3,17 @@
 //! The manifest (`dvs.lock`) is the source of truth tracked in Git.
 
 use super::oid::Oid;
+#[cfg(feature = "serde")]
 use fs_err as fs;
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Compression algorithm for stored objects.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum Compression {
     /// No compression.
     #[default]
@@ -24,7 +27,8 @@ pub enum Compression {
 }
 
 /// A single entry in the manifest.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ManifestEntry {
     /// Relative path from repo root.
     pub path: PathBuf,
@@ -36,14 +40,15 @@ pub struct ManifestEntry {
     pub bytes: u64,
 
     /// Compression algorithm (if any).
-    #[serde(default, skip_serializing_if = "is_compression_none")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "is_compression_none"))]
     pub compression: Compression,
 
     /// Remote name (default: "origin").
-    #[serde(default = "default_remote", skip_serializing_if = "is_default_remote")]
+    #[cfg_attr(feature = "serde", serde(default = "default_remote", skip_serializing_if = "is_default_remote"))]
     pub remote: String,
 }
 
+#[cfg(feature = "serde")]
 fn is_compression_none(c: &Compression) -> bool {
     matches!(c, Compression::None)
 }
@@ -52,6 +57,7 @@ fn default_remote() -> String {
     "origin".to_string()
 }
 
+#[cfg(feature = "serde")]
 fn is_default_remote(s: &str) -> bool {
     s == "origin"
 }
@@ -82,13 +88,14 @@ impl ManifestEntry {
 }
 
 /// The manifest file format.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Manifest {
     /// Schema version.
     pub version: u32,
 
     /// Base URL for HTTP CAS (optional).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub base_url: Option<String>,
 
     /// Tracked entries.
@@ -123,6 +130,7 @@ impl Manifest {
     }
 
     /// Load manifest from a file.
+    #[cfg(feature = "serde")]
     pub fn load(path: &Path) -> Result<Self, crate::DvsError> {
         let contents = fs::read_to_string(path)?;
         let manifest: Manifest = serde_json::from_str(&contents)?;
@@ -130,6 +138,7 @@ impl Manifest {
     }
 
     /// Save manifest to a file.
+    #[cfg(feature = "serde")]
     pub fn save(&self, path: &Path) -> Result<(), crate::DvsError> {
         let json = serde_json::to_string_pretty(self)?;
         fs::write(path, json)?;
@@ -282,6 +291,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_manifest_serde_roundtrip() {
         let mut manifest = Manifest::new().with_base_url("https://example.com/dvcs".to_string());
         manifest.upsert(

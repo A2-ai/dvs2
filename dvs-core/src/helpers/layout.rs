@@ -195,18 +195,20 @@ impl Layout {
 }
 
 /// Materialization state tracking.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MaterializedState {
     /// Map from path to OID of last materialized version.
     pub files: std::collections::HashMap<PathBuf, String>,
 
     /// Timestamp of last materialization.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub last_materialized: Option<String>,
 }
 
 impl MaterializedState {
     /// Load state from file.
+    #[cfg(feature = "serde")]
     pub fn load(path: &Path) -> Result<Self, DvsError> {
         if !path.exists() {
             return Ok(Self::default());
@@ -217,6 +219,7 @@ impl MaterializedState {
     }
 
     /// Save state to file.
+    #[cfg(feature = "serde")]
     pub fn save(&self, path: &Path) -> Result<(), DvsError> {
         let json = serde_json::to_string_pretty(self)?;
         if let Some(parent) = path.parent() {
@@ -355,6 +358,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_materialized_state_roundtrip() {
         let temp_dir = std::env::temp_dir().join("dvs-test-mat-state");
         let _ = fs::create_dir_all(&temp_dir);
