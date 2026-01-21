@@ -144,21 +144,32 @@ impl HttpStore {
             None => vec![],
         }
     }
+
+    /// Get common curl args including timeout.
+    fn common_args(&self) -> Vec<String> {
+        vec![
+            "-s".to_string(),           // Silent mode
+            "--max-time".to_string(),   // Maximum time for operation
+            "300".to_string(),          // 5 minute timeout
+            "--connect-timeout".to_string(), // Connection timeout
+            "30".to_string(),           // 30 second connection timeout
+        ]
+    }
 }
 
 impl ObjectStore for HttpStore {
     fn has(&self, oid: &Oid) -> StoreResult<bool> {
         let url = self.object_url(oid);
 
-        // Build curl args with optional auth
-        let mut args = vec![
-            "-s".to_string(),
+        // Build curl args with timeout and optional auth
+        let mut args = self.common_args();
+        args.extend([
             "-o".to_string(),
             "/dev/null".to_string(),
             "-w".to_string(),
             "%{http_code}".to_string(),
             "-I".to_string(),
-        ];
+        ]);
         args.extend(self.auth_args());
         args.push(url);
 
@@ -181,13 +192,13 @@ impl ObjectStore for HttpStore {
             fs::create_dir_all(parent)?;
         }
 
-        // Build curl args with optional auth
-        let mut args = vec![
-            "-s".to_string(),
+        // Build curl args with timeout and optional auth
+        let mut args = self.common_args();
+        args.extend([
             "-f".to_string(),
             "-o".to_string(),
             dest.to_string_lossy().to_string(),
-        ];
+        ]);
         args.extend(self.auth_args());
         args.push(url.clone());
 
@@ -213,15 +224,15 @@ impl ObjectStore for HttpStore {
 
         let url = self.object_url(oid);
 
-        // Build curl args with optional auth
-        let mut args = vec![
-            "-s".to_string(),
+        // Build curl args with timeout and optional auth
+        let mut args = self.common_args();
+        args.extend([
             "-f".to_string(),
             "-X".to_string(),
             "PUT".to_string(),
             "--data-binary".to_string(),
             format!("@{}", src.to_string_lossy()),
-        ];
+        ]);
         args.extend(self.auth_args());
         args.push(url.clone());
 
