@@ -8,7 +8,11 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 // Re-export dvs-core types for internal use
-use dvs_core::{add, get, init, status, DvsError, FileStatus, Outcome};
+use dvs_core::{
+    add, get, init, log, materialize, pull, push, rollback, status, DvsError, FileStatus,
+    LogEntry, MaterializeSummary, Outcome, PullSummary, PushSummary, RollbackResult,
+    RollbackTarget,
+};
 
 // =============================================================================
 // Helper: Convert DvsError to R error
@@ -65,6 +69,74 @@ struct StatusResultJson {
     message: Option<String>,
     error: Option<String>,
     error_message: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PushResultJson {
+    oid: String,
+    uploaded: bool,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PushSummaryJson {
+    uploaded: usize,
+    present: usize,
+    failed: usize,
+    results: Vec<PushResultJson>,
+}
+
+#[derive(Serialize)]
+struct PullResultJson {
+    oid: String,
+    downloaded: bool,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PullSummaryJson {
+    downloaded: usize,
+    cached: usize,
+    failed: usize,
+    results: Vec<PullResultJson>,
+}
+
+#[derive(Serialize)]
+struct MaterializeResultJson {
+    path: String,
+    oid: String,
+    materialized: bool,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MaterializeSummaryJson {
+    materialized: usize,
+    up_to_date: usize,
+    failed: usize,
+    results: Vec<MaterializeResultJson>,
+}
+
+#[derive(Serialize)]
+struct LogEntryJson {
+    index: usize,
+    timestamp: String,
+    actor: String,
+    op: String,
+    message: Option<String>,
+    prev_state: Option<String>,
+    new_state: String,
+    files: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct RollbackResultJson {
+    success: bool,
+    from_state: Option<String>,
+    to_state: String,
+    restored_files: Vec<String>,
+    removed_files: Vec<String>,
+    error: Option<String>,
 }
 
 // =============================================================================
@@ -225,9 +297,178 @@ pub fn dvs_status_json(files: Vec<String>) -> String {
     }
 }
 
+/// @title Push Files to Remote (internal)
+/// @description Internal function returning JSON. Use dvs_push() wrapper.
+/// @param remote_url Optional character string specifying the remote URL.
+/// @return A JSON string with push summary.
+/// @keywords internal
+#[miniextendr]
+pub fn dvs_push_json(remote_url: Option<&str>) -> String {
+    match push(remote_url) {
+        Ok(summary) => {
+            let json_summary = push_summary_to_json(summary);
+            serde_json::to_string(&json_summary).unwrap_or_else(|e| {
+                r_error!("JSON serialization failed: {}", e);
+            })
+        }
+        Err(e) => dvs_error_to_r(e),
+    }
+}
+
+/// @title Pull Files from Remote (internal)
+/// @description Internal function returning JSON. Use dvs_pull() wrapper.
+/// @param remote_url Optional character string specifying the remote URL.
+/// @return A JSON string with pull summary.
+/// @keywords internal
+#[miniextendr]
+pub fn dvs_pull_json(remote_url: Option<&str>) -> String {
+    match pull(remote_url) {
+        Ok(summary) => {
+            let json_summary = pull_summary_to_json(summary);
+            serde_json::to_string(&json_summary).unwrap_or_else(|e| {
+                r_error!("JSON serialization failed: {}", e);
+            })
+        }
+        Err(e) => dvs_error_to_r(e),
+    }
+}
+
+/// @title Materialize Files from Cache (internal)
+/// @description Internal function returning JSON. Use dvs_materialize() wrapper.
+/// @return A JSON string with materialize summary.
+/// @keywords internal
+#[miniextendr]
+pub fn dvs_materialize_json() -> String {
+    match materialize() {
+        Ok(summary) => {
+            let json_summary = materialize_summary_to_json(summary);
+            serde_json::to_string(&json_summary).unwrap_or_else(|e| {
+                r_error!("JSON serialization failed: {}", e);
+            })
+        }
+        Err(e) => dvs_error_to_r(e),
+    }
+}
+
+/// @title View DVS Log (internal)
+/// @description Internal function returning JSON. Use dvs_log() wrapper.
+/// @param limit Optional integer specifying maximum number of entries to return.
+/// @return A JSON array of log entries.
+/// @keywords internal
+#[miniextendr]
+pub fn dvs_log_json(limit: Option<i32>) -> String {
+    let limit_usize = limit.map(|n| n as usize);
+    match log(limit_usize) {
+        Ok(entries) => {
+            let json_entries: Vec<LogEntryJson> = entries.into_iter().map(log_entry_to_json).collect();
+            serde_json::to_string(&json_entries).unwrap_or_else(|e| {
+                r_error!("JSON serialization failed: {}", e);
+            })
+        }
+        Err(e) => dvs_error_to_r(e),
+    }
+}
+
+/// @title Rollback to Previous State (internal)
+/// @description Internal function returning JSON. Use dvs_rollback() wrapper.
+/// @param target Character string specifying the target (state ID or index number as string).
+/// @param force Logical indicating whether to skip dirty working tree check.
+/// @param materialize_files Logical indicating whether to materialize data files.
+/// @return A JSON string with rollback result.
+/// @keywords internal
+#[miniextendr]
+pub fn dvs_rollback_json(target: &str, force: bool, materialize_files: bool) -> String {
+    let target = RollbackTarget::parse(target);
+    match rollback(target, force, materialize_files) {
+        Ok(result) => {
+            let json_result = rollback_result_to_json(result);
+            serde_json::to_string(&json_result).unwrap_or_else(|e| {
+                r_error!("JSON serialization failed: {}", e);
+            })
+        }
+        Err(e) => dvs_error_to_r(e),
+    }
+}
+
 // =============================================================================
 // Helper Functions
 // =============================================================================
+
+fn push_summary_to_json(summary: PushSummary) -> PushSummaryJson {
+    PushSummaryJson {
+        uploaded: summary.uploaded,
+        present: summary.present,
+        failed: summary.failed,
+        results: summary
+            .results
+            .into_iter()
+            .map(|r| PushResultJson {
+                oid: r.oid.to_string(),
+                uploaded: r.uploaded,
+                error: r.error,
+            })
+            .collect(),
+    }
+}
+
+fn pull_summary_to_json(summary: PullSummary) -> PullSummaryJson {
+    PullSummaryJson {
+        downloaded: summary.downloaded,
+        cached: summary.cached,
+        failed: summary.failed,
+        results: summary
+            .results
+            .into_iter()
+            .map(|r| PullResultJson {
+                oid: r.oid.to_string(),
+                downloaded: r.downloaded,
+                error: r.error,
+            })
+            .collect(),
+    }
+}
+
+fn materialize_summary_to_json(summary: MaterializeSummary) -> MaterializeSummaryJson {
+    MaterializeSummaryJson {
+        materialized: summary.materialized,
+        up_to_date: summary.up_to_date,
+        failed: summary.failed,
+        results: summary
+            .results
+            .into_iter()
+            .map(|r| MaterializeResultJson {
+                path: r.path.display().to_string(),
+                oid: r.oid.to_string(),
+                materialized: r.materialized,
+                error: r.error,
+            })
+            .collect(),
+    }
+}
+
+fn log_entry_to_json(entry: LogEntry) -> LogEntryJson {
+    LogEntryJson {
+        index: entry.index,
+        timestamp: entry.entry.ts.to_rfc3339(),
+        actor: entry.entry.actor,
+        op: format!("{:?}", entry.entry.op),
+        message: entry.entry.message,
+        prev_state: entry.entry.old,
+        new_state: entry.entry.new,
+        files: entry.entry.paths.into_iter().map(|p| p.display().to_string()).collect(),
+    }
+}
+
+fn rollback_result_to_json(result: RollbackResult) -> RollbackResultJson {
+    RollbackResultJson {
+        success: result.success,
+        from_state: result.from_state,
+        to_state: result.to_state,
+        restored_files: result.restored_files.into_iter().map(|p| p.display().to_string()).collect(),
+        removed_files: result.removed_files.into_iter().map(|p| p.display().to_string()).collect(),
+        error: result.error,
+    }
+}
 
 fn outcome_to_string(outcome: Outcome) -> String {
     match outcome {
@@ -262,4 +503,13 @@ miniextendr_module! {
     fn dvs_add_json;
     fn dvs_get_json;
     fn dvs_status_json;
+
+    // Remote operations (JSON)
+    fn dvs_push_json;
+    fn dvs_pull_json;
+    fn dvs_materialize_json;
+
+    // History operations (JSON)
+    fn dvs_log_json;
+    fn dvs_rollback_json;
 }

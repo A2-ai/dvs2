@@ -93,12 +93,13 @@
 
 ### Future Plans (Not Yet Written)
 
-- [ ] **Plan 028: R Package Bindings** - Wire dvsR package to dvs-core operations via miniextendr.
-  - Wire `dvs_init()`, `dvs_add()`, `dvs_get()`, `dvs_status()` to dvs-core
-  - Wire `dvs_push()`, `dvs_pull()`, `dvs_materialize()` to dvs-core
-  - R-friendly error handling (convert `DvsError` to R errors with `error_type()`)
-  - R-friendly return types (data.frames for status, lists for results)
-  - Blocks: Plan 039 `RRunner` implementation
+- [x] **Plan 028: R Package Bindings** - Wire dvsR package to dvs-core operations via miniextendr.
+  - [x] Wire `dvs_init()`, `dvs_add()`, `dvs_get()`, `dvs_status()` to dvs-core
+  - [x] Wire `dvs_push()`, `dvs_pull()`, `dvs_materialize()` to dvs-core
+  - [x] Wire `dvs_log()`, `dvs_rollback()` to dvs-core
+  - [x] R-friendly error handling (convert `DvsError` to R errors with `error_type()`)
+  - [x] R-friendly return types (data.frames for status, lists for results)
+  - Unblocks: Plan 039 `RRunner` implementation
 
 ---
 
@@ -144,9 +145,11 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 - [x] Wire `dvs_add()` to `dvs_core::add()`
 - [x] Wire `dvs_get()` to `dvs_core::get()`
 - [x] Wire `dvs_status()` to `dvs_core::status()`
-- [ ] Wire `dvs_push()` to `dvs_core::push()`
-- [ ] Wire `dvs_pull()` to `dvs_core::pull()`
-- [ ] Wire `dvs_materialize()` to `dvs_core::materialize()`
+- [x] Wire `dvs_push()` to `dvs_core::push()`
+- [x] Wire `dvs_pull()` to `dvs_core::pull()`
+- [x] Wire `dvs_materialize()` to `dvs_core::materialize()`
+- [x] Wire `dvs_log()` to `dvs_core::log()`
+- [x] Wire `dvs_rollback()` to `dvs_core::rollback()`
 - [x] R-friendly error handling (convert DvsError to R errors)
 - [x] R-friendly return types (data.frames for status via JSON)
 
@@ -244,7 +247,7 @@ Issues identified during code review (see `reviews/` directory for details).
 
 ### Low Priority
 
-- [ ] **HttpStore relies on curl subprocess** - No timeouts or rich error reporting; requires `curl` on PATH. (`dvs-core/src/helpers/store.rs:149-235`)
+- [x] **HttpStore relies on curl subprocess** - ~~No timeouts or rich error reporting.~~ Fixed: Added 5min operation timeout and 30sec connection timeout to curl commands. (`dvs-core/src/helpers/store.rs:149-157`)
 
 - [ ] **Backend normalize doesn't canonicalize** - Only joins with `current_dir`, may mis-handle symlinks/`..`. (`dvs-core/src/helpers/backend.rs:160-171`)
 
@@ -267,6 +270,36 @@ Issues identified during code review (see `reviews/` directory for details).
 - [ ] Git hooks integration (post-checkout, pre-push)
 - [ ] Garbage collection for orphaned objects
 - [ ] Web UI for server
+
+---
+
+## Remaining Tasks from Code Review (sonnet_reviews/)
+
+See `sonnet_reviews/appendix/findings-by-priority.md` for full details.
+
+### Deferred
+
+- [ ] **P1-5: Missing rate limiting** - Server archived, would require external dependency (e.g., `governor` crate)
+- [ ] **P2-7: Init can't bootstrap non-git dir** - Needs design decision on whether to support non-git workspaces
+
+### Pending (Low Priority)
+
+- [ ] **P2-4: Backward compatibility policy** - CLAUDE.md states "no backward compat" but may want formal policy
+- [ ] **P2-5: Documentation gaps** - Missing architecture docs, developer onboarding guide
+- [ ] **P3-1: Missing batch operations** - CLI could support `dvs add --batch` for reading paths from stdin
+- [ ] **P3-2: No progress indicators** - Add progress bars for large file operations
+- [ ] **P3-4: No incremental hash verification** - Could skip re-hashing unchanged files in `dvs status`
+- [ ] **P3-5: Missing compression support** - Add zstd/lz4 compression for stored objects
+- [ ] **P3-6: Backend normalize not true canonicalization** - May mis-handle symlinks/`..` (`dvs-core/src/helpers/backend.rs:160-171`)
+- [ ] **P3-7: R JSON interface (large integers)** - File sizes > 2^53 lose precision as f64
+
+### Archived (Not Applicable)
+
+- **P2-1: dvs-daemon stub** - Moved to `archived-crates.zip`
+- **P2-3: Server missing audit logging** - Server moved to `archived-crates.zip`
+- **P3-3: Missing size quotas** - Server archived
+
+---
 
 ## Misc
 
