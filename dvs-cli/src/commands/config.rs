@@ -172,7 +172,9 @@ fn set_config(output: &Output, config_path: &Path, key: &str, value: &str) -> Re
 
     match key {
         "storage_dir" => {
-            config.storage_dir = PathBuf::from(value);
+            let path = PathBuf::from(value);
+            validate_storage_dir(&path, output)?;
+            config.storage_dir = path;
         }
         "permissions" => {
             let perms = parse_permissions(value)?;
@@ -182,6 +184,7 @@ fn set_config(output: &Output, config_path: &Path, key: &str, value: &str) -> Re
             if value.is_empty() {
                 config.group = None;
             } else {
+                validate_group(value)?;
                 config.group = Some(value.to_string());
             }
         }
@@ -217,6 +220,92 @@ fn set_config(output: &Output, config_path: &Path, key: &str, value: &str) -> Re
     } else {
         output.success(&format!("Set {} = {}", key, value));
     }
+    Ok(())
+}
+
+/// Validate storage directory path.
+///
+/// Checks:
+/// - Path is not empty
+/// - If path exists, it must be a directory (not a file)
+/// - If path doesn't exist, parent must exist or be creatable
+fn validate_storage_dir(path: &Path, output: &Output) -> Result<()> {
+    if path.as_os_str().is_empty() {
+        return Err(CliError::InvalidArg(
+            "storage_dir cannot be empty".to_string(),
+        ));
+    }
+
+    if path.exists() {
+        if !path.is_dir() {
+            return Err(CliError::InvalidArg(format!(
+                "storage_dir '{}' exists but is not a directory",
+                path.display()
+            )));
+        }
+        // Directory exists, all good
+    } else {
+        // Path doesn't exist - check if parent exists or can be created
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                // Parent doesn't exist - warn but allow (will be created on first use)
+                if !output.is_quiet() {
+                    output.warn(&format!(
+                        "storage_dir '{}' does not exist (will be created on first use)",
+                        path.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate group name.
+///
+/// On Unix, verifies the group exists in the system.
+/// On other platforms, accepts any non-empty string.
+fn validate_group(group: &str) -> Result<()> {
+    if group.is_empty() {
+        return Err(CliError::InvalidArg("group cannot be empty".to_string()));
+    }
+
+    // Validate group name format (alphanumeric, underscore, hyphen)
+    if !group
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(CliError::InvalidArg(format!(
+            "Invalid group name '{}'. Group names should contain only alphanumeric characters, underscores, and hyphens.",
+            group
+        )));
+    }
+
+    // On Unix, try to verify the group exists
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+
+        // Use `getent group <name>` to check if group exists
+        let result = Command::new("getent").args(["group", group]).output();
+
+        match result {
+            Ok(output) => {
+                if !output.status.success() {
+                    return Err(CliError::InvalidArg(format!(
+                        "Group '{}' does not exist on this system",
+                        group
+                    )));
+                }
+            }
+            Err(_) => {
+                // getent not available - skip validation
+                // This can happen on some minimal systems
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -278,6 +367,11 @@ fn format_metadata_format(format: MetadataFormat) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{OutputDest, OutputFormat};
+
+    fn test_output() -> Output {
+        Output::new(OutputFormat::Human, OutputDest::Inherit, true)
+    }
 
     #[test]
     fn test_parse_permissions() {
@@ -316,5 +410,54 @@ mod tests {
             MetadataFormat::Toml
         ));
         assert!(parse_metadata_format("xml").is_err());
+    }
+
+    #[test]
+    fn test_validate_group_format() {
+        // Valid group names
+        assert!(validate_group("staff").is_ok());
+        assert!(validate_group("wheel").is_ok());
+        assert!(validate_group("my-group").is_ok());
+        assert!(validate_group("my_group").is_ok());
+        assert!(validate_group("group123").is_ok());
+
+        // Invalid group names (format)
+        assert!(validate_group("").is_err());
+        assert!(validate_group("my group").is_err()); // space
+        assert!(validate_group("my@group").is_err()); // special char
+        assert!(validate_group("my.group").is_err()); // dot
+    }
+
+    #[test]
+    fn test_validate_storage_dir_empty() {
+        let output = test_output();
+        let empty_path = PathBuf::from("");
+        assert!(validate_storage_dir(&empty_path, &output).is_err());
+    }
+
+    #[test]
+    fn test_validate_storage_dir_existing_dir() {
+        let output = test_output();
+        // Use temp dir which exists
+        let temp = std::env::temp_dir();
+        assert!(validate_storage_dir(&temp, &output).is_ok());
+    }
+
+    #[test]
+    fn test_validate_storage_dir_is_file() {
+        let output = test_output();
+        // Create a temp file
+        let temp_dir = std::env::temp_dir();
+        let temp_file = temp_dir.join(format!("dvs-test-file-{}", std::process::id()));
+        std::fs::write(&temp_file, "test").unwrap();
+
+        let result = validate_storage_dir(&temp_file, &output);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("is not a directory"));
+
+        let _ = std::fs::remove_file(&temp_file);
     }
 }

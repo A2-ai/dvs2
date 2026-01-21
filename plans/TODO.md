@@ -233,11 +233,11 @@ Issues identified during code review (see `reviews/` directory for details).
 
 - [x] **`dvs add --metadata-format` is no-op** - ~~Flag is validated but never applied.~~ Fixed: Added `add_with_format()` function to dvs-core that accepts optional `MetadataFormat` override. CLI now parses `--metadata-format` and passes it through to override config's default. (`dvs-core/src/ops/add.rs`, `dvs-cli/src/commands/add.rs`)
 
-- [ ] **`dvs config set` lacks validation** - `storage_dir` and `group` values aren't validated (existence, permissions, group presence). (`dvs-cli/src/commands/config.rs:110-151`)
+- [x] **`dvs config set` lacks validation** - ~~`storage_dir` and `group` values aren't validated.~~ Fixed: Added `validate_storage_dir()` that checks path is not empty, not a file if exists, and warns if it doesn't exist yet. Added `validate_group()` that validates group name format and uses `getent` on Unix to verify group exists. (`dvs-cli/src/commands/config.rs`)
 
-- [ ] **No CLI for `.dvs/config.toml`** - Users must hand-edit local config for `base_url`/`auth_token`.
+- [x] **No CLI for `.dvs/config.toml`** - ~~Users must hand-edit local config for `base_url`/`auth_token`.~~ Fixed: Added `dvs local-config` subcommand with `show`, `get <key>`, `set <key> <value>`, and `unset <key>` actions. Supports `base_url` and `auth_token` keys. Auth token value is not echoed for security. (`dvs-cli/src/commands/local_config.rs`)
 
-- [ ] **Rollback `materialize=true` not implemented** - Only restores metadata, never materializes data files. (`dvs-core/src/ops/rollback.rs:205-209`)
+- [x] **Rollback `materialize=true` not implemented** - ~~Only restores metadata, never materializes data files.~~ Fixed: When `materialize=true`, rollback now builds OID from metadata (`hash_algo` + `checksum()`), checks if object is cached, and copies from cache to working directory. (`dvs-core/src/ops/rollback.rs`)
 
 ### Low Priority
 
@@ -247,9 +247,9 @@ Issues identified during code review (see `reviews/` directory for details).
 
 ### Test Gaps
 
-- [ ] Add tests for non-default hash algorithms (sha256/xxh3) across add/get/status
-- [ ] Add tests for `.dvs.toml` interoperability in get/status/rollback/merge
-- [ ] Add tests for manifest-based flows (push/pull/materialize)
+- [x] Add tests for non-default hash algorithms (sha256/xxh3) across add/get/status - Added 14 tests covering add/get/status operations with SHA-256 and XXH3 algorithms. Tests are feature-gated with `#[cfg(feature = "sha256")]` and `#[cfg(feature = "xxh3")]` and run with `--features all-hashes`. (`dvs-core/src/ops/add.rs`, `dvs-core/src/ops/get.rs`, `dvs-core/src/ops/status.rs`)
+- [x] Add tests for `.dvs.toml` interoperability in get/status/rollback/merge - Added 6 tests: `test_get_with_toml_metadata`, `test_get_toml_metadata_already_present`, `test_status_current_with_toml_metadata`, `test_status_unsynced_with_toml_metadata`, `test_find_tracked_files_with_toml`, `test_rollback_preserves_toml_format`. (`dvs-core/src/ops/get.rs`, `dvs-core/src/ops/status.rs`, `dvs-core/src/ops/rollback.rs`)
+- [x] Add tests for manifest-based flows (push/pull/materialize) - Added 4 materialize tests: `test_materialize_from_cache`, `test_materialize_already_up_to_date`, `test_materialize_missing_cache`, `test_materialize_multiple_files`. Push/pull require HTTP server which is covered by dvs-testkit integration tests. (`dvs-core/src/ops/materialize.rs`)
 - [ ] Add server auth enforcement tests for GET/HEAD
 - [ ] Add server hash verification tests for PUT
 

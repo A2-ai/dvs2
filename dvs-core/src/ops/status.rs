@@ -441,4 +441,327 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    /// Helper to create a test repo with a specific hash algorithm.
+    #[allow(dead_code)]
+    fn setup_test_repo_with_algo(
+        test_name: &str,
+        hash_algo: crate::HashAlgo,
+    ) -> (PathBuf, PathBuf) {
+        let unique_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let temp_dir = std::env::temp_dir().join(format!(
+            "dvs-test-status-{}-{}-{}",
+            std::process::id(),
+            test_name,
+            unique_id
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create a fake .git directory
+        fs::create_dir_all(temp_dir.join(".git")).unwrap();
+
+        // Create storage directory
+        let storage_dir = temp_dir.join("storage");
+        fs::create_dir_all(&storage_dir).unwrap();
+
+        // Create config file with specific hash algorithm
+        let config = Config::with_hash_algo(storage_dir.clone(), None, None, hash_algo);
+        config
+            .save(&temp_dir.join(Config::config_filename()))
+            .unwrap();
+
+        (temp_dir, storage_dir)
+    }
+
+    #[test]
+    #[cfg(feature = "sha256")]
+    fn test_status_current_with_sha256() {
+        use crate::HashAlgo;
+
+        let (temp_dir, storage_dir) =
+            setup_test_repo_with_algo("status_sha256_current", HashAlgo::Sha256);
+
+        // Create a tracked file
+        let test_file = temp_dir.join("data.csv");
+        let content = b"sha256 status test content";
+        fs::write(&test_file, content).unwrap();
+
+        let checksum = hash::get_file_hash_with_algo(&test_file, HashAlgo::Sha256).unwrap();
+
+        // Store in storage with sha256 prefix
+        let storage_path = hash::storage_path_for_hash(&storage_dir, HashAlgo::Sha256, &checksum);
+        copy::copy_to_storage(&test_file, &storage_path, None, None).unwrap();
+
+        // Create metadata with sha256
+        let metadata = Metadata::with_algo(
+            checksum,
+            content.len() as u64,
+            None,
+            "tester".to_string(),
+            HashAlgo::Sha256,
+        );
+        metadata.save(&Metadata::metadata_path(&test_file)).unwrap();
+
+        // Check status
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let config = Config::with_hash_algo(storage_dir, None, None, HashAlgo::Sha256);
+        let result = status_single_file(&backend, &test_file, &config);
+
+        assert_eq!(
+            result.status,
+            FileStatus::Current,
+            "File with sha256 should be current"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    #[cfg(feature = "xxh3")]
+    fn test_status_current_with_xxh3() {
+        use crate::HashAlgo;
+
+        let (temp_dir, storage_dir) =
+            setup_test_repo_with_algo("status_xxh3_current", HashAlgo::Xxh3);
+
+        // Create a tracked file
+        let test_file = temp_dir.join("data.csv");
+        let content = b"xxh3 status test content";
+        fs::write(&test_file, content).unwrap();
+
+        let checksum = hash::get_file_hash_with_algo(&test_file, HashAlgo::Xxh3).unwrap();
+
+        // Store in storage with xxh3 prefix
+        let storage_path = hash::storage_path_for_hash(&storage_dir, HashAlgo::Xxh3, &checksum);
+        copy::copy_to_storage(&test_file, &storage_path, None, None).unwrap();
+
+        // Create metadata with xxh3
+        let metadata = Metadata::with_algo(
+            checksum,
+            content.len() as u64,
+            None,
+            "tester".to_string(),
+            HashAlgo::Xxh3,
+        );
+        metadata.save(&Metadata::metadata_path(&test_file)).unwrap();
+
+        // Check status
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let config = Config::with_hash_algo(storage_dir, None, None, HashAlgo::Xxh3);
+        let result = status_single_file(&backend, &test_file, &config);
+
+        assert_eq!(
+            result.status,
+            FileStatus::Current,
+            "File with xxh3 should be current"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    #[cfg(feature = "sha256")]
+    fn test_status_unsynced_with_sha256() {
+        use crate::HashAlgo;
+
+        let (temp_dir, storage_dir) =
+            setup_test_repo_with_algo("status_sha256_unsynced", HashAlgo::Sha256);
+
+        // Create a file
+        let test_file = temp_dir.join("data.csv");
+        fs::write(&test_file, b"original sha256 content").unwrap();
+        let original_checksum =
+            hash::get_file_hash_with_algo(&test_file, HashAlgo::Sha256).unwrap();
+
+        // Store in storage
+        let storage_path =
+            hash::storage_path_for_hash(&storage_dir, HashAlgo::Sha256, &original_checksum);
+        copy::copy_to_storage(&test_file, &storage_path, None, None).unwrap();
+
+        // Create metadata
+        let metadata = Metadata::with_algo(
+            original_checksum,
+            23,
+            None,
+            "tester".to_string(),
+            HashAlgo::Sha256,
+        );
+        metadata.save(&Metadata::metadata_path(&test_file)).unwrap();
+
+        // Modify the local file
+        fs::write(&test_file, b"modified sha256 content!!").unwrap();
+
+        // Check status
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let config = Config::with_hash_algo(storage_dir, None, None, HashAlgo::Sha256);
+        let result = status_single_file(&backend, &test_file, &config);
+
+        assert_eq!(
+            result.status,
+            FileStatus::Unsynced,
+            "Modified file with sha256 should be unsynced"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    #[cfg(feature = "sha256")]
+    fn test_status_absent_with_sha256() {
+        use crate::HashAlgo;
+
+        let (temp_dir, storage_dir) =
+            setup_test_repo_with_algo("status_sha256_absent", HashAlgo::Sha256);
+
+        // Create metadata for a file that doesn't exist locally
+        let test_file = temp_dir.join("missing.csv");
+        let checksum = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+
+        // Store something in storage
+        let storage_path =
+            hash::storage_path_for_hash(&storage_dir, HashAlgo::Sha256, checksum);
+        fs::create_dir_all(storage_path.parent().unwrap()).unwrap();
+        fs::write(&storage_path, b"content").unwrap();
+
+        // Create metadata with sha256
+        let metadata = Metadata::with_algo(
+            checksum.to_string(),
+            7,
+            None,
+            "tester".to_string(),
+            HashAlgo::Sha256,
+        );
+        metadata.save(&Metadata::metadata_path(&test_file)).unwrap();
+
+        // Check status
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let config = Config::with_hash_algo(storage_dir, None, None, HashAlgo::Sha256);
+        let result = status_single_file(&backend, &test_file, &config);
+
+        assert_eq!(
+            result.status,
+            FileStatus::Absent,
+            "Missing file with sha256 should be absent"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_status_current_with_toml_metadata() {
+        use crate::MetadataFormat;
+
+        let (temp_dir, storage_dir) = setup_test_repo("status_toml_current");
+
+        // Create a tracked file
+        let test_file = temp_dir.join("data.csv");
+        let content = b"toml status test content";
+        fs::write(&test_file, content).unwrap();
+
+        let algo = hash::default_algorithm();
+        let checksum = hash::get_file_hash(&test_file).unwrap();
+
+        // Store in storage
+        let storage_path = hash::storage_path_for_hash(&storage_dir, algo, &checksum);
+        copy::copy_to_storage(&test_file, &storage_path, None, None).unwrap();
+
+        // Create metadata in TOML format
+        let metadata = Metadata::new(checksum, content.len() as u64, None, "tester".to_string());
+        let toml_meta_path = Metadata::metadata_path_for_format(&test_file, MetadataFormat::Toml);
+        metadata.save(&toml_meta_path).unwrap();
+
+        // Verify TOML file exists
+        assert!(toml_meta_path.exists(), "TOML metadata should exist");
+
+        // Check status
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let config = Config::new(storage_dir, None, None);
+        let result = status_single_file(&backend, &test_file, &config);
+
+        assert_eq!(
+            result.status,
+            FileStatus::Current,
+            "File with TOML metadata should be current"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_status_unsynced_with_toml_metadata() {
+        use crate::MetadataFormat;
+
+        let (temp_dir, storage_dir) = setup_test_repo("status_toml_unsynced");
+
+        // Create a tracked file
+        let test_file = temp_dir.join("data.csv");
+        fs::write(&test_file, b"original toml content").unwrap();
+        let algo = hash::default_algorithm();
+        let original_checksum = hash::get_file_hash(&test_file).unwrap();
+
+        // Store in storage
+        let storage_path = hash::storage_path_for_hash(&storage_dir, algo, &original_checksum);
+        copy::copy_to_storage(&test_file, &storage_path, None, None).unwrap();
+
+        // Create metadata in TOML format
+        let metadata = Metadata::new(original_checksum, 21, None, "tester".to_string());
+        let toml_meta_path = Metadata::metadata_path_for_format(&test_file, MetadataFormat::Toml);
+        metadata.save(&toml_meta_path).unwrap();
+
+        // Modify the local file
+        fs::write(&test_file, b"modified toml content!").unwrap();
+
+        // Check status
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let config = Config::new(storage_dir, None, None);
+        let result = status_single_file(&backend, &test_file, &config);
+
+        assert_eq!(
+            result.status,
+            FileStatus::Unsynced,
+            "Modified file with TOML metadata should be unsynced"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_find_tracked_files_with_toml() {
+        use crate::MetadataFormat;
+
+        let (temp_dir, storage_dir) = setup_test_repo("find_tracked_toml");
+
+        let algo = hash::default_algorithm();
+
+        // Create files with mixed metadata formats
+        for (name, format) in [
+            ("file1.csv", MetadataFormat::Json),
+            ("file2.csv", MetadataFormat::Toml),
+            ("file3.txt", MetadataFormat::Toml),
+        ] {
+            let path = temp_dir.join(name);
+            fs::write(&path, "content").unwrap();
+
+            let checksum = hash::get_file_hash(&path).unwrap();
+            let storage_path = hash::storage_path_for_hash(&storage_dir, algo, &checksum);
+            copy::copy_to_storage(&path, &storage_path, None, None).unwrap();
+
+            let metadata = Metadata::new(checksum, 7, None, "tester".to_string());
+            let meta_path = Metadata::metadata_path_for_format(&path, format);
+            metadata.save(&meta_path).unwrap();
+        }
+
+        // Find tracked files
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let files = find_all_tracked_files(&backend).unwrap();
+
+        assert_eq!(
+            files.len(),
+            3,
+            "Should find all 3 files regardless of metadata format"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }

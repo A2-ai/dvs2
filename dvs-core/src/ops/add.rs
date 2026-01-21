@@ -702,4 +702,162 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    /// Helper to create a test repo with a specific hash algorithm.
+    #[allow(dead_code)]
+    fn setup_test_repo_with_algo(
+        test_name: &str,
+        hash_algo: crate::HashAlgo,
+    ) -> (PathBuf, PathBuf) {
+        let unique_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let temp_dir = std::env::temp_dir().join(format!(
+            "dvs-test-add-{}-{}-{}",
+            std::process::id(),
+            test_name,
+            unique_id
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create a fake .git directory
+        fs::create_dir_all(temp_dir.join(".git")).unwrap();
+
+        // Create storage directory
+        let storage_dir = temp_dir.join("storage");
+        fs::create_dir_all(&storage_dir).unwrap();
+
+        // Create config file with specific hash algorithm
+        let config = Config::with_hash_algo(storage_dir.clone(), None, None, hash_algo);
+        config
+            .save(&temp_dir.join(Config::config_filename()))
+            .unwrap();
+
+        (temp_dir, storage_dir)
+    }
+
+    #[test]
+    #[cfg(feature = "sha256")]
+    fn test_add_with_sha256_algorithm() {
+        use crate::HashAlgo;
+
+        let (temp_dir, storage_dir) =
+            setup_test_repo_with_algo("add_sha256", HashAlgo::Sha256);
+
+        // Create a test file
+        let test_file = temp_dir.join("data.csv");
+        let content = b"sha256 test content";
+        fs::write(&test_file, content).unwrap();
+
+        // Create .dvs directory
+        let layout = Layout::new(temp_dir.clone());
+        layout.init().unwrap();
+
+        // Add the file
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let results = add_with_backend(&backend, &[PathBuf::from("data.csv")], None, None).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].outcome, Outcome::Copied);
+        assert!(!results[0].blake3_checksum.is_empty());
+
+        // Verify metadata has sha256 algorithm
+        let metadata = Metadata::load_for_data_file(&test_file).unwrap();
+        assert_eq!(metadata.hash_algo, HashAlgo::Sha256);
+
+        // Verify storage path uses sha256 prefix
+        let storage_path = crate::helpers::hash::storage_path_for_hash(
+            &storage_dir,
+            HashAlgo::Sha256,
+            &results[0].blake3_checksum,
+        );
+        assert!(storage_path.exists(), "Storage file should exist");
+        assert!(
+            storage_path.to_string_lossy().contains("/sha256/"),
+            "Storage path should contain sha256 directory"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    #[cfg(feature = "xxh3")]
+    fn test_add_with_xxh3_algorithm() {
+        use crate::HashAlgo;
+
+        let (temp_dir, storage_dir) = setup_test_repo_with_algo("add_xxh3", HashAlgo::Xxh3);
+
+        // Create a test file
+        let test_file = temp_dir.join("data.csv");
+        let content = b"xxh3 test content";
+        fs::write(&test_file, content).unwrap();
+
+        // Create .dvs directory
+        let layout = Layout::new(temp_dir.clone());
+        layout.init().unwrap();
+
+        // Add the file
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let results = add_with_backend(&backend, &[PathBuf::from("data.csv")], None, None).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].outcome, Outcome::Copied);
+        assert!(!results[0].blake3_checksum.is_empty());
+        // XXH3 produces 16-char hex hashes (64-bit)
+        assert_eq!(
+            results[0].blake3_checksum.len(),
+            16,
+            "XXH3 should produce 16-char hex string"
+        );
+
+        // Verify metadata has xxh3 algorithm
+        let metadata = Metadata::load_for_data_file(&test_file).unwrap();
+        assert_eq!(metadata.hash_algo, HashAlgo::Xxh3);
+
+        // Verify storage path uses xxh3 prefix
+        let storage_path = crate::helpers::hash::storage_path_for_hash(
+            &storage_dir,
+            HashAlgo::Xxh3,
+            &results[0].blake3_checksum,
+        );
+        assert!(storage_path.exists(), "Storage file should exist");
+        assert!(
+            storage_path.to_string_lossy().contains("/xxh3/"),
+            "Storage path should contain xxh3 directory"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    #[cfg(feature = "sha256")]
+    fn test_add_sha256_already_present() {
+        use crate::HashAlgo;
+
+        let (temp_dir, _storage_dir) =
+            setup_test_repo_with_algo("add_sha256_present", HashAlgo::Sha256);
+
+        // Create a test file
+        let test_file = temp_dir.join("data.csv");
+        fs::write(&test_file, b"sha256 content").unwrap();
+
+        // Create .dvs directory
+        let layout = Layout::new(temp_dir.clone());
+        layout.init().unwrap();
+
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+
+        // Add the file first time
+        let results = add_with_backend(&backend, &[PathBuf::from("data.csv")], None, None).unwrap();
+        assert_eq!(results[0].outcome, Outcome::Copied);
+
+        // Add the same file again (unchanged)
+        let results = add_with_backend(&backend, &[PathBuf::from("data.csv")], None, None).unwrap();
+        assert_eq!(
+            results[0].outcome,
+            Outcome::Present,
+            "Should detect file is already present with sha256"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }
