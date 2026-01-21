@@ -14,8 +14,8 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser, Subcommand};
 
 use commands::{
-    add, config, get, git_status, init, install, log, materialize, merge_repo, pull, push,
-    rollback, status, uninstall,
+    add, config, get, git_status, init, install, local_config, log, materialize, merge_repo, pull,
+    push, rollback, status, uninstall,
 };
 use output::Output;
 
@@ -118,9 +118,13 @@ pub enum Command {
         group: Option<String>,
     },
 
-    /// View or edit DVS configuration
+    /// View or edit DVS configuration (dvs.yaml/dvs.toml)
     #[command(subcommand)]
     Config(ConfigCommand),
+
+    /// View or edit local configuration (.dvs/config.toml)
+    #[command(subcommand)]
+    LocalConfig(LocalConfigCommand),
 
     /// Add files to DVS tracking
     Add {
@@ -285,6 +289,33 @@ pub enum ConfigCommand {
 }
 
 #[derive(Subcommand)]
+pub enum LocalConfigCommand {
+    /// Show all local configuration values
+    Show,
+
+    /// Get a specific local configuration value
+    Get {
+        /// Configuration key (base_url, auth_token)
+        key: String,
+    },
+
+    /// Set a local configuration value
+    Set {
+        /// Configuration key
+        key: String,
+
+        /// New value
+        value: String,
+    },
+
+    /// Remove a local configuration value
+    Unset {
+        /// Configuration key to remove
+        key: String,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum FsCommand {
     /// Print current working directory
     Pwd,
@@ -426,6 +457,17 @@ fn main() -> ExitCode {
                 ConfigCommand::Set { key, value } => config::ConfigAction::Set { key, value },
             };
             config::run(&output, action)
+        }
+        Command::LocalConfig(cfg_cmd) => {
+            let action = match cfg_cmd {
+                LocalConfigCommand::Show => local_config::LocalConfigAction::Show,
+                LocalConfigCommand::Get { key } => local_config::LocalConfigAction::Get { key },
+                LocalConfigCommand::Set { key, value } => {
+                    local_config::LocalConfigAction::Set { key, value }
+                }
+                LocalConfigCommand::Unset { key } => local_config::LocalConfigAction::Unset { key },
+            };
+            local_config::run(&output, action)
         }
         Command::MergeRepo {
             source,

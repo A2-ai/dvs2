@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::helpers::layout::Layout;
 use crate::helpers::reflog::{current_actor, Reflog, SnapshotStore};
-use crate::types::{MetadataFormat, ReflogOp};
+use crate::types::{MetadataFormat, Oid, ReflogOp};
 use crate::{detect_backend_cwd, Backend, DvsError, Metadata, RepoBackend};
 
 /// Target for rollback - either a state ID or reflog index.
@@ -216,8 +216,28 @@ pub fn rollback_with_backend(
 
     // Materialize data files if requested
     if materialize && !target_state.metadata.is_empty() {
-        // TODO: Call materialize operation to restore actual data files
-        // For now, we only restore metadata
+        for entry in &target_state.metadata {
+            // Build OID from metadata
+            let oid = Oid::new(entry.meta.hash_algo, entry.meta.checksum().to_string());
+
+            // Check if object is cached
+            let cached_path = layout.cached_object_path(&oid);
+            if !cached_path.exists() {
+                // Object not cached - skip (user may need to pull first)
+                continue;
+            }
+
+            // Determine destination path
+            let dest_path = repo_root.join(&entry.path);
+
+            // Create parent directory if needed
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            // Copy cached object to destination
+            fs::copy(&cached_path, &dest_path)?;
+        }
     }
 
     // Record rollback in reflog
@@ -244,7 +264,7 @@ pub fn rollback_with_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{MetadataEntry, WorkspaceState};
+    use crate::types::{MetadataEntry, MetadataFormat, WorkspaceState};
 
     fn setup_test_repo() -> (tempfile::TempDir, Backend) {
         let temp = tempfile::tempdir().unwrap();
@@ -404,5 +424,120 @@ mod tests {
         assert!(result.success);
         // Should be a no-op since we're already at this state
         assert!(result.restored_files.is_empty());
+    }
+
+    #[test]
+    fn test_rollback_preserves_toml_format() {
+        let (_temp, backend) = setup_test_repo();
+        let repo_root = backend.root();
+        let layout = Layout::new(repo_root.to_path_buf());
+        let snapshot_store = SnapshotStore::new(&layout);
+        let reflog = Reflog::new(&layout);
+
+        // Create an initial empty state
+        let state1 = WorkspaceState::empty();
+        let state1_id = snapshot_store.save(&state1).unwrap();
+
+        reflog
+            .record(
+                current_actor(),
+                ReflogOp::Init,
+                None,
+                None,
+                state1_id.clone(),
+                vec![],
+            )
+            .unwrap();
+
+        // Create a state with a file using TOML format
+        let meta = Metadata::new(
+            "b".repeat(64),
+            200,
+            Some("toml rollback test".to_string()),
+            "user".to_string(),
+        );
+
+        // Create the metadata file in TOML format
+        let data_path = repo_root.join("toml_data.csv");
+        let toml_meta_path = Metadata::metadata_path_for_format(&data_path, MetadataFormat::Toml);
+        meta.save(&toml_meta_path).unwrap();
+
+        // Verify TOML file exists
+        assert!(toml_meta_path.exists(), "TOML metadata should exist");
+        assert!(
+            toml_meta_path.to_string_lossy().ends_with(".dvs.toml"),
+            "Should have .dvs.toml extension"
+        );
+
+        // Create state with TOML format recorded
+        let state2 = WorkspaceState::new(
+            None,
+            vec![MetadataEntry::with_format(
+                PathBuf::from("toml_data.csv"),
+                meta.clone(),
+                MetadataFormat::Toml,
+            )],
+        );
+        let state2_id = snapshot_store.save(&state2).unwrap();
+
+        reflog
+            .record(
+                current_actor(),
+                ReflogOp::Add,
+                None,
+                Some(state1_id.clone()),
+                state2_id.clone(),
+                vec![PathBuf::from("toml_data.csv")],
+            )
+            .unwrap();
+
+        // Delete the TOML file to simulate changes
+        fs::remove_file(&toml_meta_path).unwrap();
+        assert!(!toml_meta_path.exists());
+
+        // Create a new state (state3) without the file
+        let state3 = WorkspaceState::empty();
+        let state3_id = snapshot_store.save(&state3).unwrap();
+
+        reflog
+            .record(
+                current_actor(),
+                ReflogOp::Add,
+                None,
+                Some(state2_id.clone()),
+                state3_id,
+                vec![],
+            )
+            .unwrap();
+
+        // Rollback to state2 (should restore TOML file)
+        let result = rollback_with_backend(
+            &backend,
+            RollbackTarget::StateId(state2_id.clone()),
+            true,
+            false,
+        )
+        .unwrap();
+
+        assert!(result.success);
+        assert!(result.restored_files.contains(&PathBuf::from("toml_data.csv")));
+
+        // Verify TOML file was restored (not JSON)
+        assert!(
+            toml_meta_path.exists(),
+            "TOML metadata should be restored"
+        );
+
+        // Verify JSON file was NOT created
+        let json_meta_path = Metadata::metadata_path(&data_path);
+        assert!(
+            !json_meta_path.exists(),
+            "JSON metadata should NOT be created when restoring TOML"
+        );
+
+        // Verify restored metadata is correct
+        let restored_meta = Metadata::load(&toml_meta_path).unwrap();
+        assert_eq!(restored_meta.checksum(), "b".repeat(64));
+        assert_eq!(restored_meta.message, "toml rollback test");
     }
 }

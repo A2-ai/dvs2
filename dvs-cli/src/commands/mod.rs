@@ -9,6 +9,7 @@ pub mod get;
 pub mod git_status;
 pub mod init;
 pub mod install;
+pub mod local_config;
 pub mod log;
 pub mod materialize;
 pub mod merge_repo;

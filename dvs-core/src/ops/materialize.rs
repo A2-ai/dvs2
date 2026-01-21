@@ -240,6 +240,41 @@ pub fn materialize_files(files: &[PathBuf]) -> Result<MaterializeSummary, DvsErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Config, ManifestEntry};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn setup_test_repo(test_name: &str) -> (PathBuf, PathBuf) {
+        let unique_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let temp_dir = std::env::temp_dir().join(format!(
+            "dvs-test-materialize-{}-{}-{}",
+            std::process::id(),
+            test_name,
+            unique_id
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create a fake .git directory
+        fs::create_dir_all(temp_dir.join(".git")).unwrap();
+
+        // Create storage directory
+        let storage_dir = temp_dir.join("storage");
+        fs::create_dir_all(&storage_dir).unwrap();
+
+        // Create config file
+        let config = Config::new(storage_dir.clone(), None, None);
+        config
+            .save(&temp_dir.join(Config::config_filename()))
+            .unwrap();
+
+        // Initialize .dvs directory
+        let layout = Layout::new(temp_dir.clone());
+        layout.init().unwrap();
+
+        (temp_dir, storage_dir)
+    }
 
     #[test]
     fn test_materialize_result_success() {
@@ -268,5 +303,174 @@ mod tests {
         assert_eq!(summary.up_to_date, 0);
         assert_eq!(summary.failed, 0);
         assert!(summary.results.is_empty());
+    }
+
+    #[test]
+    fn test_materialize_from_cache() {
+        let (temp_dir, _storage_dir) = setup_test_repo("materialize_from_cache");
+        let layout = Layout::new(temp_dir.clone());
+
+        // Create test content and compute its hash
+        let content = b"test file content for materialize";
+        let hash = crate::helpers::hash::hash_bytes(
+            content,
+            crate::helpers::hash::default_algorithm(),
+        ).unwrap();
+        let oid = Oid::new(crate::helpers::hash::default_algorithm(), hash);
+
+        // Cache the object
+        let cache_path = layout.cached_object_path(&oid);
+        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        fs::write(&cache_path, content).unwrap();
+        assert!(cache_path.exists(), "Cache should contain object");
+
+        // Create a manifest with an entry
+        let mut manifest = Manifest::new();
+        manifest.upsert(ManifestEntry::new(
+            PathBuf::from("data.csv"),
+            oid.clone(),
+            content.len() as u64,
+        ));
+
+        // Save the manifest
+        manifest.save(&layout.manifest_path()).unwrap();
+
+        // Materialize
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let summary = materialize_with_backend(&backend).unwrap();
+
+        // Verify
+        assert_eq!(summary.materialized, 1);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.up_to_date, 0);
+
+        // Verify file was created
+        let dest_path = temp_dir.join("data.csv");
+        assert!(dest_path.exists(), "File should be materialized");
+        assert_eq!(
+            fs::read(&dest_path).unwrap(),
+            content,
+            "Content should match"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_materialize_already_up_to_date() {
+        let (temp_dir, _storage_dir) = setup_test_repo("materialize_up_to_date");
+        let layout = Layout::new(temp_dir.clone());
+
+        // Create test content and compute its hash
+        let content = b"cached content";
+        let hash = crate::helpers::hash::hash_bytes(
+            content,
+            crate::helpers::hash::default_algorithm(),
+        ).unwrap();
+        let oid = Oid::new(crate::helpers::hash::default_algorithm(), hash);
+
+        // Cache the object
+        let cache_path = layout.cached_object_path(&oid);
+        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        fs::write(&cache_path, content).unwrap();
+
+        // Create manifest
+        let mut manifest = Manifest::new();
+        manifest.upsert(ManifestEntry::new(
+            PathBuf::from("file.txt"),
+            oid.clone(),
+            content.len() as u64,
+        ));
+        manifest.save(&layout.manifest_path()).unwrap();
+
+        // First materialize
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let summary1 = materialize_with_backend(&backend).unwrap();
+        assert_eq!(summary1.materialized, 1);
+        assert_eq!(summary1.up_to_date, 0);
+
+        // Second materialize - should be up to date
+        let summary2 = materialize_with_backend(&backend).unwrap();
+        assert_eq!(summary2.materialized, 0);
+        assert_eq!(summary2.up_to_date, 1);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_materialize_missing_cache() {
+        let (temp_dir, _storage_dir) = setup_test_repo("materialize_missing_cache");
+        let layout = Layout::new(temp_dir.clone());
+
+        // Create manifest with an entry that doesn't have a cached object
+        // Use valid hex characters (not cached)
+        let oid = Oid::blake3("deadbeef".repeat(8));
+        let mut manifest = Manifest::new();
+        manifest.upsert(ManifestEntry::new(
+            PathBuf::from("missing.txt"),
+            oid.clone(),
+            100,
+        ));
+        manifest.save(&layout.manifest_path()).unwrap();
+
+        // Materialize - should fail because object not cached
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let summary = materialize_with_backend(&backend).unwrap();
+
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.materialized, 0);
+        assert!(
+            summary.results[0].error.as_ref().unwrap().contains("not cached"),
+            "Error should mention cache"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_materialize_multiple_files() {
+        let (temp_dir, _storage_dir) = setup_test_repo("materialize_multiple");
+        let layout = Layout::new(temp_dir.clone());
+
+        let mut manifest = Manifest::new();
+
+        // Create multiple cached objects
+        for i in 0..3 {
+            let content = format!("content for file {}", i);
+            let hash = crate::helpers::hash::hash_bytes(
+                content.as_bytes(),
+                crate::helpers::hash::default_algorithm(),
+            ).unwrap();
+            let oid = Oid::new(crate::helpers::hash::default_algorithm(), hash);
+
+            // Cache the object
+            let cache_path = layout.cached_object_path(&oid);
+            fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+            fs::write(&cache_path, content.as_bytes()).unwrap();
+
+            // Add to manifest
+            manifest.upsert(ManifestEntry::new(
+                PathBuf::from(format!("dir/file{}.txt", i)),
+                oid,
+                content.len() as u64,
+            ));
+        }
+
+        manifest.save(&layout.manifest_path()).unwrap();
+
+        // Materialize
+        let backend = crate::detect_backend(&temp_dir).unwrap();
+        let summary = materialize_with_backend(&backend).unwrap();
+
+        assert_eq!(summary.materialized, 3);
+        assert_eq!(summary.failed, 0);
+
+        // Verify all files exist
+        for i in 0..3 {
+            let path = temp_dir.join(format!("dir/file{}.txt", i));
+            assert!(path.exists(), "File {} should be materialized", i);
+        }
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }
