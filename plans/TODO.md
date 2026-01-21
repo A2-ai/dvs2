@@ -87,6 +87,9 @@
 - [ ] **Plan 035: Feature Store + Derived Dataset Framework** - `plans/035-feature-store-derived.md`
 - [ ] **Plan 036: Remote Snapshot Sources (HTTP/GitHub)** - `plans/036-remote-snapshot-sources.md`
 - [ ] **Plan 040: Proc-macro Usage Audit** - `plans/040-proc-macro-usage-audit.md`
+- [ ] **Plan 049: CLI Output Formats** - `plans/049-cli-output-formats.md`
+  - Primary: Table format via `tabled` crate (`--format table`)
+  - Optional: CSV, YAML, NDJSON, Markdown formats (feature-gated)
 
 ### Future Plans (Not Yet Written)
 
@@ -137,15 +140,15 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 
 ### dvsR (R Package)
 
-- [ ] Wire `dvs_init()` to `dvs_core::init()`
-- [ ] Wire `dvs_add()` to `dvs_core::add()`
-- [ ] Wire `dvs_get()` to `dvs_core::get()`
-- [ ] Wire `dvs_status()` to `dvs_core::status()`
+- [x] Wire `dvs_init()` to `dvs_core::init()`
+- [x] Wire `dvs_add()` to `dvs_core::add()`
+- [x] Wire `dvs_get()` to `dvs_core::get()`
+- [x] Wire `dvs_status()` to `dvs_core::status()`
 - [ ] Wire `dvs_push()` to `dvs_core::push()`
 - [ ] Wire `dvs_pull()` to `dvs_core::pull()`
 - [ ] Wire `dvs_materialize()` to `dvs_core::materialize()`
-- [ ] R-friendly error handling (convert DvsError to R errors)
-- [ ] R-friendly return types (data.frames for status)
+- [x] R-friendly error handling (convert DvsError to R errors)
+- [x] R-friendly return types (data.frames for status via JSON)
 
 ---
 

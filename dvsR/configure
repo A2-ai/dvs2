@@ -608,6 +608,8 @@ PACKAGE_URL=''
 ac_subst_vars='LTLIBOBJS
 LIBOBJS
 CARGO_SOURCE_REPLACE
+MINIEXTENDR_SOURCE_DIR
+FORCE_VENDOR
 VENDOR_OUT_CARGO
 VENDOR_OUT
 OPTIONAL_CARGO_DEPS
@@ -683,7 +685,8 @@ RUST_TOOLCHAIN
 CARGO_TARGET_DIR
 CARGO_PROFILE
 ENV_RUSTFLAGS
-CARGO_BUILD_TARGET'
+CARGO_BUILD_TARGET
+MINIEXTENDR_SOURCE_DIR'
 
 
 # Initialize some variables set by options.
@@ -1309,6 +1312,9 @@ Some influential environment variables:
               Rust compiler flags passed as RUSTFLAGS
   CARGO_BUILD_TARGET
               Cargo build target triple (e.g. aarch64-apple-darwin)
+  MINIEXTENDR_SOURCE_DIR
+              Path to upstream miniextendr repo (optional, for staleness
+              detection)
 
 Use these variables to override the choices made by 'configure' or to help
 it to find libraries and programs with nonstandard names/locations.
@@ -2232,6 +2238,17 @@ VENDOR_OUT="$abs_rpkg_src/vendor"
 VENDOR_OUT_CARGO="$abs_rpkg_src_cargo/vendor"
 
 
+: ${FORCE_VENDOR:=false}
+case "$FORCE_VENDOR" in
+  true|TRUE|1) FORCE_VENDOR=true ;;
+  *)           FORCE_VENDOR=false ;;
+esac
+
+
+
+: ${MINIEXTENDR_SOURCE_DIR=""}
+
+
 CARGO_SOURCE_REPLACE="$(cat <<EOF
 source.crates-io
 replace-with = "vendored-sources"
@@ -2970,7 +2987,7 @@ cat >>$CONFIG_STATUS <<_ACEOF || ac_write_fail=1
 #
 # INIT-COMMANDS
 #
-CARGO="$CARGO" RUST_TOOLCHAIN="$RUST_TOOLCHAIN" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir"
+CARGO="$CARGO" RUST_TOOLCHAIN="$RUST_TOOLCHAIN" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" FORCE_VENDOR="$FORCE_VENDOR" MINIEXTENDR_SOURCE_DIR="$MINIEXTENDR_SOURCE_DIR"
 NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir"
 CARGO="$CARGO" RUST_TOOLCHAIN="$RUST_TOOLCHAIN" NOT_CRAN="$NOT_CRAN" SED="$SED" CARGO_STATICLIB_NAME="$CARGO_STATICLIB_NAME"
 
@@ -3432,10 +3449,34 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
     STAMP="$VENDOR_OUT/.vendor.lock.cksum"
 
     _need_vendor=0
-    if test ! -f "$STAMP"; then
+    if test "$FORCE_VENDOR" = "true"; then
+      echo "configure: FORCE_VENDOR=true, will re-vendor"
+      _need_vendor=1
+    elif test ! -f "$STAMP"; then
+      echo "configure: vendor stamp missing, will vendor"
       _need_vendor=1
     elif test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
+      echo "configure: vendor directory missing or empty, will vendor"
       _need_vendor=1
+    fi
+
+        if test $_need_vendor -eq 0 && test -n "$MINIEXTENDR_SOURCE_DIR" && test -d "$MINIEXTENDR_SOURCE_DIR"; then
+            _mx_newest=""
+      for _mx_crate in "$MINIEXTENDR_SOURCE_DIR/crates/miniextendr-api" \
+                       "$MINIEXTENDR_SOURCE_DIR/crates/miniextendr-macros" \
+                       "$MINIEXTENDR_SOURCE_DIR/crates/miniextendr-lint"; do
+        if test -d "$_mx_crate"; then
+          _crate_newest=$(find "$_mx_crate" -name "*.rs" -type f -newer "$STAMP" 2>/dev/null | head -1)
+          if test -n "$_crate_newest"; then
+            _mx_newest="$_crate_newest"
+            break
+          fi
+        fi
+      done
+      if test -n "$_mx_newest"; then
+        echo "configure: miniextendr source newer than vendor stamp: $_mx_newest"
+        _need_vendor=1
+      fi
     fi
 
     if test $_need_vendor -eq 1; then

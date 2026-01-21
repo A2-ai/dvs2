@@ -94,6 +94,15 @@ rpkg-configure:
 vendor:
     cd {{quote(rpkg_dir)}} && NOT_CRAN=true ./configure
 
+# Force re-vendor R package dependencies (use after modifying miniextendr sources)
+rpkg-vendor-force:
+    cd {{quote(rpkg_dir)}} && FORCE_VENDOR=true NOT_CRAN=true ./configure
+
+# Vendor with miniextendr source staleness detection
+# Usage: just rpkg-vendor-with-staleness /path/to/miniextendr
+rpkg-vendor-with-staleness miniextendr_src:
+    cd {{quote(rpkg_dir)}} && MINIEXTENDR_SOURCE_DIR={{quote(miniextendr_src)}} NOT_CRAN=true ./configure
+
 # Build the R package Rust library
 rpkg-build *args:
     cargo build --manifest-path={{quote(rpkg_manifest)}} --workspace {{args}}

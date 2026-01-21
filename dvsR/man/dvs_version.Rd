@@ -13,7 +13,7 @@ dvs_version()
 A character string with the version.
 }
 \description{
-Returns the version of the dvsR Rust backend.
+Returns the version of the DVS Rust backend.
 }
 \examples{
 dvs_version()

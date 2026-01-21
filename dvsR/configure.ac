@@ -164,6 +164,20 @@ AC_SUBST([VENDOR_OUT])
 VENDOR_OUT_CARGO="$abs_rpkg_src_cargo/vendor"
 AC_SUBST([VENDOR_OUT_CARGO])
 
+dnl FORCE_VENDOR: Set to true to force re-vendoring even if stamp file exists
+: ${FORCE_VENDOR:=false}
+case "$FORCE_VENDOR" in
+  true|TRUE|1) FORCE_VENDOR=true ;;
+  *)           FORCE_VENDOR=false ;;
+esac
+AC_SUBST([FORCE_VENDOR])
+
+dnl MINIEXTENDR_SOURCE_DIR: Optional path to upstream miniextendr repo for staleness detection
+dnl If set, vendoring will re-run when miniextendr sources are newer than vendor stamp
+AC_ARG_VAR([MINIEXTENDR_SOURCE_DIR], [Path to upstream miniextendr repo (optional, for staleness detection)])
+: ${MINIEXTENDR_SOURCE_DIR=""}
+AC_SUBST([MINIEXTENDR_SOURCE_DIR])
+
 dnl Source replacement config for .cargo/config.toml
 CARGO_SOURCE_REPLACE="$(cat <<EOF
 [source.crates-io]
@@ -221,10 +235,36 @@ AC_CONFIG_COMMANDS([cargo-vendor],
     STAMP="$VENDOR_OUT/.vendor.lock.cksum"
 
     _need_vendor=0
-    if test ! -f "$STAMP"; then
+    if test "$FORCE_VENDOR" = "true"; then
+      echo "configure: FORCE_VENDOR=true, will re-vendor"
+      _need_vendor=1
+    elif test ! -f "$STAMP"; then
+      echo "configure: vendor stamp missing, will vendor"
       _need_vendor=1
     elif test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
+      echo "configure: vendor directory missing or empty, will vendor"
       _need_vendor=1
+    fi
+
+    dnl Check if miniextendr sources are newer than vendor stamp (optional)
+    if test $_need_vendor -eq 0 && test -n "$MINIEXTENDR_SOURCE_DIR" && test -d "$MINIEXTENDR_SOURCE_DIR"; then
+      dnl Find the newest .rs file in miniextendr source
+      _mx_newest=""
+      for _mx_crate in "$MINIEXTENDR_SOURCE_DIR/crates/miniextendr-api" \
+                       "$MINIEXTENDR_SOURCE_DIR/crates/miniextendr-macros" \
+                       "$MINIEXTENDR_SOURCE_DIR/crates/miniextendr-lint"; do
+        if test -d "$_mx_crate"; then
+          _crate_newest=$(find "$_mx_crate" -name "*.rs" -type f -newer "$STAMP" 2>/dev/null | head -1)
+          if test -n "$_crate_newest"; then
+            _mx_newest="$_crate_newest"
+            break
+          fi
+        fi
+      done
+      if test -n "$_mx_newest"; then
+        echo "configure: miniextendr source newer than vendor stamp: $_mx_newest"
+        _need_vendor=1
+      fi
     fi
 
     if test $_need_vendor -eq 1; then
@@ -279,7 +319,7 @@ AC_CONFIG_COMMANDS([cargo-vendor],
     echo "configure: vendor complete"
   fi
 ],
-[CARGO="$CARGO" RUST_TOOLCHAIN="$RUST_TOOLCHAIN" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir"])
+[CARGO="$CARGO" RUST_TOOLCHAIN="$RUST_TOOLCHAIN" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" FORCE_VENDOR="$FORCE_VENDOR" MINIEXTENDR_SOURCE_DIR="$MINIEXTENDR_SOURCE_DIR"])
 
 dnl 2) Compress vendor directory for CRAN tarballs
 AC_CONFIG_COMMANDS([compress-vendor],
