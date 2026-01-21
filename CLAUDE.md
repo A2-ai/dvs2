@@ -112,11 +112,29 @@ just rpkg-build         # Build Rust library
 just rpkg-install       # Install R package
 just rpkg-document      # Generate R wrappers
 just rpkg-clean         # Clean build artifacts
+just rpkg-vendor-force  # Force re-vendor after miniextendr changes
 
 # Combined
 just build-all          # Build everything
 just test-all           # Test everything
 ```
+
+### miniextendr Vendoring
+
+The R package vendors miniextendr crates for CRAN compliance. When you modify miniextendr sources at `/Users/elea/Documents/GitHub/miniextendr/`, the vendored copies won't automatically update.
+
+**After modifying miniextendr sources:**
+```bash
+# Force re-vendor (always updates)
+just rpkg-vendor-force
+
+# Or with automatic staleness detection
+MINIEXTENDR_SOURCE_DIR=/Users/elea/Documents/GitHub/miniextendr just vendor
+```
+
+**Environment variables:**
+- `FORCE_VENDOR=true` - Force re-vendor even if stamp file exists
+- `MINIEXTENDR_SOURCE_DIR=/path/to/miniextendr` - Enable automatic staleness detection
 
 ## Related Repositories
 

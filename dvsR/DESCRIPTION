@@ -16,6 +16,8 @@ Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 SystemRequirements: Cargo (Rust package manager), rustc >= 1.78.0
+Imports:
+    jsonlite
 Config/build/bootstrap: TRUE
 Config/build/extra-sources: src/rust/Cargo.lock
 Config/build/never-clean: true
