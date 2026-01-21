@@ -28,7 +28,7 @@ pub fn dvs_version() -> &'static str {
 }
 
 miniextendr_module! {
-    mod dvsr;
+    mod dvs;
 
     fn dvs_hello;
     fn dvs_version;

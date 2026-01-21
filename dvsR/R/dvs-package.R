@@ -2,6 +2,6 @@
 "_PACKAGE"
 
 ## usethis namespace: start
-#' @useDynLib dvsR, .registration = TRUE
+#' @useDynLib dvs, .registration = TRUE
 ## usethis namespace: end
 NULL

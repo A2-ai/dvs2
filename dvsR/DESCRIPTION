@@ -1,4 +1,4 @@
-Package: dvsR
+Package: dvs
 Title: Data Version Control System by A2-AI
 Version: 0.0.0.9000
 Authors@R: c(

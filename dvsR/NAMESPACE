@@ -2,4 +2,4 @@
 
 export(dvs_hello)
 export(dvs_version)
-useDynLib(dvsR, .registration = TRUE)
+useDynLib(dvs, .registration = TRUE)

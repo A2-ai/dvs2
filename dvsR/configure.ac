@@ -1,4 +1,4 @@
-AC_INIT([dvsR], [0.0.0.9000])
+AC_INIT([dvs], [0.0.0.9000])
 
 dnl Verify we're running from the R package directory
 if test ! -f "DESCRIPTION" || test ! -f "NAMESPACE"; then
@@ -104,7 +104,7 @@ AC_ARG_VAR([CARGO_PROFILE], [Cargo build profile (debug or release)])
 AC_SUBST([CARGO_PROFILE])
 
 dnl Static library name - will be set after reading Cargo.toml
-CARGO_STATICLIB_NAME="dvsr"
+CARGO_STATICLIB_NAME="dvs"
 AC_SUBST([CARGO_STATICLIB_NAME])
 
 AC_ARG_VAR([ENV_RUSTFLAGS], [Rust compiler flags passed as RUSTFLAGS])
