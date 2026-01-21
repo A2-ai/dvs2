@@ -98,7 +98,11 @@ vendor:
 rpkg-vendor-force:
     cd {{quote(rpkg_dir)}} && FORCE_VENDOR=true NOT_CRAN=true ./configure
 
-# Vendor with miniextendr source staleness detection
+# Vendor with automatic miniextendr source staleness detection (uses default path)
+rpkg-vendor-detect:
+    cd {{quote(rpkg_dir)}} && MINIEXTENDR_SOURCE_DIR=/Users/elea/Documents/GitHub/miniextendr NOT_CRAN=true ./configure
+
+# Vendor with miniextendr source staleness detection (custom path)
 # Usage: just rpkg-vendor-with-staleness /path/to/miniextendr
 rpkg-vendor-with-staleness miniextendr_src:
     cd {{quote(rpkg_dir)}} && MINIEXTENDR_SOURCE_DIR={{quote(miniextendr_src)}} NOT_CRAN=true ./configure
