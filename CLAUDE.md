@@ -69,17 +69,6 @@ dvs rollback <target>
   - Uses vendored miniextendr crates in `src/vendor/`
   - Cargo.toml is generated from Cargo.toml.in by configure
 
-### Case Sensitivity Issue (Important!)
-
-R package names can be mixed-case (e.g., `dvsR`) but autoconf's `PACKAGE_TARNAME` is always lowercase (`dvsr`). This caused symbol registration to fail.
-
-**Solution**: Use `@PACKAGE_NAME@` (preserves case) for R-facing symbols:
-
-- `R_init_@PACKAGE_NAME@()` in entrypoint.c.in
-- `miniextendr_set_altrep_pkg_name("@PACKAGE_NAME@")`
-
-Use `@PACKAGE_TARNAME_RS@` (lowercase) for Rust module names.
-
 ### miniextendr Integration
 
 The R package uses miniextendr for Rust-R interop:
