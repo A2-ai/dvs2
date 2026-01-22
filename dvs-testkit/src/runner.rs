@@ -729,7 +729,10 @@ impl RRunner {
     /// Check if R and dvsR are available.
     fn check_available(&self) -> bool {
         // First check if DVS_TEST_R=1 is set
-        if std::env::var("DVS_TEST_R").map(|v| v != "1").unwrap_or(true) {
+        if std::env::var("DVS_TEST_R")
+            .map(|v| v != "1")
+            .unwrap_or(true)
+        {
             return false;
         }
 
@@ -777,10 +780,7 @@ impl RRunner {
 
         if !output.status.success() {
             // Extract error type if present (format: [error_type] message)
-            let error_type = if let Some(caps) = stderr
-                .lines()
-                .find(|l| l.contains("Error"))
-            {
+            let error_type = if let Some(caps) = stderr.lines().find(|l| l.contains("Error")) {
                 // Try to extract [error_type] from the error message
                 if let Some(start) = caps.find('[') {
                     if let Some(end) = caps.find(']') {
@@ -823,7 +823,11 @@ impl InterfaceRunner for RRunner {
     fn run(&self, repo: &TestRepo, op: &Op) -> RunResult {
         let script = match op.kind {
             OpKind::Init => {
-                let storage_dir = op.args.first().map(|s| s.as_str()).unwrap_or(".dvs-storage");
+                let storage_dir = op
+                    .args
+                    .first()
+                    .map(|s| s.as_str())
+                    .unwrap_or(".dvs-storage");
                 format!(
                     r#"
                     library(dvs)
@@ -916,14 +920,12 @@ impl InterfaceRunner for RRunner {
                     remote
                 )
             }
-            OpKind::Materialize => {
-                r#"
+            OpKind::Materialize => r#"
                 library(dvs)
                 result <- dvs_materialize()
                 cat("SUCCESS\n")
                 "#
-                .to_string()
-            }
+            .to_string(),
             OpKind::Log => {
                 let limit = op
                     .args
@@ -1115,4 +1117,3 @@ mod r_tests {
         assert!(result.passed(), "Conformance test failed: {:?}", result);
     }
 }
-

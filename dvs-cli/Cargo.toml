@@ -20,8 +20,7 @@ yaml-config = ["dvs-core/yaml-config"]
 toml-config = ["dvs-core/toml-config"]
 
 [dependencies]
-# Enable git2-backend for native Git integration in the CLI
-dvs-core = { workspace = true, features = ["git2-backend"] }
+dvs-core.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 clap_complete.workspace = true
 indicatif.workspace = true

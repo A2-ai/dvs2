@@ -250,7 +250,7 @@ impl Output {
     /// Only outputs in Table mode; in other modes this is a no-op.
     pub fn table<T: tabled::Tabled>(&self, items: &[T]) {
         if self.is_table() && !self.is_null() && !self.quiet {
-            use tabled::{Table, settings::Style};
+            use tabled::{settings::Style, Table};
             let table = Table::new(items).with(Style::rounded()).to_string();
             self.write_line(&table);
         }
@@ -286,7 +286,10 @@ impl Output {
 
     /// Create a progress bar with a standard file operation template.
     pub fn file_progress(&self, len: u64) -> ProgressBar {
-        self.progress_bar(len, "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+        self.progress_bar(
+            len,
+            "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+        )
     }
 
     /// Create a spinner for operations without a known count.

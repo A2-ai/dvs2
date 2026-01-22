@@ -48,9 +48,6 @@ glob = "0.3"
 # Utilities (used by: dvs-core)
 chrono = { version = "0.4", features = ["serde"] }
 
-# Git (used by: dvs-core)
-git2 = "0.20"
-
 # CLI (used by: dvs-cli)
 clap_complete = "4.5"
 indicatif = "0.17"

@@ -20,14 +20,11 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [features]
-# Lightweight defaults: TOML config, no git2 (CLI fallback available)
 default = ["blake3", "mmap", "walkdir", "toml-config", "serde"]
 blake3 = ["dep:blake3"]
 xxh3 = ["dep:xxhash-rust"]
 sha256 = ["dep:sha2"]
 all-hashes = ["blake3", "xxh3", "sha256"]
-# Optional backends
-git2-backend = ["dep:git2"]
 mmap = ["dep:memmap2"]
 walkdir = ["dep:walkdir"]
 # Serialization (required for config/metadata/manifest persistence)
@@ -63,9 +60,6 @@ path-absolutize = "3.1.1"
 xdg = "3.0.0"
 pathdiff = "0.2.3"
 libc = "0.2"
-
-# Git (optional - falls back to CLI)
-git2 = { workspace = true, optional = true }
 
 # User info
 whoami = "2.0.2"

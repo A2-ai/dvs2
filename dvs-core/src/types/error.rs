@@ -350,14 +350,6 @@ impl From<toml::ser::Error> for DvsError {
     }
 }
 
-#[cfg(feature = "git2-backend")]
-impl From<git2::Error> for DvsError {
-    fn from(e: git2::Error) -> Self {
-        Self::new(ErrorKind::GitError {
-            message: e.to_string(),
-        })
-    }
-}
 
 // Backward compatibility: allow matching on old-style variants
 // These are kept for gradual migration

@@ -397,8 +397,16 @@ fn main() -> ExitCode {
         } => add::run(&output, files, message, metadata_format, batch),
         Command::Get { files, batch } => get::run(&output, files, batch),
         Command::Status { files, batch } => status::run(&output, files, batch),
-        Command::Push { remote, files, batch } => push::run(&output, remote, files, batch),
-        Command::Pull { remote, files, batch } => pull::run(&output, remote, files, batch),
+        Command::Push {
+            remote,
+            files,
+            batch,
+        } => push::run(&output, remote, files, batch),
+        Command::Pull {
+            remote,
+            files,
+            batch,
+        } => pull::run(&output, remote, files, batch),
         Command::Materialize { files, batch } => materialize::run(&output, files, batch),
         Command::Log { limit } => log::run(&output, limit),
         Command::Rollback {

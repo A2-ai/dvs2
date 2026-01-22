@@ -33,9 +33,6 @@ walkdir.workspace = true
 # Utilities
 chrono.workspace = true
 
-# Git
-git2.workspace = true
-
 # Test utilities
 tempfile = "3.24"
 

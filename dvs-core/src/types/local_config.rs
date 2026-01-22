@@ -20,15 +20,24 @@ use std::path::Path;
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct LocalConfig {
     /// Default remote URL for push/pull operations.
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub base_url: Option<String>,
 
     /// Authentication settings.
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub auth: Option<AuthConfig>,
 
     /// Cache settings.
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub cache: Option<CacheConfig>,
 }
 
@@ -37,7 +46,10 @@ pub struct LocalConfig {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AuthConfig {
     /// Bearer token for authentication.
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub token: Option<String>,
 }
 
@@ -46,7 +58,10 @@ pub struct AuthConfig {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CacheConfig {
     /// Maximum cache size in bytes.
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub max_size: Option<u64>,
 }
 

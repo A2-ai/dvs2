@@ -71,7 +71,10 @@ pub struct Metadata {
 
     /// Hash algorithm used for this file.
     /// Defaults to Blake3 for backward compatibility with existing metadata.
-    #[cfg_attr(feature = "serde", serde(default = "default_hash_algo", skip_serializing_if = "is_blake3"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default = "default_hash_algo", skip_serializing_if = "is_blake3")
+    )]
     pub hash_algo: HashAlgo,
 }
 

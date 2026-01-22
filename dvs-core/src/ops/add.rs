@@ -3,7 +3,9 @@
 use crate::helpers::layout::Layout;
 use crate::helpers::reflog::{current_actor, Reflog, SnapshotStore};
 use crate::helpers::{config as config_helper, copy, file, hash};
-use crate::types::{Manifest, ManifestEntry, MetadataEntry, MetadataFormat, Oid, ReflogOp, WorkspaceState};
+use crate::types::{
+    Manifest, ManifestEntry, MetadataEntry, MetadataFormat, Oid, ReflogOp, WorkspaceState,
+};
 use crate::{
     detect_backend_cwd, AddResult, Backend, Config, DvsError, Metadata, Outcome, RepoBackend,
 };
@@ -204,7 +206,8 @@ fn capture_metadata_walkdir(repo_root: &Path) -> Result<Vec<MetadataEntry>, DvsE
                     // Get the relative path to the data file
                     if let Some(data_path) = Metadata::data_path(path) {
                         if let Some(relative) = pathdiff::diff_paths(&data_path, repo_root) {
-                            metadata_entries.push(MetadataEntry::with_format(relative, meta, format));
+                            metadata_entries
+                                .push(MetadataEntry::with_format(relative, meta, format));
                         }
                     }
                 }
@@ -681,7 +684,11 @@ mod tests {
         assert_eq!(results[0].outcome, Outcome::Copied);
 
         let manifest = Manifest::load(&layout.manifest_path()).unwrap();
-        let original_oid = manifest.get(std::path::Path::new("file1.txt")).unwrap().oid.clone();
+        let original_oid = manifest
+            .get(std::path::Path::new("file1.txt"))
+            .unwrap()
+            .oid
+            .clone();
 
         // Modify file and add again
         fs::write(temp_dir.join("file1.txt"), "modified content").unwrap();
@@ -740,8 +747,7 @@ mod tests {
     fn test_add_with_sha256_algorithm() {
         use crate::HashAlgo;
 
-        let (temp_dir, storage_dir) =
-            setup_test_repo_with_algo("add_sha256", HashAlgo::Sha256);
+        let (temp_dir, storage_dir) = setup_test_repo_with_algo("add_sha256", HashAlgo::Sha256);
 
         // Create a test file
         let test_file = temp_dir.join("data.csv");

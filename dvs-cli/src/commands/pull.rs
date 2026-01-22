@@ -30,7 +30,12 @@ struct PullSummary {
 }
 
 /// Run the pull command.
-pub fn run(output: &Output, remote: Option<String>, files: Vec<PathBuf>, batch: bool) -> Result<()> {
+pub fn run(
+    output: &Output,
+    remote: Option<String>,
+    files: Vec<PathBuf>,
+    batch: bool,
+) -> Result<()> {
     // Collect files from args or stdin (batch mode)
     let files = paths::collect_files(files, batch)?;
 

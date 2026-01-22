@@ -9,9 +9,8 @@ use std::path::PathBuf;
 
 // Re-export dvs-core types for internal use
 use dvs_core::{
-    add, get, init, log, materialize, pull, push, rollback, status, DvsError, FileStatus,
-    LogEntry, MaterializeSummary, Outcome, PullSummary, PushSummary, RollbackResult,
-    RollbackTarget,
+    add, get, init, log, materialize, pull, push, rollback, status, DvsError, FileStatus, LogEntry,
+    MaterializeSummary, Outcome, PullSummary, PushSummary, RollbackResult, RollbackTarget,
 };
 
 // =============================================================================
@@ -178,11 +177,7 @@ pub fn dvs_version() -> String {
 /// @return A JSON string with initialization details.
 /// @keywords internal
 #[miniextendr]
-pub fn dvs_init_json(
-    storage_dir: &str,
-    permissions: Option<i32>,
-    group: Option<&str>,
-) -> String {
+pub fn dvs_init_json(storage_dir: &str, permissions: Option<i32>, group: Option<&str>) -> String {
     let storage_path = PathBuf::from(storage_dir);
     let perms = permissions.map(|p| p as u32);
 
@@ -360,7 +355,8 @@ pub fn dvs_log_json(limit: Option<i32>) -> String {
     let limit_usize = limit.map(|n| n as usize);
     match log(limit_usize) {
         Ok(entries) => {
-            let json_entries: Vec<LogEntryJson> = entries.into_iter().map(log_entry_to_json).collect();
+            let json_entries: Vec<LogEntryJson> =
+                entries.into_iter().map(log_entry_to_json).collect();
             serde_json::to_string(&json_entries).unwrap_or_else(|e| {
                 r_error!("JSON serialization failed: {}", e);
             })
@@ -455,7 +451,12 @@ fn log_entry_to_json(entry: LogEntry) -> LogEntryJson {
         message: entry.entry.message,
         prev_state: entry.entry.old,
         new_state: entry.entry.new,
-        files: entry.entry.paths.into_iter().map(|p| p.display().to_string()).collect(),
+        files: entry
+            .entry
+            .paths
+            .into_iter()
+            .map(|p| p.display().to_string())
+            .collect(),
     }
 }
 
@@ -464,8 +465,16 @@ fn rollback_result_to_json(result: RollbackResult) -> RollbackResultJson {
         success: result.success,
         from_state: result.from_state,
         to_state: result.to_state,
-        restored_files: result.restored_files.into_iter().map(|p| p.display().to_string()).collect(),
-        removed_files: result.removed_files.into_iter().map(|p| p.display().to_string()).collect(),
+        restored_files: result
+            .restored_files
+            .into_iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        removed_files: result
+            .removed_files
+            .into_iter()
+            .map(|p| p.display().to_string())
+            .collect(),
         error: result.error,
     }
 }

@@ -3,6 +3,7 @@
 use dvs_core::helpers::backend::{detect_backend, Backend, GitBackend};
 use fs_err as fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use tempfile::TempDir;
 
 /// A temporary test repository with git init and storage directory.
@@ -24,8 +25,18 @@ impl TestRepo {
         let root = temp.path().to_path_buf();
         let storage = root.join(".dvs-storage");
 
-        // Initialize git repo
-        git2::Repository::init(&root)?;
+        // Initialize git repo using CLI
+        let output = Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&root)
+            .output()?;
+
+        if !output.status.success() {
+            return Err(TestRepoError::Git(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
 
         // Create storage directory
         fs::create_dir_all(&storage)?;
@@ -195,7 +206,7 @@ pub enum TestRepoError {
     /// I/O error.
     Io(std::io::Error),
     /// Git error.
-    Git(git2::Error),
+    Git(String),
 }
 
 impl std::fmt::Display for TestRepoError {
@@ -212,12 +223,6 @@ impl std::error::Error for TestRepoError {}
 impl From<std::io::Error> for TestRepoError {
     fn from(e: std::io::Error) -> Self {
         TestRepoError::Io(e)
-    }
-}
-
-impl From<git2::Error> for TestRepoError {
-    fn from(e: git2::Error) -> Self {
-        TestRepoError::Git(e)
     }
 }
 
