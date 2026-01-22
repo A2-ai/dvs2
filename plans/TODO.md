@@ -67,7 +67,7 @@
 - [ ] **Plan 034: Concurrency Locks for Dataset Updates** - `plans/034-concurrency-locks.md`
 - [ ] **Plan 035: Feature Store + Derived Dataset Framework** - `plans/035-feature-store-derived.md`
 - [ ] **Plan 036: Remote Snapshot Sources (HTTP/GitHub)** - `plans/036-remote-snapshot-sources.md`
-- [ ] **Plan 040: Proc-macro Usage Audit** - `plans/040-proc-macro-usage-audit.md`
+- [x] **Plan 040: Proc-macro Usage Audit** - Audited proc-macro usage across all crates. serde_derive used in dvs-core/cli/testkit, clap derive in dvs-cli, miniextendr-macros in dvsR. Updated plan with current findings after daemon/server removal.
 - [x] **Plan 049: CLI Output Formats (Phase 1)** - Added table output format
   - Added `--format table` option via `tabled` crate
   - Implemented for `dvs status` and `dvs log` commands
@@ -158,7 +158,7 @@ cargo build -p dvs-cli --all-features && cargo test --all-features
 
 This ensures the CLI binary is built with the same features (yaml-config) as the testkit.
 
-- [ ] dvsR testthat tests
+- [x] dvsR testthat tests - Added 7 testthat tests covering dvs_init, dvs_add, dvs_get, dvs_status, dvs_log, and message recording. All 27 assertions pass.
 
 ---
 
