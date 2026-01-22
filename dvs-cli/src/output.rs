@@ -4,6 +4,7 @@
 //! writing to different destinations (inherit/stdout, null, pipe, file).
 
 use crate::{OutputDest, OutputFormat};
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 use std::io::Write;
 use std::path::PathBuf;
@@ -230,6 +231,57 @@ impl Output {
                 "{{\"type\":\"error\",\"message\":\"{}\"}}",
                 escape_json(msg)
             )),
+        }
+    }
+
+    /// Check if progress bars should be shown.
+    ///
+    /// Progress bars are hidden when:
+    /// - JSON mode is enabled
+    /// - Quiet mode is enabled
+    /// - Output is redirected to null/pipe/file
+    pub fn show_progress(&self) -> bool {
+        !self.is_json() && !self.quiet && matches!(self.dest, OutputDest::Inherit)
+    }
+
+    /// Create a progress bar for iterating over items.
+    ///
+    /// Returns a hidden progress bar if progress should not be shown.
+    pub fn progress_bar(&self, len: u64, template: &str) -> ProgressBar {
+        if self.show_progress() && len > 0 {
+            let pb = ProgressBar::new(len);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template(template)
+                    .unwrap_or_else(|_| ProgressStyle::default_bar())
+                    .progress_chars("=> "),
+            );
+            pb
+        } else {
+            ProgressBar::hidden()
+        }
+    }
+
+    /// Create a progress bar with a standard file operation template.
+    pub fn file_progress(&self, len: u64) -> ProgressBar {
+        self.progress_bar(len, "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+    }
+
+    /// Create a spinner for operations without a known count.
+    #[allow(dead_code)]
+    pub fn spinner(&self, msg: &str) -> ProgressBar {
+        if self.show_progress() {
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(
+                ProgressStyle::default_spinner()
+                    .template("{spinner:.green} {msg}")
+                    .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+            );
+            pb.set_message(msg.to_string());
+            pb.enable_steady_tick(std::time::Duration::from_millis(100));
+            pb
+        } else {
+            ProgressBar::hidden()
         }
     }
 }

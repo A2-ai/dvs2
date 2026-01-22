@@ -30,7 +30,17 @@ struct GetSummary {
 }
 
 /// Run the get command.
-pub fn run(output: &Output, files: Vec<PathBuf>) -> Result<()> {
+pub fn run(output: &Output, files: Vec<PathBuf>, batch: bool) -> Result<()> {
+    // Collect files from args or stdin (batch mode)
+    let files = paths::collect_files(files, batch)?;
+
+    if files.is_empty() {
+        return Err(super::CliError::InvalidArg(
+            "No files specified. Provide files as arguments or use --batch to read from stdin."
+                .to_string(),
+        ));
+    }
+
     // Resolve all file paths
     let resolved_files: Vec<PathBuf> = files
         .iter()
@@ -46,7 +56,11 @@ pub fn run(output: &Output, files: Vec<PathBuf>) -> Result<()> {
     let mut error_count = 0;
     let mut file_entries = Vec::new();
 
+    // Create progress bar for processing results
+    let pb = output.file_progress(results.len() as u64);
+
     for result in &results {
+        pb.inc(1);
         let (outcome_str, error) = match result.outcome {
             dvs_core::Outcome::Copied => {
                 success_count += 1;
@@ -88,6 +102,8 @@ pub fn run(output: &Output, files: Vec<PathBuf>) -> Result<()> {
             }
         }
     }
+
+    pb.finish_and_clear();
 
     // Output
     if output.is_json() {

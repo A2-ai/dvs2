@@ -129,7 +129,7 @@ pub enum Command {
     /// Add files to DVS tracking
     Add {
         /// Files or glob patterns to add
-        #[arg(required = true)]
+        #[arg(required_unless_present = "batch")]
         files: Vec<PathBuf>,
 
         /// Message describing this version
@@ -139,19 +139,31 @@ pub enum Command {
         /// Metadata file format (json or toml)
         #[arg(long, value_name = "FORMAT")]
         metadata_format: Option<String>,
+
+        /// Read file paths from stdin (one per line)
+        #[arg(long)]
+        batch: bool,
     },
 
     /// Retrieve files from DVS storage
     Get {
         /// Files or glob patterns to retrieve
-        #[arg(required = true)]
+        #[arg(required_unless_present = "batch")]
         files: Vec<PathBuf>,
+
+        /// Read file paths from stdin (one per line)
+        #[arg(long)]
+        batch: bool,
     },
 
     /// Check status of tracked files
     Status {
         /// Files or glob patterns to check (empty = all tracked files)
         files: Vec<PathBuf>,
+
+        /// Read file paths from stdin (one per line)
+        #[arg(long)]
+        batch: bool,
     },
 
     /// Push objects to remote storage
@@ -162,6 +174,10 @@ pub enum Command {
 
         /// Files to push (empty = all objects in manifest)
         files: Vec<PathBuf>,
+
+        /// Read file paths from stdin (one per line)
+        #[arg(long)]
+        batch: bool,
     },
 
     /// Pull objects from remote storage
@@ -172,12 +188,20 @@ pub enum Command {
 
         /// Files to pull (empty = all objects in manifest)
         files: Vec<PathBuf>,
+
+        /// Read file paths from stdin (one per line)
+        #[arg(long)]
+        batch: bool,
     },
 
     /// Materialize files from cache to working tree
     Materialize {
         /// Files to materialize (empty = all files in manifest)
         files: Vec<PathBuf>,
+
+        /// Read file paths from stdin (one per line)
+        #[arg(long)]
+        batch: bool,
     },
 
     /// View reflog (history of state changes)
@@ -377,12 +401,13 @@ fn main() -> ExitCode {
             files,
             message,
             metadata_format,
-        } => add::run(&output, files, message, metadata_format),
-        Command::Get { files } => get::run(&output, files),
-        Command::Status { files } => status::run(&output, files),
-        Command::Push { remote, files } => push::run(&output, remote, files),
-        Command::Pull { remote, files } => pull::run(&output, remote, files),
-        Command::Materialize { files } => materialize::run(&output, files),
+            batch,
+        } => add::run(&output, files, message, metadata_format, batch),
+        Command::Get { files, batch } => get::run(&output, files, batch),
+        Command::Status { files, batch } => status::run(&output, files, batch),
+        Command::Push { remote, files, batch } => push::run(&output, remote, files, batch),
+        Command::Pull { remote, files, batch } => pull::run(&output, remote, files, batch),
+        Command::Materialize { files, batch } => materialize::run(&output, files, batch),
         Command::Log { limit } => log::run(&output, limit),
         Command::Rollback {
             target,

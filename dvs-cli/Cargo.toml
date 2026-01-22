@@ -24,6 +24,7 @@ toml-config = ["dvs-core/toml-config"]
 dvs-core = { workspace = true, features = ["git2-backend"] }
 clap = { version = "4.5", features = ["derive"] }
 clap_complete.workspace = true
+indicatif.workspace = true
 thiserror.workspace = true
 fs-err.workspace = true
 serde.workspace = true

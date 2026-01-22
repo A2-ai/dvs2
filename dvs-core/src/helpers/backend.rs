@@ -9,6 +9,8 @@ use super::ignore::{
     add_dvsignore_pattern, add_gitignore_pattern, load_dvs_ignore_patterns, load_gitignore_patterns,
 };
 use crate::DvsError;
+use fs_err as fs;
+use path_absolutize::Absolutize;
 use std::path::{Path, PathBuf};
 
 /// Backend trait for repository/workspace operations.
@@ -158,15 +160,25 @@ impl RepoBackend for GitBackend {
     }
 
     fn normalize(&self, path: &Path) -> Result<PathBuf, DvsError> {
-        // Canonicalize both paths to resolve symlinks and ..
-        let abs_path = if path.is_absolute() {
-            path.to_path_buf()
+        // Resolve symlinks and .. components
+        // Try canonicalize first (requires path to exist), fall back to absolutize
+        let abs_path = if path.exists() {
+            // canonicalize resolves symlinks and .. for existing paths
+            fs::canonicalize(path)?
         } else {
-            std::env::current_dir()?.join(path)
+            // absolutize resolves .. and . but not symlinks (path may not exist)
+            path.absolutize()?.into_owned()
+        };
+
+        // Also canonicalize root for consistent comparison
+        let canonical_root = if self.root.exists() {
+            fs::canonicalize(&self.root)?
+        } else {
+            self.root.absolutize()?.into_owned()
         };
 
         // Use pathdiff to get relative path from root
-        match pathdiff::diff_paths(&abs_path, &self.root) {
+        match pathdiff::diff_paths(&abs_path, &canonical_root) {
             Some(rel) => Ok(rel),
             None => Err(DvsError::file_outside_repo(abs_path)),
         }
@@ -246,15 +258,25 @@ impl RepoBackend for DvsBackend {
     }
 
     fn normalize(&self, path: &Path) -> Result<PathBuf, DvsError> {
-        // Canonicalize both paths to resolve symlinks and ..
-        let abs_path = if path.is_absolute() {
-            path.to_path_buf()
+        // Resolve symlinks and .. components
+        // Try canonicalize first (requires path to exist), fall back to absolutize
+        let abs_path = if path.exists() {
+            // canonicalize resolves symlinks and .. for existing paths
+            fs::canonicalize(path)?
         } else {
-            std::env::current_dir()?.join(path)
+            // absolutize resolves .. and . but not symlinks (path may not exist)
+            path.absolutize()?.into_owned()
+        };
+
+        // Also canonicalize root for consistent comparison
+        let canonical_root = if self.root.exists() {
+            fs::canonicalize(&self.root)?
+        } else {
+            self.root.absolutize()?.into_owned()
         };
 
         // Use pathdiff to get relative path from root
-        match pathdiff::diff_paths(&abs_path, &self.root) {
+        match pathdiff::diff_paths(&abs_path, &canonical_root) {
             Some(rel) => Ok(rel),
             None => Err(DvsError::file_outside_repo(abs_path)),
         }

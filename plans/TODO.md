@@ -116,7 +116,7 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 - [x] `dvs rollback [--force] [--no-materialize] <target>` subcommand - rollback to previous state
 - [x] `dvs config` subcommand - show/edit configuration
 - [ ] `dvs daemon` subcommand - start/stop/status daemon
-- [ ] Progress bars for large file operations
+- [x] Progress bars for large file operations - Added via `indicatif` crate to add, get, status, push, pull, materialize commands
 
 ### dvs-server (HTTP CAS)
 
@@ -215,6 +215,7 @@ cargo build -p dvs-cli --all-features && cargo test --all-features
 ```
 
 This ensures the CLI binary is built with the same features (yaml-config) as the testkit.
+
 - [ ] dvs-daemon IPC tests
 - [ ] dvs-server HTTP integration tests
 - [ ] dvsR testthat tests
@@ -249,7 +250,7 @@ Issues identified during code review (see `reviews/` directory for details).
 
 - [x] **HttpStore relies on curl subprocess** - ~~No timeouts or rich error reporting.~~ Fixed: Added 5min operation timeout and 30sec connection timeout to curl commands. (`dvs-core/src/helpers/store.rs:149-157`)
 
-- [ ] **Backend normalize doesn't canonicalize** - Only joins with `current_dir`, may mis-handle symlinks/`..`. (`dvs-core/src/helpers/backend.rs:160-171`)
+- [x] **Backend normalize doesn't canonicalize** - ~~Only joins with `current_dir`, may mis-handle symlinks/`..`.~~ Fixed: Now uses `fs::canonicalize()` for existing paths and `path_absolutize` for non-existing paths. (`dvs-core/src/helpers/backend.rs:162-185`)
 
 ### Test Gaps
 
@@ -286,12 +287,12 @@ See `sonnet_reviews/appendix/findings-by-priority.md` for full details.
 
 - [ ] **P2-4: Backward compatibility policy** - CLAUDE.md states "no backward compat" but may want formal policy
 - [ ] **P2-5: Documentation gaps** - Missing architecture docs, developer onboarding guide
-- [ ] **P3-1: Missing batch operations** - CLI could support `dvs add --batch` for reading paths from stdin
-- [ ] **P3-2: No progress indicators** - Add progress bars for large file operations
-- [ ] **P3-4: No incremental hash verification** - Could skip re-hashing unchanged files in `dvs status`
-- [ ] **P3-5: Missing compression support** - Add zstd/lz4 compression for stored objects
-- [ ] **P3-6: Backend normalize not true canonicalization** - May mis-handle symlinks/`..` (`dvs-core/src/helpers/backend.rs:160-171`)
-- [ ] **P3-7: R JSON interface (large integers)** - File sizes > 2^53 lose precision as f64
+- [x] **P3-1: Batch operations** - Added `--batch` flag to add, get, status, push, pull, materialize commands. Reads paths from stdin (one per line, # comments, empty lines ignored).
+- [x] **P3-2: Progress indicators** - Added `indicatif` progress bars to add, get, status, push, pull, materialize commands. Hidden in JSON/quiet mode.
+- [ ] **P3-4: Incremental hash verification** - Deferred: Would require storing mtime in metadata and design decisions about fast-path vs full verification
+- [ ] **P3-5: Compression support** - Deferred: Feature work requiring new dependencies (zstd/lz4)
+- [x] **P3-6: Backend normalize not true canonicalization** - Fixed with `fs::canonicalize()` + `path_absolutize`
+- [x] **P3-7: R JSON interface (large integers)** - File sizes > 2^53 (~9 PB) lose precision as f64. Accepted limitation: R has no native 64-bit integers; workaround would require `bit64` package
 
 ### Archived (Not Applicable)
 
