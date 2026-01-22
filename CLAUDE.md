@@ -73,6 +73,7 @@ dvs rollback <target>
 R package names can be mixed-case (e.g., `dvsR`) but autoconf's `PACKAGE_TARNAME` is always lowercase (`dvsr`). This caused symbol registration to fail.
 
 **Solution**: Use `@PACKAGE_NAME@` (preserves case) for R-facing symbols:
+
 - `R_init_@PACKAGE_NAME@()` in entrypoint.c.in
 - `miniextendr_set_altrep_pkg_name("@PACKAGE_NAME@")`
 
@@ -81,6 +82,7 @@ Use `@PACKAGE_TARNAME_RS@` (lowercase) for Rust module names.
 ### miniextendr Integration
 
 The R package uses miniextendr for Rust-R interop:
+
 - `#[miniextendr]` attribute on Rust functions
 - `miniextendr_module!` macro to register functions
 - Vendored crates require edition 2024 for miniextendr-macros and miniextendr-lint
@@ -125,6 +127,7 @@ just test-all           # Test everything
 The R package vendors miniextendr crates for CRAN compliance. When you modify miniextendr sources at `/Users/elea/Documents/GitHub/miniextendr/`, use the vendor recipes to update:
 
 **After modifying miniextendr sources:**
+
 ```bash
 # Automatic staleness detection + copy from source (recommended)
 just rpkg-vendor-detect
@@ -137,6 +140,7 @@ just rpkg-vendor-with-staleness /path/to/miniextendr
 ```
 
 **What happens:**
+
 1. Checks if miniextendr sources are newer than vendor stamp
 2. Copies miniextendr-api, miniextendr-macros, miniextendr-lint from source
 3. Patches Cargo.toml files to remove workspace inheritance
@@ -144,6 +148,7 @@ just rpkg-vendor-with-staleness /path/to/miniextendr
 5. Creates vendor.tar.xz for CRAN builds
 
 **Environment variables:**
+
 - `FORCE_VENDOR=true` - Force re-vendor even if stamp file exists
 - `MINIEXTENDR_SOURCE_DIR=/path/to/miniextendr` - Path to miniextendr source for copying and staleness detection
 
