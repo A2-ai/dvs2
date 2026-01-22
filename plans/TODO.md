@@ -42,24 +42,11 @@
 
 - [x] **Plans 004-021: Crate Inclusion** - All transitive dependencies (miniextendr-api, miniextendr-macros, miniextendr-lint, proc-macro2, quote, syn, unicode-ident, version_check, ahash, cfg-if, getrandom, libc, once_cell, r-efi, wasip2, wit-bindgen, zerocopy, zerocopy-derive) are included in the vendor tarball and used for R package builds.
 
-### In Progress
-
-- [x] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
-  harness to verify CLI/R interfaces produce the same effects.
-  - [x] Created `dvs-testkit` crate with `TestRepo`, `WorkspaceSnapshot`
-  - [x] Implemented `CoreRunner` baseline
-  - [x] Created standard scenarios (init/add/get/status)
-  - [x] Implemented `CliRunner` (feature-gated with `cli-runner`)
-  - [x] Wired conformance tests into CI (via `--all-features`)
-  - [x] Implemented `RRunner` for dvsR (feature: `r-runner`)
-    - Spawns Rscript subprocess to execute dvsR functions
-    - Captures JSON results and compares workspace snapshots
-    - Enable with `DVS_TEST_R=1` environment variable
-    - Tests: `test_r_runner_init`, `test_r_runner_add`, `test_conformance_core_vs_r`
+- [x] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance harness (dvs-testkit) with TestRepo, WorkspaceSnapshot, CoreRunner, CliRunner, RRunner. All interfaces produce consistent results.
 
 ### Pending Plans (Documented)
 
-- [ ] **Plan 001: Decoupling Architecture** - `plans/001-decoupling-architecture.md`
+- [x] **Plan 001: Decoupling Architecture** - Complete. Moved to `ARCHITECTURE.md`.
 - [ ] **Plan 030: Temporal SCD Snapshots for Tabular Data** - `plans/030-temporal-scd-snapshots.md`
 - [ ] **Plan 031: Slice Timestamp (As-Of) Views** - `plans/031-slice-ts-asof.md`
 - [ ] **Plan 032: Temporal Interlace for Aligned Joins** - `plans/032-temporal-interlace.md`
@@ -222,7 +209,7 @@ See `sonnet_reviews/appendix/findings-by-priority.md` for full details.
 ### Pending (Low Priority)
 
 - [ ] **P2-4: Backward compatibility policy** - CLAUDE.md states "no backward compat" but may want formal policy
-- [ ] **P2-5: Documentation gaps** - Missing architecture docs, developer onboarding guide
+- [x] **P2-5: Documentation gaps** - Added `ARCHITECTURE.md`. Developer onboarding covered in `CLAUDE.md`.
 - [x] **P3-1: Batch operations** - Added `--batch` flag to add, get, status, push, pull, materialize commands. Reads paths from stdin (one per line, # comments, empty lines ignored).
 - [x] **P3-2: Progress indicators** - Added `indicatif` progress bars to add, get, status, push, pull, materialize commands. Hidden in JSON/quiet mode.
 - [ ] **P3-4: Incremental hash verification** - Deferred: Would require storing mtime in metadata and design decisions about fast-path vs full verification
