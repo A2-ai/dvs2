@@ -67,7 +67,7 @@ doc-open: doc
 # Check for std::fs usage in workspace Rust sources
 # Allows std::fs::Permissions and std::fs::Metadata (types that fs-err doesn't re-export)
 check-std-fs:
-    @! rg -nP -g '*.rs' -e 'std::fs(?!::(Permissions|Metadata)\b)' -e 'std::\s*\{[^}]*\bfs\b[^}]*\}' dvs-core dvs-cli dvs-daemon dvs-server dvs-testkit
+    @! rg -nP -g '*.rs' -e 'std::fs(?!::(Permissions|Metadata)\b)' -e 'std::\s*\{[^}]*\bfs\b[^}]*\}' dvs-core dvs-cli dvs-testkit
 
 
 # Run any cargo subcommand against the workspace

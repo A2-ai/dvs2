@@ -1,6 +1,7 @@
 //! `dvs log` command implementation.
 
 use serde::Serialize;
+use tabled::Tabled;
 
 use super::Result;
 use crate::output::Output;
@@ -23,6 +24,21 @@ struct LogEntryJson {
     paths: Vec<String>,
 }
 
+/// Table row for log output.
+#[derive(Tabled)]
+struct LogTableRow {
+    #[tabled(rename = "Index")]
+    index: String,
+    #[tabled(rename = "Op")]
+    op: String,
+    #[tabled(rename = "State")]
+    state: String,
+    #[tabled(rename = "Timestamp")]
+    timestamp: String,
+    #[tabled(rename = "Message")]
+    message: String,
+}
+
 /// Run the log command.
 pub fn run(output: &Output, limit: Option<usize>) -> Result<()> {
     let entries = dvs_core::log(limit)?;
@@ -36,8 +52,9 @@ pub fn run(output: &Output, limit: Option<usize>) -> Result<()> {
         return Ok(());
     }
 
-    // Collect entries for JSON output
+    // Collect entries for JSON/table output
     let mut json_entries = Vec::new();
+    let mut table_rows = Vec::new();
 
     for entry in &entries {
         let e = &entry.entry;
@@ -58,8 +75,16 @@ pub fn run(output: &Output, limit: Option<usize>) -> Result<()> {
             paths: e.paths.iter().map(|p| p.display().to_string()).collect(),
         });
 
-        // Human-readable output
-        if !output.is_json() {
+        table_rows.push(LogTableRow {
+            index: format!("@{{{}}}", entry.index),
+            op: e.op.to_string(),
+            state: state_short.to_string(),
+            timestamp: ts.clone(),
+            message: e.message.clone().unwrap_or_default(),
+        });
+
+        // Human-readable output (skip for table format)
+        if !output.is_json() && !output.is_table() {
             let line = if let Some(ref msg) = e.message {
                 format!(
                     "@{{{}}}: {} {} {} - {}",
@@ -80,11 +105,13 @@ pub fn run(output: &Output, limit: Option<usize>) -> Result<()> {
         }
     }
 
-    // JSON output
+    // Output based on format
     if output.is_json() {
         output.json(&LogOutput {
             entries: json_entries,
         });
+    } else if output.is_table() {
+        output.table(&table_rows);
     }
 
     Ok(())

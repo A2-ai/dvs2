@@ -100,6 +100,11 @@ impl Output {
         matches!(self.format, OutputFormat::Json)
     }
 
+    /// Check if table output is requested.
+    pub fn is_table(&self) -> bool {
+        matches!(self.format, OutputFormat::Table)
+    }
+
     /// Check if output is going to null or pipe (discarded).
     pub fn is_null(&self) -> bool {
         matches!(self.dest, OutputDest::Null | OutputDest::Pipe)
@@ -172,7 +177,7 @@ impl Output {
     pub fn println(&self, msg: &str) {
         if !self.quiet && !self.is_null() {
             match self.format {
-                OutputFormat::Human => self.write_line(msg),
+                OutputFormat::Human | OutputFormat::Table => self.write_line(msg),
                 OutputFormat::Json => {
                     // For JSON, we'd normally collect and output at the end
                     // For now, just print as-is
@@ -186,7 +191,9 @@ impl Output {
     pub fn success(&self, msg: &str) {
         if !self.quiet && !self.is_null() {
             match self.format {
-                OutputFormat::Human => self.write_line(&format!("\x1b[32m{}\x1b[0m", msg)),
+                OutputFormat::Human | OutputFormat::Table => {
+                    self.write_line(&format!("\x1b[32m{}\x1b[0m", msg))
+                }
                 OutputFormat::Json => self.write_line(&format!(
                     "{{\"type\":\"success\",\"message\":\"{}\"}}",
                     escape_json(msg)
@@ -199,7 +206,7 @@ impl Output {
     pub fn info(&self, msg: &str) {
         if !self.quiet && !self.is_null() {
             match self.format {
-                OutputFormat::Human => self.write_line(msg),
+                OutputFormat::Human | OutputFormat::Table => self.write_line(msg),
                 OutputFormat::Json => self.write_line(&format!(
                     "{{\"type\":\"info\",\"message\":\"{}\"}}",
                     escape_json(msg)
@@ -213,7 +220,9 @@ impl Output {
         if !self.quiet {
             // Warnings go to stderr
             match self.format {
-                OutputFormat::Human => self.write_err(&format!("\x1b[33m{}\x1b[0m", msg)),
+                OutputFormat::Human | OutputFormat::Table => {
+                    self.write_err(&format!("\x1b[33m{}\x1b[0m", msg))
+                }
                 OutputFormat::Json => self.write_err(&format!(
                     "{{\"type\":\"warning\",\"message\":\"{}\"}}",
                     escape_json(msg)
@@ -226,11 +235,24 @@ impl Output {
     pub fn error(&self, msg: &str) {
         // Errors always go to stderr
         match self.format {
-            OutputFormat::Human => self.write_err(&format!("\x1b[31merror: {}\x1b[0m", msg)),
+            OutputFormat::Human | OutputFormat::Table => {
+                self.write_err(&format!("\x1b[31merror: {}\x1b[0m", msg))
+            }
             OutputFormat::Json => self.write_err(&format!(
                 "{{\"type\":\"error\",\"message\":\"{}\"}}",
                 escape_json(msg)
             )),
+        }
+    }
+
+    /// Output a table of items using tabled crate.
+    ///
+    /// Only outputs in Table mode; in other modes this is a no-op.
+    pub fn table<T: tabled::Tabled>(&self, items: &[T]) {
+        if self.is_table() && !self.is_null() && !self.quiet {
+            use tabled::{Table, settings::Style};
+            let table = Table::new(items).with(Style::rounded()).to_string();
+            self.write_line(&table);
         }
     }
 

@@ -85,7 +85,7 @@ impl WorkspaceState {
 
     /// Check if this state is empty.
     pub fn is_empty(&self) -> bool {
-        self.manifest.as_ref().map_or(true, |m| m.is_empty()) && self.metadata.is_empty()
+        self.manifest.as_ref().is_none_or(|m| m.is_empty()) && self.metadata.is_empty()
     }
 
     /// Serialize to canonical JSON for hashing.

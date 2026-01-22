@@ -1,7 +1,7 @@
 //! DVS Test Kit - Conformance testing utilities.
 //!
 //! This crate provides utilities for testing DVS across multiple interfaces
-//! (CLI, R, server, daemon) to ensure they all produce the same consequences.
+//! (CLI, R) to ensure they all produce the same consequences.
 //!
 //! # Key Types
 //!
@@ -16,9 +16,7 @@
 //! |--------|--------|-------------|
 //! | `CoreRunner` | ✅ Implemented | Baseline - calls dvs-core directly |
 //! | `CliRunner` | ✅ Implemented | Runs `dvs` CLI binary (feature: `cli-runner`) |
-//! | `ServerRunner` | ✅ Implemented | Tests HTTP CAS endpoints (feature: `server-runner`) |
-//! | `RRunner` | ❌ Not implemented | Will run R scripts via dvsR |
-//! | `DaemonRunner` | ❌ Not implemented | Will test daemon IPC via dvs-daemon |
+//! | `RRunner` | ✅ Implemented | Run R scripts via dvsR (feature: `r-runner`) |
 //!
 //! # Example
 //!
@@ -58,8 +56,8 @@ pub use snapshot::{FileSnapshot, ObjectPresence, WorkspaceSnapshot};
 #[cfg(feature = "cli-runner")]
 pub use runner::CliRunner;
 
-#[cfg(feature = "server-runner")]
-pub use runner::{ServerRunner, TestServer};
+#[cfg(feature = "r-runner")]
+pub use runner::RRunner;
 
 /// Re-export dvs_core for convenience in tests.
 pub use dvs_core;

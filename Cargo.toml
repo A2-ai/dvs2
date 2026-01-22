@@ -1,6 +1,6 @@
 [workspace]
 members = ["dvs-core", "dvs-cli", "dvs-testkit"]
-exclude = ["dvsR", "dvs-daemon", "dvs-server"]
+exclude = ["dvsR"]
 resolver = "2"
 
 [profile.release]
@@ -18,19 +18,19 @@ authors = [
 description = 'This package allows users to version large or sensitive files under Git without tracking the file directly.'
 license = 'MIT'
 edition = '2021'
-rust-version = '1.78'
+rust-version = '1.85'
 
 [workspace.dependencies]
 # Internal crates
 dvs-core = { path = "dvs-core" }
 
-# Serialization (used by: dvs-core, dvs-daemon, dvs-server)
+# Serialization (used by: dvs-core)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 toml = "0.9"
 
-# Error handling (used by: dvs-core, dvs-daemon, dvs-server)
+# Error handling (used by: dvs-core, dvs-cli)
 thiserror = "2.0"
 anyhow = "1.0"
 
@@ -44,15 +44,6 @@ fs-err = "2"
 memmap2 = "0.9"
 walkdir = "2.5"
 glob = "0.3"
-
-# File watching (used by: dvs-daemon)
-notify = "8"
-
-# Async runtime (used by: dvs-daemon, dvs-server)
-tokio = { version = "1", features = ["full"] }
-
-# HTTP server (used by: dvs-server)
-tiny_http = "0.12"
 
 # Utilities (used by: dvs-core)
 chrono = { version = "0.4", features = ["serde"] }

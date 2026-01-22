@@ -127,7 +127,7 @@ impl RunResult {
 /// - `CoreRunner`: Calls dvs-core directly (baseline)
 /// - `CliRunner`: Runs dvs CLI binary
 /// - `RRunner`: Runs R scripts (future)
-/// - `ServerRunner`: Tests HTTP endpoints (future)
+/// - Future: Additional runners for other interfaces
 pub trait InterfaceRunner {
     /// Get the runner name.
     fn name(&self) -> &'static str;
@@ -579,405 +579,6 @@ mod tests {
     }
 }
 
-// ============================================================================
-// Server Runner (requires `server-runner` feature)
-// ============================================================================
-
-/// Test server wrapper for testing HTTP CAS endpoints.
-///
-/// This starts a dvs-server in the background on a random port
-/// and provides utilities for testing object storage.
-#[cfg(feature = "server-runner")]
-pub struct TestServer {
-    /// The URL of the running server.
-    pub url: String,
-    /// The port the server is listening on.
-    pub port: u16,
-    /// Server handle for non-blocking request processing.
-    #[allow(dead_code)]
-    handle: std::sync::Arc<dvs_server::ServerHandle>,
-    /// Background thread for serving requests.
-    _server_thread: Option<std::thread::JoinHandle<()>>,
-    /// Storage directory.
-    _storage_dir: tempfile::TempDir,
-    /// Shutdown flag.
-    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-#[cfg(feature = "server-runner")]
-impl TestServer {
-    /// Start a new test server on a random available port.
-    pub fn start() -> Result<Self, String> {
-        use dvs_server::{AuthConfig, ServerConfig};
-        use std::sync::atomic::AtomicBool;
-
-        // Create temp storage directory
-        let storage_dir =
-            tempfile::TempDir::new().map_err(|e| format!("Failed to create temp dir: {}", e))?;
-
-        // Find an available port
-        let port = Self::find_available_port()?;
-
-        // Create server config
-        let config = ServerConfig {
-            host: "127.0.0.1".to_string(),
-            port,
-            storage_root: storage_dir.path().to_path_buf(),
-            auth: AuthConfig::default(), // Auth disabled for tests
-            max_upload_size: 100 * 1024 * 1024,
-            cors_enabled: false,
-            cors_origins: vec![],
-            log_level: "warn".to_string(),
-        };
-
-        // Start server in background mode
-        let (url, handle) = dvs_server::start_server_background(config)
-            .map_err(|e| format!("Failed to start server: {}", e))?;
-
-        let handle = std::sync::Arc::new(handle);
-        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
-
-        // Spawn background thread to process requests
-        let handle_clone = handle.clone();
-        let shutdown_clone = shutdown.clone();
-        let server_thread = std::thread::spawn(move || {
-            while !shutdown_clone.load(std::sync::atomic::Ordering::Relaxed) {
-                // Process any pending requests
-                let _ = handle_clone.handle_one();
-                // Small sleep to prevent busy-waiting
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-        });
-
-        // Wait for server to be ready
-        Self::wait_for_server(&url)?;
-
-        Ok(Self {
-            url,
-            port,
-            handle,
-            _server_thread: Some(server_thread),
-            _storage_dir: storage_dir,
-            shutdown,
-        })
-    }
-
-    /// Find an available port.
-    fn find_available_port() -> Result<u16, String> {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .map_err(|e| format!("Failed to bind: {}", e))?;
-        Ok(listener
-            .local_addr()
-            .map_err(|e| format!("Failed to get addr: {}", e))?
-            .port())
-    }
-
-    /// Wait for server to be ready.
-    fn wait_for_server(url: &str) -> Result<(), String> {
-        let health_url = format!("{}/health", url);
-        let client = reqwest::blocking::Client::new();
-
-        for _ in 0..50 {
-            match client.get(&health_url).send() {
-                Ok(resp) if resp.status().is_success() => return Ok(()),
-                _ => std::thread::sleep(std::time::Duration::from_millis(100)),
-            }
-        }
-
-        Err("Server did not become ready in time".to_string())
-    }
-
-    /// Get the base URL for object operations.
-    pub fn objects_url(&self) -> String {
-        format!("{}/objects", self.url)
-    }
-
-    /// Check if an object exists on the server.
-    pub fn object_exists(&self, algo: &str, hash: &str) -> Result<bool, String> {
-        let url = format!("{}/{}/{}", self.objects_url(), algo, hash);
-        let client = reqwest::blocking::Client::new();
-        let resp = client
-            .head(&url)
-            .send()
-            .map_err(|e| format!("HEAD request failed: {}", e))?;
-        Ok(resp.status().is_success())
-    }
-
-    /// Get an object from the server.
-    pub fn get_object(&self, algo: &str, hash: &str) -> Result<Vec<u8>, String> {
-        let url = format!("{}/{}/{}", self.objects_url(), algo, hash);
-        let client = reqwest::blocking::Client::new();
-        let resp = client
-            .get(&url)
-            .send()
-            .map_err(|e| format!("GET request failed: {}", e))?;
-
-        if !resp.status().is_success() {
-            return Err(format!("GET returned {}", resp.status()));
-        }
-
-        resp.bytes()
-            .map(|b| b.to_vec())
-            .map_err(|e| format!("Failed to read body: {}", e))
-    }
-
-    /// Put an object to the server.
-    pub fn put_object(&self, algo: &str, hash: &str, data: &[u8]) -> Result<bool, String> {
-        let url = format!("{}/{}/{}", self.objects_url(), algo, hash);
-        let client = reqwest::blocking::Client::new();
-        let resp = client
-            .put(&url)
-            .body(data.to_vec())
-            .send()
-            .map_err(|e| format!("PUT request failed: {}", e))?;
-
-        if !resp.status().is_success() {
-            return Err(format!("PUT returned {}", resp.status()));
-        }
-
-        // 201 = created new, 200 = already existed
-        Ok(resp.status() == reqwest::StatusCode::CREATED)
-    }
-}
-
-#[cfg(feature = "server-runner")]
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        // Signal shutdown
-        self.shutdown
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        // Give thread time to exit
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-}
-
-/// Server runner - tests HTTP CAS endpoints.
-///
-/// This runner tests that objects stored via HTTP can be retrieved
-/// correctly. It's used to verify the server's storage layer.
-///
-/// Note: This runner tests object storage, not full DVS operations.
-/// For init/add/get/status, use CoreRunner or CliRunner.
-#[cfg(feature = "server-runner")]
-pub struct ServerRunner {
-    server: std::sync::Arc<TestServer>,
-}
-
-#[cfg(feature = "server-runner")]
-impl ServerRunner {
-    /// Create a new server runner.
-    pub fn new() -> Result<Self, String> {
-        let server = TestServer::start()?;
-        Ok(Self {
-            server: std::sync::Arc::new(server),
-        })
-    }
-
-    /// Get the server URL.
-    pub fn url(&self) -> &str {
-        &self.server.url
-    }
-
-    /// Get a reference to the test server.
-    pub fn server(&self) -> &TestServer {
-        &self.server
-    }
-}
-
-#[cfg(feature = "server-runner")]
-impl Default for ServerRunner {
-    fn default() -> Self {
-        Self::new().expect("Failed to start test server")
-    }
-}
-
-#[cfg(feature = "server-runner")]
-impl InterfaceRunner for ServerRunner {
-    fn name(&self) -> &'static str {
-        "server"
-    }
-
-    fn run(&self, repo: &TestRepo, op: &Op) -> RunResult {
-        // Server runner only supports push/pull operations
-        // that interact with the CAS endpoints
-        match op.kind {
-            OpKind::Push => {
-                // For push, we need to:
-                // 1. Read objects from local storage
-                // 2. Push them to the server
-                // This requires the repo to be initialized with a config
-                run_push_server(repo, &op.args, &self.server)
-            }
-            OpKind::Pull => {
-                // For pull, we need to:
-                // 1. Fetch objects from server
-                // 2. Store them locally
-                run_pull_server(repo, &op.args, &self.server)
-            }
-            _ => {
-                // For other operations, delegate to core runner
-                // since the server only provides object storage
-                let core = CoreRunner::new();
-                core.run(repo, op)
-            }
-        }
-    }
-
-    fn is_available(&self) -> bool {
-        // Server is started in new(), so always available if created
-        true
-    }
-}
-
-#[cfg(feature = "server-runner")]
-fn run_push_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> RunResult {
-    use dvs_core::Manifest;
-    use fs_err as fs;
-
-    // Load manifest to find objects to push
-    let dvs_dir = repo.root().join(".dvs");
-    let manifest_path = dvs_dir.join("manifest.json");
-
-    if !manifest_path.exists() {
-        return RunResult::failure(
-            1,
-            "No manifest found - run init and add first".to_string(),
-            None,
-        );
-    }
-
-    let manifest = match Manifest::load(&manifest_path) {
-        Ok(m) => m,
-        Err(e) => return RunResult::failure(1, format!("Failed to load manifest: {}", e), None),
-    };
-
-    // Load config
-    let config = match dvs_core::Config::load_from_dir(repo.root()) {
-        Ok(c) => c,
-        Err(e) => return RunResult::failure(1, format!("Failed to load config: {}", e), None),
-    };
-
-    let local_store = dvs_core::LocalStore::new(config.storage_dir.clone());
-
-    // Push each unique object
-    let mut pushed = 0;
-    let mut skipped = 0;
-    for oid in manifest.unique_oids() {
-        // Check if already on server
-        match server.object_exists(oid.algo.prefix(), &oid.hex) {
-            Ok(true) => {
-                skipped += 1;
-                continue;
-            }
-            Ok(false) => {}
-            Err(e) => {
-                return RunResult::failure(
-                    1,
-                    format!("Failed to check object {}: {}", oid, e),
-                    None,
-                )
-            }
-        }
-
-        // Read object from local storage to temp file
-        let obj_path = local_store.object_path(oid);
-        if !obj_path.exists() {
-            return RunResult::failure(1, format!("Object not found locally: {}", oid), None);
-        }
-
-        let data = match fs::read(&obj_path) {
-            Ok(d) => d,
-            Err(e) => {
-                return RunResult::failure(1, format!("Failed to read object {}: {}", oid, e), None)
-            }
-        };
-
-        // Push to server
-        match server.put_object(oid.algo.prefix(), &oid.hex, &data) {
-            Ok(_) => pushed += 1,
-            Err(e) => return RunResult::failure(1, format!("Failed to push {}: {}", oid, e), None),
-        }
-    }
-
-    // Return success with snapshot
-    match WorkspaceSnapshot::capture(repo) {
-        Ok(snapshot) => {
-            let mut result = RunResult::success(snapshot);
-            result.stdout = format!("Pushed {} objects ({} already existed)", pushed, skipped);
-            result
-        }
-        Err(e) => RunResult::failure(1, format!("Snapshot error: {}", e), None),
-    }
-}
-
-#[cfg(feature = "server-runner")]
-fn run_pull_server(repo: &TestRepo, _args: &[String], server: &TestServer) -> RunResult {
-    use dvs_core::{Manifest, ObjectStore as _};
-    use fs_err as fs;
-
-    // Load manifest to find objects to pull
-    let dvs_dir = repo.root().join(".dvs");
-    let manifest_path = dvs_dir.join("manifest.json");
-
-    if !manifest_path.exists() {
-        return RunResult::failure(1, "No manifest found".to_string(), None);
-    }
-
-    let manifest = match Manifest::load(&manifest_path) {
-        Ok(m) => m,
-        Err(e) => return RunResult::failure(1, format!("Failed to load manifest: {}", e), None),
-    };
-
-    // Load config
-    let config = match dvs_core::Config::load_from_dir(repo.root()) {
-        Ok(c) => c,
-        Err(e) => return RunResult::failure(1, format!("Failed to load config: {}", e), None),
-    };
-
-    let local_store = dvs_core::LocalStore::new(config.storage_dir.clone());
-
-    // Pull each unique object
-    let mut pulled = 0;
-    let mut skipped = 0;
-    for oid in manifest.unique_oids() {
-        // Check if already exists locally
-        if local_store.has(oid).unwrap_or(false) {
-            skipped += 1;
-            continue;
-        }
-
-        // Fetch from server
-        let data = match server.get_object(oid.algo.prefix(), &oid.hex) {
-            Ok(d) => d,
-            Err(e) => return RunResult::failure(1, format!("Failed to pull {}: {}", oid, e), None),
-        };
-
-        // Write to temp file then copy to local store
-        let obj_path = local_store.object_path(oid);
-        if let Some(parent) = obj_path.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                return RunResult::failure(1, format!("Failed to create dir: {}", e), None);
-            }
-        }
-
-        if let Err(e) = fs::write(&obj_path, &data) {
-            return RunResult::failure(1, format!("Failed to store {}: {}", oid, e), None);
-        }
-
-        pulled += 1;
-    }
-
-    // Return success with snapshot
-    match WorkspaceSnapshot::capture(repo) {
-        Ok(snapshot) => {
-            let mut result = RunResult::success(snapshot);
-            result.stdout = format!("Pulled {} objects ({} already existed)", pulled, skipped);
-            result
-        }
-        Err(e) => RunResult::failure(1, format!("Snapshot error: {}", e), None),
-    }
-}
-
 #[cfg(all(test, feature = "cli-runner"))]
 mod cli_tests {
     use super::*;
@@ -1085,92 +686,433 @@ mod cli_tests {
     }
 }
 
-#[cfg(all(test, feature = "server-runner"))]
-mod server_tests {
-    use super::*;
+// ============================================================================
+// R Runner (requires `r-runner` feature)
+// ============================================================================
 
-    #[test]
-    fn test_server_start_stop() {
-        let server = TestServer::start().expect("Failed to start server");
-        assert!(!server.url.is_empty());
-        assert!(server.port > 0);
-        // Server will be stopped on drop
-    }
+/// R runner - runs dvsR functions via Rscript.
+///
+/// This runner executes R scripts that call dvsR functions and captures
+/// their output. Use this to verify R package behavior matches core behavior.
+///
+/// Requires:
+/// - R to be installed (`Rscript` available in PATH)
+/// - dvsR package to be installed (`library(dvs)` must work)
+///
+/// Enable with `DVS_TEST_R=1` environment variable to run R tests.
+#[cfg(feature = "r-runner")]
+pub struct RRunner {
+    /// Path to Rscript binary (or "Rscript" if using PATH).
+    rscript_path: String,
+    /// Whether R and dvsR are available.
+    available: Option<bool>,
+}
 
-    #[test]
-    fn test_server_put_get_object() {
-        let server = TestServer::start().expect("Failed to start server");
-
-        // Create a test object
-        let data = b"hello world test data";
-        let hash = blake3::hash(data).to_hex().to_string();
-
-        // Initially should not exist
-        assert!(!server.object_exists("blake3", &hash).unwrap());
-
-        // Put the object
-        let created = server.put_object("blake3", &hash, data).unwrap();
-        assert!(created, "Should report as newly created");
-
-        // Now should exist
-        assert!(server.object_exists("blake3", &hash).unwrap());
-
-        // Get should return the same data
-        let retrieved = server.get_object("blake3", &hash).unwrap();
-        assert_eq!(retrieved, data);
-
-        // Put again should report as already existing
-        let created = server.put_object("blake3", &hash, data).unwrap();
-        assert!(!created, "Should report as already existing");
-    }
-
-    #[test]
-    fn test_server_runner_delegates_init_add() {
-        // ServerRunner delegates init/add/get/status to CoreRunner
-        let runner = ServerRunner::new().expect("Failed to create server runner");
-        let repo = TestRepo::new().expect("Failed to create test repo");
-
-        // Initialize
-        let init = Op::init(".dvs-storage");
-        let result = runner.run(&repo, &init);
-        assert!(result.success, "Init failed: {}", result.stderr);
-
-        // Create and add a file
-        repo.write_file("data.txt", b"test content for server")
-            .unwrap();
-        let add = Op::add(&["data.txt"]);
-        let result = runner.run(&repo, &add);
-        assert!(result.success, "Add failed: {}", result.stderr);
-
-        // Verify file was tracked
-        let snapshot = result.snapshot.unwrap();
-        assert!(snapshot.is_tracked(&PathBuf::from("data.txt")));
-    }
-
-    #[test]
-    fn test_server_object_roundtrip() {
-        // Test that objects can be pushed to and pulled from the server
-        let server = TestServer::start().expect("Failed to start server");
-
-        // Create multiple test objects
-        let test_objects = vec![
-            (b"hello world".as_slice(), "blake3"),
-            (b"test data 123".as_slice(), "blake3"),
-            (b"another object".as_slice(), "blake3"),
-        ];
-
-        for (data, algo) in &test_objects {
-            let hash = blake3::hash(data).to_hex().to_string();
-
-            // Put object
-            server.put_object(algo, &hash, data).expect("Put failed");
-
-            // Verify it exists
-            assert!(server.object_exists(algo, &hash).unwrap());
-
-            // Get and verify content matches
-            let retrieved = server.get_object(algo, &hash).expect("Get failed");
-            assert_eq!(&retrieved[..], *data);
+#[cfg(feature = "r-runner")]
+impl RRunner {
+    /// Create a new R runner using the default Rscript location.
+    pub fn new() -> Self {
+        Self {
+            rscript_path: "Rscript".to_string(),
+            available: None,
         }
     }
+
+    /// Create an R runner with a specific Rscript path.
+    pub fn with_rscript(path: &str) -> Self {
+        Self {
+            rscript_path: path.to_string(),
+            available: None,
+        }
+    }
+
+    /// Check if R and dvsR are available.
+    fn check_available(&self) -> bool {
+        // First check if DVS_TEST_R=1 is set
+        if std::env::var("DVS_TEST_R").map(|v| v != "1").unwrap_or(true) {
+            return false;
+        }
+
+        // Check if Rscript is available
+        let output = std::process::Command::new(&self.rscript_path)
+            .arg("--version")
+            .output();
+
+        if output.is_err() {
+            return false;
+        }
+
+        // Check if dvsR package is installed
+        let check_script = r#"
+            tryCatch({
+                library(dvs)
+                cat("OK\n")
+            }, error = function(e) {
+                cat("FAIL\n")
+            })
+        "#;
+
+        let output = std::process::Command::new(&self.rscript_path)
+            .arg("-e")
+            .arg(check_script)
+            .output();
+
+        match output {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).contains("OK"),
+            Err(_) => false,
+        }
+    }
+
+    /// Run an R script and capture output.
+    fn run_script(&self, repo: &TestRepo, script: &str) -> Result<String, String> {
+        let output = std::process::Command::new(&self.rscript_path)
+            .current_dir(repo.root())
+            .arg("-e")
+            .arg(script)
+            .output()
+            .map_err(|e| format!("Failed to run Rscript: {}", e))?;
+
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+        if !output.status.success() {
+            // Extract error type if present (format: [error_type] message)
+            let error_type = if let Some(caps) = stderr
+                .lines()
+                .find(|l| l.contains("Error"))
+            {
+                // Try to extract [error_type] from the error message
+                if let Some(start) = caps.find('[') {
+                    if let Some(end) = caps.find(']') {
+                        Some(caps[start + 1..end].to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            return Err(format!(
+                "R script failed ({}): {}\nstdout: {}",
+                error_type.unwrap_or_else(|| "unknown".to_string()),
+                stderr,
+                stdout
+            ));
+        }
+
+        Ok(stdout)
+    }
 }
+
+#[cfg(feature = "r-runner")]
+impl Default for RRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "r-runner")]
+impl InterfaceRunner for RRunner {
+    fn name(&self) -> &'static str {
+        "r"
+    }
+
+    fn run(&self, repo: &TestRepo, op: &Op) -> RunResult {
+        let script = match op.kind {
+            OpKind::Init => {
+                let storage_dir = op.args.first().map(|s| s.as_str()).unwrap_or(".dvs-storage");
+                format!(
+                    r#"
+                    library(dvs)
+                    result <- dvs_init("{}")
+                    cat("SUCCESS\n")
+                    "#,
+                    storage_dir
+                )
+            }
+            OpKind::Add => {
+                let files = op
+                    .args
+                    .iter()
+                    .map(|s| format!("\"{}\"", s))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    r#"
+                    library(dvs)
+                    result <- dvs_add(c({}))
+                    cat("SUCCESS\n")
+                    "#,
+                    files
+                )
+            }
+            OpKind::Get => {
+                let files = op
+                    .args
+                    .iter()
+                    .map(|s| format!("\"{}\"", s))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    r#"
+                    library(dvs)
+                    result <- dvs_get(c({}))
+                    cat("SUCCESS\n")
+                    "#,
+                    files
+                )
+            }
+            OpKind::Status => {
+                let files = if op.args.is_empty() {
+                    "character(0)".to_string()
+                } else {
+                    let files = op
+                        .args
+                        .iter()
+                        .map(|s| format!("\"{}\"", s))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("c({})", files)
+                };
+                format!(
+                    r#"
+                    library(dvs)
+                    result <- dvs_status({})
+                    cat("SUCCESS\n")
+                    "#,
+                    files
+                )
+            }
+            OpKind::Push => {
+                let remote = op
+                    .args
+                    .first()
+                    .map(|s| format!("\"{}\"", s))
+                    .unwrap_or("NULL".to_string());
+                format!(
+                    r#"
+                    library(dvs)
+                    result <- dvs_push({})
+                    cat("SUCCESS\n")
+                    "#,
+                    remote
+                )
+            }
+            OpKind::Pull => {
+                let remote = op
+                    .args
+                    .first()
+                    .map(|s| format!("\"{}\"", s))
+                    .unwrap_or("NULL".to_string());
+                format!(
+                    r#"
+                    library(dvs)
+                    result <- dvs_pull({})
+                    cat("SUCCESS\n")
+                    "#,
+                    remote
+                )
+            }
+            OpKind::Materialize => {
+                r#"
+                library(dvs)
+                result <- dvs_materialize()
+                cat("SUCCESS\n")
+                "#
+                .to_string()
+            }
+            OpKind::Log => {
+                let limit = op
+                    .args
+                    .first()
+                    .map(|s| s.clone())
+                    .unwrap_or("NULL".to_string());
+                format!(
+                    r#"
+                    library(dvs)
+                    result <- dvs_log({})
+                    cat("SUCCESS\n")
+                    "#,
+                    limit
+                )
+            }
+            OpKind::Rollback => {
+                let target = op.args.first().map(|s| s.as_str()).unwrap_or("0");
+                let force = op
+                    .args
+                    .get(1)
+                    .map(|s| s == "true" || s == "TRUE")
+                    .unwrap_or(false);
+                let materialize = op
+                    .args
+                    .get(2)
+                    .map(|s| s != "false" && s != "FALSE")
+                    .unwrap_or(true);
+                format!(
+                    r#"
+                    library(dvs)
+                    result <- dvs_rollback("{}", force = {}, materialize = {})
+                    cat("SUCCESS\n")
+                    "#,
+                    target,
+                    if force { "TRUE" } else { "FALSE" },
+                    if materialize { "TRUE" } else { "FALSE" }
+                )
+            }
+        };
+
+        match self.run_script(repo, &script) {
+            Ok(stdout) => {
+                let success = stdout.contains("SUCCESS");
+                match WorkspaceSnapshot::capture(repo) {
+                    Ok(snapshot) => RunResult {
+                        success,
+                        exit_code: if success { 0 } else { 1 },
+                        stdout,
+                        stderr: String::new(),
+                        error_type: None,
+                        snapshot: Some(snapshot),
+                    },
+                    Err(e) => RunResult::failure(1, format!("Snapshot error: {}", e), None),
+                }
+            }
+            Err(msg) => {
+                // Try to extract error type from the message
+                let error_type = if msg.contains('[') && msg.contains(']') {
+                    let start = msg.find('[').unwrap();
+                    let end = msg.find(']').unwrap();
+                    Some(msg[start + 1..end].to_string())
+                } else {
+                    None
+                };
+
+                // Still capture snapshot for comparison (operation may have partially succeeded)
+                let snapshot = WorkspaceSnapshot::capture(repo).ok();
+
+                RunResult {
+                    success: false,
+                    exit_code: 1,
+                    stdout: String::new(),
+                    stderr: msg,
+                    error_type,
+                    snapshot,
+                }
+            }
+        }
+    }
+
+    fn is_available(&self) -> bool {
+        // Cache the availability check
+        if let Some(available) = self.available {
+            return available;
+        }
+        self.check_available()
+    }
+}
+
+#[cfg(all(test, feature = "r-runner"))]
+mod r_tests {
+    use super::*;
+
+    /// Helper to skip test if R runner is not available.
+    fn runner_if_available() -> Option<RRunner> {
+        let runner = RRunner::new();
+        if runner.is_available() {
+            Some(runner)
+        } else {
+            eprintln!(
+                "Skipping R test: R or dvsR not available. Set DVS_TEST_R=1 and install dvsR to run R tests."
+            );
+            None
+        }
+    }
+
+    #[test]
+    fn test_r_runner_is_available() {
+        let runner = RRunner::new();
+        // This test documents whether R is available, not whether it should be
+        let available = runner.is_available();
+        eprintln!(
+            "R runner available: {} (set DVS_TEST_R=1 to enable)",
+            available
+        );
+    }
+
+    #[test]
+    fn test_r_runner_init() {
+        let runner = match runner_if_available() {
+            Some(r) => r,
+            None => return,
+        };
+        let repo = TestRepo::new().unwrap();
+
+        let op = Op::init(".dvs-storage");
+        let result = runner.run(&repo, &op);
+
+        assert!(
+            result.success,
+            "R init failed: {}\nstdout: {}",
+            result.stderr, result.stdout
+        );
+        assert!(result.snapshot.is_some());
+        assert!(result.snapshot.unwrap().is_initialized());
+    }
+
+    #[test]
+    fn test_r_runner_add() {
+        let runner = match runner_if_available() {
+            Some(r) => r,
+            None => return,
+        };
+        let repo = TestRepo::new().unwrap();
+
+        // Initialize first
+        let init = Op::init(".dvs-storage");
+        let result = runner.run(&repo, &init);
+        assert!(result.success, "R init failed: {}", result.stderr);
+
+        // Create a file
+        repo.write_file("data.csv", b"a,b,c\n1,2,3\n").unwrap();
+
+        // Add it
+        let add = Op::add(&["data.csv"]);
+        let result = runner.run(&repo, &add);
+
+        assert!(
+            result.success,
+            "R add failed: {}\nstdout: {}",
+            result.stderr, result.stdout
+        );
+
+        let snapshot = result.snapshot.unwrap();
+        assert_eq!(snapshot.tracked_count(), 1);
+        assert!(snapshot.is_tracked(&PathBuf::from("data.csv")));
+    }
+
+    #[test]
+    fn test_conformance_core_vs_r() {
+        let r = match runner_if_available() {
+            Some(r) => r,
+            None => return,
+        };
+        let core = CoreRunner::new();
+
+        // Simple init + add scenario
+        let result = run_conformance_test(
+            &core,
+            &r,
+            || {
+                let repo = TestRepo::new()?;
+                repo.write_file("test.txt", b"hello world")?;
+                Ok(repo)
+            },
+            &[Op::init(".dvs-storage"), Op::add(&["test.txt"])],
+        );
+
+        assert!(result.passed(), "Conformance test failed: {:?}", result);
+    }
+}
+
