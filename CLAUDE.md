@@ -8,9 +8,10 @@ DVS (Data Version System) is a tool for versioning large or sensitive files unde
 
 ```shell
 dvsexperimental/
-├── Cargo.toml              # Workspace manifest (dvs-core, dvs-cli)
+├── Cargo.toml              # Workspace manifest
 ├── dvs-core/               # Core Rust library
 ├── dvs-cli/                # CLI application
+├── dvs-testkit/            # Testing utilities (TestRepo, runners)
 ├── dvsR/                   # R package with Rust bindings (miniextendr)
 │   ├── DESCRIPTION
 │   ├── NAMESPACE
@@ -112,7 +113,7 @@ just check              # Check without building
 just rpkg-configure     # Run configure
 just rpkg-build         # Build Rust library
 just rpkg-install       # Install R package
-just rpkg-document      # Generate R wrappers
+just rpkg-document      # Run roxygen2 (NAMESPACE + Rd files)
 just rpkg-clean         # Clean build artifacts
 just rpkg-vendor-force  # Force re-vendor after miniextendr changes
 just rpkg-vendor-detect # Re-vendor if miniextendr sources changed

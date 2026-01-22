@@ -131,17 +131,13 @@ rpkg-check *args:
 rpkg-cargo subcmd *args:
     cargo {{subcmd}} --manifest-path={{quote(rpkg_manifest)}} {{args}}
 
-# Generate R wrapper functions (runs the document binary)
+# Generate NAMESPACE and Rd files via roxygen2
 rpkg-document:
-    cargo run --manifest-path={{quote(rpkg_manifest)}} --bin document --release
+    Rscript -e 'devtools::document("{{rpkg_dir}}")'
 
 # Install the R package
 rpkg-install:
     NOT_CRAN=true Rscript -e 'install.packages("{{rpkg_dir}}", repos = NULL, type = "source")'
-
-# Run devtools::document() on R package
-rpkg-roxygen:
-    Rscript -e 'devtools::document("{{rpkg_dir}}")'
 
 # Run R CMD check on the package
 rpkg-check-r *args:
@@ -149,10 +145,7 @@ rpkg-check-r *args:
 
 # Clean R package build artifacts
 rpkg-clean:
-    rm -rf {{rpkg_dir}}/src/rust/target
-    rm -f {{rpkg_dir}}/src/*.o {{rpkg_dir}}/src/*.so {{rpkg_dir}}/src/*.dll
-    rm -f {{rpkg_dir}}/src/Makevars {{rpkg_dir}}/src/entrypoint.c {{rpkg_dir}}/src/mx_abi.c
-    rm -f {{rpkg_dir}}/src/rust/Cargo.toml {{rpkg_dir}}/src/rust/document.rs
+    cd {{rpkg_dir}} && NOT_CRAN=false ./cleanup
 
 # ============================================================================
 # Combined recipes
