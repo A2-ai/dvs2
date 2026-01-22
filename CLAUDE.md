@@ -122,23 +122,30 @@ just test-all           # Test everything
 
 ### miniextendr Vendoring
 
-The R package vendors miniextendr crates for CRAN compliance. When you modify miniextendr sources at `/Users/elea/Documents/GitHub/miniextendr/`, the vendored copies won't automatically update.
+The R package vendors miniextendr crates for CRAN compliance. When you modify miniextendr sources at `/Users/elea/Documents/GitHub/miniextendr/`, use the vendor recipes to update:
 
 **After modifying miniextendr sources:**
 ```bash
-# Automatic staleness detection (recommended)
+# Automatic staleness detection + copy from source (recommended)
 just rpkg-vendor-detect
 
-# Force re-vendor (always updates)
+# Force re-vendor (always updates, even if unchanged)
 just rpkg-vendor-force
 
 # Custom miniextendr path
 just rpkg-vendor-with-staleness /path/to/miniextendr
 ```
 
+**What happens:**
+1. Checks if miniextendr sources are newer than vendor stamp
+2. Copies miniextendr-api, miniextendr-macros, miniextendr-lint from source
+3. Patches Cargo.toml files to remove workspace inheritance
+4. Runs `cargo vendor` for other transitive dependencies
+5. Creates vendor.tar.xz for CRAN builds
+
 **Environment variables:**
 - `FORCE_VENDOR=true` - Force re-vendor even if stamp file exists
-- `MINIEXTENDR_SOURCE_DIR=/path/to/miniextendr` - Enable automatic staleness detection
+- `MINIEXTENDR_SOURCE_DIR=/path/to/miniextendr` - Path to miniextendr source for copying and staleness detection
 
 ## Related Repositories
 
@@ -158,4 +165,4 @@ a heading in DONE.md. Also update the plan status in TODO.md.
 
 - **No backward compatibility**: We do not care about backward compatibility for now. Feel free to make breaking changes to APIs, file formats, and configurations as needed.
 - **DVS naming**: Always use "DVS" or "dvs" (Data Version System). Never use "DVC" which is a different project.
-- **Use `fs_err` instead of `std::fs`**: All filesystem operations in dvs-core, dvs-cli, dvs-daemon, and dvs-server must use `fs_err` instead of `std::fs` for better error messages. The only exceptions are `std::fs::Permissions` and `std::fs::Metadata` types (which `fs_err` doesn't re-export). This is enforced by `just check-std-fs` lint.
+- **Use `fs_err` instead of `std::fs`**: All filesystem operations in dvs-core and dvs-cli must use `fs_err` instead of `std::fs` for better error messages. The only exceptions are `std::fs::Permissions` and `std::fs::Metadata` types (which `fs_err` doesn't re-export). This is enforced by `just check-std-fs` lint.

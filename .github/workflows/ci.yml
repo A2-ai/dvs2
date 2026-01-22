@@ -95,12 +95,12 @@ jobs:
         run: cargo doc --manifest-path Cargo.toml --workspace --no-deps
 
   rust-msrv:
-    name: Rust MSRV (1.78.0)
+    name: Rust MSRV (1.85.0)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Rust 1.78.0
-        uses: dtolnay/rust-toolchain@1.78.0
+      - name: Set up Rust 1.85.0
+        uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2

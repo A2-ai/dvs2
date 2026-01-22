@@ -38,47 +38,28 @@
 
 - [x] **Plan 046: Merge One DVS Repository into Another** - Added `dvs merge-repo <source>` command to import tracked files, metadata, and objects from a source DVS repository into the destination. Supports `--prefix` to place imports under a subdirectory, `--conflict` mode (abort/skip/overwrite), `--verify` for hash verification, and `--dry-run`. Includes 8 unit tests covering all merge scenarios.
 
+- [x] **Plan 002: Vendor Crates Inclusion** - Vendored miniextendr and all transitive dependencies for CRAN/offline builds. Crates are packaged in `dvsR/inst/vendor.tar.xz` and extracted during configure. dvsR remains isolated from root workspace.
+
+- [x] **Plans 004-021: Crate Inclusion** - All transitive dependencies (miniextendr-api, miniextendr-macros, miniextendr-lint, proc-macro2, quote, syn, unicode-ident, version_check, ahash, cfg-if, getrandom, libc, once_cell, r-efi, wasip2, wit-bindgen, zerocopy, zerocopy-derive) are included in the vendor tarball and used for R package builds.
+
 ### In Progress
 
-- [ ] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
-  harness to verify CLI/R/other interfaces produce the same effects.
+- [x] **Plan 039: Cross-Interface Consequence Tests** - Shared conformance
+  harness to verify CLI/R interfaces produce the same effects.
   - [x] Created `dvs-testkit` crate with `TestRepo`, `WorkspaceSnapshot`
   - [x] Implemented `CoreRunner` baseline
   - [x] Created standard scenarios (init/add/get/status)
   - [x] Implemented `CliRunner` (feature-gated with `cli-runner`)
   - [x] Wired conformance tests into CI (via `--all-features`)
-  - [x] Implemented `ServerRunner` for HTTP endpoints (feature: `server-runner`)
-  - [ ] Implement `RRunner` for dvsR (blocked by Plan 028: R Package Bindings)
-    - Needs: dvsR package with working Rust bindings via miniextendr
-    - Will spawn R subprocess, execute dvsR functions, capture results
-    - Feature: `r-runner` with optional deps on subprocess execution
-  - [ ] Implement `DaemonRunner` for daemon IPC (blocked by dvs-daemon implementation)
-    - Needs: dvs-daemon with IPC interface (Unix socket or named pipe)
-    - Will connect to running daemon, send commands, verify responses
-    - Feature: `daemon-runner` with optional deps on dvs-daemon
+  - [x] Implemented `RRunner` for dvsR (feature: `r-runner`)
+    - Spawns Rscript subprocess to execute dvsR functions
+    - Captures JSON results and compares workspace snapshots
+    - Enable with `DVS_TEST_R=1` environment variable
+    - Tests: `test_r_runner_init`, `test_r_runner_add`, `test_conformance_core_vs_r`
 
-### Pending Plans (Documented, Status Unknown)
+### Pending Plans (Documented)
 
 - [ ] **Plan 001: Decoupling Architecture** - `plans/001-decoupling-architecture.md`
-- [ ] **Plan 002: Vendor Crates Inclusion** - `plans/002-vendor-crates-inclusion.md`
-- [ ] **Plan 004: miniextendr-api Inclusion** - `plans/004-miniextendr-api-inclusion.md`
-- [ ] **Plan 005: miniextendr-macros Inclusion** - `plans/005-miniextendr-macros-inclusion.md`
-- [ ] **Plan 006: miniextendr-lint Inclusion** - `plans/006-miniextendr-lint-inclusion.md`
-- [ ] **Plan 007: ahash Inclusion** - `plans/007-ahash-inclusion.md`
-- [ ] **Plan 008: cfg-if Inclusion** - `plans/008-cfg-if-inclusion.md`
-- [ ] **Plan 009: getrandom Inclusion** - `plans/009-getrandom-inclusion.md`
-- [ ] **Plan 010: libc Inclusion** - `plans/010-libc-inclusion.md`
-- [ ] **Plan 011: once_cell Inclusion** - `plans/011-once_cell-inclusion.md`
-- [ ] **Plan 012: proc-macro2 Inclusion** - `plans/012-proc-macro2-inclusion.md`
-- [ ] **Plan 013: quote Inclusion** - `plans/013-quote-inclusion.md`
-- [ ] **Plan 014: syn Inclusion** - `plans/014-syn-inclusion.md`
-- [ ] **Plan 015: unicode-ident Inclusion** - `plans/015-unicode-ident-inclusion.md`
-- [ ] **Plan 016: version_check Inclusion** - `plans/016-version_check-inclusion.md`
-- [ ] **Plan 017: r-efi Inclusion** - `plans/017-r-efi-inclusion.md`
-- [ ] **Plan 018: wasip2 Inclusion** - `plans/018-wasip2-inclusion.md`
-- [ ] **Plan 019: wit-bindgen Inclusion** - `plans/019-wit-bindgen-inclusion.md`
-- [ ] **Plan 020: zerocopy Inclusion** - `plans/020-zerocopy-inclusion.md`
-- [ ] **Plan 021: zerocopy-derive Inclusion** - `plans/021-zerocopy-derive-inclusion.md`
 - [ ] **Plan 030: Temporal SCD Snapshots for Tabular Data** - `plans/030-temporal-scd-snapshots.md`
 - [ ] **Plan 031: Slice Timestamp (As-Of) Views** - `plans/031-slice-ts-asof.md`
 - [ ] **Plan 032: Temporal Interlace for Aligned Joins** - `plans/032-temporal-interlace.md`
@@ -87,9 +68,11 @@
 - [ ] **Plan 035: Feature Store + Derived Dataset Framework** - `plans/035-feature-store-derived.md`
 - [ ] **Plan 036: Remote Snapshot Sources (HTTP/GitHub)** - `plans/036-remote-snapshot-sources.md`
 - [ ] **Plan 040: Proc-macro Usage Audit** - `plans/040-proc-macro-usage-audit.md`
-- [ ] **Plan 049: CLI Output Formats** - `plans/049-cli-output-formats.md`
-  - Primary: Table format via `tabled` crate (`--format table`)
-  - Optional: CSV, YAML, NDJSON, Markdown formats (feature-gated)
+- [x] **Plan 049: CLI Output Formats (Phase 1)** - Added table output format
+  - Added `--format table` option via `tabled` crate
+  - Implemented for `dvs status` and `dvs log` commands
+  - Pretty ASCII tables with rounded style
+  - Phase 2 (optional formats: CSV, YAML, NDJSON, Markdown) deferred
 
 ### Future Plans (Not Yet Written)
 
@@ -115,29 +98,7 @@ Note: The current direction uses `.dvs/` + `dvs.lock` for the HTTP-first workflo
 - [x] `dvs log [-n N]` subcommand - view reflog history
 - [x] `dvs rollback [--force] [--no-materialize] <target>` subcommand - rollback to previous state
 - [x] `dvs config` subcommand - show/edit configuration
-- [ ] `dvs daemon` subcommand - start/stop/status daemon
 - [x] Progress bars for large file operations - Added via `indicatif` crate to add, get, status, push, pull, materialize commands
-
-### dvs-server (HTTP CAS)
-
-- [x] `HEAD /objects/{algo}/{hash}` - check object existence
-- [x] `GET /objects/{algo}/{hash}` - download object
-- [x] `PUT /objects/{algo}/{hash}` - upload object (requires Write permission)
-- [x] `DELETE /objects/{algo}/{hash}` - delete object (requires Delete permission)
-- [x] Authentication middleware (API key / Bearer token)
-- [x] Storage backend wiring to LocalStorage
-- [x] Auth checks wired into PUT/DELETE handlers
-- [x] CORS support (preflight, origin validation, configurable origins)
-- [x] Request body size limits (max_upload_size config, 413 response)
-
-### dvs-daemon
-
-- [ ] `start_daemon()` - Initialize and run event loop
-- [ ] `stop_daemon()` - Graceful shutdown
-- [ ] File watcher integration with notify crate
-- [ ] Event handler for auto-add/auto-sync
-- [ ] IPC client/server for daemon control
-- [ ] PID file and signal handling
 
 ### dvsR (R Package)
 
@@ -176,33 +137,14 @@ Implemented in `dvs-core/src/types/local_config.rs` with `LocalConfig`, `AuthCon
 
 **Wiring:** `push` and `pull` operations now check LocalConfig for `base_url` as a fallback (priority: explicit `--remote` > LocalConfig > manifest).
 
-### Daemon config - Not yet implemented
-
-- [ ] `watch_paths` - Directories to watch
-- [ ] `debounce_ms` - Delay before processing changes
-- [ ] `auto_add` - Enable auto-add for new files
-- [ ] `auto_sync` - Enable auto-sync for changes
-
-### Server config (ServerConfig struct)
-
-- [x] `host` - Bind address
-- [x] `port` - Listen port
-- [x] `storage_root` - Storage directory
-- [x] `auth.enabled` - Enable authentication
-- [x] `auth.api_keys` - List of API keys
-- [x] `max_upload_size` - Maximum upload size in bytes
-- [x] `cors_enabled` - Enable CORS
-- [x] `cors_origins` - Allowed CORS origins
-
 ---
 
 ## Testing
 
-- [x] Unit tests for dvs-core types (168 tests passing)
+- [x] Unit tests for dvs-core types (180 tests passing)
 - [x] Unit tests for dvs-core helpers
 - [x] Unit tests for dvs-core operations
-- [x] Unit tests for dvs-server (20 tests: storage, auth, config)
-- [x] Unit tests for dvs-testkit (36 tests: TestRepo, WorkspaceSnapshot, CoreRunner, CliRunner, ServerRunner, integration)
+- [x] Unit tests for dvs-testkit (36 tests: TestRepo, WorkspaceSnapshot, CoreRunner, CliRunner, integration)
 - [x] Integration tests with temp directories (14 tests in dvs-testkit/src/integration.rs)
 - [x] Integration tests with real git repos (TestRepo uses git2::Repository::init)
 
@@ -216,8 +158,6 @@ cargo build -p dvs-cli --all-features && cargo test --all-features
 
 This ensures the CLI binary is built with the same features (yaml-config) as the testkit.
 
-- [ ] dvs-daemon IPC tests
-- [ ] dvs-server HTTP integration tests
 - [ ] dvsR testthat tests
 
 ---
@@ -256,9 +196,7 @@ Issues identified during code review (see `reviews/` directory for details).
 
 - [x] Add tests for non-default hash algorithms (sha256/xxh3) across add/get/status - Added 14 tests covering add/get/status operations with SHA-256 and XXH3 algorithms. Tests are feature-gated with `#[cfg(feature = "sha256")]` and `#[cfg(feature = "xxh3")]` and run with `--features all-hashes`. (`dvs-core/src/ops/add.rs`, `dvs-core/src/ops/get.rs`, `dvs-core/src/ops/status.rs`)
 - [x] Add tests for `.dvs.toml` interoperability in get/status/rollback/merge - Added 6 tests: `test_get_with_toml_metadata`, `test_get_toml_metadata_already_present`, `test_status_current_with_toml_metadata`, `test_status_unsynced_with_toml_metadata`, `test_find_tracked_files_with_toml`, `test_rollback_preserves_toml_format`. (`dvs-core/src/ops/get.rs`, `dvs-core/src/ops/status.rs`, `dvs-core/src/ops/rollback.rs`)
-- [x] Add tests for manifest-based flows (push/pull/materialize) - Added 4 materialize tests: `test_materialize_from_cache`, `test_materialize_already_up_to_date`, `test_materialize_missing_cache`, `test_materialize_multiple_files`. Push/pull require HTTP server which is covered by dvs-testkit integration tests. (`dvs-core/src/ops/materialize.rs`)
-- [ ] Add server auth enforcement tests for GET/HEAD
-- [ ] Add server hash verification tests for PUT
+- [x] Add tests for manifest-based flows (push/pull/materialize) - Added 4 materialize tests: `test_materialize_from_cache`, `test_materialize_already_up_to_date`, `test_materialize_missing_cache`, `test_materialize_multiple_files`. (`dvs-core/src/ops/materialize.rs`)
 
 ---
 
@@ -270,7 +208,6 @@ Issues identified during code review (see `reviews/` directory for details).
 - [ ] Merkle tree for partial sync
 - [ ] Git hooks integration (post-checkout, pre-push)
 - [ ] Garbage collection for orphaned objects
-- [ ] Web UI for server
 
 ---
 
@@ -280,7 +217,6 @@ See `sonnet_reviews/appendix/findings-by-priority.md` for full details.
 
 ### Deferred
 
-- [ ] **P1-5: Missing rate limiting** - Server archived, would require external dependency (e.g., `governor` crate)
 - [ ] **P2-7: Init can't bootstrap non-git dir** - Needs design decision on whether to support non-git workspaces
 
 ### Pending (Low Priority)
@@ -294,11 +230,10 @@ See `sonnet_reviews/appendix/findings-by-priority.md` for full details.
 - [x] **P3-6: Backend normalize not true canonicalization** - Fixed with `fs::canonicalize()` + `path_absolutize`
 - [x] **P3-7: R JSON interface (large integers)** - File sizes > 2^53 (~9 PB) lose precision as f64. Accepted limitation: R has no native 64-bit integers; workaround would require `bit64` package
 
-### Archived (Not Applicable)
+### Archived (Removed from Project)
 
-- **P2-1: dvs-daemon stub** - Moved to `archived-crates.zip`
-- **P2-3: Server missing audit logging** - Server moved to `archived-crates.zip`
-- **P3-3: Missing size quotas** - Server archived
+- **dvs-daemon** - File watcher daemon removed (was stub only)
+- **dvs-server** - HTTP CAS server removed (moved to `archived-crates.zip`)
 
 ---
 

@@ -24,6 +24,7 @@ pub enum OutputFormat {
     #[default]
     Human,
     Json,
+    Table,
 }
 
 /// Output destination for CLI output.

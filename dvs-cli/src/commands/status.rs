@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 use std::path::PathBuf;
+use tabled::Tabled;
 
 use super::Result;
 use crate::output::Output;
@@ -20,6 +21,17 @@ struct FileStatusEntry {
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+/// Table row for status output.
+#[derive(Tabled)]
+struct StatusTableRow {
+    #[tabled(rename = "Path")]
+    path: String,
+    #[tabled(rename = "Status")]
+    status: String,
+    #[tabled(rename = "Error")]
+    error: String,
 }
 
 #[derive(Serialize)]
@@ -87,8 +99,8 @@ pub fn run(output: &Output, files: Vec<PathBuf>, batch: bool) -> Result<()> {
             error: result.error_message.clone(),
         });
 
-        // Human-readable output
-        if !output.is_json() {
+        // Human-readable output (skip for table format since we print table at end)
+        if !output.is_json() && !output.is_table() {
             match result.status {
                 dvs_core::FileStatus::Current => {
                     if !output.is_quiet() {
@@ -127,6 +139,21 @@ pub fn run(output: &Output, files: Vec<PathBuf>, batch: bool) -> Result<()> {
             },
         };
         output.json(&json_output);
+    } else if output.is_table() {
+        // Table output
+        let table_rows: Vec<StatusTableRow> = file_entries
+            .iter()
+            .map(|e| StatusTableRow {
+                path: e.path.clone(),
+                status: e.status.clone(),
+                error: e.error.clone().unwrap_or_default(),
+            })
+            .collect();
+        output.table(&table_rows);
+        output.info(&format!(
+            "\nSummary: {} current, {} unsynced, {} absent, {} errors",
+            current_count, unsynced_count, absent_count, error_count
+        ));
     } else {
         // Human summary
         output.info(&format!(

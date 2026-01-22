@@ -75,12 +75,12 @@ dnl Report rustc version
 RUSTC_VERSION="$($RUSTC --version)"
 AC_MSG_NOTICE([using $RUSTC_VERSION])
 
-dnl Check minimum rustc version (1.78+)
+dnl Check minimum rustc version (1.85+)
 RUSTC_VERSION_NUM=`echo "$RUSTC_VERSION" | "$SED" 's/rustc \(@<:@0-9@:>@*\.@<:@0-9@:>@*\.@<:@0-9@:>@*\).*/\1/'`
 RUSTC_MAJOR=`echo "$RUSTC_VERSION_NUM" | cut -d. -f1`
 RUSTC_MINOR=`echo "$RUSTC_VERSION_NUM" | cut -d. -f2`
 MIN_RUSTC_MAJOR=1
-MIN_RUSTC_MINOR=78
+MIN_RUSTC_MINOR=85
 if test "$RUSTC_MAJOR" -lt "$MIN_RUSTC_MAJOR" || \
    (test "$RUSTC_MAJOR" -eq "$MIN_RUSTC_MAJOR" && test "$RUSTC_MINOR" -lt "$MIN_RUSTC_MINOR"); then
   AC_MSG_ERROR([rustc $MIN_RUSTC_MAJOR.$MIN_RUSTC_MINOR+ required, found $RUSTC_VERSION_NUM])
@@ -248,11 +248,13 @@ AC_CONFIG_COMMANDS([cargo-vendor],
 
     dnl Check if miniextendr sources are newer than vendor stamp (optional)
     if test $_need_vendor -eq 0 && test -n "$MINIEXTENDR_SOURCE_DIR" && test -d "$MINIEXTENDR_SOURCE_DIR"; then
-      dnl Find the newest .rs file in miniextendr source
+      dnl Find the newest .rs file in miniextendr source (try both flat and nested layouts)
       _mx_newest=""
-      for _mx_crate in "$MINIEXTENDR_SOURCE_DIR/crates/miniextendr-api" \
-                       "$MINIEXTENDR_SOURCE_DIR/crates/miniextendr-macros" \
-                       "$MINIEXTENDR_SOURCE_DIR/crates/miniextendr-lint"; do
+      for _mx_name in miniextendr-api miniextendr-macros miniextendr-lint; do
+        _mx_crate="$MINIEXTENDR_SOURCE_DIR/$_mx_name"
+        if test ! -d "$_mx_crate"; then
+          _mx_crate="$MINIEXTENDR_SOURCE_DIR/crates/$_mx_name"
+        fi
         if test -d "$_mx_crate"; then
           _crate_newest=$(find "$_mx_crate" -name "*.rs" -type f -newer "$STAMP" 2>/dev/null | head -1)
           if test -n "$_crate_newest"; then
@@ -270,6 +272,58 @@ AC_CONFIG_COMMANDS([cargo-vendor],
     if test $_need_vendor -eq 1; then
       echo "configure: running cargo vendor"
       mkdir -p "$VENDOR_OUT"
+
+      dnl Copy miniextendr crates from source if MINIEXTENDR_SOURCE_DIR is set
+      if test -n "$MINIEXTENDR_SOURCE_DIR" && test -d "$MINIEXTENDR_SOURCE_DIR"; then
+        echo "configure: copying miniextendr crates from $MINIEXTENDR_SOURCE_DIR"
+        for _mx_crate in miniextendr-api miniextendr-macros miniextendr-lint; do
+          dnl Try both layouts: flat (miniextendr-api/) and nested (crates/miniextendr-api/)
+          _mx_src="$MINIEXTENDR_SOURCE_DIR/$_mx_crate"
+          if test ! -d "$_mx_src"; then
+            _mx_src="$MINIEXTENDR_SOURCE_DIR/crates/$_mx_crate"
+          fi
+          _mx_dst="$VENDOR_OUT/$_mx_crate"
+          if test -d "$_mx_src"; then
+            rm -rf "$_mx_dst"
+            cp -R "$_mx_src" "$_mx_dst"
+            echo "configure:   copied $_mx_crate"
+          else
+            echo "configure: warning: $_mx_crate not found in $MINIEXTENDR_SOURCE_DIR" >&2
+          fi
+        done
+
+        dnl Patch Cargo.toml files to remove workspace inheritance
+        echo "configure: patching miniextendr Cargo.toml files"
+        for _mx_crate in miniextendr-api miniextendr-macros miniextendr-lint; do
+          _toml="$VENDOR_OUT/$_mx_crate/Cargo.toml"
+          if test -f "$_toml"; then
+            dnl Replace workspace inheritance with actual values
+            $SED -i.bak \
+              -e 's/^version\.workspace = true$/version = "0.1.0"/' \
+              -e 's/^edition\.workspace = true$/edition = "2024"/' \
+              -e 's/^license\.workspace = true$/license = "MIT"/' \
+              -e '/^repository\.workspace = true$/d' \
+              -e '/^homepage\.workspace = true$/d' \
+              -e '/^keywords\.workspace = true$/d' \
+              -e '/^categories\.workspace = true$/d' \
+              -e 's/miniextendr-macros = { workspace = true }/miniextendr-macros = { path = "..\/miniextendr-macros" }/' \
+              -e 's/miniextendr-engine = { workspace = true }/miniextendr-engine = { path = "..\/miniextendr-engine" }/' \
+              -e 's/miniextendr-lint = { workspace = true }/miniextendr-lint = { path = "..\/miniextendr-lint" }/' \
+              -e 's/miniextendr-api = { workspace = true }/miniextendr-api = { path = "..\/miniextendr-api" }/' \
+              "$_toml"
+            dnl Handle features arrays separately (brackets need special handling)
+            $SED -i.bak \
+              -e 's/proc-macro2 = { workspace = true }/proc-macro2 = { version = "1.0", features = LBRACKET"span-locations"RBRACKET }/' \
+              -e 's/quote = { workspace = true }/quote = "1.0"/' \
+              -e 's/syn = { workspace = true }/syn = { version = "2.0", features = LBRACKET"full", "extra-traits"RBRACKET }/' \
+              "$_toml"
+            dnl Replace LBRACKET/RBRACKET placeholders with actual brackets
+            dnl Use @<:@ and @:>@ which are autoconf's escaped [ and ]
+            $SED -i.bak -e 's/LBRACKET/@<:@/g' -e 's/RBRACKET/@:>@/g' "$_toml"
+            rm -f "${_toml}.bak"
+          fi
+        done
+      fi
 
       dnl Temporarily move .cargo/config.toml to avoid circular vendored-sources reference
       _cargo_cfg="src/rust/.cargo/config.toml"

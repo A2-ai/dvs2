@@ -1,7 +1,7 @@
 {
     // Rust-analyzer configuration for monorepo with R package
     "rust-analyzer.linkedProjects": [
-        // Main workspace (dvs-core, dvs-cli, dvs-daemon, dvs-server)
+        // Main workspace (dvs-core, dvs-cli, dvs-testkit)
         "Cargo.toml",
         // R package's standalone Rust crate (NOT part of main workspace)
         "dvsR/src/rust/Cargo.toml"
