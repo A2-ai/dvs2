@@ -27,9 +27,10 @@ pub enum OutputFormat {
 }
 
 /// Output destination for CLI output.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum OutputDest {
     /// Don't redirect output (write to stdout, default)
+    #[default]
     Inherit,
     /// Discard output (like /dev/null)
     Null,
@@ -37,12 +38,6 @@ pub enum OutputDest {
     Pipe,
     /// Write to a file path
     File(PathBuf),
-}
-
-impl Default for OutputDest {
-    fn default() -> Self {
-        Self::Inherit
-    }
 }
 
 impl std::str::FromStr for OutputDest {
