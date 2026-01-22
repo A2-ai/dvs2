@@ -155,4 +155,18 @@ mod tests {
         let normalized = normalize_path(&path);
         assert_eq!(normalized, PathBuf::from("/a/c/d"));
     }
+
+    #[test]
+    fn test_collect_files_non_batch() {
+        let files = vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")];
+        let result = collect_files(files.clone(), false).unwrap();
+        assert_eq!(result, files);
+    }
+
+    #[test]
+    fn test_collect_files_empty() {
+        let files: Vec<PathBuf> = vec![];
+        let result = collect_files(files, false).unwrap();
+        assert!(result.is_empty());
+    }
 }
