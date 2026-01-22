@@ -40,11 +40,17 @@ pub struct ManifestEntry {
     pub bytes: u64,
 
     /// Compression algorithm (if any).
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "is_compression_none"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "is_compression_none")
+    )]
     pub compression: Compression,
 
     /// Remote name (default: "origin").
-    #[cfg_attr(feature = "serde", serde(default = "default_remote", skip_serializing_if = "is_default_remote"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default = "default_remote", skip_serializing_if = "is_default_remote")
+    )]
     pub remote: String,
 }
 
@@ -95,7 +101,10 @@ pub struct Manifest {
     pub version: u32,
 
     /// Base URL for HTTP CAS (optional).
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub base_url: Option<String>,
 
     /// Tracked entries.

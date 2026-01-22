@@ -137,10 +137,7 @@ impl HttpStore {
     /// Get the auth header args for curl if auth_token is set.
     fn auth_args(&self) -> Vec<String> {
         match &self.auth_token {
-            Some(token) => vec![
-                "-H".to_string(),
-                format!("Authorization: Bearer {}", token),
-            ],
+            Some(token) => vec!["-H".to_string(), format!("Authorization: Bearer {}", token)],
             None => vec![],
         }
     }
@@ -148,11 +145,11 @@ impl HttpStore {
     /// Get common curl args including timeout.
     fn common_args(&self) -> Vec<String> {
         vec![
-            "-s".to_string(),           // Silent mode
-            "--max-time".to_string(),   // Maximum time for operation
-            "300".to_string(),          // 5 minute timeout
+            "-s".to_string(),                // Silent mode
+            "--max-time".to_string(),        // Maximum time for operation
+            "300".to_string(),               // 5 minute timeout
             "--connect-timeout".to_string(), // Connection timeout
-            "30".to_string(),           // 30 second connection timeout
+            "30".to_string(),                // 30 second connection timeout
         ]
     }
 }

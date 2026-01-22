@@ -312,10 +312,9 @@ mod tests {
 
         // Create test content and compute its hash
         let content = b"test file content for materialize";
-        let hash = crate::helpers::hash::hash_bytes(
-            content,
-            crate::helpers::hash::default_algorithm(),
-        ).unwrap();
+        let hash =
+            crate::helpers::hash::hash_bytes(content, crate::helpers::hash::default_algorithm())
+                .unwrap();
         let oid = Oid::new(crate::helpers::hash::default_algorithm(), hash);
 
         // Cache the object
@@ -363,10 +362,9 @@ mod tests {
 
         // Create test content and compute its hash
         let content = b"cached content";
-        let hash = crate::helpers::hash::hash_bytes(
-            content,
-            crate::helpers::hash::default_algorithm(),
-        ).unwrap();
+        let hash =
+            crate::helpers::hash::hash_bytes(content, crate::helpers::hash::default_algorithm())
+                .unwrap();
         let oid = Oid::new(crate::helpers::hash::default_algorithm(), hash);
 
         // Cache the object
@@ -420,7 +418,11 @@ mod tests {
         assert_eq!(summary.failed, 1);
         assert_eq!(summary.materialized, 0);
         assert!(
-            summary.results[0].error.as_ref().unwrap().contains("not cached"),
+            summary.results[0]
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("not cached"),
             "Error should mention cache"
         );
 
@@ -440,7 +442,8 @@ mod tests {
             let hash = crate::helpers::hash::hash_bytes(
                 content.as_bytes(),
                 crate::helpers::hash::default_algorithm(),
-            ).unwrap();
+            )
+            .unwrap();
             let oid = Oid::new(crate::helpers::hash::default_algorithm(), hash);
 
             // Cache the object

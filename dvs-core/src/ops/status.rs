@@ -97,7 +97,10 @@ fn find_tracked_files_walkdir(repo_root: &Path) -> Result<Vec<PathBuf>, DvsError
         }
 
         // Check if this is a .dvs or .dvs.toml metadata file
-        let filename = path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default();
+        let filename = path
+            .file_name()
+            .map(|f| f.to_string_lossy())
+            .unwrap_or_default();
         if filename.ends_with(".dvs") || filename.ends_with(".dvs.toml") {
             if let Some(data_path) = Metadata::data_path(path) {
                 // Avoid duplicates if both formats exist
@@ -135,7 +138,10 @@ fn find_tracked_files_recursive(repo_root: &Path) -> Result<Vec<PathBuf>, DvsErr
                 recurse(&path, files)?;
             } else {
                 // Check if this is a .dvs or .dvs.toml metadata file
-                let filename = path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default();
+                let filename = path
+                    .file_name()
+                    .map(|f| f.to_string_lossy())
+                    .unwrap_or_default();
                 if filename.ends_with(".dvs") || filename.ends_with(".dvs.toml") {
                     if let Some(data_path) = Metadata::data_path(&path) {
                         // Avoid duplicates if both formats exist
@@ -619,8 +625,7 @@ mod tests {
         let checksum = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
 
         // Store something in storage
-        let storage_path =
-            hash::storage_path_for_hash(&storage_dir, HashAlgo::Sha256, checksum);
+        let storage_path = hash::storage_path_for_hash(&storage_dir, HashAlgo::Sha256, checksum);
         fs::create_dir_all(storage_path.parent().unwrap()).unwrap();
         fs::write(&storage_path, b"content").unwrap();
 

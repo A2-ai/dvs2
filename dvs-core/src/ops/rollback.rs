@@ -520,13 +520,12 @@ mod tests {
         .unwrap();
 
         assert!(result.success);
-        assert!(result.restored_files.contains(&PathBuf::from("toml_data.csv")));
+        assert!(result
+            .restored_files
+            .contains(&PathBuf::from("toml_data.csv")));
 
         // Verify TOML file was restored (not JSON)
-        assert!(
-            toml_meta_path.exists(),
-            "TOML metadata should be restored"
-        );
+        assert!(toml_meta_path.exists(), "TOML metadata should be restored");
 
         // Verify JSON file was NOT created
         let json_meta_path = Metadata::metadata_path(&data_path);

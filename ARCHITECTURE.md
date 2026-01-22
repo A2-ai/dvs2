@@ -61,16 +61,17 @@ R package using miniextendr for FFI. Communicates with dvs-core via JSON.
 
 ```toml
 [features]
-default = ["git2-backend", "mmap", "walkdir", "toml-config", "blake3"]
-git2-backend = ["dep:git2"]      # libgit2 for git operations
+default = ["blake3", "mmap", "walkdir", "toml-config", "serde"]
+blake3 = ["dep:blake3"]          # BLAKE3 hashing (default)
+sha256 = ["dep:sha2"]            # SHA-256 hashing
+xxh3 = ["dep:xxhash-rust"]       # XXH3 fast hashing
 mmap = ["dep:memmap2"]           # Memory-mapped file hashing
 walkdir = ["dep:walkdir"]        # Recursive directory listing
 yaml-config = ["dep:serde_yaml"] # YAML config file support
 toml-config = ["dep:toml"]       # TOML config file support
-blake3 = ["dep:blake3"]          # BLAKE3 hashing (default)
-sha256 = ["dep:sha2"]            # SHA-256 hashing
-xxh3 = ["dep:xxhash-rust"]       # XXH3 fast hashing
 ```
+
+Git operations use the system `git` CLI.
 
 ## Error Handling
 

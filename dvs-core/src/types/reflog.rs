@@ -51,7 +51,10 @@ pub struct WorkspaceState {
     pub version: u32,
 
     /// The manifest contents (dvs.lock), if present.
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub manifest: Option<Manifest>,
 
     /// Metadata entries, sorted by path for deterministic hashing.
@@ -152,18 +155,27 @@ pub struct ReflogEntry {
     pub op: ReflogOp,
 
     /// Optional message describing the change.
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub message: Option<String>,
 
     /// Previous state ID (`state:{id}` format), None for first entry.
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub old: Option<String>,
 
     /// New state ID (`state:{id}` format).
     pub new: String,
 
     /// Paths affected by this operation.
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
     pub paths: Vec<PathBuf>,
 }
 
