@@ -42,6 +42,7 @@ clippy *args:
 # Format workspace code
 fmt *args:
     cargo fmt --manifest-path={{quote(workspace_manifest)}} --all {{args}}
+    cargo fmt --manifest-path={{quote(rpkg_manifest)}} --all {{args}}
 
 # Check workspace without building
 check *args:
