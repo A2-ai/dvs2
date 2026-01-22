@@ -30,7 +30,10 @@ struct PullSummary {
 }
 
 /// Run the pull command.
-pub fn run(output: &Output, remote: Option<String>, files: Vec<PathBuf>) -> Result<()> {
+pub fn run(output: &Output, remote: Option<String>, files: Vec<PathBuf>, batch: bool) -> Result<()> {
+    // Collect files from args or stdin (batch mode)
+    let files = paths::collect_files(files, batch)?;
+
     let summary = if files.is_empty() {
         // Pull all objects from manifest
         dvs_core::pull(remote.as_deref())?
@@ -46,7 +49,11 @@ pub fn run(output: &Output, remote: Option<String>, files: Vec<PathBuf>) -> Resu
     // Collect results for JSON
     let mut object_entries = Vec::new();
 
+    // Create progress bar for processing results
+    let pb = output.file_progress(summary.results.len() as u64);
+
     for result in &summary.results {
+        pb.inc(1);
         let (outcome, error) = if result.is_error() {
             ("error", result.error.clone())
         } else if result.downloaded {
@@ -73,6 +80,8 @@ pub fn run(output: &Output, remote: Option<String>, files: Vec<PathBuf>) -> Resu
             }
         }
     }
+
+    pb.finish_and_clear();
 
     // Output
     if output.is_json() {

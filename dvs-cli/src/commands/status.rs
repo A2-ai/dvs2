@@ -31,7 +31,10 @@ struct StatusSummary {
 }
 
 /// Run the status command.
-pub fn run(output: &Output, files: Vec<PathBuf>) -> Result<()> {
+pub fn run(output: &Output, files: Vec<PathBuf>, batch: bool) -> Result<()> {
+    // Collect files from args or stdin (batch mode)
+    let files = paths::collect_files(files, batch)?;
+
     // Resolve file paths (empty means all tracked files)
     let resolved_files: Vec<PathBuf> = if files.is_empty() {
         Vec::new()
@@ -54,7 +57,11 @@ pub fn run(output: &Output, files: Vec<PathBuf>) -> Result<()> {
     // Build file entries for JSON output
     let mut file_entries = Vec::new();
 
+    // Create progress bar for processing results
+    let pb = output.file_progress(results.len() as u64);
+
     for result in &results {
+        pb.inc(1);
         let status_str = match result.status {
             dvs_core::FileStatus::Current => {
                 current_count += 1;
@@ -105,6 +112,8 @@ pub fn run(output: &Output, files: Vec<PathBuf>) -> Result<()> {
             }
         }
     }
+
+    pb.finish_and_clear();
 
     // JSON output
     if output.is_json() {

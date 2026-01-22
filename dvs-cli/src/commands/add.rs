@@ -35,7 +35,18 @@ pub fn run(
     files: Vec<PathBuf>,
     message: Option<String>,
     metadata_format: Option<String>,
+    batch: bool,
 ) -> Result<()> {
+    // Collect files from args or stdin (batch mode)
+    let files = paths::collect_files(files, batch)?;
+
+    if files.is_empty() {
+        return Err(super::CliError::InvalidArg(
+            "No files specified. Provide files as arguments or use --batch to read from stdin."
+                .to_string(),
+        ));
+    }
+
     // Parse and validate metadata format if provided
     let format_override = if let Some(ref fmt) = metadata_format {
         match dvs_core::MetadataFormat::from_str(fmt) {
@@ -66,7 +77,11 @@ pub fn run(
     let mut error_count = 0;
     let mut file_entries = Vec::new();
 
+    // Create progress bar for processing results
+    let pb = output.file_progress(results.len() as u64);
+
     for result in &results {
+        pb.inc(1);
         let (outcome_str, error) = match result.outcome {
             dvs_core::Outcome::Copied => {
                 success_count += 1;
@@ -111,6 +126,8 @@ pub fn run(
             }
         }
     }
+
+    pb.finish_and_clear();
 
     // Output
     if output.is_json() {

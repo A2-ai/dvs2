@@ -2,9 +2,40 @@
 //!
 //! Handles working directory changes, tilde expansion, and path normalization.
 
+use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 
 use crate::commands::{CliError, Result};
+
+/// Read file paths from stdin, one per line.
+/// Empty lines and lines starting with # are ignored.
+pub fn read_paths_from_stdin() -> Result<Vec<PathBuf>> {
+    let stdin = io::stdin();
+    let paths: Vec<PathBuf> = stdin
+        .lock()
+        .lines()
+        .filter_map(|line| {
+            let line = line.ok()?;
+            let trimmed = line.trim();
+            // Skip empty lines and comments
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                None
+            } else {
+                Some(PathBuf::from(trimmed))
+            }
+        })
+        .collect();
+    Ok(paths)
+}
+
+/// Collect files from args or stdin (batch mode).
+pub fn collect_files(files: Vec<PathBuf>, batch: bool) -> Result<Vec<PathBuf>> {
+    if batch {
+        read_paths_from_stdin()
+    } else {
+        Ok(files)
+    }
+}
 
 /// Change the current working directory.
 pub fn set_cwd(path: &Path) -> Result<()> {

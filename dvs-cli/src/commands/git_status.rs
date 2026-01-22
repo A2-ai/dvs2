@@ -38,7 +38,7 @@ pub fn run(output: &Output, git_args: Vec<String>) -> Result<()> {
     }
 
     // Run dvs status (internal)
-    match super::status::run(output, vec![]) {
+    match super::status::run(output, vec![], false) {
         Ok(()) => {}
         Err(e) => {
             output.error(&format!("DVS status error: {}", e));
