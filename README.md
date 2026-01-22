@@ -54,6 +54,34 @@ dvs log [-n N]
 dvs rollback <target>
 ```
 
+### Batch Operations
+
+Commands that accept file arguments also support `--batch` to read paths from stdin:
+
+```bash
+# Add files listed in a file
+cat files.txt | dvs add --batch
+
+# Process output from find
+find . -name "*.csv" | dvs add --batch
+
+# Batch format supports comments and blank lines
+echo "data.csv
+# This is a comment
+results.json" | dvs add --batch
+```
+
+### Output Formats
+
+All commands support `--format json` for machine-readable output:
+
+```bash
+dvs status --format json
+dvs add data.csv --format json
+```
+
+Use `--quiet` to suppress non-error output, or `--output null` to discard output entirely.
+
 ## Development
 
 ### Building
