@@ -66,10 +66,6 @@ pub struct Cli {
     #[arg(short = 'C', long = "cwd", global = true, value_name = "DIR")]
     cwd: Option<PathBuf>,
 
-    /// Explicit repository root (overrides auto-detection)
-    #[arg(long = "repo", global = true, value_name = "DIR")]
-    repo: Option<PathBuf>,
-
     /// Output format
     #[arg(long, global = true, default_value = "human")]
     format: OutputFormat,
