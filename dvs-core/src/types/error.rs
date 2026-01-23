@@ -350,7 +350,6 @@ impl From<toml::ser::Error> for DvsError {
     }
 }
 
-
 // Backward compatibility: allow matching on old-style variants
 // These are kept for gradual migration
 
