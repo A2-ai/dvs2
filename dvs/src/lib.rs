@@ -39,12 +39,12 @@ pub mod testutil {
 
     /// Initializes a DVS repository in the given directory.
     /// Creates storage at `{repo_root}/.storage` and metadata at `{repo_root}/.dvs`.
-    /// Returns (storage_dir, dvs_metadata_dir).
-    pub fn init_dvs_repo(repo_root: &Path) -> (PathBuf, PathBuf) {
+    /// Returns (config, dvs_metadata_dir).
+    pub fn init_dvs_repo(repo_root: &Path) -> (Config, PathBuf) {
         let storage_dir = repo_root.join(".storage");
-        let config = Config::new_local(&storage_dir);
-        init(repo_root, config).unwrap();
+        let config = Config::new_local(&storage_dir, None, None).unwrap();
+        init(repo_root, config.clone()).unwrap();
         let dvs_dir = repo_root.join(".dvs");
-        (storage_dir, dvs_dir)
+        (config, dvs_dir)
     }
 }
