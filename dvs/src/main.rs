@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 
 use dvs::config::{Backend, Config, find_repo_root};
-use dvs::file::{FileMetadata, Outcome, get_file, get_status};
+use dvs::file::{FileMetadata, Outcome, expand_glob, expand_glob_tracked, get_file, get_status};
 use dvs::init::init;
 
 /// Resolve a path to be relative to the repository root.
@@ -57,13 +57,13 @@ pub enum Command {
         group: Option<String>,
     },
     Add {
-        path: PathBuf,
+        pattern: String,
         #[clap(long)]
         message: Option<String>,
     },
     Status,
     Get {
-        path: PathBuf,
+        pattern: String,
     },
 }
 
@@ -98,18 +98,22 @@ fn try_main() -> Result<()> {
             init(current_dir, config)?;
             println!("DVS Initialized");
         }
-        Command::Add { path, message } => {
+        Command::Add { pattern, message } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Failed to read config"))??;
-            let (absolute_path, relative_path) =
-                resolve_repo_path(&path, &current_dir, &canonical_root, true)?;
+
+            let paths = expand_glob(&pattern, &canonical_current_dir)?;
 
             match config.backend() {
                 Backend::Local(backend) => {
                     let dvs_dir = repo_root.join(config.metadata_folder_name());
-                    let metadata = FileMetadata::from_file(&path, message)?;
-                    metadata.save_local(&path, backend, &dvs_dir, &relative_path)?;
-                    println!("File {} added successfully to DVS", absolute_path.display());
+                    for path in paths {
+                        let (_, relative_path) =
+                            resolve_repo_path(&path, &current_dir, &canonical_root, true)?;
+                        let metadata = FileMetadata::from_file(&path, message.clone())?;
+                        metadata.save_local(&path, backend, &dvs_dir, &relative_path)?;
+                        println!("Added: {}", relative_path.display());
+                    }
                 }
             }
         }
@@ -131,21 +135,33 @@ fn try_main() -> Result<()> {
                 }
             }
         }
-        Command::Get { path } => {
+        Command::Get { pattern } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Failed to read config"))??;
-            // Can't canonicalize since file may not exist yet
-            let (_, relative_path) =
-                resolve_repo_path(&path, &canonical_current_dir, &canonical_root, false)?;
+
+            // Compute pattern relative to repo root
+            let cwd_relative = canonical_current_dir
+                .strip_prefix(&canonical_root)
+                .unwrap_or(Path::new(""));
+            let effective_pattern = if cwd_relative.as_os_str().is_empty() {
+                pattern
+            } else {
+                format!("{}/{}", cwd_relative.display(), pattern)
+            };
 
             match config.backend() {
                 Backend::Local(backend) => {
                     let dvs_dir = repo_root.join(config.metadata_folder_name());
-                    let outcome = get_file(&backend.path, &dvs_dir, &repo_root, &relative_path)?;
-                    match outcome {
-                        Outcome::Copied => println!("Retrieved {}", relative_path.display()),
-                        Outcome::Present => {
-                            println!("{} already up to date", relative_path.display())
+                    let paths = expand_glob_tracked(&effective_pattern, &dvs_dir)?;
+
+                    for relative_path in paths {
+                        let outcome =
+                            get_file(&backend.path, &dvs_dir, &repo_root, &relative_path)?;
+                        match outcome {
+                            Outcome::Copied => println!("Retrieved: {}", relative_path.display()),
+                            Outcome::Present => {
+                                println!("Up to date: {}", relative_path.display())
+                            }
                         }
                     }
                 }

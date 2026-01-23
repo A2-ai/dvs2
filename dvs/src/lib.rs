@@ -3,7 +3,7 @@ pub mod file;
 pub mod init;
 
 pub use file::{FileMetadata, FileStatus, Hashes, Outcome, Status};
-pub use file::{get_file, get_file_status, get_status};
+pub use file::{expand_glob, expand_glob_tracked, get_file, get_file_status, get_status};
 
 #[cfg(test)]
 pub mod testutil {

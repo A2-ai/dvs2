@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use fs_err as fs;
+use globset::Glob;
 use serde::{Deserialize, Serialize};
+use walkdir::WalkDir;
 
 use crate::config::LocalBackend;
 
@@ -10,6 +12,67 @@ fn get_path_in_dvs(dvs_directory: impl AsRef<Path>, relative_path: impl AsRef<Pa
     let dvs_path = dvs_directory.as_ref().join(relative_path.as_ref());
     let dvs_filename = format!("{}.dvs", dvs_path.display());
     PathBuf::from(dvs_filename)
+}
+
+/// Expands a glob pattern against files on disk.
+/// Returns paths relative to `base_dir`.
+pub fn expand_glob(pattern: &str, base_dir: &Path) -> Result<Vec<PathBuf>> {
+    let glob = Glob::new(pattern)
+        .map_err(|e| anyhow!("Invalid glob pattern '{}': {}", pattern, e))?
+        .compile_matcher();
+
+    let paths: Vec<PathBuf> = WalkDir::new(base_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            e.path()
+                .strip_prefix(base_dir)
+                .map(|rel| glob.is_match(rel))
+                .unwrap_or(false)
+        })
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    if paths.is_empty() {
+        bail!("No files match pattern: {}", pattern);
+    }
+    Ok(paths)
+}
+
+/// Expands a glob pattern against tracked files (files in `.dvs/`).
+/// Returns paths relative to repo root (without .dvs extension).
+pub fn expand_glob_tracked(pattern: &str, dvs_dir: &Path) -> Result<Vec<PathBuf>> {
+    let glob = Glob::new(pattern)
+        .map_err(|e| anyhow!("Invalid glob pattern '{}': {}", pattern, e))?
+        .compile_matcher();
+
+    let paths: Vec<PathBuf> = WalkDir::new(dvs_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "dvs")
+                .unwrap_or(false)
+        })
+        .filter_map(|e| {
+            // Get relative path without .dvs extension
+            let rel = e.path().strip_prefix(dvs_dir).ok()?;
+            let rel_no_ext = rel.with_extension("");
+            if glob.is_match(&rel_no_ext) {
+                Some(rel_no_ext)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if paths.is_empty() {
+        bail!("No tracked files match pattern: {}", pattern);
+    }
+    Ok(paths)
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -208,10 +271,19 @@ pub fn get_status(
     repo_root: impl AsRef<Path>,
     dvs_directory: impl AsRef<Path>,
 ) -> Result<Vec<FileStatus>> {
-    let pattern = format!("{}/**/*.dvs", dvs_directory.as_ref().display());
     let mut results = Vec::new();
-    for entry in glob::glob(&pattern)? {
-        let dvs_path = entry?;
+    for entry in WalkDir::new(dvs_directory.as_ref())
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "dvs")
+                .unwrap_or(false)
+        })
+    {
+        let dvs_path = entry.path();
         // Strip dvs_directory prefix and .dvs suffix to get relative path
         let relative = dvs_path
             .strip_prefix(dvs_directory.as_ref())?
