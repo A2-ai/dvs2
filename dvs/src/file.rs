@@ -166,13 +166,6 @@ impl FileMetadata {
     }
 }
 
-pub fn file_exists_in_dvs(
-    dvs_directory: impl AsRef<Path>,
-    relative_path: impl AsRef<Path>,
-) -> bool {
-    get_path_in_dvs(dvs_directory, relative_path).is_file()
-}
-
 #[derive(Debug)]
 pub struct FileStatus {
     pub path: PathBuf,
@@ -263,4 +256,200 @@ pub fn get_file(
 
     fs::copy(&storage_path, &target_path)?;
     Ok(Outcome::Copied)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
+
+    #[test]
+    fn file_metadata_from_file_creates_hashes_and_message() {
+        let (_tmp, root) = create_temp_git_repo();
+        let file_path = create_file(&root, "test.txt", b"hello world");
+
+        let metadata =
+            FileMetadata::from_file(&file_path, Some("test message".to_string())).unwrap();
+
+        assert_eq!(metadata.hashes.blake3.len(), 64);
+        assert_eq!(metadata.hashes.md5, "5eb63bbbe01eeed093cb22bb8f5acdc3");
+        assert_eq!(metadata.size, 11);
+        assert_eq!(metadata.message, Some("test message".to_string()));
+    }
+
+    #[test]
+    fn file_metadata_from_nonexistent_file_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = FileMetadata::from_file(tmp.path().join("nonexistent.txt"), None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn save_local_creates_storage_and_metadata() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (storage_dir, dvs_dir) = init_dvs_repo(&root);
+        let file_path = create_file(&root, "data.bin", b"binary data");
+
+        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        let outcome = metadata
+            .save_local(&file_path, &storage_dir, &dvs_dir, "data.bin")
+            .unwrap();
+
+        assert_eq!(outcome, Outcome::Copied);
+        // Metadata file should exist
+        assert!(dvs_dir.join("data.bin.dvs").is_file());
+        // Storage file should exist (md5 prefix/suffix structure)
+        let (prefix, suffix) = metadata.hashes.md5.split_at(2);
+        assert!(storage_dir.join(prefix).join(suffix).is_file());
+    }
+
+    #[test]
+    fn save_local_returns_present_when_already_stored() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (storage_dir, dvs_dir) = init_dvs_repo(&root);
+        let file_path = create_file(&root, "data.bin", b"binary data");
+
+        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        metadata
+            .save_local(&file_path, &storage_dir, &dvs_dir, "data.bin")
+            .unwrap();
+
+        // Second save should return Present
+        let outcome = metadata
+            .save_local(&file_path, &storage_dir, &dvs_dir, "data.bin")
+            .unwrap();
+        assert_eq!(outcome, Outcome::Present);
+    }
+
+    #[test]
+    fn get_file_status_returns_untracked_for_new_file() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (_storage_dir, dvs_dir) = init_dvs_repo(&root);
+        create_file(&root, "new.txt", b"content");
+
+        let status = get_file_status(&root, &dvs_dir, "new.txt").unwrap();
+        assert_eq!(status, Status::Untracked);
+    }
+
+    #[test]
+    fn get_file_status_returns_current_for_synced_file() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (storage_dir, dvs_dir) = init_dvs_repo(&root);
+        let file_path = create_file(&root, "synced.txt", b"content");
+
+        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        metadata
+            .save_local(&file_path, &storage_dir, &dvs_dir, "synced.txt")
+            .unwrap();
+
+        let status = get_file_status(&root, &dvs_dir, "synced.txt").unwrap();
+        assert_eq!(status, Status::Current);
+    }
+
+    #[test]
+    fn get_file_status_returns_absent_when_file_deleted() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (storage_dir, dvs_dir) = init_dvs_repo(&root);
+        let file_path = create_file(&root, "deleted.txt", b"content");
+
+        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        metadata
+            .save_local(&file_path, &storage_dir, &dvs_dir, "deleted.txt")
+            .unwrap();
+
+        // Delete the original file
+        fs::remove_file(&file_path).unwrap();
+
+        let status = get_file_status(&root, &dvs_dir, "deleted.txt").unwrap();
+        assert_eq!(status, Status::Absent);
+    }
+
+    #[test]
+    fn get_file_status_returns_unsynced_when_file_modified() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (storage_dir, dvs_dir) = init_dvs_repo(&root);
+        let file_path = create_file(&root, "modified.txt", b"original");
+
+        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        metadata
+            .save_local(&file_path, &storage_dir, &dvs_dir, "modified.txt")
+            .unwrap();
+
+        // Modify the file
+        fs::write(&file_path, b"changed content").unwrap();
+
+        let status = get_file_status(&root, &dvs_dir, "modified.txt").unwrap();
+        assert_eq!(status, Status::Unsynced);
+    }
+
+    #[test]
+    fn get_file_retrieves_from_storage() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (storage_dir, dvs_dir) = init_dvs_repo(&root);
+        let file_path = create_file(&root, "retrieve.txt", b"stored content");
+
+        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        metadata
+            .save_local(&file_path, &storage_dir, &dvs_dir, "retrieve.txt")
+            .unwrap();
+
+        // Delete the original file
+        fs::remove_file(&file_path).unwrap();
+        assert!(!file_path.exists());
+
+        // Retrieve it
+        let outcome = get_file(&storage_dir, &dvs_dir, &root, "retrieve.txt").unwrap();
+        assert_eq!(outcome, Outcome::Copied);
+        assert!(file_path.exists());
+        assert_eq!(fs::read(&file_path).unwrap(), b"stored content");
+    }
+
+    #[test]
+    fn get_file_returns_present_when_already_current() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (storage_dir, dvs_dir) = init_dvs_repo(&root);
+        let file_path = create_file(&root, "present.txt", b"content");
+
+        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        metadata
+            .save_local(&file_path, &storage_dir, &dvs_dir, "present.txt")
+            .unwrap();
+
+        // File still exists and matches - should return Present
+        let outcome = get_file(&storage_dir, &dvs_dir, &root, "present.txt").unwrap();
+        assert_eq!(outcome, Outcome::Present);
+    }
+
+    #[test]
+    fn get_file_fails_for_untracked_file() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (storage_dir, dvs_dir) = init_dvs_repo(&root);
+
+        let result = get_file(&storage_dir, &dvs_dir, &root, "untracked.txt");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not tracked"));
+    }
+
+    #[test]
+    fn get_status_returns_all_tracked_files() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (storage_dir, dvs_dir) = init_dvs_repo(&root);
+
+        // Add multiple files
+        for name in ["a.txt", "b.txt", "subdir/c.txt"] {
+            let file_path = create_file(&root, name, name.as_bytes());
+            let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+            metadata
+                .save_local(&file_path, &storage_dir, &dvs_dir, name)
+                .unwrap();
+        }
+
+        let statuses = get_status(&root, &dvs_dir).unwrap();
+        assert_eq!(statuses.len(), 3);
+
+        // All should be Current
+        for status in &statuses {
+            assert_eq!(status.status, Status::Current);
+        }
+    }
 }

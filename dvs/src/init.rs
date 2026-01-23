@@ -24,3 +24,66 @@ pub fn init(directory: impl AsRef<Path>, config: Config) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::create_temp_git_repo;
+
+    #[test]
+    fn init_creates_config_and_directories() {
+        let (_tmp, root) = create_temp_git_repo();
+        let storage = root.join(".storage");
+
+        let config = Config::new_local(&storage);
+        init(&root, config).unwrap();
+
+        // Config file should exist
+        assert!(root.join("dvs.toml").is_file());
+        // Metadata folder should exist
+        assert!(root.join(".dvs").is_dir());
+        // Storage folder should exist
+        assert!(storage.is_dir());
+    }
+
+    #[test]
+    fn init_fails_if_already_initialized() {
+        let (_tmp, root) = create_temp_git_repo();
+        let storage = root.join(".storage");
+
+        let config = Config::new_local(&storage);
+        init(&root, config.clone()).unwrap();
+
+        // Second init should fail
+        let result = init(&root, config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn init_fails_without_git_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join(".storage");
+
+        let config = Config::new_local(&storage);
+        let result = init(tmp.path(), config);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("repository root"));
+    }
+
+    #[test]
+    fn init_from_subdirectory_creates_at_repo_root() {
+        let (_tmp, root) = create_temp_git_repo();
+        let subdir = root.join("nested/deep");
+        fs::create_dir_all(&subdir).unwrap();
+        let storage = root.join(".storage");
+
+        let config = Config::new_local(&storage);
+        init(&subdir, config).unwrap();
+
+        // Config should be at repo root, not in subdirectory
+        assert!(root.join("dvs.toml").is_file());
+        assert!(!subdir.join("dvs.toml").exists());
+    }
+}

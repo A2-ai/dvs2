@@ -353,6 +353,7 @@ dependencies = [
  "md5",
  "serde",
  "serde_json",
+ "tempfile",
  "toml",
  "whoami",
 ]
