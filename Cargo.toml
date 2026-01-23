@@ -1,5 +1,5 @@
 [workspace]
-members = ["dvs-core", "dvs-cli", "dvs-testkit"]
+members = ["dvs-core", "dvs-cli", "dvs-testkit", "dvs"]
 exclude = ["dvsR"]
 resolver = "2"
 

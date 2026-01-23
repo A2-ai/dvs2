@@ -29,6 +29,11 @@ config.log
 # Claude Code session transcripts
 2026-*.txt
 dvsR/2026-*.txt
+.claude/
 
 # Archived crates (server/daemon moved here)
 archived-crates.zip
+
+.dvs/
+dvs.toml
+.storage
