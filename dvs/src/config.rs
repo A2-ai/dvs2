@@ -92,3 +92,47 @@ impl Config {
         &self.backend
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::create_temp_git_repo;
+
+    #[test]
+    fn find_repo_root_at_root() {
+        let (_tmp, root) = create_temp_git_repo();
+        assert_eq!(find_repo_root(&root), Some(root));
+    }
+
+    #[test]
+    fn find_repo_root_from_subdirectory() {
+        let (_tmp, root) = create_temp_git_repo();
+        let subdir = root.join("a/b/c");
+        fs::create_dir_all(&subdir).unwrap();
+        assert_eq!(find_repo_root(&subdir), Some(root));
+    }
+
+    #[test]
+    fn find_repo_root_returns_none_without_git() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(find_repo_root(tmp.path()), None);
+    }
+
+    #[test]
+    fn config_save_and_find_roundtrip() {
+        let (_tmp, root) = create_temp_git_repo();
+        let storage = root.join(".storage");
+
+        let original = Config::new_local(&storage);
+        original.save(&root).unwrap();
+
+        let loaded = Config::find(&root).unwrap().unwrap();
+        assert_eq!(original, loaded);
+    }
+
+    #[test]
+    fn config_find_returns_none_without_config_file() {
+        let (_tmp, root) = create_temp_git_repo();
+        assert!(Config::find(&root).is_none());
+    }
+}

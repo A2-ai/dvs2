@@ -58,7 +58,7 @@ pub enum Command {
     Status,
     Get {
         path: PathBuf,
-    }
+    },
 }
 
 #[derive(Parser)]
@@ -101,10 +101,7 @@ fn try_main() -> Result<()> {
                     let dvs_dir = repo_root.join(config.metadata_folder_name());
                     let metadata = FileMetadata::from_file(&path, message)?;
                     metadata.save_local(&path, &backend.path, &dvs_dir, &relative_path)?;
-                    println!(
-                        "File {} added successfully to DVS",
-                        absolute_path.display()
-                    );
+                    println!("File {} added successfully to DVS", absolute_path.display());
                 }
             }
         }
