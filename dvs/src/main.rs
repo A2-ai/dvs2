@@ -49,6 +49,12 @@ pub enum Command {
         path: PathBuf,
         #[clap(long)]
         metadata_folder_name: Option<String>,
+        /// Unix permissions for storage directory and files (octal, e.g., "770")
+        #[clap(long)]
+        permissions: Option<String>,
+        /// Unix group to set on storage directory and files
+        #[clap(long)]
+        group: Option<String>,
     },
     Add {
         path: PathBuf,
@@ -82,8 +88,10 @@ fn try_main() -> Result<()> {
         Command::Init {
             path,
             metadata_folder_name,
+            permissions,
+            group,
         } => {
-            let mut config = Config::new_local(path);
+            let mut config = Config::new_local(path, permissions, group)?;
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
             }
@@ -100,7 +108,7 @@ fn try_main() -> Result<()> {
                 Backend::Local(backend) => {
                     let dvs_dir = repo_root.join(config.metadata_folder_name());
                     let metadata = FileMetadata::from_file(&path, message)?;
-                    metadata.save_local(&path, &backend.path, &dvs_dir, &relative_path)?;
+                    metadata.save_local(&path, backend, &dvs_dir, &relative_path)?;
                     println!("File {} added successfully to DVS", absolute_path.display());
                 }
             }

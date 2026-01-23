@@ -20,6 +20,7 @@ pub fn init(directory: impl AsRef<Path>, config: Config) -> Result<()> {
     match config.backend() {
         Backend::Local(b) => {
             fs::create_dir_all(&b.path)?;
+            b.apply_perms(&b.path)?;
         }
     }
     Ok(())
@@ -35,7 +36,7 @@ mod tests {
         let (_tmp, root) = create_temp_git_repo();
         let storage = root.join(".storage");
 
-        let config = Config::new_local(&storage);
+        let config = Config::new_local(&storage, None, None).unwrap();
         init(&root, config).unwrap();
 
         // Config file should exist
@@ -51,7 +52,7 @@ mod tests {
         let (_tmp, root) = create_temp_git_repo();
         let storage = root.join(".storage");
 
-        let config = Config::new_local(&storage);
+        let config = Config::new_local(&storage, None, None).unwrap();
         init(&root, config.clone()).unwrap();
 
         // Second init should fail
@@ -65,7 +66,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join(".storage");
 
-        let config = Config::new_local(&storage);
+        let config = Config::new_local(&storage, None, None).unwrap();
         let result = init(tmp.path(), config);
 
         assert!(result.is_err());
@@ -79,7 +80,7 @@ mod tests {
         fs::create_dir_all(&subdir).unwrap();
         let storage = root.join(".storage");
 
-        let config = Config::new_local(&storage);
+        let config = Config::new_local(&storage, None, None).unwrap();
         init(&subdir, config).unwrap();
 
         // Config should be at repo root, not in subdirectory
