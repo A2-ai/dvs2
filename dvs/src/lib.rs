@@ -2,6 +2,9 @@ pub mod config;
 pub mod file;
 pub mod init;
 
+pub use file::{FileMetadata, FileStatus, Hashes, Outcome, Status};
+pub use file::{get_file, get_file_status, get_status};
+
 #[cfg(test)]
 pub mod testutil {
     use crate::config::Config;

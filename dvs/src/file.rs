@@ -10,10 +10,10 @@ fn get_path_in_dvs(dvs_directory: impl AsRef<Path>, relative_path: impl AsRef<Pa
     PathBuf::from(dvs_filename)
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct Hashes {
-    blake3: String,
-    md5: String,
+    pub blake3: String,
+    pub md5: String,
 }
 
 impl From<Vec<u8>> for Hashes {
@@ -29,7 +29,8 @@ impl From<Vec<u8>> for Hashes {
 }
 
 /// Outcome of an add or get operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Outcome {
     /// File was copied to/from storage.
     Copied,
@@ -37,7 +38,8 @@ pub enum Outcome {
     Present,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Status {
     /// Local file not tracked in dvs
     Untracked,
@@ -49,13 +51,14 @@ pub enum Status {
     Unsynced,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileMetadata {
-    hashes: Hashes,
-    size: u64,
-    created_by: String,
-    add_time: String,
-    message: Option<String>,
+    pub hashes: Hashes,
+    pub size: u64,
+    pub created_by: String,
+    pub add_time: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 impl PartialEq for FileMetadata {
@@ -166,7 +169,7 @@ impl FileMetadata {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileStatus {
     pub path: PathBuf,
     pub status: Status,
