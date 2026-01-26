@@ -232,6 +232,7 @@ dependencies = [
  "clap",
  "dvs",
  "env_logger",
+ "serde_json",
 ]
 
 [[package]]
