@@ -206,12 +206,10 @@ dependencies = [
 
 [[package]]
 name = "dvs"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
- "clap",
- "env_logger",
  "fs-err",
  "globset",
  "jiff",
@@ -224,6 +222,16 @@ dependencies = [
  "toml",
  "walkdir",
  "whoami",
+]
+
+[[package]]
+name = "dvs-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dvs",
+ "env_logger",
 ]
 
 [[package]]
