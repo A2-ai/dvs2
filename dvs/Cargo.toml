@@ -1,6 +1,11 @@
 [package]
 name = "dvs"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
@@ -17,18 +22,8 @@ jiff.workspace = true
 anyhow.workspace = true
 whoami.workspace = true
 
-clap = {optional = true, version = "4.5.54", features = ["derive"]}
-env_logger = "0.11.8"
-
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["user", "fs"] }
 
 [dev-dependencies]
 tempfile = "3.24.0"
-
-[features]
-cli = ["dep:clap"]
-
-[[bin]]
-name = "dvs"
-required-features = ["cli"]
