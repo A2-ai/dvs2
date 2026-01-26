@@ -16,9 +16,11 @@ pub const DEFAULT_FOLDER_NAME: &str = ".dvs";
 /// Returns `None` if no `.git` folder is found before reaching the filesystem root.
 pub fn find_repo_root(start_dir: impl AsRef<Path>) -> Option<PathBuf> {
     let mut dir = start_dir.as_ref();
+    log::debug!("Searching for repo root starting from {}", dir.display());
 
     loop {
         if dir.join(".git").exists() || dir.join(CONFIG_FILE_NAME).exists() {
+            log::debug!("Found repo root at {}", dir.display());
             return Some(dir.to_path_buf());
         }
 
@@ -55,6 +57,11 @@ impl DvsPaths {
             find_repo_root(&cwd).ok_or_else(|| anyhow!("Not in a git repository"))?,
         )?;
 
+        log::debug!(
+            "Resolved paths: cwd={}, repo_root={}",
+            cwd.display(),
+            repo_root.display()
+        );
         Ok(Self {
             cwd,
             repo_root,
@@ -97,6 +104,11 @@ impl DvsPaths {
     /// Expand glob pattern against files on disk.
     /// Pattern matched relative to cwd, returns paths relative to repo_root.
     pub fn expand_glob(&self, pattern: &str) -> Result<Vec<PathBuf>> {
+        log::debug!(
+            "Expanding glob pattern '{}' from cwd {}",
+            pattern,
+            self.cwd.display()
+        );
         let glob = Glob::new(pattern)
             .map_err(|e| anyhow::anyhow!("Invalid glob pattern '{}': {}", pattern, e))?
             .compile_matcher();
@@ -132,10 +144,16 @@ impl DvsPaths {
     /// Pattern adjusted for cwd (e.g., "*.txt" in subdir becomes "subdir/*.txt").
     /// Returns paths relative to repo_root.
     pub fn expand_glob_tracked(&self, pattern: &str) -> Result<Vec<PathBuf>> {
+        log::debug!("Expanding glob pattern '{}' against tracked files", pattern);
         // Adjust pattern based on cwd relative to repo root
         let effective_pattern = match self.cwd.strip_prefix(&self.repo_root).ok() {
             Some(rel) if !rel.as_os_str().is_empty() => {
-                format!("{}/{}", rel.display(), pattern)
+                let adjusted = format!("{}/{}", rel.display(), pattern);
+                log::debug!(
+                    "Adjusted pattern to '{}' for cwd-relative matching",
+                    adjusted
+                );
+                adjusted
             }
             _ => pattern.to_string(),
         };

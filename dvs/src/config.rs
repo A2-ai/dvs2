@@ -35,13 +35,15 @@ impl Config {
     pub fn save(&self, directory: impl AsRef<Path>) -> Result<()> {
         let config_path = directory.as_ref().join(CONFIG_FILE_NAME);
         let content = toml::to_string_pretty(&self)?;
-        fs::write(config_path, content)?;
+        fs::write(&config_path, content)?;
+        log::info!("Configuration saved to {}", config_path.display());
         Ok(())
     }
 
     pub fn find(current_directory: impl AsRef<Path>) -> Option<Result<Self>> {
         let repo_root = find_repo_root(current_directory)?;
         let config_path = repo_root.join(CONFIG_FILE_NAME);
+        log::debug!("Looking for config at {}", config_path.display());
         if config_path.exists() {
             let content = match fs::read_to_string(&config_path) {
                 Ok(c) => c,
@@ -52,6 +54,7 @@ impl Config {
                     .with_context(|| format!("Failed to parse {}", config_path.display())),
             )
         } else {
+            log::debug!("No config file found at {}", config_path.display());
             None
         }
     }
