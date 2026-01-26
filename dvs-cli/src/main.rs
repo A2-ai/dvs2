@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
+use serde_json::json;
 
 use dvs::config::Config;
 use dvs::file::{Outcome, add_files, get_files, get_status};
@@ -35,6 +36,10 @@ pub enum Command {
 #[derive(Parser)]
 #[clap(version, author, about, subcommand_negates_reqs = true)]
 pub struct Cli {
+    /// Output results as JSON
+    #[clap(long, global = true)]
+    pub json: bool,
+
     #[clap(subcommand)]
     pub command: Command,
 }
@@ -57,7 +62,11 @@ fn try_main() -> Result<()> {
                 config.set_metadata_folder_name(m);
             }
             init(&current_dir, config)?;
-            println!("DVS Initialized");
+            if cli.json {
+                println!("{}", json!({"status": "initialized"}));
+            } else {
+                println!("DVS Initialized");
+            }
         }
         Command::Add { pattern, message } => {
             let config =
@@ -65,8 +74,12 @@ fn try_main() -> Result<()> {
             let paths = DvsPaths::from_cwd(&config)?;
 
             let results = add_files(&pattern, &paths, config.backend(), message)?;
-            for result in results {
-                println!("Added: {}", result.path.display());
+            if cli.json {
+                println!("{}", serde_json::to_string(&results)?);
+            } else {
+                for result in results {
+                    println!("Added: {}", result.path.display());
+                }
             }
         }
         Command::Status => {
@@ -75,7 +88,9 @@ fn try_main() -> Result<()> {
             let paths = DvsPaths::from_cwd(&config)?;
 
             let statuses = get_status(&paths)?;
-            if statuses.is_empty() {
+            if cli.json {
+                println!("{}", serde_json::to_string(&statuses)?);
+            } else if statuses.is_empty() {
                 println!("No tracked files");
             } else {
                 for file_status in statuses {
@@ -89,10 +104,14 @@ fn try_main() -> Result<()> {
             let paths = DvsPaths::from_cwd(&config)?;
 
             let results = get_files(&pattern, &paths, config.backend())?;
-            for result in results {
-                match result.outcome {
-                    Outcome::Copied => println!("Retrieved: {}", result.path.display()),
-                    Outcome::Present => println!("Up to date: {}", result.path.display()),
+            if cli.json {
+                println!("{}", serde_json::to_string(&results)?);
+            } else {
+                for result in results {
+                    match result.outcome {
+                        Outcome::Copied => println!("Retrieved: {}", result.path.display()),
+                        Outcome::Present => println!("Up to date: {}", result.path.display()),
+                    }
                 }
             }
         }
