@@ -1,47 +1,12 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 
-use dvs::config::{Backend, Config, find_repo_root};
-use dvs::file::{FileMetadata, Outcome, expand_glob, expand_glob_tracked, get_file, get_status};
+use dvs::config::Config;
+use dvs::file::{Outcome, add_files, get_files, get_status};
 use dvs::init::init;
-
-/// Resolve a path to be relative to the repository root.
-/// If `canonicalize` is true, the path is canonicalized first (file must exist).
-/// Returns (absolute_path, relative_path).
-fn resolve_repo_path(
-    path: &Path,
-    current_dir: &Path,
-    repo_root: &Path,
-    canonicalize: bool,
-) -> Result<(PathBuf, PathBuf)> {
-    let absolute_path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        current_dir.join(path)
-    };
-
-    let absolute_path = if canonicalize {
-        fs::canonicalize(&absolute_path)?
-    } else {
-        absolute_path
-    };
-
-    let relative_path = absolute_path
-        .strip_prefix(repo_root)
-        .map(|p| p.to_path_buf())
-        .map_err(|_| {
-            anyhow!(
-                "Path {} is not inside repository {}",
-                absolute_path.display(),
-                repo_root.display()
-            )
-        })?;
-
-    Ok((absolute_path, relative_path))
-}
+use dvs::paths::DvsPaths;
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -79,10 +44,6 @@ fn try_main() -> Result<()> {
 
     let cli = Cli::parse();
     let current_dir = std::env::current_dir()?;
-    let canonical_current_dir = fs::canonicalize(&current_dir)?;
-    let repo_root =
-        find_repo_root(&current_dir).ok_or_else(|| anyhow!("Not in a git repository"))?;
-    let canonical_root = fs::canonicalize(&repo_root)?;
 
     match cli.command {
         Command::Init {
@@ -95,75 +56,43 @@ fn try_main() -> Result<()> {
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
             }
-            init(current_dir, config)?;
+            init(&current_dir, config)?;
             println!("DVS Initialized");
         }
         Command::Add { pattern, message } => {
             let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Failed to read config"))??;
+                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let paths = DvsPaths::from_cwd(&config)?;
 
-            let paths = expand_glob(&pattern, &canonical_current_dir)?;
-
-            match config.backend() {
-                Backend::Local(backend) => {
-                    let dvs_dir = repo_root.join(config.metadata_folder_name());
-                    for path in paths {
-                        let (_, relative_path) =
-                            resolve_repo_path(&path, &current_dir, &canonical_root, true)?;
-                        let metadata = FileMetadata::from_file(&path, message.clone())?;
-                        metadata.save_local(&path, backend, &dvs_dir, &relative_path)?;
-                        println!("Added: {}", relative_path.display());
-                    }
-                }
+            let results = add_files(&pattern, &paths, config.backend(), message)?;
+            for result in results {
+                println!("Added: {}", result.path.display());
             }
         }
         Command::Status => {
             let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Failed to read config"))??;
+                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let paths = DvsPaths::from_cwd(&config)?;
 
-            match config.backend() {
-                Backend::Local(_) => {
-                    let dvs_dir = repo_root.join(config.metadata_folder_name());
-                    let statuses = get_status(&repo_root, &dvs_dir)?;
-                    if statuses.is_empty() {
-                        println!("No tracked files");
-                    } else {
-                        for file_status in statuses {
-                            println!("{}: {:?}", file_status.path.display(), file_status.status);
-                        }
-                    }
+            let statuses = get_status(&paths)?;
+            if statuses.is_empty() {
+                println!("No tracked files");
+            } else {
+                for file_status in statuses {
+                    println!("{}: {:?}", file_status.path.display(), file_status.status);
                 }
             }
         }
         Command::Get { pattern } => {
             let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Failed to read config"))??;
+                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let paths = DvsPaths::from_cwd(&config)?;
 
-            // Compute pattern relative to repo root
-            let cwd_relative = canonical_current_dir
-                .strip_prefix(&canonical_root)
-                .unwrap_or(Path::new(""));
-            let effective_pattern = if cwd_relative.as_os_str().is_empty() {
-                pattern
-            } else {
-                format!("{}/{}", cwd_relative.display(), pattern)
-            };
-
-            match config.backend() {
-                Backend::Local(backend) => {
-                    let dvs_dir = repo_root.join(config.metadata_folder_name());
-                    let paths = expand_glob_tracked(&effective_pattern, &dvs_dir)?;
-
-                    for relative_path in paths {
-                        let outcome =
-                            get_file(&backend.path, &dvs_dir, &repo_root, &relative_path)?;
-                        match outcome {
-                            Outcome::Copied => println!("Retrieved: {}", relative_path.display()),
-                            Outcome::Present => {
-                                println!("Up to date: {}", relative_path.display())
-                            }
-                        }
-                    }
+            let results = get_files(&pattern, &paths, config.backend())?;
+            for result in results {
+                match result.outcome {
+                    Outcome::Copied => println!("Retrieved: {}", result.path.display()),
+                    Outcome::Present => println!("Up to date: {}", result.path.display()),
                 }
             }
         }

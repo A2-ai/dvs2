@@ -1,9 +1,13 @@
+pub mod backends;
 pub mod config;
 pub mod file;
 pub mod init;
+pub mod paths;
 
-pub use file::{FileMetadata, FileStatus, Hashes, Outcome, Status};
-pub use file::{expand_glob, expand_glob_tracked, get_file, get_file_status, get_status};
+pub use backends::Backend;
+pub use file::{AddResult, FileMetadata, FileStatus, GetResult, Hashes, Outcome, Status};
+pub use file::{add_files, get_file, get_file_status, get_files, get_status};
+pub use paths::{DvsPaths, find_repo_root};
 
 #[cfg(test)]
 pub mod testutil {

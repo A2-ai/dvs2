@@ -1,105 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use anyhow::{Result, anyhow};
+use crate::backends::Backend as BackendTrait;
+use crate::backends::local::LocalBackend;
+use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, find_repo_root};
+use anyhow::{Context, Result};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
-
-const CONFIG_FILE_NAME: &str = "dvs.toml";
-const DEFAULT_FOLDER_NAME: &str = ".dvs";
-
-/// Finds the root of a git repository by walking up from the given directory
-/// until a `.git` folder is found.
-///
-/// Returns `None` if no `.git` folder is found before reaching the filesystem root.
-pub fn find_repo_root(start_dir: impl AsRef<Path>) -> Option<PathBuf> {
-    let mut dir = start_dir.as_ref();
-
-    loop {
-        if dir.join(".git").exists() {
-            return Some(dir.to_path_buf());
-        }
-
-        dir = dir.parent()?;
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct LocalBackend {
-    pub path: PathBuf,
-    permissions: Option<String>,
-    group: Option<String>,
-}
-
-/// Parse a permission string as an octal mode.
-/// Returns the mode as an u32.
-fn parse_permissions(perms: &str) -> Result<u32> {
-    let mode = u32::from_str_radix(perms, 8).map_err(|_| {
-        anyhow!(
-            "Invalid permission mode '{}': must be octal (e.g., '770')",
-            perms
-        )
-    })?;
-    if mode > 0o7777 {
-        anyhow::bail!(
-            "Invalid permission mode '{}': value {} exceeds maximum 7777",
-            perms,
-            mode
-        );
-    }
-    Ok(mode)
-}
-
-/// Resolve a group name to its GID.
-#[cfg(unix)]
-fn resolve_group(group_name: &str) -> Result<nix::unistd::Gid> {
-    use nix::unistd::Group;
-    let group =
-        Group::from_name(group_name)?.ok_or_else(|| anyhow!("Group '{}' not found", group_name))?;
-    Ok(nix::unistd::Gid::from_raw(group.gid.as_raw()))
-}
-
-#[cfg(not(unix))]
-fn resolve_group(_group_name: &str) -> Result<()> {
-    Ok(())
-}
-
-impl LocalBackend {
-    pub fn permissions(&self) -> Option<&str> {
-        self.permissions.as_deref()
-    }
-
-    pub fn group(&self) -> Option<&str> {
-        self.group.as_deref()
-    }
-
-    /// Apply configured permissions and group to a path.
-    /// No-op on non-Unix or if neither permissions nor group are set.
-    #[cfg(unix)]
-    pub fn apply_perms(&self, path: impl AsRef<Path>) -> Result<()> {
-        use nix::unistd::chown;
-        use std::os::unix::fs::PermissionsExt;
-
-        let path = path.as_ref();
-
-        if let Some(perms) = &self.permissions {
-            let mode = parse_permissions(perms)?;
-            let permissions = std::fs::Permissions::from_mode(mode);
-            fs::set_permissions(path, permissions)?;
-        }
-
-        if let Some(group_name) = &self.group {
-            let gid = resolve_group(group_name)?;
-            chown(path, None, Some(gid))?;
-        }
-
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    pub fn apply_perms(&self, _path: impl AsRef<Path>) -> Result<()> {
-        Ok(())
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
@@ -119,22 +25,10 @@ impl Config {
         permissions: Option<String>,
         group: Option<String>,
     ) -> Result<Config> {
-        // Validate permissions and group before creating config
-        if let Some(ref perms) = permissions {
-            parse_permissions(perms)?;
-        }
-        if let Some(ref grp) = group {
-            resolve_group(grp)?;
-        }
-
-        let backend = Backend::Local(LocalBackend {
-            path: path.as_ref().to_path_buf(),
-            permissions,
-            group,
-        });
+        let backend = LocalBackend::new(path.as_ref(), permissions, group)?;
         Ok(Config {
             metadata_folder_name: None,
-            backend,
+            backend: Backend::Local(backend),
         })
     }
 
@@ -153,7 +47,10 @@ impl Config {
                 Ok(c) => c,
                 Err(e) => return Some(Err(e.into())),
             };
-            Some(toml::from_str(&content).map_err(|e| e.into()))
+            Some(
+                toml::from_str(&content)
+                    .with_context(|| format!("Failed to parse {}", config_path.display())),
+            )
         } else {
             None
         }
@@ -171,8 +68,10 @@ impl Config {
         }
     }
 
-    pub fn backend(&self) -> &Backend {
-        &self.backend
+    pub fn backend(&self) -> &dyn BackendTrait {
+        match &self.backend {
+            Backend::Local(b) => b,
+        }
     }
 }
 
@@ -180,26 +79,6 @@ impl Config {
 mod tests {
     use super::*;
     use crate::testutil::create_temp_git_repo;
-
-    #[test]
-    fn find_repo_root_at_root() {
-        let (_tmp, root) = create_temp_git_repo();
-        assert_eq!(find_repo_root(&root), Some(root));
-    }
-
-    #[test]
-    fn find_repo_root_from_subdirectory() {
-        let (_tmp, root) = create_temp_git_repo();
-        let subdir = root.join("a/b/c");
-        fs::create_dir_all(&subdir).unwrap();
-        assert_eq!(find_repo_root(&subdir), Some(root));
-    }
-
-    #[test]
-    fn find_repo_root_returns_none_without_git() {
-        let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(find_repo_root(tmp.path()), None);
-    }
 
     #[test]
     fn config_save_and_find_roundtrip() {
@@ -258,5 +137,18 @@ mod tests {
         let result = Config::new_local(&storage, None, Some("nonexistent_group_12345".to_string()));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn config_with_custom_metadata_folder() {
+        let (_tmp, root) = create_temp_git_repo();
+        let storage = root.join(".storage");
+
+        let mut config = Config::new_local(&storage, None, None).unwrap();
+        config.set_metadata_folder_name(".custom_dvs".to_string());
+        config.save(&root).unwrap();
+
+        let loaded = Config::find(&root).unwrap().unwrap();
+        assert_eq!(loaded.metadata_folder_name(), ".custom_dvs");
     }
 }
