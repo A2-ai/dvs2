@@ -15,7 +15,7 @@ fn parse_permissions(perms: &str) -> Result<u32> {
         )
     })?;
     if mode > 0o7777 {
-        anyhow::bail!(
+        bail!(
             "Invalid permission mode '{}': value {} exceeds maximum 7777",
             perms,
             mode
@@ -76,12 +76,14 @@ impl LocalBackend {
         let path = path.as_ref();
 
         if let Some(perms) = &self.permissions {
+            log::debug!("Setting permissions {} on {}", perms, path.display());
             let mode = parse_permissions(perms)?;
             let permissions = std::fs::Permissions::from_mode(mode);
             fs::set_permissions(path, permissions)?;
         }
 
         if let Some(group_name) = &self.group {
+            log::debug!("Setting group {} on {}", group_name, path.display());
             let gid = resolve_group(group_name)?;
             chown(path, None, Some(gid))?;
         }
@@ -105,8 +107,10 @@ impl LocalBackend {
 
 impl Backend for LocalBackend {
     fn init(&self) -> Result<()> {
+        log::debug!("Creating storage directory: {}", self.path.display());
         fs::create_dir_all(&self.path)?;
         self.apply_perms(&self.path)?;
+        log::info!("Initialized local storage at {}", self.path.display());
         Ok(())
     }
 
@@ -123,6 +127,7 @@ impl Backend for LocalBackend {
 
     fn store_bytes(&self, hash: &str, content: &[u8]) -> Result<()> {
         let path = self.hash_to_path(hash)?;
+        log::debug!("Storing {} bytes to {}", content.len(), path.display());
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
             self.apply_perms(parent)?;
@@ -152,6 +157,7 @@ impl Backend for LocalBackend {
     fn remove(&self, hash: &str) -> Result<()> {
         let path = self.hash_to_path(hash)?;
         if path.is_file() {
+            log::debug!("Removing {} from storage", hash);
             fs::remove_file(path)?;
         }
         Ok(())

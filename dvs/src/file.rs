@@ -71,7 +71,7 @@ impl FileMetadata {
             bail!("Path {} is not a file", path.as_ref().display());
         }
 
-        let content = fs::read(path)?;
+        let content = fs::read(path.as_ref())?;
         let size = content.len() as u64;
         let hashes = Hashes::from(content);
         let created_by = whoami::username()?;
@@ -99,11 +99,21 @@ impl FileMetadata {
         let dvs_file_exists = dvs_file_path.is_file();
         let storage_exists = backend.exists(&self.hashes.md5)?;
 
+        log::debug!(
+            "Saving {}: metadata_exists={}, storage_exists={}",
+            relative_path.as_ref().display(),
+            dvs_file_exists,
+            storage_exists
+        );
+
         if dvs_file_exists && storage_exists {
             // we read the file anyway to make sure it's not 2 files having the same hash
             let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)?;
             if existing == *self {
-                log::info!("File is already in sync");
+                log::debug!(
+                    "File {} is already in sync",
+                    relative_path.as_ref().display()
+                );
                 return Ok(Outcome::Present);
             }
         }
@@ -122,6 +132,7 @@ impl FileMetadata {
 
         // 4. Then metadata
         let old_metadata_content = fs::read(&dvs_file_path).ok();
+        log::debug!("Writing metadata to {}", dvs_file_path.display());
         let metadata_res = fs::write(
             &dvs_file_path,
             serde_json::to_string(self).expect("valid json"),
@@ -130,6 +141,10 @@ impl FileMetadata {
         match (storage_res, metadata_res) {
             (Ok(_), Ok(_)) => Ok(Outcome::Copied),
             (Err(e), Ok(_)) => {
+                log::warn!(
+                    "Storage failed, rolling back metadata for {}",
+                    relative_path.as_ref().display()
+                );
                 if let Some(old) = old_metadata_content {
                     fs::write(&dvs_file_path, &old)?;
                 } else {
@@ -138,6 +153,10 @@ impl FileMetadata {
                 Err(e)
             }
             (Ok(_), Err(_)) => {
+                log::warn!(
+                    "Metadata write failed, rolling back storage for {}",
+                    relative_path.as_ref().display()
+                );
                 if let Some(old) = old_storage_content {
                     backend.store_bytes(&self.hashes.md5, &old)?;
                 } else {
@@ -146,6 +165,10 @@ impl FileMetadata {
                 bail!("Failed to write metadata file: {dvs_file_path:?}")
             }
             (Err(e), Err(_)) => {
+                log::warn!(
+                    "Both storage and metadata failed, rolling back for {}",
+                    relative_path.as_ref().display()
+                );
                 if let Some(old) = old_metadata_content {
                     fs::write(&dvs_file_path, &old)?;
                 } else {
@@ -189,6 +212,7 @@ pub fn get_file_status(paths: &DvsPaths, relative_path: impl AsRef<Path>) -> Res
 
 pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
     let dvs_directory = paths.metadata_folder();
+    log::debug!("Scanning metadata folder: {}", dvs_directory.display());
     let mut results = Vec::new();
     for entry in WalkDir::new(&dvs_directory)
         .into_iter()
@@ -210,6 +234,7 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
             status,
         });
     }
+    log::debug!("Found {} tracked files", results.len());
     Ok(results)
 }
 
@@ -220,6 +245,7 @@ pub fn get_file(
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
 ) -> Result<Outcome> {
+    log::debug!("Retrieving file: {}", relative_path.as_ref().display());
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
     if !dvs_file_path.is_file() {
         bail!(
@@ -229,6 +255,11 @@ pub fn get_file(
     }
 
     let metadata: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)?;
+    log::debug!(
+        "Read metadata for {}: md5 hash={}",
+        relative_path.as_ref().display(),
+        metadata.hashes.md5
+    );
 
     if !backend.exists(&metadata.hashes.md5)? {
         bail!("Storage file missing for hash: {}", metadata.hashes.md5);
@@ -240,11 +271,20 @@ pub fn get_file(
     if target_path.is_file() {
         let current = FileMetadata::from_file(&target_path, None)?;
         if current == metadata {
+            log::debug!(
+                "File {} already present locally and matches",
+                relative_path.as_ref().display()
+            );
             return Ok(Outcome::Present);
         }
     }
 
     // Retrieve from backend to target path
+    log::debug!(
+        "Copying {} from storage to {}",
+        metadata.hashes.md5,
+        target_path.display()
+    );
     backend
         .retrieve(&metadata.hashes.md5, &target_path)
         .with_context(|| format!("Failed to retrieve {}", relative_path.as_ref().display()))?;
@@ -280,10 +320,19 @@ pub fn add_files(
     backend: &dyn Backend,
     message: Option<String>,
 ) -> Result<Vec<AddResult>> {
+    log::debug!("Adding files matching pattern: {}", pattern);
     let matched_paths = paths.expand_glob(pattern)?;
     if matched_paths.is_empty() {
         bail!("No files match pattern: {}", pattern);
     }
+    log::debug!(
+        "Pattern '{}' matched {:?}",
+        pattern,
+        matched_paths
+            .iter()
+            .map(|p| p.display())
+            .collect::<Vec<_>>()
+    );
     let mut results = Vec::new();
 
     for relative_path in matched_paths {
@@ -291,6 +340,11 @@ pub fn add_files(
 
         let metadata = FileMetadata::from_file(&full_path, message.clone())?;
         let outcome = metadata.save(&full_path, backend, paths, &relative_path)?;
+        log::info!(
+            "Successfully added {} ({:?})",
+            relative_path.display(),
+            outcome
+        );
         results.push(AddResult {
             path: relative_path,
             outcome,
@@ -305,14 +359,29 @@ pub fn add_files(
 /// The pattern is matched against tracked files (paths in metadata folder).
 /// The pattern is adjusted based on cwd relative to repo root.
 pub fn get_files(pattern: &str, paths: &DvsPaths, backend: &dyn Backend) -> Result<Vec<GetResult>> {
+    log::debug!("Getting files matching pattern: {}", pattern);
     let matched_paths = paths.expand_glob_tracked(pattern)?;
     if matched_paths.is_empty() {
         bail!("No tracked files match pattern: {}", pattern);
     }
+
+    log::debug!(
+        "Pattern '{}' matched {:?}",
+        pattern,
+        matched_paths
+            .iter()
+            .map(|p| p.display())
+            .collect::<Vec<_>>()
+    );
     let mut results = Vec::new();
 
     for relative_path in matched_paths {
         let outcome = get_file(backend, paths, &relative_path)?;
+        log::info!(
+            "Successfully retrieved {} ({:?})",
+            relative_path.display(),
+            outcome
+        );
         results.push(GetResult {
             path: relative_path,
             outcome,

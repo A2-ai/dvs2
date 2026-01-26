@@ -16,8 +16,14 @@ pub fn init(directory: impl AsRef<Path>, config: Config) -> Result<()> {
     let repo_root =
         find_repo_root(&directory).ok_or_else(|| anyhow!("Cannot find repository root"))?;
     config.save(&repo_root)?;
+    log::debug!(
+        "Creating metadata folder: {}",
+        repo_root.join(config.metadata_folder_name()).display()
+    );
     fs::create_dir(repo_root.join(config.metadata_folder_name()))?;
+    log::debug!("Initializing backend");
     config.backend().init()?;
+    log::info!("DVS repository initialized successfully");
     Ok(())
 }
 
