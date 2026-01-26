@@ -1,5 +1,5 @@
 [workspace]
-members = ["dvs-core", "dvs-cli", "dvs-testkit", "dvs"]
+members = ["dvs"]
 exclude = ["dvsR"]
 resolver = "2"
 
@@ -8,7 +8,7 @@ lto = true
 codegen-units = 1
 
 [workspace.package]
-version = "0.0.0-9000"
+version = "0.1.0"
 authors = [
     'Jenna Johnson <jenna@a2-ai.com>',
     'Devin Pastoor <devin@a2-ai.com>',
@@ -17,40 +17,19 @@ authors = [
 ]
 description = 'This package allows users to version large or sensitive files under Git without tracking the file directly.'
 license = 'MIT'
-edition = '2021'
+edition = '2024'
 rust-version = '1.85'
 
 [workspace.dependencies]
-# Internal crates
-dvs-core = { path = "dvs-core" }
-
-# Serialization (used by: dvs-core)
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml = "0.9"
+serde_json = "1.0.149"
 toml = "0.9"
-
-# Error handling (used by: dvs-core, dvs-cli)
-thiserror = "2.0"
-anyhow = "1.0"
-
-# Hashing (used by: dvs-core)
-blake3 = { version = "1.8", features = ["rayon"] }
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
-sha2 = "0.10"
-
-# File system (used by: dvs-core, dvs-cli)
-fs-err = "2"
-memmap2 = "0.9"
-walkdir = "2.5"
-glob = "0.3"
-
-# Utilities (used by: dvs-core)
-chrono = { version = "0.4", features = ["serde"] }
-
-# CLI (used by: dvs-cli)
-clap_complete = "4.5"
-indicatif = "0.17"
-
-# Testing (used by: all crates)
-tempfile = "3"
+fs-err = "3"
+log = "0.4.29"
+blake3 = "1.8.3"
+globset = "0.4"
+walkdir = "2"
+md5 = "0.8.0"
+jiff = "0.2.18"
+anyhow = "1.0.100"
+whoami = "2"

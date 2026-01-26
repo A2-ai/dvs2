@@ -1,199 +1,90 @@
 # https://just.systems
 
-# ============================================================================
-# Path definitions
-# ============================================================================
-
-# Root workspace manifest
-workspace_manifest := "Cargo.toml"
-
-# R package embedded Rust crate
 rpkg_dir := "dvsR"
 rpkg_manifest := rpkg_dir / "src/rust/Cargo.toml"
-rpkg_manifest_in := rpkg_dir / "src/rust/Cargo.toml.in"
-
-# ============================================================================
-# Default recipe
-# ============================================================================
 
 default:
     @just --list
 
 # ============================================================================
-# Workspace recipes (dvs-core, dvs-cli)
+# dvs crate
 # ============================================================================
 
-# Build the workspace (dvs-core, dvs-cli)
 build *args:
-    cargo build --manifest-path={{quote(workspace_manifest)}} --workspace {{args}}
+    cargo build {{args}}
 
-# Build workspace in release mode
 build-release *args:
-    cargo build --manifest-path={{quote(workspace_manifest)}} --workspace --release {{args}}
+    cargo build --release {{args}}
 
-# Run tests for workspace crates
 test *args:
-    cargo test --manifest-path={{quote(workspace_manifest)}} --workspace {{args}}
+    cargo test {{args}}
 
-# Run clippy on workspace
 clippy *args:
-    cargo clippy --manifest-path={{quote(workspace_manifest)}} --workspace {{args}}
+    cargo clippy {{args}}
 
-# Format workspace code
 fmt *args:
-    cargo fmt --manifest-path={{quote(workspace_manifest)}} --all {{args}}
-    cargo fmt --manifest-path={{quote(rpkg_manifest)}} --all {{args}}
+    cargo fmt {{args}}
 
-# Check workspace without building
 check *args:
-    cargo check --manifest-path={{quote(workspace_manifest)}} --workspace {{args}}
+    cargo check {{args}}
 
-# Generate documentation for workspace crates (public items only)
 doc *args:
-    cargo doc --manifest-path={{quote(workspace_manifest)}} --workspace --no-deps {{args}}
+    cargo doc --no-deps {{args}}
 
-# TODO: add rpkg_manfiest to `doc-private`
-# Generate documentation including private items (for internal review)
-doc-private *args:
-    cargo doc --manifest-path={{quote(workspace_manifest)}} --workspace --document-private-items --no-deps {{args}}
-# Check documentation for warnings (treats warnings as errors)
-doc-check:
-    RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path={{quote(workspace_manifest)}} --workspace --document-private-items --no-deps
-    RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path={{quote(rpkg_manifest)}} --document-private-items --no-deps
-
-# Open documentation in browser
-doc-open: doc
-    cargo doc --manifest-path={{quote(workspace_manifest)}} --workspace --no-deps --open
-
-# Check for std::fs usage in workspace Rust sources
-# Allows std::fs::Permissions and std::fs::Metadata (types that fs-err doesn't re-export)
+# Check for std::fs usage (allow Permissions/Metadata types)
 check-std-fs:
-    @! rg -nP -g '*.rs' -e 'std::fs(?!::(Permissions|Metadata)\b)' -e 'std::\s*\{[^}]*\bfs\b[^}]*\}' dvs-core dvs-cli dvs-testkit
-
-
-# Run any cargo subcommand against the workspace
-cargo subcmd *args:
-    cargo {{subcmd}} --manifest-path={{quote(workspace_manifest)}} {{args}}
+    @! rg -nP -g '*.rs' -e 'std::fs(?!::(Permissions|Metadata)\b)' -e 'std::\s*\{[^}]*\bfs\b[^}]*\}' dvs
 
 # Install the dvs CLI binary
 install-cli *args:
-    cargo install --force --locked --path=dvs-cli {{args}}
-
-# Install the R package (alias for rpkg-install)
-install-rpkg:
-    NOT_CRAN=true Rscript -e 'install.packages("{{rpkg_dir}}", repos = NULL, type = "source")'
+    cargo install --force --locked --path=dvs --features=cli {{args}}
 
 # ============================================================================
-# R package recipes (dvsR)
+# R package (dvsR)
 # ============================================================================
 
-# Configure the R package (generates Cargo.toml from .in template)
 rpkg-configure:
     cd {{quote(rpkg_dir)}} && NOT_CRAN=true ./configure
 
-# Vendor R package dependencies (runs configure with NOT_CRAN=true)
-vendor:
-    cd {{quote(rpkg_dir)}} && NOT_CRAN=true ./configure
-
-# Force re-vendor R package dependencies (use after modifying miniextendr sources)
-rpkg-vendor-force:
-    cd {{quote(rpkg_dir)}} && FORCE_VENDOR=true NOT_CRAN=true ./configure
-
-# Vendor with automatic miniextendr source staleness detection (uses default path)
-rpkg-vendor-detect:
-    cd {{quote(rpkg_dir)}} && MINIEXTENDR_SOURCE_DIR=/Users/elea/Documents/GitHub/miniextendr NOT_CRAN=true ./configure
-
-# Vendor with miniextendr source staleness detection (custom path)
-# Usage: just rpkg-vendor-with-staleness /path/to/miniextendr
-rpkg-vendor-with-staleness miniextendr_src:
-    cd {{quote(rpkg_dir)}} && MINIEXTENDR_SOURCE_DIR={{quote(miniextendr_src)}} NOT_CRAN=true ./configure
-
-# Build the R package Rust library
 rpkg-build *args:
-    cargo build --manifest-path={{quote(rpkg_manifest)}} --workspace {{args}}
+    cargo build --manifest-path={{quote(rpkg_manifest)}} {{args}}
 
-# Build R package Rust library in release mode
 rpkg-build-release *args:
-    cargo build --manifest-path={{quote(rpkg_manifest)}} --workspace --release {{args}}
+    cargo build --manifest-path={{quote(rpkg_manifest)}} --release {{args}}
 
-# Run tests for R package Rust code
 rpkg-test *args:
-    cargo test --manifest-path={{quote(rpkg_manifest)}} --workspace {{args}}
+    cargo test --manifest-path={{quote(rpkg_manifest)}} {{args}}
 
-# Run clippy on R package Rust code
 rpkg-clippy *args:
-    cargo clippy --manifest-path={{quote(rpkg_manifest)}} --workspace {{args}}
+    cargo clippy --manifest-path={{quote(rpkg_manifest)}} {{args}}
 
-# Check R package Rust code without building
 rpkg-check *args:
-    cargo check --manifest-path={{quote(rpkg_manifest)}} --workspace {{args}}
+    cargo check --manifest-path={{quote(rpkg_manifest)}} {{args}}
 
-# Run any cargo subcommand against the R package manifest
-rpkg-cargo subcmd *args:
-    cargo {{subcmd}} --manifest-path={{quote(rpkg_manifest)}} {{args}}
-
-# Generate NAMESPACE and Rd files via roxygen2
 rpkg-document:
     Rscript -e 'devtools::document("{{rpkg_dir}}")'
 
-# Install the R package
 rpkg-install:
     NOT_CRAN=true Rscript -e 'install.packages("{{rpkg_dir}}", repos = NULL, type = "source")'
 
-# Run R CMD check on the package
-rpkg-check-r *args:
-    NOT_CRAN=true R CMD check {{rpkg_dir}} {{args}}
-
-# Clean R package build artifacts
-rpkg-clean:
-    cd {{rpkg_dir}} && NOT_CRAN=false ./cleanup
-
 # ============================================================================
-# Combined recipes
+# Combined
 # ============================================================================
 
-# Build everything (workspace + R package)
 build-all: build rpkg-build
 
-# Build everything in release mode
-build-all-release: build-release rpkg-build-release
-
-# Test everything
 test-all: test rpkg-test
 
-# Check everything
 check-all: check rpkg-check
 
-# Format all Rust code
+clippy-all: clippy rpkg-clippy
+
 fmt-all: fmt
     cargo fmt --manifest-path={{quote(rpkg_manifest)}}
 
-# Check formatting for all Rust code
-fmt-check-all:
-    cargo fmt --manifest-path={{quote(workspace_manifest)}} --all -- --check
+fmt-check:
+    cargo fmt -- --check
     cargo fmt --manifest-path={{quote(rpkg_manifest)}} -- --check
 
-# Alias fmt-check to fmt-check-all (default)
-fmt-check: fmt-check-all
-
-# Run clippy on everything
-clippy-all: clippy rpkg-clippy
-
-# Run all CI checks (format, clippy, tests, std-fs lint)
 ci: fmt-check clippy check-std-fs test
     @echo "All CI checks passed!"
-
-# ============================================================================
-# Version management
-# ============================================================================
-
-# Sync or bump versions from DESCRIPTION.
-# Examples:
-#   just bump-version
-#   just bump-version -- --bump=patch
-#   just bump-version -- --bump=dev
-#   just bump-version -- --bump=dev+
-#   just bump-version -- --set=0.1.0.9000
-#   just bump-version -- --mode=workspace
-bump-version *args:
-    Rscript tools/bump-version.R {{rpkg_dir}} {{args}}
