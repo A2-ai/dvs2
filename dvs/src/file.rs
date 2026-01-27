@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::backends::Backend;
+use crate::lock::FileLock;
 use crate::paths::DvsPaths;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -96,6 +97,8 @@ impl FileMetadata {
         relative_path: impl AsRef<Path>,
     ) -> Result<Outcome> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
+        // Prevent concurrent edit of the same metadata file
+        let _lock = FileLock::acquire(&dvs_file_path)?;
         let dvs_file_exists = dvs_file_path.is_file();
         let storage_exists = backend.exists(&self.hashes.md5)?;
 

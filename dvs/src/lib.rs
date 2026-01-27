@@ -1,7 +1,9 @@
+pub mod audit;
 pub mod backends;
 pub mod config;
 pub mod file;
 pub mod init;
+mod lock;
 pub mod paths;
 
 pub use backends::Backend;
