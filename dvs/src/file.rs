@@ -1,31 +1,14 @@
 use std::path::{Path, PathBuf};
 
+use crate::audit::{AuditEntry, AuditFile};
+use crate::backends::Backend;
+use crate::hashes::Hashes;
+use crate::paths::DvsPaths;
 use anyhow::{Context, Result, bail};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 use walkdir::WalkDir;
-
-use crate::backends::Backend;
-use crate::lock::FileLock;
-use crate::paths::DvsPaths;
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-pub struct Hashes {
-    pub blake3: String,
-    pub md5: String,
-}
-
-impl From<Vec<u8>> for Hashes {
-    fn from(bytes: Vec<u8>) -> Self {
-        let blake3_hash = format!("{}", blake3::hash(&bytes));
-        let md5_hash = format!("{:x}", md5::compute(&bytes));
-
-        Self {
-            blake3: blake3_hash,
-            md5: md5_hash,
-        }
-    }
-}
 
 /// Outcome of an add or get operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,16 +74,15 @@ impl FileMetadata {
     /// Copies the source file to storage and saves metadata atomically (both succeed or neither).
     pub fn save(
         &self,
+        operation_id: Uuid,
         source_file: impl AsRef<Path>,
         backend: &dyn Backend,
         paths: &DvsPaths,
         relative_path: impl AsRef<Path>,
     ) -> Result<Outcome> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
-        // Prevent concurrent edit of the same metadata file
-        let _lock = FileLock::acquire(&dvs_file_path)?;
         let dvs_file_exists = dvs_file_path.is_file();
-        let storage_exists = backend.exists(&self.hashes.md5)?;
+        let storage_exists = backend.exists(&self.hashes)?;
 
         log::debug!(
             "Saving {}: metadata_exists={}, storage_exists={}",
@@ -128,10 +110,10 @@ impl FileMetadata {
         }
 
         // 2. Read old storage content for rollback (if any)
-        let old_storage_content = backend.read(&self.hashes.md5)?;
+        let old_storage_content = backend.read(&self.hashes)?;
 
         // 3. Store file to backend
-        let storage_res = backend.store(&self.hashes.md5, source_file.as_ref());
+        let storage_res = backend.store(&self.hashes, source_file.as_ref());
 
         // 4. Then metadata
         let old_metadata_content = fs::read(&dvs_file_path).ok();
@@ -142,7 +124,19 @@ impl FileMetadata {
         );
 
         match (storage_res, metadata_res) {
-            (Ok(_), Ok(_)) => Ok(Outcome::Copied),
+            (Ok(_), Ok(_)) => {
+                let audit_entry = AuditEntry::new(
+                    operation_id,
+                    AuditFile {
+                        path: source_file.as_ref().to_path_buf(),
+                        hashes: self.hashes.clone(),
+                    },
+                );
+                if let Err(e) = backend.log_audit(&audit_entry) {
+                    log::warn!("Failed to write audit log: {}", e);
+                }
+                Ok(Outcome::Copied)
+            }
             (Err(e), Ok(_)) => {
                 log::warn!(
                     "Storage failed, rolling back metadata for {}",
@@ -161,9 +155,9 @@ impl FileMetadata {
                     relative_path.as_ref().display()
                 );
                 if let Some(old) = old_storage_content {
-                    backend.store_bytes(&self.hashes.md5, &old)?;
+                    backend.store_bytes(&self.hashes, &old)?;
                 } else {
-                    backend.remove(&self.hashes.md5)?;
+                    backend.remove(&self.hashes)?;
                 }
                 bail!("Failed to write metadata file: {dvs_file_path:?}")
             }
@@ -178,9 +172,9 @@ impl FileMetadata {
                     fs::remove_file(&dvs_file_path)?;
                 }
                 if let Some(old) = old_storage_content {
-                    backend.store_bytes(&self.hashes.md5, &old)?;
+                    backend.store_bytes(&self.hashes, &old)?;
                 } else {
-                    backend.remove(&self.hashes.md5)?;
+                    backend.remove(&self.hashes)?;
                 }
                 bail!("Failed to write metadata file: {dvs_file_path:?}: {e}")
             }
@@ -259,13 +253,13 @@ pub fn get_file(
 
     let metadata: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)?;
     log::debug!(
-        "Read metadata for {}: md5 hash={}",
+        "Read metadata for {}: {}",
         relative_path.as_ref().display(),
-        metadata.hashes.md5
+        metadata.hashes
     );
 
-    if !backend.exists(&metadata.hashes.md5)? {
-        bail!("Storage file missing for hash: {}", metadata.hashes.md5);
+    if !backend.exists(&metadata.hashes)? {
+        bail!("Storage file missing for hash: {}", metadata.hashes);
     }
 
     let target_path = paths.file_path(relative_path.as_ref());
@@ -285,11 +279,11 @@ pub fn get_file(
     // Retrieve from backend to target path
     log::debug!(
         "Copying {} from storage to {}",
-        metadata.hashes.md5,
+        metadata.hashes,
         target_path.display()
     );
     backend
-        .retrieve(&metadata.hashes.md5, &target_path)
+        .retrieve(&metadata.hashes, &target_path)
         .with_context(|| format!("Failed to retrieve {}", relative_path.as_ref().display()))?;
     let actual = FileMetadata::from_file(&target_path, None)?;
     if actual.hashes != metadata.hashes {
@@ -337,12 +331,13 @@ pub fn add_files(
             .collect::<Vec<_>>()
     );
     let mut results = Vec::new();
+    let operation_id = Uuid::new_v4();
 
     for relative_path in matched_paths {
         let full_path = paths.file_path(&relative_path);
 
         let metadata = FileMetadata::from_file(&full_path, message.clone())?;
-        let outcome = metadata.save(&full_path, backend, paths, &relative_path)?;
+        let outcome = metadata.save(operation_id, &full_path, backend, paths, &relative_path)?;
         log::info!(
             "Successfully added {} ({:?})",
             relative_path.display(),
@@ -446,13 +441,13 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, None).unwrap();
         let outcome = metadata
-            .save(&file_path, backend, &paths, "data.bin")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
             .unwrap();
 
         assert_eq!(outcome, Outcome::Copied);
         // Metadata file should exist
         assert!(dvs_dir.join("data.bin.dvs").is_file());
-        assert!(backend.exists(&metadata.hashes.md5).unwrap());
+        assert!(backend.exists(&metadata.hashes).unwrap());
     }
 
     #[test]
@@ -465,12 +460,12 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, None).unwrap();
         metadata
-            .save(&file_path, backend, &paths, "data.bin")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
             .unwrap();
 
         // Second save should return Present
         let outcome = metadata
-            .save(&file_path, backend, &paths, "data.bin")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
             .unwrap();
         assert_eq!(outcome, Outcome::Present);
     }
@@ -496,7 +491,7 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, None).unwrap();
         metadata
-            .save(&file_path, backend, &paths, "synced.txt")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "synced.txt")
             .unwrap();
 
         let status = get_file_status(&paths, "synced.txt").unwrap();
@@ -513,7 +508,7 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, None).unwrap();
         metadata
-            .save(&file_path, backend, &paths, "deleted.txt")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "deleted.txt")
             .unwrap();
 
         // Delete the original file
@@ -533,7 +528,7 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, None).unwrap();
         metadata
-            .save(&file_path, backend, &paths, "modified.txt")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "modified.txt")
             .unwrap();
 
         // Modify the file
@@ -553,7 +548,7 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, None).unwrap();
         metadata
-            .save(&file_path, backend, &paths, "retrieve.txt")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "retrieve.txt")
             .unwrap();
 
         // Delete the original file
@@ -577,7 +572,7 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, None).unwrap();
         metadata
-            .save(&file_path, backend, &paths, "present.txt")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "present.txt")
             .unwrap();
 
         // File still exists and matches - should return Present
@@ -608,7 +603,9 @@ mod tests {
         for name in ["a.txt", "b.txt", "subdir/c.txt"] {
             let file_path = create_file(&root, name, name.as_bytes());
             let metadata = FileMetadata::from_file(&file_path, None).unwrap();
-            metadata.save(&file_path, backend, &paths, name).unwrap();
+            metadata
+                .save(Uuid::new_v4(), &file_path, backend, &paths, name)
+                .unwrap();
         }
 
         let statuses = get_status(&paths).unwrap();
@@ -775,13 +772,17 @@ mod tests {
         // Add file A with content "foo" (hash H1)
         let file_a = create_file(&root, "a.txt", b"foo");
         let metadata_a = FileMetadata::from_file(&file_a, None).unwrap();
-        metadata_a.save(&file_a, backend, &paths, "a.txt").unwrap();
+        metadata_a
+            .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt")
+            .unwrap();
         let hash_h1 = metadata_a.hashes.md5.clone();
 
         // Add file B with content "bar" (hash H2)
         let file_b = create_file(&root, "b.txt", b"bar");
         let metadata_b = FileMetadata::from_file(&file_b, None).unwrap();
-        metadata_b.save(&file_b, backend, &paths, "b.txt").unwrap();
+        metadata_b
+            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt")
+            .unwrap();
         let hash_h2 = metadata_b.hashes.md5.clone();
         assert_ne!(hash_h1, hash_h2);
 
@@ -793,7 +794,7 @@ mod tests {
         assert_eq!(metadata_b_new.hashes.md5, hash_h1);
 
         metadata_b_new
-            .save(&file_b, backend, &paths, "b.txt")
+            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt")
             .unwrap();
 
         // Verify metadata was updated
@@ -821,7 +822,7 @@ mod tests {
         let file_path = create_file(&root, "data.txt", b"original content");
         let metadata = FileMetadata::from_file(&file_path, None).unwrap();
         metadata
-            .save(&file_path, backend, &paths, "data.txt")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.txt")
             .unwrap();
 
         // Delete the local file
@@ -830,8 +831,8 @@ mod tests {
         // Corrupt the storage file
         let storage_path = root
             .join(".storage")
-            .join(&metadata.hashes.md5[..2])
-            .join(&metadata.hashes.md5[2..]);
+            .join(&metadata.hashes.blake3[..2])
+            .join(&metadata.hashes.blake3[2..]);
         fs::write(&storage_path, b"corrupted content").unwrap();
 
         // get_file should error on hash mismatch

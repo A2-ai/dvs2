@@ -1,9 +1,9 @@
 ```
 
-rm -rf ../.dvs ../dvs.toml ../.storage && cargo run --features=cli -- init /home/vincent/Code/a2-ai/dvsexperimental/dvs/.storage
-cargo run --features=cli -- add README.md
-cargo run --features=cli -- status
+rm -rf .dvs dvs.toml .storage && cargo run  -- init /home/vincent/Code/a2-ai/dvs2/.storage
+cargo run -- add README.md
+cargo run -- status
 rm README.md
-cargo run --features=cli -- get README.md
-cargo run --features=cli -- status
+cargo run -- get README.md
+cargo run  -- status
 ```

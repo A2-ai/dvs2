@@ -11,3 +11,5 @@ DVS (Data Version System) is a tool for versioning large or sensitive files unde
 - GC?
 - dvs remove?
 - integrity check? would need to read the file again after saving it
+- compression?
+- migrate from dvs1
