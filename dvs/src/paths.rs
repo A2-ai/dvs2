@@ -193,6 +193,7 @@ impl DvsPaths {
 mod tests {
     use super::*;
     use crate::testutil::create_temp_git_repo;
+    use uuid::Uuid;
 
     #[test]
     fn find_repo_root_at_root() {
@@ -263,7 +264,13 @@ mod tests {
         let metadata = crate::FileMetadata::from_file(&file_path, None).unwrap();
         let paths = DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name());
         metadata
-            .save(&file_path, config.backend(), &paths, "data.txt")
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                config.backend(),
+                &paths,
+                "data.txt",
+            )
             .unwrap();
 
         // Also create a regular file in a subdir
