@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::Hashes;
+use anyhow::Result;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -31,4 +32,13 @@ impl AuditEntry {
             file,
         }
     }
+}
+
+pub fn parse_audit_log(bytes: &[u8]) -> Result<Vec<AuditEntry>> {
+    let content = std::str::from_utf8(bytes)?;
+    content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| Ok(serde_json::from_str(line)?))
+        .collect()
 }

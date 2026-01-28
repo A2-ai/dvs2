@@ -200,6 +200,7 @@ impl Backend for LocalBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audit::{AuditEntry, AuditFile, parse_audit_log};
     use crate::hashes::Hashes;
 
     fn test_hash(hash: &str) -> Hashes {
@@ -357,5 +358,53 @@ mod tests {
         let stored = storage.join("ab").join("c123def456789012345678901234ab");
         let mode = fs::metadata(&stored).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o750);
+    }
+
+    #[test]
+    fn log_audit_appends_to_jsonl() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("storage");
+        let backend = LocalBackend::new(&storage, None, None).unwrap();
+        backend.init().unwrap();
+
+        let hash = test_hash("abc123def456789012345678901234ab");
+
+        let entry1 = AuditEntry {
+            operation_id: "op-1".to_string(),
+            timestamp: 1000000000,
+            user: "alice".to_string(),
+            file: AuditFile {
+                path: PathBuf::from("file1.txt"),
+                hashes: hash.clone(),
+            },
+        };
+
+        let entry2 = AuditEntry {
+            operation_id: "op-2".to_string(),
+            timestamp: 2000000000,
+            user: "bob".to_string(),
+            file: AuditFile {
+                path: PathBuf::from("file2.txt"),
+                hashes: hash.clone(),
+            },
+        };
+
+        backend.log_audit(&entry1).unwrap();
+        backend.log_audit(&entry2).unwrap();
+
+        let audit_path = storage.join("audit.log.jsonl");
+        assert!(audit_path.is_file());
+
+        let content = fs::read(&audit_path).unwrap();
+        let entries = parse_audit_log(&content).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        assert_eq!(entries[0].operation_id, "op-1");
+        assert_eq!(entries[0].timestamp, 1000000000);
+        assert_eq!(entries[0].user, "alice");
+
+        assert_eq!(entries[1].operation_id, "op-2");
+        assert_eq!(entries[1].timestamp, 2000000000);
+        assert_eq!(entries[1].user, "bob");
     }
 }
