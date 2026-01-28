@@ -1,12 +1,15 @@
+pub mod audit;
 pub mod backends;
 pub mod config;
 pub mod file;
+mod hashes;
 pub mod init;
 pub mod paths;
 
 pub use backends::Backend;
-pub use file::{AddResult, FileMetadata, FileStatus, GetResult, Hashes, Outcome, Status};
+pub use file::{AddResult, FileMetadata, FileStatus, GetResult, Outcome, Status};
 pub use file::{add_files, get_file, get_file_status, get_files, get_status};
+pub use hashes::{HashAlg, Hashes};
 pub use paths::{DvsPaths, find_repo_root};
 
 #[cfg(test)]
