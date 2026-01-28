@@ -108,7 +108,7 @@ impl LocalBackend {
     fn hash_to_path(&self, hashes: &Hashes) -> Result<PathBuf> {
         let hash = hashes.get_by_alg(self.hash_alg);
         if hash.len() < 3 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
-            bail!("Invalid hash: {}", hash);
+            bail!("Invalid hash: {hash}");
         }
         let (prefix, suffix) = hash.split_at(2);
         Ok(self.path.join(prefix).join(suffix))
@@ -137,7 +137,7 @@ impl Backend for LocalBackend {
 
     fn store_bytes(&self, hash: &Hashes, content: &[u8]) -> Result<()> {
         let path = self.hash_to_path(hash)?;
-        log::debug!("Storing {} bytes to {}", content.len(), path.display());
+        log::debug!("Storing {} bytes to {path:?}", content.len());
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
             self.apply_perms(parent)?;
@@ -167,7 +167,7 @@ impl Backend for LocalBackend {
     fn remove(&self, hash: &Hashes) -> Result<()> {
         let path = self.hash_to_path(hash)?;
         if path.is_file() {
-            log::debug!("Removing {} from storage", hash);
+            log::debug!("Removing {path:?} from storage");
             fs::remove_file(path)?;
         }
         Ok(())
@@ -176,6 +176,7 @@ impl Backend for LocalBackend {
     fn read(&self, hash: &Hashes) -> Result<Option<Vec<u8>>> {
         let path = self.hash_to_path(hash)?;
         if path.is_file() {
+            log::debug!("Reading {path:?} from storage");
             Ok(Some(fs::read(&path)?))
         } else {
             Ok(None)
@@ -183,6 +184,7 @@ impl Backend for LocalBackend {
     }
 
     fn log_audit(&self, entry: &AuditEntry) -> Result<()> {
+        log::debug!("Appending {entry:?} to audit log");
         let audit_path = self.path.join(AUDIT_LOG_FILENAME);
         let mut file = OpenOptions::new()
             .create(true)

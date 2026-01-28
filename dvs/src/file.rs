@@ -133,7 +133,7 @@ impl FileMetadata {
                     },
                 );
                 if let Err(e) = backend.log_audit(&audit_entry) {
-                    log::warn!("Failed to write audit log: {}", e);
+                    log::error!("Failed to write audit log {audit_entry:?}: {e}");
                 }
                 Ok(Outcome::Copied)
             }
