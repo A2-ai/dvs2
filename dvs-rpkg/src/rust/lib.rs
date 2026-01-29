@@ -15,16 +15,6 @@ use dvs::init::init;
 use dvs::paths::{find_repo_root, DvsPaths};
 use dvs::{add_files, get_file, get_file_status, get_files, get_status, AddResult};
 
-/// Initialize a DVS repository with a local backend.
-///
-/// # Arguments
-/// * `directory` - Directory to initialize (must be inside a git repo)
-/// * `storage_path` - Path where file content will be stored
-/// * `permissions` - Optional Unix permissions for storage files (e.g., "755")
-/// * `group` - Optional Unix group for storage files
-///
-/// # Returns
-/// Empty string on success, or error message on failure.
 #[miniextendr]
 pub fn dvs_init(
     #[miniextendr(default = r#"".""#)] directory: &str,
@@ -43,13 +33,6 @@ pub fn dvs_init(
     Ok(List::from_pairs(vec![("status", "initialized")]))
 }
 
-/// Add files matching a glob pattern to DVS.
-///
-/// # Arguments
-/// * `pattern` - Glob pattern to match files (e.g., "*.csv", "data/**/*.parquet")
-/// * `message` - Optional commit message
-///
-///
 #[miniextendr]
 pub fn dvs_add(pattern: &str, message: Option<String>) -> Result<AsSerialize<Vec<AddResult>>> {
     let current_dir = std::env::current_dir()?;
