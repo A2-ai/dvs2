@@ -48,5 +48,5 @@ features = [
     "extra-traits",
 ]
 
-[dev-dependencies.tempfile]
-version = "3.12"
+[dev-dependencies]
+tempfile = "3.12"

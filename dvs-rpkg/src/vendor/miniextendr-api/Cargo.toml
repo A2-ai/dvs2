@@ -216,7 +216,6 @@ version = "0.18.3"
 optional = true
 
 [dependencies.miniextendr-macros]
-path = "../miniextendr-macros"
 version = "*"
 
 [dependencies.nalgebra]

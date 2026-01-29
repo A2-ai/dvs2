@@ -215,15 +215,18 @@ case "$FORCE_VENDOR" in
 esac
 AC_SUBST([FORCE_VENDOR])
 
-dnl MINIEXTENDR_SOURCE_DIR: Optional path to upstream miniextendr repo for staleness detection
-dnl If set, vendoring will re-run when miniextendr sources are newer than vendor stamp
-AC_ARG_VAR([MINIEXTENDR_SOURCE_DIR], [Path to upstream miniextendr repo (optional, for staleness detection)])
-: ${MINIEXTENDR_SOURCE_DIR=""}
-AC_SUBST([MINIEXTENDR_SOURCE_DIR])
-
 dnl Source replacement config for .cargo/config.toml
+dnl This replaces both crates-io and git sources with vendored-sources
 CARGO_SOURCE_REPLACE="$(cat <<EOF
 [source.crates-io]
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/CGMossa/miniextendr"]
+git = "https://github.com/CGMossa/miniextendr"
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/A2-ai/dvs2"]
+git = "https://github.com/A2-ai/dvs2"
 replace-with = "vendored-sources"
 
 [source.vendored-sources]
@@ -364,7 +367,7 @@ AC_CONFIG_COMMANDS([cargo-vendor],
     fi
     echo "configure: CRAN build - using pre-vendored sources"
   else
-    dnl Dev mode - run cargo vendor
+    dnl Dev mode - run cargo vendor to fetch git dependencies and crates.io deps
     MANIFEST="src/rust/Cargo.toml"
     LOCKFILE="src/rust/Cargo.lock"
     STAMP="$VENDOR_OUT/.vendor.lock.cksum"
@@ -381,154 +384,9 @@ AC_CONFIG_COMMANDS([cargo-vendor],
       _need_vendor=1
     fi
 
-    dnl Check if miniextendr sources are newer than vendor stamp (optional)
-    if test $_need_vendor -eq 0 && test -n "$MINIEXTENDR_SOURCE_DIR" && test -d "$MINIEXTENDR_SOURCE_DIR"; then
-      dnl Find the newest .rs file in miniextendr source (try both flat and nested layouts)
-      _mx_newest=""
-      for _mx_name in miniextendr-api miniextendr-macros miniextendr-lint; do
-        _mx_crate="$MINIEXTENDR_SOURCE_DIR/$_mx_name"
-        if test ! -d "$_mx_crate"; then
-          _mx_crate="$MINIEXTENDR_SOURCE_DIR/crates/$_mx_name"
-        fi
-        if test -d "$_mx_crate"; then
-          _crate_newest=$(find "$_mx_crate" -name "*.rs" -type f -newer "$STAMP" 2>/dev/null | head -1)
-          if test -n "$_crate_newest"; then
-            _mx_newest="$_crate_newest"
-            break
-          fi
-        fi
-      done
-      if test -n "$_mx_newest"; then
-        echo "configure: miniextendr source newer than vendor stamp: $_mx_newest"
-        _need_vendor=1
-      fi
-    fi
-
     if test $_need_vendor -eq 1; then
       echo "configure: running cargo vendor"
       mkdir -p "$VENDOR_OUT"
-
-      dnl Temporarily remove .cargo/config.toml to avoid vendor redirect affecting cargo package
-      dnl This is done once for all packaging operations (miniextendr + dvs)
-      _root_cargo_cfg="$abs_rpkg_dir/../.cargo/config.toml"
-      _root_cargo_cfg_bak="$abs_rpkg_dir/../.cargo/config.toml.pkg-bak"
-      if test -f "$_root_cargo_cfg"; then
-        mv "$_root_cargo_cfg" "$_root_cargo_cfg_bak"
-      fi
-
-      dnl Package miniextendr crates from source if MINIEXTENDR_SOURCE_DIR is set
-      dnl Using cargo package resolves workspace metadata and external dependencies automatically
-      dnl We still need to patch inter-crate deps since they're not on crates.io
-      if test -n "$MINIEXTENDR_SOURCE_DIR" && test -d "$MINIEXTENDR_SOURCE_DIR"; then
-        echo "configure: packaging miniextendr crates from $MINIEXTENDR_SOURCE_DIR"
-
-        dnl Get version from miniextendr workspace Cargo.toml
-        _mx_root_toml="$MINIEXTENDR_SOURCE_DIR/Cargo.toml"
-        MX_VERSION=$(grep -A20 'workspace.package' "$_mx_root_toml" | grep '^version' | head -1 | $SED 's/^version *= *"\(.*\)"/\1/' | $SED "s/^version *= *'\\(.*\\)'/\\1/")
-        if test -z "$MX_VERSION"; then
-          MX_VERSION="0.1.0"
-        fi
-
-        dnl Package each crate using -p flag from the workspace directory
-        dnl This picks up the .cargo/config.toml patches in miniextendr
-        _mx_pkg_dir=$(grep 'target-dir' "$MINIEXTENDR_SOURCE_DIR/.cargo/config.toml" 2>/dev/null | $SED 's/.*= *"\(.*\)"/\1/' || echo "$MINIEXTENDR_SOURCE_DIR/target")
-
-        for _mx_crate in miniextendr-api miniextendr-macros miniextendr-lint; do
-          _mx_dst="$VENDOR_OUT/$_mx_crate"
-          rm -rf "$_mx_dst"
-
-          dnl Run cargo package from the miniextendr workspace directory
-          (cd "$MINIEXTENDR_SOURCE_DIR" && $CARGO_CMD package --allow-dirty --no-verify -p "$_mx_crate") 2>/dev/null
-          if test $? -ne 0; then
-            echo "configure: error: cargo package failed for $_mx_crate" >&2
-            exit 1
-          fi
-
-          dnl Extract the .crate file into vendor directory
-          _crate_file="$_mx_pkg_dir/package/${_mx_crate}-$MX_VERSION.crate"
-          if test -f "$_crate_file"; then
-            tar -xzf "$_crate_file" -C "$VENDOR_OUT"
-            mv "$VENDOR_OUT/${_mx_crate}-$MX_VERSION" "$_mx_dst"
-            rm -rf "$_mx_dst/tests"
-            echo '{"files":{}}' > "$_mx_dst/.cargo-checksum.json"
-            echo "configure:   packaged $_mx_crate v$MX_VERSION"
-          else
-            echo "configure: warning: expected crate file not found: $_crate_file" >&2
-          fi
-        done
-
-        dnl Patch inter-crate dependencies to use path references
-        dnl (cargo package converts workspace deps to version = "*" for unpublished crates)
-        echo "configure: patching miniextendr inter-crate dependencies"
-        for _mx_crate in miniextendr-api miniextendr-macros miniextendr-lint; do
-          _toml="$VENDOR_OUT/$_mx_crate/Cargo.toml"
-          if test -f "$_toml"; then
-            dnl Add path = after each miniextendr dependency section header
-            $SED -i.bak \
-              -e '/dependencies\.miniextendr-macros/a\
-path = "../miniextendr-macros"' \
-              -e '/dependencies\.miniextendr-lint/a\
-path = "../miniextendr-lint"' \
-              -e '/dependencies\.miniextendr-api/a\
-path = "../miniextendr-api"' \
-              "$_toml"
-            rm -f "${_toml}.bak"
-          fi
-        done
-      fi
-
-      dnl Package and extract dvs from parent directory (it's a path dependency, not on crates.io)
-      dnl Using cargo package resolves all workspace dependencies automatically
-      dnl This must happen BEFORE cargo vendor since dvs is referenced in Cargo.toml
-      _dvs_core_src="$abs_rpkg_dir/../dvs"
-      _dvs_core_dst="$VENDOR_OUT/dvs"
-      if test -d "$_dvs_core_src"; then
-        echo "configure: packaging dvs from $_dvs_core_src"
-        dnl Remove any existing dvs in vendor (will be recreated by extraction)
-        rm -rf "$_dvs_core_dst"
-
-        dnl Get version from workspace Cargo.toml for the .crate filename
-        _workspace_toml="$abs_rpkg_dir/../Cargo.toml"
-        DVS_VERSION=$(grep -A20 'workspace.package' "$_workspace_toml" | grep '^version' | head -1 | $SED 's/^version *= *"\(.*\)"/\1/' | $SED "s/^version *= *'\\(.*\\)'/\\1/")
-        if test -z "$DVS_VERSION"; then
-          DVS_VERSION="0.1.0"
-        fi
-
-        dnl Run cargo package to create a distributable crate with resolved dependencies
-        dnl --allow-dirty: allow uncommitted changes
-        dnl --no-verify: skip build verification (we'll build during R package install)
-        _pkg_target_dir="$abs_rpkg_dir/../target"
-
-        $CARGO_CMD package --allow-dirty --no-verify --manifest-path "$_dvs_core_src/Cargo.toml" 2>/dev/null
-        _pkg_status=$?
-
-        if test $_pkg_status -ne 0; then
-          echo "configure: error: cargo package failed for dvs" >&2
-          exit 1
-        fi
-
-        dnl Extract the .crate file into vendor directory
-        _crate_file="$_pkg_target_dir/package/dvs-$DVS_VERSION.crate"
-        if test -f "$_crate_file"; then
-          dnl Extract and rename to just "dvs"
-          tar -xzf "$_crate_file" -C "$VENDOR_OUT"
-          mv "$VENDOR_OUT/dvs-$DVS_VERSION" "$_dvs_core_dst"
-          dnl Remove tests directory to reduce size
-          rm -rf "$_dvs_core_dst/tests"
-          echo '{"files":{}}' > "$_dvs_core_dst/.cargo-checksum.json"
-          echo "configure:   packaged and extracted dvs v$DVS_VERSION"
-        else
-          echo "configure: error: expected crate file not found: $_crate_file" >&2
-          exit 1
-        fi
-      else
-        echo "configure: warning: dvs not found at $_dvs_core_src" >&2
-      fi
-
-      dnl Restore root .cargo/config.toml after all packaging operations
-      if test -f "$_root_cargo_cfg_bak"; then
-        mv "$_root_cargo_cfg_bak" "$_root_cargo_cfg"
-      fi
 
       dnl Temporarily move .cargo/config.toml to avoid circular vendored-sources reference
       _cargo_cfg="src/rust/.cargo/config.toml"
@@ -537,14 +395,8 @@ path = "../miniextendr-api"' \
         mv "$_cargo_cfg" "$_cargo_cfg_bak"
       fi
 
-      dnl Use --locked if Cargo.lock exists to respect existing dependency versions
-      _vendor_locked_flag=""
-      if test -f "$LOCKFILE" && test -n "$CARGO_LOCKED_FLAG"; then
-        _vendor_locked_flag="$CARGO_LOCKED_FLAG"
-      fi
-      $CARGO_CMD vendor $_vendor_locked_flag \
-        --manifest-path "$MANIFEST" \
-        "$VENDOR_OUT" > /dev/null
+      dnl cargo vendor fetches all dependencies (git and crates.io) and vendors them
+      $CARGO_CMD vendor --manifest-path "$MANIFEST" "$VENDOR_OUT" > /dev/null
       _vendor_status=$?
 
       dnl Restore cargo config
@@ -561,8 +413,21 @@ path = "../miniextendr-api"' \
     dnl Generate Cargo.lock if missing
     if test ! -f "$LOCKFILE"; then
       echo "configure: generating Cargo.lock"
+      dnl Need to temporarily remove config again for lockfile generation
+      _cargo_cfg="src/rust/.cargo/config.toml"
+      _cargo_cfg_bak="src/rust/.cargo/config.toml.bak"
+      if test -f "$_cargo_cfg"; then
+        mv "$_cargo_cfg" "$_cargo_cfg_bak"
+      fi
+
       $CARGO_CMD generate-lockfile --manifest-path "$MANIFEST"
-      if test $? -ne 0; then
+      _lock_status=$?
+
+      if test -f "$_cargo_cfg_bak"; then
+        mv "$_cargo_cfg_bak" "$_cargo_cfg"
+      fi
+
+      if test $_lock_status -ne 0; then
         echo "configure: error: cargo generate-lockfile failed" >&2
         exit 1
       fi
@@ -572,13 +437,10 @@ path = "../miniextendr-api"' \
     _new="$(cksum < "$LOCKFILE" | cut -d' ' -f1,2 | tr ' ' ':')"
     echo "$_new" > "$STAMP"
 
-    dnl Keep vendor checksums for dev builds - they match Cargo.lock and enable --locked
-    dnl Checksums are cleared only in the tarball compression step (for CRAN compatibility)
-
     echo "configure: vendor complete"
   fi
 ],
-[CARGO_CMD="$CARGO_CMD" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" FORCE_VENDOR="$FORCE_VENDOR" MINIEXTENDR_SOURCE_DIR="$MINIEXTENDR_SOURCE_DIR" CARGO_LOCKED_FLAG="$CARGO_LOCKED_FLAG"])
+[CARGO_CMD="$CARGO_CMD" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" FORCE_VENDOR="$FORCE_VENDOR" SED="$SED"])
 
 dnl 4) Compress vendor directory for CRAN tarballs
 AC_CONFIG_COMMANDS([compress-vendor],
@@ -591,35 +453,13 @@ AC_CONFIG_COMMANDS([compress-vendor],
     VENDOR_TARBALL="$abs_rpkg_dir/inst/vendor.tar.xz"
     VENDOR_STAMP="$abs_rpkg_dir/inst/.vendor.tar.xz.cksum"
 
-    dnl Calculate fingerprint: Cargo.lock + miniextendr source checksums + dvs checksum
+    dnl Calculate fingerprint from Cargo.lock
     _lock_ck=""
     if test -f "src/rust/Cargo.lock"; then
       _lock_ck="$(cksum < "src/rust/Cargo.lock" | cut -d' ' -f1,2 | tr ' ' ':')"
     fi
 
-    dnl Add miniextendr crate checksums if source available
-    _mx_ck=""
-    if test -n "$MINIEXTENDR_SOURCE_DIR" && test -d "$MINIEXTENDR_SOURCE_DIR"; then
-      for _mx_crate in miniextendr-api miniextendr-macros miniextendr-lint; do
-        _mx_src="$MINIEXTENDR_SOURCE_DIR/$_mx_crate"
-        if test ! -d "$_mx_src"; then
-          _mx_src="$MINIEXTENDR_SOURCE_DIR/crates/$_mx_crate"
-        fi
-        if test -d "$_mx_src"; then
-          _crate_ck=$(find "$_mx_src" -name "*.rs" -type f -exec cksum {} \; 2>/dev/null | cksum | cut -d' ' -f1)
-          _mx_ck="${_mx_ck}:${_crate_ck}"
-        fi
-      done
-    fi
-
-    dnl Add dvs checksum if source available
-    _dvs_core_ck=""
-    _dvs_core_src="$abs_rpkg_dir/../dvs"
-    if test -d "$_dvs_core_src"; then
-      _dvs_core_ck=$(find "$_dvs_core_src" \( -name "*.rs" -o -name "Cargo.toml" \) -type f -exec cksum {} \; 2>/dev/null | cksum | cut -d' ' -f1)
-    fi
-
-    _new_fingerprint="lock:$_lock_ck:mx:$_mx_ck:dvs:$_dvs_core_ck"
+    _new_fingerprint="lock:$_lock_ck"
     _old_fingerprint="$(cat "$VENDOR_STAMP" 2>/dev/null || true)"
 
     _need_compress=0
@@ -672,6 +512,6 @@ AC_CONFIG_COMMANDS([compress-vendor],
     fi
   fi
 ],
-[NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" MINIEXTENDR_SOURCE_DIR="$MINIEXTENDR_SOURCE_DIR" RSYNC="$RSYNC"])
+[NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir"])
 
 AC_OUTPUT

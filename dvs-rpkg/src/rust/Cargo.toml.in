@@ -22,10 +22,19 @@ nonapi = ["miniextendr-api/nonapi"]
 connections = ["miniextendr-api/connections"]
 
 [dependencies]
-miniextendr-api = { path = "../vendor/miniextendr-api" }
-dvs = { path = "../vendor/dvs" }
+miniextendr-api = { git = "https://github.com/CGMossa/miniextendr" }
+dvs = { git = "https://github.com/A2-ai/dvs2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [build-dependencies]
-miniextendr-lint = { path = "../vendor/miniextendr-lint" }
+miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr" }
+
+# Patch crates.io dependencies to use git sources
+# This is needed because miniextendr crates depend on each other via workspace deps
+# which resolve to version = "*" and can't be found on crates.io
+[patch.crates-io]
+miniextendr-api = { git = "https://github.com/CGMossa/miniextendr" }
+miniextendr-macros = { git = "https://github.com/CGMossa/miniextendr" }
+miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr" }
+dvs = { git = "https://github.com/A2-ai/dvs2" }
