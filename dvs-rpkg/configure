@@ -2442,7 +2442,10 @@ CARGO_TARGET_DIR_CARGO="$abs_rpkg_src_cargo/rust/target"
 : ${CARGO_PROFILE="release"}
 
 
-CARGO_STATICLIB_NAME="dvs"
+CARGO_STATICLIB_NAME="$($SED -n 's/^name = "\(.*\)"/\1/p' "$RUST_SRC_DIR/Cargo.toml.in" | head -1 | tr '-' '_')"
+if test -z "$CARGO_STATICLIB_NAME"; then
+  as_fn_error $? "Could not extract crate name from $RUST_SRC_DIR/Cargo.toml.in" "$LINENO" 5
+fi
 
 
 
@@ -2570,9 +2573,6 @@ ac_config_commands="$ac_config_commands cargo-vendor"
 
 
 ac_config_commands="$ac_config_commands compress-vendor"
-
-
-ac_config_commands="$ac_config_commands patch-staticlib-name"
 
 
 cat >confcache <<\_ACEOF
@@ -3279,7 +3279,6 @@ NOT_CRAN="$NOT_CRAN" abs_rpkg_dir="$abs_top_srcdir"
 CARGO_CMD="$CARGO_CMD" CARGO_OFFLINE_FLAG="$CARGO_OFFLINE_FLAG" SED="$SED"
 CARGO_CMD="$CARGO_CMD" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" FORCE_VENDOR="$FORCE_VENDOR" MINIEXTENDR_SOURCE_DIR="$MINIEXTENDR_SOURCE_DIR" CARGO_LOCKED_FLAG="$CARGO_LOCKED_FLAG"
 NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" MINIEXTENDR_SOURCE_DIR="$MINIEXTENDR_SOURCE_DIR" RSYNC="$RSYNC"
-CARGO_CMD="$CARGO_CMD" NOT_CRAN="$NOT_CRAN" SED="$SED" CARGO_STATICLIB_NAME="$CARGO_STATICLIB_NAME"
 
 _ACEOF
 
@@ -3300,7 +3299,6 @@ do
     "cargo-lockfile-compat") CONFIG_COMMANDS="$CONFIG_COMMANDS cargo-lockfile-compat" ;;
     "cargo-vendor") CONFIG_COMMANDS="$CONFIG_COMMANDS cargo-vendor" ;;
     "compress-vendor") CONFIG_COMMANDS="$CONFIG_COMMANDS compress-vendor" ;;
-    "patch-staticlib-name") CONFIG_COMMANDS="$CONFIG_COMMANDS patch-staticlib-name" ;;
 
   *) as_fn_error $? "invalid argument: '$ac_config_target'" "$LINENO" 5;;
   esac
@@ -4091,31 +4089,6 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
       echo "configure: skipping vendor compression (unchanged)"
     fi
   fi
- ;;
-    "patch-staticlib-name":C)
-  if test "$NOT_CRAN" = "true"; then
-    _pkgid_flags="--color=never"
-  else
-    _pkgid_flags="--offline --color=never"
-  fi
-  _pkgid_output="$( $CARGO_CMD pkgid $_pkgid_flags --manifest-path src/rust/Cargo.toml 2>/dev/null )"
-  _pkgid_status=$?
-  if test $_pkgid_status -ne 0; then
-        REAL_STATICLIB_NAME="$($SED -n 's/^name = "\(.*\)"/\1/p' src/rust/Cargo.toml | head -1 | tr '-' '_')"
-  else
-    REAL_STATICLIB_NAME="$(echo "$_pkgid_output" | "$SED" 's/.*#\([^@]*\)@.*/\1/' | tr '-' '_')"
-  fi
-  if test -z "$REAL_STATICLIB_NAME"; then
-    echo "configure: warning: Could not extract package name, using default: $CARGO_STATICLIB_NAME" >&2
-    REAL_STATICLIB_NAME="$CARGO_STATICLIB_NAME"
-  fi
-  echo "configure: CARGO_STATICLIB_NAME = $REAL_STATICLIB_NAME"
-
-    for f in src/Makevars src/rust/document.rs; do
-    if test -f "$f"; then
-      "$SED" "s/__CARGO_STATICLIB_NAME_PLACEHOLDER__/$REAL_STATICLIB_NAME/g" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-    fi
-  done
  ;;
 
   esac

@@ -136,8 +136,11 @@ AC_ARG_VAR([CARGO_PROFILE], [Cargo build profile (debug or release)])
 : ${CARGO_PROFILE="release"}
 AC_SUBST([CARGO_PROFILE])
 
-dnl Static library name - will be set after reading Cargo.toml
-CARGO_STATICLIB_NAME="dvs"
+dnl Static library name - extract from Cargo.toml.in and convert hyphens to underscores
+CARGO_STATICLIB_NAME="$($SED -n 's/^name = "\(.*\)"/\1/p' "$RUST_SRC_DIR/Cargo.toml.in" | head -1 | tr '-' '_')"
+if test -z "$CARGO_STATICLIB_NAME"; then
+  AC_MSG_ERROR([Could not extract crate name from $RUST_SRC_DIR/Cargo.toml.in])
+fi
 AC_SUBST([CARGO_STATICLIB_NAME])
 
 AC_ARG_VAR([ENV_RUSTFLAGS], [Rust compiler flags passed as RUSTFLAGS])
@@ -688,36 +691,5 @@ AC_CONFIG_COMMANDS([compress-vendor],
   fi
 ],
 [NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" MINIEXTENDR_SOURCE_DIR="$MINIEXTENDR_SOURCE_DIR" RSYNC="$RSYNC"])
-
-dnl 5) Extract CARGO_STATICLIB_NAME from generated Cargo.toml
-AC_CONFIG_COMMANDS([patch-staticlib-name],
-[
-  if test "$NOT_CRAN" = "true"; then
-    _pkgid_flags="--color=never"
-  else
-    _pkgid_flags="--offline --color=never"
-  fi
-  _pkgid_output="$( $CARGO_CMD pkgid $_pkgid_flags --manifest-path src/rust/Cargo.toml 2>/dev/null )"
-  _pkgid_status=$?
-  if test $_pkgid_status -ne 0; then
-    dnl Fallback: extract from Cargo.toml directly
-    REAL_STATICLIB_NAME="$($SED -n 's/^name = "\(.*\)"/\1/p' src/rust/Cargo.toml | head -1 | tr '-' '_')"
-  else
-    REAL_STATICLIB_NAME="$(echo "$_pkgid_output" | "$SED" 's/.*#\([^@]*\)@.*/\1/' | tr '-' '_')"
-  fi
-  if test -z "$REAL_STATICLIB_NAME"; then
-    echo "configure: warning: Could not extract package name, using default: $CARGO_STATICLIB_NAME" >&2
-    REAL_STATICLIB_NAME="$CARGO_STATICLIB_NAME"
-  fi
-  echo "configure: CARGO_STATICLIB_NAME = $REAL_STATICLIB_NAME"
-
-  dnl Patch generated files
-  for f in src/Makevars src/rust/document.rs; do
-    if test -f "$f"; then
-      "$SED" "s/__CARGO_STATICLIB_NAME_PLACEHOLDER__/$REAL_STATICLIB_NAME/g" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-    fi
-  done
-],
-[CARGO_CMD="$CARGO_CMD" NOT_CRAN="$NOT_CRAN" SED="$SED" CARGO_STATICLIB_NAME="$CARGO_STATICLIB_NAME"])
 
 AC_OUTPUT
