@@ -7,7 +7,7 @@ use serde::Deserialize;
 use walkdir::WalkDir;
 
 use crate::FileMetadata;
-use crate::config::Config;
+use crate::config::{Backend, Config};
 use crate::hashes::Hashes;
 use crate::paths::DEFAULT_METADATA_FOLDER_NAME;
 
@@ -85,6 +85,7 @@ pub fn migrate(root: impl AsRef<Path>) -> Result<usize> {
     let old_config: V1Config = serde_yaml::from_str(&yaml_content)?;
     let storage_dir = old_config.storage_dir.clone();
     let new_config = old_config.migrate()?;
+    let Backend::Local(ref backend) = new_config.backend;
 
     // Collect files to write and delete
     let mut files_to_write: Vec<(PathBuf, String)> = vec![];
@@ -139,18 +140,31 @@ pub fn migrate(root: impl AsRef<Path>) -> Result<usize> {
 
     let migrated_count = files_to_write.len() - 1; // -1 for config file
 
-    // 4. Write all new files
+    // 4. Write all new files and apply permissions
     let mut written: Vec<PathBuf> = vec![];
+    let mut dirs_created: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for (path, content) in &files_to_write {
         if let Some(parent) = path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
                 delete_files(&written);
                 return Err(e.into());
             }
+            if dirs_created.insert(parent.to_path_buf()) {
+                if let Err(e) = backend.apply_perms(parent) {
+                    delete_files(&written);
+                    return Err(e);
+                }
+            }
         }
         if let Err(e) = fs::write(path, content) {
             delete_files(&written);
             return Err(e.into());
+        }
+        if path.extension().is_some_and(|ext| ext == "dvs") {
+            if let Err(e) = backend.apply_perms(path) {
+                delete_files(&written);
+                return Err(e);
+            }
         }
         written.push(path.clone());
     }
