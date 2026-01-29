@@ -13,10 +13,8 @@ use anyhow::{anyhow, Result};
 // Re-export dvs types for internal use
 use dvs::config::Config;
 use dvs::init::init;
-use dvs::paths::{find_repo_root, DvsPaths};
-use dvs::{
-    add_files, get_file, get_file_status, get_files, get_status, AddResult, FileStatus, GetResult,
-};
+use dvs::paths::DvsPaths;
+use dvs::{add_files, get_files, get_status, AddResult, FileStatus, GetResult};
 
 #[miniextendr]
 pub fn dvs_init(
