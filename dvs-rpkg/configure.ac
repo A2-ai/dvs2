@@ -360,12 +360,15 @@ AC_CONFIG_COMMANDS([cargo-vendor],
           echo "configure: removed --locked from Makevars.win for tarball compatibility"
         fi
       else
-        echo "configure: error: CRAN/offline build but vendor directory is missing: $VENDOR_OUT" >&2
-        echo "configure:        Run configure with NOT_CRAN=true first, or use a release tarball." >&2
-        exit 1
+        dnl No vendor directory and no tarball - fall through to vendor from network
+        echo "configure: no cached vendors found, will fetch from network"
+        _use_prevendored=0
       fi
     fi
-    echo "configure: CRAN build - using pre-vendored sources"
+  fi
+
+  if test $_use_prevendored -eq 1; then
+    echo "configure: using pre-vendored sources"
   else
     dnl Dev mode - run cargo vendor to fetch git dependencies and crates.io deps
     MANIFEST="src/rust/Cargo.toml"

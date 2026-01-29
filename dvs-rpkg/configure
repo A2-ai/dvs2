@@ -3800,12 +3800,14 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
           echo "configure: removed --locked from Makevars.win for tarball compatibility"
         fi
       else
-        echo "configure: error: CRAN/offline build but vendor directory is missing: $VENDOR_OUT" >&2
-        echo "configure:        Run configure with NOT_CRAN=true first, or use a release tarball." >&2
-        exit 1
+                echo "configure: no cached vendors found, will fetch from network"
+        _use_prevendored=0
       fi
     fi
-    echo "configure: CRAN build - using pre-vendored sources"
+  fi
+
+  if test $_use_prevendored -eq 1; then
+    echo "configure: using pre-vendored sources"
   else
         MANIFEST="src/rust/Cargo.toml"
     LOCKFILE="src/rust/Cargo.lock"
