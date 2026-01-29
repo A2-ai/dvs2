@@ -1,7 +1,3 @@
-// Allow deprecated varargs syntax in macro_coverage.rs test module
-// This lint is triggered even with function-level #[allow] when -D warnings is set
-#![allow(varargs_without_pattern)]
-
 //! miniextendr-api: core runtime for Rust <-> R interop.
 //!
 //! This crate provides the FFI surface, safety wrappers, and macro re-exports

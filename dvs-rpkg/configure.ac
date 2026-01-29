@@ -408,7 +408,17 @@ AC_CONFIG_COMMANDS([cargo-vendor],
       echo "configure: running cargo vendor"
       mkdir -p "$VENDOR_OUT"
 
+      dnl Temporarily remove .cargo/config.toml to avoid vendor redirect affecting cargo package
+      dnl This is done once for all packaging operations (miniextendr + dvs)
+      _root_cargo_cfg="$abs_rpkg_dir/../.cargo/config.toml"
+      _root_cargo_cfg_bak="$abs_rpkg_dir/../.cargo/config.toml.pkg-bak"
+      if test -f "$_root_cargo_cfg"; then
+        mv "$_root_cargo_cfg" "$_root_cargo_cfg_bak"
+      fi
+
       dnl Copy miniextendr crates from source if MINIEXTENDR_SOURCE_DIR is set
+      dnl Note: miniextendr crates depend on each other and aren't on crates.io,
+      dnl so we can't use cargo package like we do for dvs. We copy and patch instead.
       if test -n "$MINIEXTENDR_SOURCE_DIR" && test -d "$MINIEXTENDR_SOURCE_DIR"; then
         echo "configure: copying miniextendr crates from $MINIEXTENDR_SOURCE_DIR"
 
@@ -468,84 +478,66 @@ AC_CONFIG_COMMANDS([cargo-vendor],
               "$_toml"
             dnl Handle features arrays separately (brackets need special handling)
             $SED -i.bak \
-              -e 's/proc-macro2 = { workspace = true }/proc-macro2 = { version = "1.0", features = LBRACKET"span-locations"RBRACKET }/' \
+              -e 's/proc-macro2 = { workspace = true }/proc-macro2 = { version = "1.0", features = @<:@"span-locations"@:>@ }/' \
               -e 's/quote = { workspace = true }/quote = "1.0"/' \
-              -e 's/syn = { workspace = true }/syn = { version = "2.0", features = LBRACKET"full", "extra-traits"RBRACKET }/' \
+              -e 's/syn = { workspace = true }/syn = { version = "2.0", features = @<:@"full", "extra-traits"@:>@ }/' \
               "$_toml"
-            dnl Replace LBRACKET/RBRACKET placeholders with actual brackets
-            dnl Use @<:@ and @:>@ which are autoconf's escaped [ and ]
-            $SED -i.bak -e 's/LBRACKET/@<:@/g' -e 's/RBRACKET/@:>@/g' "$_toml"
             rm -f "${_toml}.bak"
           fi
         done
       fi
 
-      dnl Copy dvs from parent directory (it's a path dependency, not on crates.io)
+      dnl Package and extract dvs from parent directory (it's a path dependency, not on crates.io)
+      dnl Using cargo package resolves all workspace dependencies automatically
       dnl This must happen BEFORE cargo vendor since dvs is referenced in Cargo.toml
       _dvs_core_src="$abs_rpkg_dir/../dvs"
       _dvs_core_dst="$VENDOR_OUT/dvs"
       if test -d "$_dvs_core_src"; then
-        echo "configure: copying dvs from $_dvs_core_src"
+        echo "configure: packaging dvs from $_dvs_core_src"
+        dnl Remove any existing dvs in vendor (will be recreated by extraction)
         rm -rf "$_dvs_core_dst"
-        mkdir -p "$_dvs_core_dst"
-        dnl Use rsync to copy, excluding tests/benches/examples
-        $RSYNC -a --exclude='/tests' --exclude='/benches' --exclude='/examples' "$_dvs_core_src/" "$_dvs_core_dst/"
 
-        dnl Extract workspace values from monorepo root Cargo.toml
+        dnl Get version from workspace Cargo.toml for the .crate filename
         _workspace_toml="$abs_rpkg_dir/../Cargo.toml"
-        if test -f "$_workspace_toml"; then
-          DVS_WS_VERSION=$(grep -A20 'workspace.package' "$_workspace_toml" | grep '^version' | head -1 | $SED 's/^version *= *"\(.*\)"/\1/' | $SED "s/^version *= *'\\(.*\\)'/\\1/")
-          DVS_WS_EDITION=$(grep -A20 'workspace.package' "$_workspace_toml" | grep '^edition' | head -1 | $SED 's/^edition *= *"\(.*\)"/\1/' | $SED "s/^edition *= *'\\(.*\\)'/\\1/")
-          DVS_WS_RUSTVERSION=$(grep -A20 'workspace.package' "$_workspace_toml" | grep '^rust-version' | head -1 | $SED 's/^rust-version *= *"\(.*\)"/\1/' | $SED "s/^rust-version *= *'\\(.*\\)'/\\1/")
-          DVS_WS_LICENSE=$(grep -A20 'workspace.package' "$_workspace_toml" | grep '^license' | head -1 | $SED 's/^license *= *"\(.*\)"/\1/' | $SED "s/^license *= *'\\(.*\\)'/\\1/")
-          echo "configure:   extracted dvs workspace values: version=$DVS_WS_VERSION edition=$DVS_WS_EDITION rust-version=$DVS_WS_RUSTVERSION"
+        DVS_VERSION=$(grep -A20 'workspace.package' "$_workspace_toml" | grep '^version' | head -1 | $SED 's/^version *= *"\(.*\)"/\1/' | $SED "s/^version *= *'\\(.*\\)'/\\1/")
+        if test -z "$DVS_VERSION"; then
+          DVS_VERSION="0.1.0"
+        fi
+
+        dnl Run cargo package to create a distributable crate with resolved dependencies
+        dnl --allow-dirty: allow uncommitted changes
+        dnl --no-verify: skip build verification (we'll build during R package install)
+        _pkg_target_dir="$abs_rpkg_dir/../target"
+
+        $CARGO_CMD package --allow-dirty --no-verify --manifest-path "$_dvs_core_src/Cargo.toml" 2>/dev/null
+        _pkg_status=$?
+
+        if test $_pkg_status -ne 0; then
+          echo "configure: error: cargo package failed for dvs" >&2
+          exit 1
+        fi
+
+        dnl Extract the .crate file into vendor directory
+        _crate_file="$_pkg_target_dir/package/dvs-$DVS_VERSION.crate"
+        if test -f "$_crate_file"; then
+          dnl Extract and rename to just "dvs"
+          tar -xzf "$_crate_file" -C "$VENDOR_OUT"
+          mv "$VENDOR_OUT/dvs-$DVS_VERSION" "$_dvs_core_dst"
+          dnl Remove tests directory to reduce size
+          rm -rf "$_dvs_core_dst/tests"
+          echo '{"files":{}}' > "$_dvs_core_dst/.cargo-checksum.json"
+          echo "configure:   packaged and extracted dvs v$DVS_VERSION"
         else
-          dnl Fallback to defaults if workspace Cargo.toml not found
-          DVS_WS_VERSION="0.0.0-9000"
-          DVS_WS_EDITION="2021"
-          DVS_WS_RUSTVERSION="1.86"
-          DVS_WS_LICENSE="MIT"
-          echo "configure:   warning: workspace Cargo.toml not found, using defaults" >&2
+          echo "configure: error: expected crate file not found: $_crate_file" >&2
+          exit 1
         fi
-
-        dnl Patch dvs Cargo.toml to remove workspace inheritance
-        _dvs_toml="$_dvs_core_dst/Cargo.toml"
-        if test -f "$_dvs_toml"; then
-          echo "configure: patching dvs Cargo.toml (removing workspace inheritance)"
-          $SED -i.bak \
-            -e "s/^version\.workspace = true$/version = \"$DVS_WS_VERSION\"/" \
-            -e "s/^edition\.workspace = true$/edition = \"$DVS_WS_EDITION\"/" \
-            -e "s/^rust-version\.workspace = true$/rust-version = \"$DVS_WS_RUSTVERSION\"/" \
-            -e "s/^license\.workspace = true$/license = \"$DVS_WS_LICENSE\"/" \
-            -e "s/^authors\.workspace = true$/authors = @<:@@:>@/" \
-            -e '/^description\.workspace = true$/d' \
-            -e '/^publish\.workspace = true$/d' \
-            -e "s/^publish = true$/publish = false/" \
-            "$_dvs_toml"
-
-          dnl Patch workspace dependency references with hardcoded versions
-          dnl Note: Versions are taken from workspace Cargo.toml at time of writing
-          $SED -i.bak \
-            -e 's/serde = { workspace = true, optional = true }/serde = { version = "1", features = @<:@"derive"@:>@, optional = true }/' \
-            -e 's/serde_yaml = { workspace = true, optional = true }/serde_yaml = { version = "0.9", optional = true }/' \
-            -e 's/serde_json = { workspace = true, optional = true }/serde_json = { version = "1", optional = true }/' \
-            -e 's/toml = { workspace = true, optional = true }/toml = { version = "0.9", optional = true }/' \
-            -e 's/memmap2 = { workspace = true, optional = true }/memmap2 = { version = "0.9", optional = true }/' \
-            -e 's/blake3 = { workspace = true, optional = true }/blake3 = { version = "1.8", features = @<:@"rayon"@:>@, optional = true }/' \
-            -e 's/xxhash-rust = { workspace = true, optional = true }/xxhash-rust = { version = "0.8", features = @<:@"xxh3"@:>@, optional = true }/' \
-            -e 's/sha2 = { workspace = true, optional = true }/sha2 = { version = "0.10", optional = true }/' \
-            -e 's/fs-err\.workspace = true/fs-err = "3"/' \
-            -e 's/walkdir = { workspace = true, optional = true }/walkdir = { version = "2.5", optional = true }/' \
-            -e 's/glob\.workspace = true/glob = "0.3"/' \
-            -e 's/jiff\.workspace = true/jiff = { version = "0.2", features = @<:@"serde"@:>@ }/' \
-            "$_dvs_toml"
-
-          rm -f "${_dvs_toml}.bak"
-        fi
-        echo '{"files":{}}' > "$_dvs_core_dst/.cargo-checksum.json"
-        echo "configure:   copied and patched dvs"
       else
         echo "configure: warning: dvs not found at $_dvs_core_src" >&2
+      fi
+
+      dnl Restore root .cargo/config.toml after all packaging operations
+      if test -f "$_root_cargo_cfg_bak"; then
+        mv "$_root_cargo_cfg_bak" "$_root_cargo_cfg"
       fi
 
       dnl Temporarily move .cargo/config.toml to avoid circular vendored-sources reference
