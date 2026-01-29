@@ -23,6 +23,10 @@ src/vendor/
 inst/vendor.tar.xz
 inst/.vendor.tar.xz.cksum
 
+# Intermediary files from configure.ac
+src/.vendor-tarball-staging/
+src/.unpacked-from-tarball
+
 # History files
 .Rhistory
 .Rapp.history
