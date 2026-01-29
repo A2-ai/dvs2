@@ -18,23 +18,24 @@ use dvs::{add_files, get_files, get_status, AddResult, FileStatus, GetResult};
 
 #[miniextendr]
 pub fn dvs_init(
-    #[miniextendr(default = r#"".""#)] directory: &str,
+    #[miniextendr(default = r#"".""#)] directory: PathBuf,
     #[miniextendr(default = "NULL")] permissions: Option<String>,
     #[miniextendr(default = "NULL")] group: Option<String>,
-    #[miniextendr(default = "NULL")] metadata_folder_name: Option<PathBuf>,
+    #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
 ) -> Result<List> {
-    let mut config = Config::new_local(directory, permissions, group)?;
+    let mut config = Config::new_local(&directory, permissions, group)?;
 
     if let Some(m) = metadata_folder_name {
         config.set_metadata_folder_name(m);
     }
-    init(directory, config)?;
+    init(&directory, config)?;
 
     r_println!("DVS Initialized");
     Ok(List::from_pairs(vec![("status", "initialized")]))
 }
 
 #[miniextendr]
+// TODO: should message be allowed to be _missing_?
 pub fn dvs_add(pattern: &str, message: Option<String>) -> Result<AsSerialize<Vec<AddResult>>> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
