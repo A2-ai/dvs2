@@ -23,7 +23,7 @@ pub fn dvs_init(
     #[miniextendr(default = r#"".""#)] directory: PathBuf,
     #[miniextendr(default = "NULL")] permissions: Option<String>,
     #[miniextendr(default = "NULL")] group: Option<String>,
-    #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
+    #[miniextendr(default = "NULL")] metadata_folder_name: Option<PathBuf>,
 ) -> Result<List> {
     let mut config = Config::new_local(&directory, permissions, group)?;
 
