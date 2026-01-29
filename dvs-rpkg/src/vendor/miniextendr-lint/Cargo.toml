@@ -1,0 +1,15 @@
+[package]
+name = "miniextendr-lint"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Internal build-time linter for miniextendr (not published to crates.io)"
+publish = false
+
+[dependencies]
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+
+[dev-dependencies]
+tempfile = "3.12"

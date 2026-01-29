@@ -1,0 +1,29 @@
+[package]
+name = "dvs"
+version = "0.1.0"
+authors = []
+license = "MIT"
+edition = "2024"
+rust-version = "1.85"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+toml.workspace = true
+fs-err = "2"
+log.workspace = true
+
+blake3.workspace = true
+globset.workspace = true
+walkdir.workspace = true
+md5.workspace = true
+jiff = { version = "0.2", features = ["serde"] }
+anyhow.workspace = true
+whoami.workspace = true
+uuid = { version = "1.20.0", features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["user", "fs"] }
+
+[dev-dependencies]
+tempfile = "3.24.0"
