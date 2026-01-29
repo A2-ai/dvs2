@@ -1,0 +1,40 @@
+^LICENSE\.md$
+^\.github$
+^\.vscode$
+^src/rust/target$
+^src/rust/\.cargo$
+^src/vendor$
+^\.cargo$
+^autom4te\.cache$
+^config\.log$
+^config\.status$
+^src/.*\.o$
+^src/.*\.so$
+^src/.*\.dll$
+^dev$
+^src/rust/ra_target$
+^configure~$
+^src/miniextendr_wrappers\.R$
+^bootstrap\.R$
+^\.gitignore$
+^\.DS_Store$
+\.Rcheck$
+^inst/\.vendor\.tar\.xz\.cksum$
+
+# Vendored crate metadata (causes R CMD check NOTEs/ERRORs)
+\.cargo-checksum\.json$
+\.cargo_vcs_info\.json$
+^src/vendor/.*\.github$
+^src/vendor/.*\.editorconfig$
+^src/vendor/.*\.git-blame-ignore-revs$
+^src/vendor/.*\.release-plz\.toml$
+^src/vendor/.*\.rustfmt\.toml$
+^src/vendor/.*\.travis\.yml$
+\.vendor\.lock\.cksum$
+
+# Static libraries in vendored crates
+^src/vendor/.*\.a$
+^src/vendor/.*\.lib$
+
+# Vendored Makefiles with GNU extensions
+^src/vendor/r-efi/Makefile$
