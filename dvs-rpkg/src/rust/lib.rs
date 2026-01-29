@@ -13,8 +13,8 @@ use anyhow::{anyhow, Result};
 // Re-export dvs types for internal use
 use dvs::config::Config;
 use dvs::init::init;
-use dvs::paths::DvsPaths;
-use dvs::{add_files, get_files, get_status, AddResult, FileStatus, GetResult};
+use dvs::paths::{find_repo_root, DvsPaths};
+use dvs::{add_files, get_file, get_file_status, get_files, get_status, AddResult, FileStatus};
 
 #[miniextendr]
 pub fn dvs_init(
@@ -56,21 +56,9 @@ pub fn dvs_status() -> Result<AsSerialize<Vec<FileStatus>>> {
     Ok(statuses.into())
 }
 
-#[miniextendr]
-pub fn dvs_get(pattern: &str) -> Result<AsSerialize<Vec<GetResult>>> {
-    let current_dir = std::env::current_dir()?;
-
-    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-    let paths = DvsPaths::from_cwd(&config)?;
-
-    let results = get_files(pattern, &paths, config.backend())?;
-    Ok(results.into())
-}
-
 miniextendr_module! {
     mod dvs;
     fn dvs_init;
     fn dvs_add;
     fn dvs_status;
-    fn dvs_get;
 }
