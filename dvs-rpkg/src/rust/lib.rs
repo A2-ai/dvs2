@@ -3,8 +3,10 @@
 //! This crate provides R bindings for the DVS (Data Version Control System).
 //! Results are returned as JSON strings for efficient parsing in R.
 
-use miniextendr_api::{miniextendr, miniextendr_module};
+use miniextendr_api::{miniextendr, miniextendr_module, r_println, List};
 use std::path::PathBuf;
+
+use anyhow::{anyhow, Result};
 
 // Re-export dvs types for internal use
 use dvs::config::Config;
@@ -24,20 +26,20 @@ use dvs::{add_files, get_file, get_file_status, get_files, get_status};
 /// Empty string on success, or error message on failure.
 #[miniextendr]
 pub fn dvs_init(
-    directory: &str,
-    storage_path: &str,
-    permissions: Option<String>,
-    group: Option<String>,
-) -> String {
-    let config = match Config::new_local(storage_path, permissions, group) {
-        Ok(c) => c,
-        Err(e) => return format!("{{\"error\": \"{}\"}}", escape_json(&e.to_string())),
-    };
+    #[miniextendr(default = r#"".""#)] directory: &str,
+    #[miniextendr(default = "NULL")] permissions: Option<String>,
+    #[miniextendr(default = "NULL")] group: Option<String>,
+    #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
+) -> Result<List> {
+    let mut config = Config::new_local(directory, permissions, group)?;
 
-    match init(directory, config) {
-        Ok(()) => "{}".to_string(),
-        Err(e) => format!("{{\"error\": \"{}\"}}", escape_json(&e.to_string())),
+    if let Some(m) = metadata_folder_name {
+        config.set_metadata_folder_name(m);
     }
+    init(directory, config)?;
+
+    r_println("DVS Initialized");
+    Ok(List::from_pairs(vec![("status", "initialized")]))
 }
 
 /// Find DVS configuration from a directory.

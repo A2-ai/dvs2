@@ -4,13 +4,12 @@
 # Sys.setenv(R_PACKAGE_DIR = pkgdir)
 # Sys.setenv(R_LIBRARY_DIR = dirname(pkgdir))
 
-# Only clean when on CRAN or during R CMD check
+# Only clean generated files when on CRAN or during R CMD check
+# Note: target directories are NOT cleaned - they're gitignored and
+# removing them breaks incremental compilation
 if [ "$NOT_CRAN" != "true" ]; then
   rm -f  src/Makevars
-  rm -rf src/rust/target
-  rm -rf src/rust/ra_target
   rm -rf src/rust/.cargo
-  rm     src/rust/Cargo.toml
   rm -rf src/rust/document.rs
   rm -rf src/entrypoint.c
   rm -f src/*-wrappers.R
