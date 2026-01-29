@@ -3912,10 +3912,10 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
         done
       fi
 
-                  _dvs_core_src="$abs_rpkg_dir/../dvs-core"
-      _dvs_core_dst="$VENDOR_OUT/dvs-core"
+                  _dvs_core_src="$abs_rpkg_dir/../dvs"
+      _dvs_core_dst="$VENDOR_OUT/dvs"
       if test -d "$_dvs_core_src"; then
-        echo "configure: copying dvs-core from $_dvs_core_src"
+        echo "configure: copying dvs from $_dvs_core_src"
         rm -rf "$_dvs_core_dst"
         mkdir -p "$_dvs_core_dst"
                 $RSYNC -a --exclude='/tests' --exclude='/benches' --exclude='/examples' "$_dvs_core_src/" "$_dvs_core_dst/"
@@ -3937,7 +3937,7 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
 
                 _dvs_toml="$_dvs_core_dst/Cargo.toml"
         if test -f "$_dvs_toml"; then
-          echo "configure: patching dvs-core Cargo.toml (removing workspace inheritance)"
+          echo "configure: patching dvs Cargo.toml (removing workspace inheritance)"
           $SED -i.bak \
             -e "s/^version\.workspace = true$/version = \"$DVS_WS_VERSION\"/" \
             -e "s/^edition\.workspace = true$/edition = \"$DVS_WS_EDITION\"/" \
@@ -3967,9 +3967,9 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
           rm -f "${_dvs_toml}.bak"
         fi
         echo '{"files":{}}' > "$_dvs_core_dst/.cargo-checksum.json"
-        echo "configure:   copied and patched dvs-core"
+        echo "configure:   copied and patched dvs"
       else
-        echo "configure: warning: dvs-core not found at $_dvs_core_src" >&2
+        echo "configure: warning: dvs not found at $_dvs_core_src" >&2
       fi
 
             _cargo_cfg="src/rust/.cargo/config.toml"
@@ -4041,7 +4041,7 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
     fi
 
         _dvs_core_ck=""
-    _dvs_core_src="$abs_rpkg_dir/../dvs-core"
+    _dvs_core_src="$abs_rpkg_dir/../dvs"
     if test -d "$_dvs_core_src"; then
       _dvs_core_ck=$(find "$_dvs_core_src" \( -name "*.rs" -o -name "Cargo.toml" \) -type f -exec cksum {} \; 2>/dev/null | cksum | cut -d' ' -f1)
     fi

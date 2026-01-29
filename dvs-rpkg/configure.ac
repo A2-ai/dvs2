@@ -477,12 +477,12 @@ AC_CONFIG_COMMANDS([cargo-vendor],
         done
       fi
 
-      dnl Copy dvs-core from parent directory (it's a path dependency, not on crates.io)
-      dnl This must happen BEFORE cargo vendor since dvs-core is referenced in Cargo.toml
-      _dvs_core_src="$abs_rpkg_dir/../dvs-core"
-      _dvs_core_dst="$VENDOR_OUT/dvs-core"
+      dnl Copy dvs from parent directory (it's a path dependency, not on crates.io)
+      dnl This must happen BEFORE cargo vendor since dvs is referenced in Cargo.toml
+      _dvs_core_src="$abs_rpkg_dir/../dvs"
+      _dvs_core_dst="$VENDOR_OUT/dvs"
       if test -d "$_dvs_core_src"; then
-        echo "configure: copying dvs-core from $_dvs_core_src"
+        echo "configure: copying dvs from $_dvs_core_src"
         rm -rf "$_dvs_core_dst"
         mkdir -p "$_dvs_core_dst"
         dnl Use rsync to copy, excluding tests/benches/examples
@@ -505,10 +505,10 @@ AC_CONFIG_COMMANDS([cargo-vendor],
           echo "configure:   warning: workspace Cargo.toml not found, using defaults" >&2
         fi
 
-        dnl Patch dvs-core Cargo.toml to remove workspace inheritance
+        dnl Patch dvs Cargo.toml to remove workspace inheritance
         _dvs_toml="$_dvs_core_dst/Cargo.toml"
         if test -f "$_dvs_toml"; then
-          echo "configure: patching dvs-core Cargo.toml (removing workspace inheritance)"
+          echo "configure: patching dvs Cargo.toml (removing workspace inheritance)"
           $SED -i.bak \
             -e "s/^version\.workspace = true$/version = \"$DVS_WS_VERSION\"/" \
             -e "s/^edition\.workspace = true$/edition = \"$DVS_WS_EDITION\"/" \
@@ -540,9 +540,9 @@ AC_CONFIG_COMMANDS([cargo-vendor],
           rm -f "${_dvs_toml}.bak"
         fi
         echo '{"files":{}}' > "$_dvs_core_dst/.cargo-checksum.json"
-        echo "configure:   copied and patched dvs-core"
+        echo "configure:   copied and patched dvs"
       else
-        echo "configure: warning: dvs-core not found at $_dvs_core_src" >&2
+        echo "configure: warning: dvs not found at $_dvs_core_src" >&2
       fi
 
       dnl Temporarily move .cargo/config.toml to avoid circular vendored-sources reference
@@ -606,7 +606,7 @@ AC_CONFIG_COMMANDS([compress-vendor],
     VENDOR_TARBALL="$abs_rpkg_dir/inst/vendor.tar.xz"
     VENDOR_STAMP="$abs_rpkg_dir/inst/.vendor.tar.xz.cksum"
 
-    dnl Calculate fingerprint: Cargo.lock + miniextendr source checksums + dvs-core checksum
+    dnl Calculate fingerprint: Cargo.lock + miniextendr source checksums + dvs checksum
     _lock_ck=""
     if test -f "src/rust/Cargo.lock"; then
       _lock_ck="$(cksum < "src/rust/Cargo.lock" | cut -d' ' -f1,2 | tr ' ' ':')"
@@ -627,9 +627,9 @@ AC_CONFIG_COMMANDS([compress-vendor],
       done
     fi
 
-    dnl Add dvs-core checksum if source available
+    dnl Add dvs checksum if source available
     _dvs_core_ck=""
-    _dvs_core_src="$abs_rpkg_dir/../dvs-core"
+    _dvs_core_src="$abs_rpkg_dir/../dvs"
     if test -d "$_dvs_core_src"; then
       _dvs_core_ck=$(find "$_dvs_core_src" \( -name "*.rs" -o -name "Cargo.toml" \) -type f -exec cksum {} \; 2>/dev/null | cksum | cut -d' ' -f1)
     fi

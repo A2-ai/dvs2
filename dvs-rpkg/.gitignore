@@ -23,7 +23,7 @@ src/vendor/*
 !src/vendor/miniextendr-api/
 !src/vendor/miniextendr-macros/
 !src/vendor/miniextendr-lint/
-!src/vendor/dvs-core/
+!src/vendor/dvs/
 !src/vendor/.vendor.lock.cksum
 
 # History files
