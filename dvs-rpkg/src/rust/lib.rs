@@ -13,7 +13,7 @@ use anyhow::{anyhow, Result};
 use dvs::config::Config;
 use dvs::init::init;
 use dvs::paths::{find_repo_root, DvsPaths};
-use dvs::{add_files, get_file, get_file_status, get_files, get_status, AddResult};
+use dvs::{add_files, get_file, get_file_status, get_files, get_status, AddResult, FileStatus};
 
 #[miniextendr]
 pub fn dvs_init(
@@ -42,8 +42,21 @@ pub fn dvs_add(pattern: &str, message: Option<String>) -> Result<AsSerialize<Vec
     Ok(add_files(pattern, &paths, config.backend(), message)?.into())
 }
 
+#[miniextendr]
+pub fn dvs_status() -> Result<AsSerialize<Vec<FileStatus>>> {
+    let current_dir = std::env::current_dir()?;
+
+    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+    let paths = DvsPaths::from_cwd(&config)?;
+
+    let statuses = get_status(&paths)?;
+
+    Ok(statuses.into())
+}
+
 miniextendr_module! {
     mod dvs;
     fn dvs_init;
     fn dvs_add;
+    fn dvs_status;
 }

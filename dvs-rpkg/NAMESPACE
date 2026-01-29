@@ -2,4 +2,5 @@
 
 export(dvs_add)
 export(dvs_init)
+export(dvs_status)
 useDynLib(dvs, .registration = TRUE)
