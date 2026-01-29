@@ -10,7 +10,7 @@ rust-version = "1.85"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 toml.workspace = true
-fs-err = "2"
+fs-err = "3"
 log.workspace = true
 
 blake3.workspace = true

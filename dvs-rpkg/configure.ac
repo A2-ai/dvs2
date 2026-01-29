@@ -534,7 +534,7 @@ AC_CONFIG_COMMANDS([cargo-vendor],
             -e 's/blake3 = { workspace = true, optional = true }/blake3 = { version = "1.8", features = @<:@"rayon"@:>@, optional = true }/' \
             -e 's/xxhash-rust = { workspace = true, optional = true }/xxhash-rust = { version = "0.8", features = @<:@"xxh3"@:>@, optional = true }/' \
             -e 's/sha2 = { workspace = true, optional = true }/sha2 = { version = "0.10", optional = true }/' \
-            -e 's/fs-err\.workspace = true/fs-err = "2"/' \
+            -e 's/fs-err\.workspace = true/fs-err = "3"/' \
             -e 's/walkdir = { workspace = true, optional = true }/walkdir = { version = "2.5", optional = true }/' \
             -e 's/glob\.workspace = true/glob = "0.3"/' \
             -e 's/jiff\.workspace = true/jiff = { version = "0.2", features = @<:@"serde"@:>@ }/' \
