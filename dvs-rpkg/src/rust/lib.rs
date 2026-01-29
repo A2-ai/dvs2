@@ -3,9 +3,10 @@
 //! This crate provides R bindings for the DVS (Data Version Control System).
 //! Results are returned as JSON strings for efficient parsing in R.
 
+use std::path::PathBuf;
+
 use miniextendr_api::serde::AsSerialize;
 use miniextendr_api::{miniextendr, miniextendr_module, r_println, List};
-use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 
@@ -22,7 +23,7 @@ pub fn dvs_init(
     #[miniextendr(default = r#"".""#)] directory: &str,
     #[miniextendr(default = "NULL")] permissions: Option<String>,
     #[miniextendr(default = "NULL")] group: Option<String>,
-    #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
+    #[miniextendr(default = "NULL")] metadata_folder_name: Option<PathBuf>,
 ) -> Result<List> {
     let mut config = Config::new_local(directory, permissions, group)?;
 
