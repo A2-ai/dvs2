@@ -3856,59 +3856,49 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
       fi
 
                         if test -n "$MINIEXTENDR_SOURCE_DIR" && test -d "$MINIEXTENDR_SOURCE_DIR"; then
-        echo "configure: copying miniextendr crates from $MINIEXTENDR_SOURCE_DIR"
+        echo "configure: packaging miniextendr crates from $MINIEXTENDR_SOURCE_DIR"
 
                 _mx_root_toml="$MINIEXTENDR_SOURCE_DIR/Cargo.toml"
-        if test -f "$_mx_root_toml"; then
-          WORKSPACE_VERSION=$(grep -A20 'workspace.package' "$_mx_root_toml" | grep '^version' | head -1 | $SED 's/^version *= *"\(.*\)"/\1/' | $SED "s/^version *= *'\\(.*\\)'/\\1/")
-          WORKSPACE_EDITION=$(grep -A20 'workspace.package' "$_mx_root_toml" | grep '^edition' | head -1 | $SED 's/^edition *= *"\(.*\)"/\1/' | $SED "s/^edition *= *'\\(.*\\)'/\\1/")
-          WORKSPACE_LICENSE=$(grep -A20 'workspace.package' "$_mx_root_toml" | grep '^license' | head -1 | $SED 's/^license *= *"\(.*\)"/\1/' | $SED "s/^license *= *'\\(.*\\)'/\\1/")
-          echo "configure:   extracted workspace values: version=$WORKSPACE_VERSION edition=$WORKSPACE_EDITION license=$WORKSPACE_LICENSE"
-        else
-                    WORKSPACE_VERSION="0.1.0"
-          WORKSPACE_EDITION="2024"
-          WORKSPACE_LICENSE="MIT"
-          echo "configure:   warning: miniextendr root Cargo.toml not found, using defaults" >&2
+        MX_VERSION=$(grep -A20 'workspace.package' "$_mx_root_toml" | grep '^version' | head -1 | $SED 's/^version *= *"\(.*\)"/\1/' | $SED "s/^version *= *'\\(.*\\)'/\\1/")
+        if test -z "$MX_VERSION"; then
+          MX_VERSION="0.1.0"
         fi
 
+                        _mx_pkg_dir=$(grep 'target-dir' "$MINIEXTENDR_SOURCE_DIR/.cargo/config.toml" 2>/dev/null | $SED 's/.*= *"\(.*\)"/\1/' || echo "$MINIEXTENDR_SOURCE_DIR/target")
+
         for _mx_crate in miniextendr-api miniextendr-macros miniextendr-lint; do
-                    _mx_src="$MINIEXTENDR_SOURCE_DIR/$_mx_crate"
-          if test ! -d "$_mx_src"; then
-            _mx_src="$MINIEXTENDR_SOURCE_DIR/crates/$_mx_crate"
-          fi
           _mx_dst="$VENDOR_OUT/$_mx_crate"
-          if test -d "$_mx_src"; then
-            rm -rf "$_mx_dst"
-            mkdir -p "$_mx_dst"
-                        $RSYNC -a --exclude='/tests' --exclude='/benches' --exclude='/examples' "$_mx_src/" "$_mx_dst/"
-                        echo '{"files":{}}' > "$_mx_dst/.cargo-checksum.json"
-            echo "configure:   copied $_mx_crate"
+          rm -rf "$_mx_dst"
+
+                    (cd "$MINIEXTENDR_SOURCE_DIR" && $CARGO_CMD package --allow-dirty --no-verify -p "$_mx_crate") 2>/dev/null
+          if test $? -ne 0; then
+            echo "configure: error: cargo package failed for $_mx_crate" >&2
+            exit 1
+          fi
+
+                    _crate_file="$_mx_pkg_dir/package/${_mx_crate}-$MX_VERSION.crate"
+          if test -f "$_crate_file"; then
+            tar -xzf "$_crate_file" -C "$VENDOR_OUT"
+            mv "$VENDOR_OUT/${_mx_crate}-$MX_VERSION" "$_mx_dst"
+            rm -rf "$_mx_dst/tests"
+            echo '{"files":{}}' > "$_mx_dst/.cargo-checksum.json"
+            echo "configure:   packaged $_mx_crate v$MX_VERSION"
           else
-            echo "configure: warning: $_mx_crate not found in $MINIEXTENDR_SOURCE_DIR" >&2
+            echo "configure: warning: expected crate file not found: $_crate_file" >&2
           fi
         done
 
-                echo "configure: patching miniextendr Cargo.toml files"
+                        echo "configure: patching miniextendr inter-crate dependencies"
         for _mx_crate in miniextendr-api miniextendr-macros miniextendr-lint; do
           _toml="$VENDOR_OUT/$_mx_crate/Cargo.toml"
           if test -f "$_toml"; then
                         $SED -i.bak \
-              -e "s/^version\.workspace = true$/version = \"$WORKSPACE_VERSION\"/" \
-              -e "s/^edition\.workspace = true$/edition = \"$WORKSPACE_EDITION\"/" \
-              -e "s/^license\.workspace = true$/license = \"$WORKSPACE_LICENSE\"/" \
-              -e '/^repository\.workspace = true$/d' \
-              -e '/^homepage\.workspace = true$/d' \
-              -e '/^keywords\.workspace = true$/d' \
-              -e '/^categories\.workspace = true$/d' \
-              -e 's/miniextendr-macros = { workspace = true }/miniextendr-macros = { path = "..\/miniextendr-macros" }/' \
-              -e 's/miniextendr-engine = { workspace = true }/miniextendr-engine = { path = "..\/miniextendr-engine" }/' \
-              -e 's/miniextendr-lint = { workspace = true }/miniextendr-lint = { path = "..\/miniextendr-lint" }/' \
-              -e 's/miniextendr-api = { workspace = true }/miniextendr-api = { path = "..\/miniextendr-api" }/' \
-              "$_toml"
-                        $SED -i.bak \
-              -e 's/proc-macro2 = { workspace = true }/proc-macro2 = { version = "1.0", features = ["span-locations"] }/' \
-              -e 's/quote = { workspace = true }/quote = "1.0"/' \
-              -e 's/syn = { workspace = true }/syn = { version = "2.0", features = ["full", "extra-traits"] }/' \
+              -e '/dependencies\.miniextendr-macros/a\
+path = "../miniextendr-macros"' \
+              -e '/dependencies\.miniextendr-lint/a\
+path = "../miniextendr-lint"' \
+              -e '/dependencies\.miniextendr-api/a\
+path = "../miniextendr-api"' \
               "$_toml"
             rm -f "${_toml}.bak"
           fi
