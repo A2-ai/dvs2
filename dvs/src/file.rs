@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::audit::{AuditEntry, AuditFile};
 use crate::backends::Backend;
 use crate::hashes::Hashes;
-use crate::paths::DvsPaths;
+use crate::paths::{DvsPaths, PathInput};
 use anyhow::{Context, Result, bail};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
@@ -312,24 +312,17 @@ pub struct GetResult {
 /// The pattern is matched against files relative to cwd.
 /// Files are stored with paths relative to repo_root.
 pub fn add_files(
-    pattern: &str,
+    input: impl Into<PathInput>,
     paths: &DvsPaths,
     backend: &dyn Backend,
     message: Option<String>,
 ) -> Result<Vec<AddResult>> {
-    log::debug!("Adding files matching pattern: {}", pattern);
-    let matched_paths = paths.expand_glob(pattern)?;
+    let input = input.into();
+    let matched_paths = paths.resolve_for_add(&input)?;
     if matched_paths.is_empty() {
-        bail!("No files match pattern: {}", pattern);
+        bail!("No files match: {input:?}");
     }
-    log::debug!(
-        "Pattern '{}' matched {:?}",
-        pattern,
-        matched_paths
-            .iter()
-            .map(|p| p.display())
-            .collect::<Vec<_>>()
-    );
+
     let mut results = Vec::new();
     let operation_id = Uuid::new_v4();
 
@@ -356,21 +349,17 @@ pub fn add_files(
 ///
 /// The pattern is matched against tracked files (paths in metadata folder).
 /// The pattern is adjusted based on cwd relative to repo root.
-pub fn get_files(pattern: &str, paths: &DvsPaths, backend: &dyn Backend) -> Result<Vec<GetResult>> {
-    log::debug!("Getting files matching pattern: {}", pattern);
-    let matched_paths = paths.expand_glob_tracked(pattern)?;
+pub fn get_files(
+    input: impl Into<PathInput>,
+    paths: &DvsPaths,
+    backend: &dyn Backend,
+) -> Result<Vec<GetResult>> {
+    let input = input.into();
+    let matched_paths = paths.resolve_tracked(&input)?;
     if matched_paths.is_empty() {
-        bail!("No tracked files match pattern: {}", pattern);
+        bail!("No tracked files match: {input:?}");
     }
 
-    log::debug!(
-        "Pattern '{}' matched {:?}",
-        pattern,
-        matched_paths
-            .iter()
-            .map(|p| p.display())
-            .collect::<Vec<_>>()
-    );
     let mut results = Vec::new();
 
     for relative_path in matched_paths {
@@ -755,6 +744,67 @@ mod tests {
                 .to_string()
                 .contains("No tracked files match")
         );
+    }
+
+    fn run_add_get_roundtrip(
+        add_input: impl Into<PathInput>,
+        get_input: impl Into<PathInput>,
+        expected_files: &[&str],
+    ) {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+
+        create_file(&root, "a.txt", b"a");
+        create_file(&root, "b.txt", b"b");
+        create_file(&root, "c.csv", b"c");
+
+        // Add files
+        let results = add_files(add_input, &paths, backend, None).unwrap();
+        assert_eq!(results.len(), expected_files.len());
+        for result in &results {
+            assert_eq!(result.outcome, Outcome::Copied);
+        }
+
+        // Verify correct files are tracked
+        let statuses = get_status(&paths).unwrap();
+        assert_eq!(statuses.len(), expected_files.len());
+        let tracked_names: Vec<_> = statuses.iter().map(|s| s.path.to_str().unwrap()).collect();
+        for expected in expected_files {
+            assert!(
+                tracked_names.contains(expected),
+                "Expected {expected} to be tracked"
+            );
+        }
+
+        // Delete tracked files
+        for name in expected_files {
+            fs::remove_file(root.join(name)).unwrap();
+        }
+
+        // Get files back
+        let results = get_files(get_input, &paths, backend).unwrap();
+        assert_eq!(results.len(), expected_files.len());
+        for result in &results {
+            assert_eq!(result.outcome, Outcome::Copied);
+        }
+
+        // Verify files restored
+        for name in expected_files {
+            assert!(root.join(name).exists(), "Expected {name} to be restored");
+        }
+    }
+
+    #[test]
+    fn add_get_roundtrip_with_glob() {
+        run_add_get_roundtrip("*.txt", "*.*", &["a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn add_get_roundtrip_with_explicit_paths() {
+        let paths: Vec<PathBuf> = vec!["a.txt".into(), "c.csv".into()];
+        run_add_get_roundtrip(paths.clone(), paths, &["a.txt", "c.csv"]);
     }
 
     #[test]
