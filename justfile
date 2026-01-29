@@ -1,6 +1,6 @@
 # https://just.systems
 
-rpkg_dir := "dvsR"
+rpkg_dir := "dvs-rpkg"
 rpkg_manifest := rpkg_dir / "src/rust/Cargo.toml"
 
 default:
@@ -45,6 +45,10 @@ install-cli *args:
 
 rpkg-configure:
     cd {{quote(rpkg_dir)}} && NOT_CRAN=true ./configure
+
+# Re-vendor dependencies from git (miniextendr + dvs)
+rpkg-vendor:
+    cd {{quote(rpkg_dir)}} && NOT_CRAN=true FORCE_VENDOR=true ./configure
 
 rpkg-build *args:
     cargo build --manifest-path={{quote(rpkg_manifest)}} {{args}}

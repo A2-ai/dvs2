@@ -1,56 +1,42 @@
 {
-    // Rust-analyzer configuration for monorepo with R package
-    "rust-analyzer.linkedProjects": [
-        // Main workspace (dvs-core, dvs-cli, dvs-testkit)
-        "Cargo.toml",
-        // R package's standalone Rust crate (NOT part of main workspace)
-        "dvsR/src/rust/Cargo.toml"
-    ],
-
-    "rust-analyzer.cargo.features": "all",
-
-    // Exclude R package's vendored crates from analysis
-    "rust-analyzer.files.exclude": [
-        "dvsR/src/vendor",
-        "dvsR/src/rust/target"
-    ],
-
-    // R package Rust code needs special handling for generated files
-    "rust-analyzer.cargo.extraEnv": {
-        "CARGO_TARGET_DIR": "target"
-    },
-
-    // Check on save configuration
-    "rust-analyzer.check.command": "clippy",
-    "rust-analyzer.check.extraArgs": ["--", "-W", "clippy::all"],
-
-    // Format on save
-    "[rust]": {
-        "editor.formatOnSave": true,
-        "editor.defaultFormatter": "rust-lang.rust-analyzer"
-    },
-
-    // File associations
-    "files.associations": {
-        "*.in": "plaintext",
-        "Cargo.toml.in": "toml",
-        "configure.ac": "autoconf"
-    },
-
-    // Exclude build artifacts from search
-    "files.exclude": {
-        "**/target": true,
-        // "**/dvsR/src/vendor": true,
-        "**/autom4te.cache": true,
-        "**/*.o": true,
-        "**/*.so": true,
-        "**/*.a": true
-    },
-
-    // Search exclusions
-    "search.exclude": {
-        "**/target": true,
-        "**/dvsR/src/vendor": true,
-        "**/Cargo.lock": true
-    }
+  "rust-analyzer.linkedProjects": [
+    "Cargo.toml",
+    "dvs-rpkg/src/rust/Cargo.toml"
+  ],
+  "rust-analyzer.cargo.features": "all",
+  "rust-analyzer.files.exclude": [
+    "dvs-rpkg/src/vendor",
+    "dvs-rpkg/src/rust/target"
+  ],
+  "rust-analyzer.cargo.extraEnv": {
+    "CARGO_TARGET_DIR": "target"
+  },
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.check.extraArgs": [
+    "--",
+    "-W",
+    "clippy::all"
+  ],
+  "[rust]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+  },
+  "files.associations": {
+    "*.in": "plaintext",
+    "Cargo.toml.in": "toml",
+    "configure.ac": "autoconf"
+  },
+  "files.exclude": {
+    "**/target": true,
+    "**/autom4te.cache": true,
+    "**/*.o": true,
+    "**/*.so": true,
+    "**/*.a": true
+  },
+  "search.exclude": {
+    "**/target": true,
+    "**/dvs-rpkg/src/vendor": true,
+    "**/Cargo.lock": true
+  },
+  "C_Cpp_Runner.msvcBatchPath": ""
 }
