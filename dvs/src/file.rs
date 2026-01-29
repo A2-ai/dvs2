@@ -1,3 +1,4 @@
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use crate::audit::{AuditEntry, AuditFile};
@@ -56,9 +57,9 @@ impl FileMetadata {
             bail!("Path {} is not a file", path.as_ref().display());
         }
 
-        let content = fs::read(path.as_ref())?;
-        let size = content.len() as u64;
-        let hashes = Hashes::from(content);
+        let file = fs::File::open(path.as_ref())?;
+        let size = file.metadata()?.len();
+        let hashes = Hashes::from_reader(BufReader::new(file))?;
         let created_by = whoami::username()?;
         let add_time = jiff::Zoned::now().to_string();
 

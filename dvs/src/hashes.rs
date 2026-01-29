@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+use std::io::BufRead;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
@@ -17,19 +18,28 @@ pub struct Hashes {
     pub md5: String,
 }
 
-impl From<Vec<u8>> for Hashes {
-    fn from(bytes: Vec<u8>) -> Self {
-        let blake3_hash = format!("{}", blake3::hash(&bytes));
-        let md5_hash = format!("{:x}", md5::compute(&bytes));
-
-        Self {
-            blake3: blake3_hash,
-            md5: md5_hash,
-        }
-    }
-}
-
 impl Hashes {
+    pub fn from_reader<R: BufRead>(mut reader: R) -> std::io::Result<Self> {
+        let mut blake3_hasher = blake3::Hasher::new();
+        let mut md5_context = md5::Context::new();
+
+        loop {
+            let buf = reader.fill_buf()?;
+            if buf.is_empty() {
+                break;
+            }
+            blake3_hasher.update(buf);
+            md5_context.consume(buf);
+            let len = buf.len();
+            reader.consume(len);
+        }
+
+        Ok(Self {
+            blake3: blake3_hasher.finalize().to_string(),
+            md5: format!("{:x}", md5_context.finalize()),
+        })
+    }
+
     pub fn get_by_alg(&self, alg: HashAlg) -> &str {
         match alg {
             HashAlg::Blake3 => &self.blake3,

@@ -7,7 +7,7 @@ use globset::Glob;
 use walkdir::WalkDir;
 
 pub const CONFIG_FILE_NAME: &str = "dvs.toml";
-pub const DEFAULT_FOLDER_NAME: &str = ".dvs";
+pub const DEFAULT_METADATA_FOLDER_NAME: &str = ".dvs";
 
 /// We can pass either a glob or a list of paths to dvs to handle.
 /// This enum is here to auto-convert properly
