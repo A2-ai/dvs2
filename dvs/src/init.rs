@@ -6,15 +6,18 @@ use fs_err as fs;
 use crate::config::Config;
 use crate::paths::find_repo_root;
 
-pub fn init(directory: impl AsRef<Path>, config: Config) -> Result<()> {
-    if Config::find(&directory).is_some() {
+/// Starts a new dvs project.
+/// We need a ready to use Config object + the current directory the user is in
+/// The library handles finding where to create the config file and metadata folder
+pub fn init(current_dir: impl AsRef<Path>, config: Config) -> Result<()> {
+    if Config::find(&current_dir).is_some() {
         bail!(
             "Configuration already exists in {}",
-            directory.as_ref().display()
+            current_dir.as_ref().display()
         );
     }
     let repo_root =
-        find_repo_root(&directory).ok_or_else(|| anyhow!("Cannot find repository root"))?;
+        find_repo_root(&current_dir).ok_or_else(|| anyhow!("Cannot find repository root"))?;
     config.save(&repo_root)?;
     log::debug!(
         "Creating metadata folder: {}",

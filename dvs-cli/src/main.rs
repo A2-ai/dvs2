@@ -11,8 +11,13 @@ use dvs::paths::DvsPaths;
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Starts a new dvs project.
+    /// This will create a `dvs.toml` file in the root folder of where the user is calling the CLI
+    /// from. root folder being the place where we find a `.git` folder
     Init {
+        /// Where the data will be stored
         path: PathBuf,
+        /// If you want to use a folder name other than `.dvs` for sotring the metadata files
         #[clap(long)]
         metadata_folder_name: Option<String>,
         /// Unix permissions for storage directory and files (octal, e.g., "770")
@@ -22,13 +27,16 @@ pub enum Command {
         #[clap(long)]
         group: Option<String>,
     },
+    /// Adds the given files to dvs. You can use a glob or paths
     Add {
         #[clap(required = true)]
         paths: Vec<PathBuf>,
         #[clap(long)]
         message: Option<String>,
     },
+    /// Gets the status of each files in the current repository
     Status,
+    /// Retrieves the given files from dvs storage. You can use a glob or paths
     Get {
         #[clap(required = true)]
         paths: Vec<PathBuf>,

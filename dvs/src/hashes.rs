@@ -8,6 +8,9 @@ pub enum HashAlg {
     Md5,
 }
 
+/// By default, blake3 is used locally but for example AWS/Azure automatically computes
+/// MD5 so it makes sense to use MD5 for those.
+/// We compute both so we can easily switch backends if needed.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct Hashes {
     pub blake3: String,
