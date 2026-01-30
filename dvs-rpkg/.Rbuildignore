@@ -17,6 +17,7 @@
 ^src/miniextendr_wrappers\.R$
 ^bootstrap\.R$
 ^\.gitignore$
+^\.Renviron$
 ^\.DS_Store$
 \.Rcheck$
 ^inst/\.vendor\.tar\.xz\.cksum$
