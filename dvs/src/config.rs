@@ -15,6 +15,9 @@ pub enum Backend {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Config {
+    /// By default, all the metadata files (the .dvs files) will be stored in a `.dvs` folder
+    /// at the root of the repository
+    /// If this option is set, dvs will use that folder name instead of `.dvs`
     metadata_folder_name: Option<String>,
     backend: Backend,
 }
