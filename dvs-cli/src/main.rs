@@ -23,13 +23,15 @@ pub enum Command {
         group: Option<String>,
     },
     Add {
-        pattern: String,
+        #[clap(required = true)]
+        paths: Vec<PathBuf>,
         #[clap(long)]
         message: Option<String>,
     },
     Status,
     Get {
-        pattern: String,
+        #[clap(required = true)]
+        paths: Vec<PathBuf>,
     },
 }
 
@@ -68,12 +70,12 @@ fn try_main() -> Result<()> {
                 println!("DVS Initialized");
             }
         }
-        Command::Add { pattern, message } => {
+        Command::Add { paths, message } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-            let paths = DvsPaths::from_cwd(&config)?;
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-            let results = add_files(&pattern, &paths, config.backend(), message)?;
+            let results = add_files(paths, &dvs_paths, config.backend(), message)?;
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
@@ -98,12 +100,12 @@ fn try_main() -> Result<()> {
                 }
             }
         }
-        Command::Get { pattern } => {
+        Command::Get { paths } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-            let paths = DvsPaths::from_cwd(&config)?;
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-            let results = get_files(&pattern, &paths, config.backend())?;
+            let results = get_files(paths, &dvs_paths, config.backend())?;
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {

@@ -10,7 +10,7 @@ pub use backends::Backend;
 pub use file::{AddResult, FileMetadata, FileStatus, GetResult, Outcome, Status};
 pub use file::{add_files, get_file, get_file_status, get_files, get_status};
 pub use hashes::{HashAlg, Hashes};
-pub use paths::{DvsPaths, find_repo_root};
+pub use paths::{DvsPaths, PathInput, find_repo_root};
 
 #[cfg(test)]
 pub mod testutil {
