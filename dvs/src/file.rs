@@ -33,6 +33,7 @@ pub enum Status {
     Unsynced,
 }
 
+/// The dvs metadata for a given file
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileMetadata {
     pub hashes: Hashes,
@@ -188,7 +189,7 @@ pub struct FileStatus {
     pub status: Status,
 }
 
-pub fn get_file_status(paths: &DvsPaths, relative_path: impl AsRef<Path>) -> Result<Status> {
+fn get_file_status(paths: &DvsPaths, relative_path: impl AsRef<Path>) -> Result<Status> {
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
     if !dvs_file_path.is_file() {
         return Ok(Status::Untracked);
@@ -235,9 +236,7 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
     Ok(results)
 }
 
-/// Retrieves a file from local storage to the target path.
-/// Returns `Outcome::Present` if file already exists and matches, `Outcome::Copied` if copied.
-pub fn get_file(
+fn get_file(
     backend: &dyn Backend,
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
