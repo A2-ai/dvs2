@@ -86,9 +86,9 @@ checksum = "5dd9dc738b7a8311c7ade152424974d8115f2cdad61e8dab8dac9f2362298510"
 
 [[package]]
 name = "cc"
-version = "1.2.54"
+version = "1.2.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6354c81bbfd62d9cfa9cb3c773c2b7b2a3a482d569de977fd0e961f6e7c00583"
+checksum = "47b26a0954ae34af09b50f0de26458fa95369a0d478d8236d3f93082b219bd29"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -161,9 +161,9 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8591b0bcc8a98a64310a2fae1bb3e9b8564dd10e381e6e28010fde8e8e8568db"
+checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "fs-err"
@@ -309,7 +309,7 @@ checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 [[package]]
 name = "miniextendr-api"
 version = "0.1.0"
-source = "git+https://github.com/CGMossa/miniextendr#9fdcb20cb01f45753edf760671d19b36759cda7b"
+source = "git+https://github.com/CGMossa/miniextendr#5726e2d580db19a5e6331c5a857c734a9c35b2cf"
 dependencies = [
  "ahash",
  "miniextendr-macros",
@@ -319,7 +319,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-lint"
 version = "0.1.0"
-source = "git+https://github.com/CGMossa/miniextendr#9fdcb20cb01f45753edf760671d19b36759cda7b"
+source = "git+https://github.com/CGMossa/miniextendr#5726e2d580db19a5e6331c5a857c734a9c35b2cf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -329,7 +329,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-macros"
 version = "0.1.0"
-source = "git+https://github.com/CGMossa/miniextendr#9fdcb20cb01f45753edf760671d19b36759cda7b"
+source = "git+https://github.com/CGMossa/miniextendr#5726e2d580db19a5e6331c5a857c734a9c35b2cf"
 dependencies = [
  "proc-macro2",
  "quote",
