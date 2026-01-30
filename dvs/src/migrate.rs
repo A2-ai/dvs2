@@ -62,11 +62,11 @@ fn delete_files(files: &[PathBuf]) {
 /// 1. Convert `dvs.yaml` to `dvs.toml`
 /// 2. Update all `.dvs` metadata files to the v2 format (adding MD5 hashes) and save them to strings
 /// 3. Save all the new files
-/// 3. Delete all the v1 files (config + .dvs metadata files)
+/// 4. Delete all the v1 files (config + .dvs metadata files)
 ///
 /// The migration is atomic: all new files are written before any old files are deleted.
 /// If any write fails, all newly written files are cleaned up.
-/// If a file in the storage doesn't match the hash from the metadata file, the process fill fail.
+/// If a file in the storage doesn't match the hash from the metadata file, the process will fail.
 pub fn migrate(root: impl AsRef<Path>) -> Result<usize> {
     let root = fs::canonicalize(root.as_ref())?;
     let yaml_path = root.join("dvs.yaml");
