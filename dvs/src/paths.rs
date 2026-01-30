@@ -1,13 +1,41 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use fs_err as fs;
 use globset::Glob;
 use walkdir::WalkDir;
 
 pub const CONFIG_FILE_NAME: &str = "dvs.toml";
 pub const DEFAULT_FOLDER_NAME: &str = ".dvs";
+
+/// We can pass either a glob or a list of paths to dvs to handle.
+/// This enum is here to auto-convert properly
+#[derive(Debug, Clone)]
+pub enum PathInput {
+    /// A glob pattern to expand using the library
+    Glob(String),
+    /// Explicit list of paths (relative to repo root)
+    Paths(Vec<PathBuf>),
+}
+
+impl From<&str> for PathInput {
+    fn from(s: &str) -> Self {
+        PathInput::Glob(s.to_string())
+    }
+}
+
+impl From<String> for PathInput {
+    fn from(s: String) -> Self {
+        PathInput::Glob(s)
+    }
+}
+
+impl From<Vec<PathBuf>> for PathInput {
+    fn from(paths: Vec<PathBuf>) -> Self {
+        PathInput::Paths(paths)
+    }
+}
 
 /// Finds the root of a git repository by walking up from the given directory
 /// until a `.git` folder or `dvs.toml` is found
@@ -101,9 +129,48 @@ impl DvsPaths {
         self.repo_root.join(relative)
     }
 
+    fn resolve(&self, input: &PathInput, tracked: bool) -> Result<Vec<PathBuf>> {
+        match input {
+            PathInput::Glob(pattern) => {
+                if tracked {
+                    self.expand_glob_tracked(pattern)
+                } else {
+                    self.expand_glob(pattern)
+                }
+            }
+            PathInput::Paths(paths) => {
+                for path in paths {
+                    if tracked {
+                        // For get: check if file is tracked (metadata exists)
+                        let metadata_path = self.metadata_path(path);
+                        if !metadata_path.is_file() {
+                            bail!("Path {} is not tracked by DVS", path.display());
+                        }
+                    } else {
+                        // For add: check if file exists on disk
+                        let full = self.file_path(path);
+                        if !full.is_file() {
+                            bail!("Path {} does not exist or is not a file", path.display());
+                        }
+                    }
+                }
+                log::debug!("Passed paths: {:?}", paths);
+                Ok(paths.clone())
+            }
+        }
+    }
+
+    pub fn resolve_for_add(&self, input: &PathInput) -> Result<Vec<PathBuf>> {
+        self.resolve(input, false)
+    }
+
+    pub fn resolve_tracked(&self, input: &PathInput) -> Result<Vec<PathBuf>> {
+        self.resolve(input, true)
+    }
+
     /// Expand glob pattern against files on disk.
     /// Pattern matched relative to cwd, returns paths relative to repo_root.
-    pub fn expand_glob(&self, pattern: &str) -> Result<Vec<PathBuf>> {
+    fn expand_glob(&self, pattern: &str) -> Result<Vec<PathBuf>> {
         log::debug!(
             "Expanding glob pattern '{}' from cwd {}",
             pattern,
@@ -137,13 +204,18 @@ impl DvsPaths {
             }
         }
 
+        log::debug!(
+            "Pattern '{}' matched {:?}",
+            pattern,
+            paths.iter().map(|p| p.display()).collect::<Vec<_>>()
+        );
         Ok(paths)
     }
 
     /// Expand glob pattern against tracked files (in .dvs/).
     /// Pattern adjusted for cwd (e.g., "*.txt" in subdir becomes "subdir/*.txt").
     /// Returns paths relative to repo_root.
-    pub fn expand_glob_tracked(&self, pattern: &str) -> Result<Vec<PathBuf>> {
+    fn expand_glob_tracked(&self, pattern: &str) -> Result<Vec<PathBuf>> {
         log::debug!("Expanding glob pattern '{}' against tracked files", pattern);
         // Adjust pattern based on cwd relative to repo root
         let effective_pattern = match self.cwd.strip_prefix(&self.repo_root).ok() {
@@ -185,6 +257,11 @@ impl DvsPaths {
             }
         }
 
+        log::debug!(
+            "Pattern '{}' matched {:?}",
+            pattern,
+            paths.iter().map(|p| p.display()).collect::<Vec<_>>()
+        );
         Ok(paths)
     }
 }
