@@ -2437,9 +2437,9 @@ CARGO_TARGET_DIR_CARGO="$abs_rpkg_src_cargo/rust/target"
 : ${CARGO_PROFILE="release"}
 
 
-CARGO_STATICLIB_NAME="$($SED -n 's/^name = "\(.*\)"/\1/p' "$RUST_SRC_DIR/Cargo.toml.in" | head -1 | tr '-' '_')"
+CARGO_STATICLIB_NAME="$($SED -n 's/^name = "\(.*\)"/\1/p' "$RUST_SRC_DIR/Cargo.toml" | head -1 | tr '-' '_')"
 if test -z "$CARGO_STATICLIB_NAME"; then
-  as_fn_error $? "Could not extract crate name from $RUST_SRC_DIR/Cargo.toml.in" "$LINENO" 5
+  as_fn_error $? "Could not extract crate name from $RUST_SRC_DIR/Cargo.toml" "$LINENO" 5
 fi
 
 
@@ -2542,8 +2542,6 @@ EOF
 
 
 
-ac_config_files="$ac_config_files src/rust/Cargo.toml:src/rust/Cargo.toml.in"
-
 ac_config_files="$ac_config_files src/rust/document.rs:src/rust/document.rs.in"
 
 
@@ -2562,7 +2560,7 @@ ac_config_files="$ac_config_files src/rust/.cargo/config.toml:src/rust/cargo-con
 
 
 
-ac_config_commands="$ac_config_commands sync-root-cargo-config"
+ac_config_commands="$ac_config_commands dev-cargo-config"
 
 
 ac_config_commands="$ac_config_commands cargo-lockfile-compat"
@@ -3274,7 +3272,7 @@ cat >>$CONFIG_STATUS <<_ACEOF || ac_write_fail=1
 #
 # INIT-COMMANDS
 #
-NOT_CRAN="$NOT_CRAN" abs_rpkg_dir="$abs_top_srcdir"
+NOT_CRAN="$NOT_CRAN"
 CARGO_CMD="$CARGO_CMD" CARGO_OFFLINE_FLAG="$CARGO_OFFLINE_FLAG" SED="$SED"
 CARGO_CMD="$CARGO_CMD" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" FORCE_VENDOR="$FORCE_VENDOR" SED="$SED"
 NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir"
@@ -3287,14 +3285,13 @@ cat >>$CONFIG_STATUS <<\_ACEOF || ac_write_fail=1
 for ac_config_target in $ac_config_targets
 do
   case $ac_config_target in
-    "src/rust/Cargo.toml") CONFIG_FILES="$CONFIG_FILES src/rust/Cargo.toml:src/rust/Cargo.toml.in" ;;
     "src/rust/document.rs") CONFIG_FILES="$CONFIG_FILES src/rust/document.rs:src/rust/document.rs.in" ;;
     "src/Makevars") CONFIG_FILES="$CONFIG_FILES src/Makevars:src/Makevars.in" ;;
     "src/Makevars.win") CONFIG_FILES="$CONFIG_FILES src/Makevars.win:src/Makevars.win.in" ;;
     "src/entrypoint.c") CONFIG_FILES="$CONFIG_FILES src/entrypoint.c:src/entrypoint.c.in" ;;
     "src/mx_abi.c") CONFIG_FILES="$CONFIG_FILES src/mx_abi.c:src/mx_abi.c.in" ;;
     "src/rust/.cargo/config.toml") CONFIG_FILES="$CONFIG_FILES src/rust/.cargo/config.toml:src/rust/cargo-config.toml.in" ;;
-    "sync-root-cargo-config") CONFIG_COMMANDS="$CONFIG_COMMANDS sync-root-cargo-config" ;;
+    "dev-cargo-config") CONFIG_COMMANDS="$CONFIG_COMMANDS dev-cargo-config" ;;
     "cargo-lockfile-compat") CONFIG_COMMANDS="$CONFIG_COMMANDS cargo-lockfile-compat" ;;
     "cargo-vendor") CONFIG_COMMANDS="$CONFIG_COMMANDS cargo-vendor" ;;
     "compress-vendor") CONFIG_COMMANDS="$CONFIG_COMMANDS compress-vendor" ;;
@@ -3716,27 +3713,13 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
 
 
   case $ac_file$ac_mode in
-    "sync-root-cargo-config":C)
-    ROOT_WORKSPACE="$abs_rpkg_dir/.."
-  ROOT_CFG="$ROOT_WORKSPACE/.cargo/config.toml"
+    "dev-cargo-config":C)
   RPKG_CFG="src/rust/.cargo/config.toml"
 
-  if test "$NOT_CRAN" = "true" && test -d "$ROOT_WORKSPACE" && test -f "$RPKG_CFG"; then
-        if test -f "$ROOT_WORKSPACE/Cargo.toml"; then
-      mkdir -p "$ROOT_WORKSPACE/.cargo"
-
-      if test -f "$ROOT_CFG"; then
-                echo "======================================================================" >&2
-        echo "configure: WARNING: Overwriting $ROOT_CFG with rpkg cargo config" >&2
-        echo "configure:          This enables vendored sources for the entire workspace" >&2
-        echo "configure:" >&2
-        echo "configure:          If you have custom settings, back them up first." >&2
-        echo "======================================================================" >&2
-        sleep 2
-      fi
-
-      cp "$RPKG_CFG" "$ROOT_CFG"
-      echo "configure: synced cargo config to monorepo root"
+  if test "$NOT_CRAN" = "true"; then
+            if test -f "$RPKG_CFG"; then
+      rm "$RPKG_CFG"
+      echo "configure: removed cargo config (dev mode - using network sources)"
     fi
   fi
  ;;
@@ -3838,8 +3821,10 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
             $CARGO_CMD vendor --manifest-path "$MANIFEST" "$VENDOR_OUT" > /dev/null
       _vendor_status=$?
 
-            if test -f "$_cargo_cfg_bak"; then
+            if test "$NOT_CRAN" != "true" && test -f "$_cargo_cfg_bak"; then
         mv "$_cargo_cfg_bak" "$_cargo_cfg"
+      else
+        rm -f "$_cargo_cfg_bak"
       fi
 
       if test $_vendor_status -ne 0; then
@@ -3859,8 +3844,10 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
       $CARGO_CMD generate-lockfile --manifest-path "$MANIFEST"
       _lock_status=$?
 
-      if test -f "$_cargo_cfg_bak"; then
+      if test "$NOT_CRAN" != "true" && test -f "$_cargo_cfg_bak"; then
         mv "$_cargo_cfg_bak" "$_cargo_cfg"
+      else
+        rm -f "$_cargo_cfg_bak"
       fi
 
       if test $_lock_status -ne 0; then

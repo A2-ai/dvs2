@@ -6,7 +6,6 @@ config.status
 src/Makevars
 src/Makevars.win
 src/*-wrappers.R
-src/rust/Cargo.toml
 src/rust/document.rs
 src/entrypoint.c
 src/mx_abi.c
@@ -23,6 +22,10 @@ src/vendor/
 # Vendor tarball (generated, not tracked)
 inst/vendor.tar.xz
 inst/.vendor.tar.xz.cksum
+
+# Intermediary files from configure.ac
+src/.vendor-tarball-staging/
+src/.unpacked-from-tarball
 
 # History files
 .Rhistory

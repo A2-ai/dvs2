@@ -136,10 +136,10 @@ AC_ARG_VAR([CARGO_PROFILE], [Cargo build profile (debug or release)])
 : ${CARGO_PROFILE="release"}
 AC_SUBST([CARGO_PROFILE])
 
-dnl Static library name - extract from Cargo.toml.in and convert hyphens to underscores
-CARGO_STATICLIB_NAME="$($SED -n 's/^name = "\(.*\)"/\1/p' "$RUST_SRC_DIR/Cargo.toml.in" | head -1 | tr '-' '_')"
+dnl Static library name - extract from Cargo.toml and convert hyphens to underscores
+CARGO_STATICLIB_NAME="$($SED -n 's/^name = "\(.*\)"/\1/p' "$RUST_SRC_DIR/Cargo.toml" | head -1 | tr '-' '_')"
 if test -z "$CARGO_STATICLIB_NAME"; then
-  AC_MSG_ERROR([Could not extract crate name from $RUST_SRC_DIR/Cargo.toml.in])
+  AC_MSG_ERROR([Could not extract crate name from $RUST_SRC_DIR/Cargo.toml])
 fi
 AC_SUBST([CARGO_STATICLIB_NAME])
 
@@ -236,8 +236,7 @@ EOF
 AC_SUBST([CARGO_SOURCE_REPLACE])
 
 
-dnl Generate Cargo.toml and document.rs from templates
-AC_CONFIG_FILES([src/rust/Cargo.toml:src/rust/Cargo.toml.in])
+dnl Generate document.rs from template
 AC_CONFIG_FILES([src/rust/document.rs:src/rust/document.rs.in])
 
 dnl Generate Makevars, entrypoint.c, and mx_abi.c from templates
@@ -255,36 +254,21 @@ AC_CONFIG_FILES([src/rust/.cargo/config.toml:src/rust/cargo-config.toml.in])
 
 dnl ---- AC_CONFIG_COMMANDS run after AC_CONFIG_FILES generates files ----
 
-dnl 1) Sync cargo config to monorepo root (for vendored builds in monorepo context)
-AC_CONFIG_COMMANDS([sync-root-cargo-config],
+dnl 1) Remove cargo config in dev mode (vendored sources not needed for development)
+AC_CONFIG_COMMANDS([dev-cargo-config],
 [
-  dnl Sync .cargo/config.toml to monorepo root if in dev mode and monorepo detected
-  ROOT_WORKSPACE="$abs_rpkg_dir/.."
-  ROOT_CFG="$ROOT_WORKSPACE/.cargo/config.toml"
   RPKG_CFG="src/rust/.cargo/config.toml"
 
-  if test "$NOT_CRAN" = "true" && test -d "$ROOT_WORKSPACE" && test -f "$RPKG_CFG"; then
-    dnl Check if this looks like a monorepo (has Cargo.toml at root)
-    if test -f "$ROOT_WORKSPACE/Cargo.toml"; then
-      mkdir -p "$ROOT_WORKSPACE/.cargo"
-
-      if test -f "$ROOT_CFG"; then
-        dnl Warn about overwrite
-        echo "======================================================================" >&2
-        echo "configure: WARNING: Overwriting $ROOT_CFG with rpkg cargo config" >&2
-        echo "configure:          This enables vendored sources for the entire workspace" >&2
-        echo "configure:" >&2
-        echo "configure:          If you have custom settings, back them up first." >&2
-        echo "======================================================================" >&2
-        sleep 2
-      fi
-
-      cp "$RPKG_CFG" "$ROOT_CFG"
-      echo "configure: synced cargo config to monorepo root"
+  if test "$NOT_CRAN" = "true"; then
+    dnl In dev mode, remove the generated cargo config so we use normal cargo resolution
+    dnl The vendored config is only needed for CRAN builds
+    if test -f "$RPKG_CFG"; then
+      rm "$RPKG_CFG"
+      echo "configure: removed cargo config (dev mode - using network sources)"
     fi
   fi
 ],
-[NOT_CRAN="$NOT_CRAN" abs_rpkg_dir="$abs_top_srcdir"])
+[NOT_CRAN="$NOT_CRAN"])
 
 dnl 2) Check cargo lockfile compatibility and regenerate if needed
 AC_CONFIG_COMMANDS([cargo-lockfile-compat],
@@ -402,9 +386,11 @@ AC_CONFIG_COMMANDS([cargo-vendor],
       $CARGO_CMD vendor --manifest-path "$MANIFEST" "$VENDOR_OUT" > /dev/null
       _vendor_status=$?
 
-      dnl Restore cargo config
-      if test -f "$_cargo_cfg_bak"; then
+      dnl Restore cargo config (only in CRAN mode - dev mode doesn't need vendored sources)
+      if test "$NOT_CRAN" != "true" && test -f "$_cargo_cfg_bak"; then
         mv "$_cargo_cfg_bak" "$_cargo_cfg"
+      else
+        rm -f "$_cargo_cfg_bak"
       fi
 
       if test $_vendor_status -ne 0; then
@@ -426,8 +412,10 @@ AC_CONFIG_COMMANDS([cargo-vendor],
       $CARGO_CMD generate-lockfile --manifest-path "$MANIFEST"
       _lock_status=$?
 
-      if test -f "$_cargo_cfg_bak"; then
+      if test "$NOT_CRAN" != "true" && test -f "$_cargo_cfg_bak"; then
         mv "$_cargo_cfg_bak" "$_cargo_cfg"
+      else
+        rm -f "$_cargo_cfg_bak"
       fi
 
       if test $_lock_status -ne 0; then
