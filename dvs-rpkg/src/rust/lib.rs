@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use miniextendr_api::{
-    list, miniextendr, miniextendr_module, r_println, AsSerializeRow, DataFrame, List,
+    list, miniextendr, miniextendr_module, r_println, AsSerializeRow, DataFrame, List, Missing,
 };
 
 use anyhow::{anyhow, Result};
@@ -36,11 +36,16 @@ pub fn dvs_init(
 }
 
 #[miniextendr]
-// TODO: should message be allowed to be _missing_?
 pub fn dvs_add(
     pattern: &str,
-    message: Option<String>,
+    message: Missing<Option<String>>,
 ) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
+    let message = if message.is_missing() {
+        None
+    } else {
+        message.unwrap()
+    };
+
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
