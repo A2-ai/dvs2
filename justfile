@@ -65,11 +65,18 @@ rpkg-clippy *args:
 rpkg-check *args:
     cargo check --manifest-path={{quote(rpkg_manifest)}} {{args}}
 
+rpkg-fmt *args:
+    cargo fmt --manifest-path={{quote(rpkg_manifest)}} {{args}}
+
+rpkg-update *args:
+    cargo update --manifest-path={{quote(rpkg_manifest)}} {{args}}
+
 rpkg-document:
     Rscript -e 'devtools::document("{{rpkg_dir}}")'
 
 rpkg-install:
     NOT_CRAN=true Rscript -e 'install.packages("{{rpkg_dir}}", repos = NULL, type = "source")'
+alias install-rpkg := rpkg-install
 
 # ============================================================================
 # Combined
@@ -83,8 +90,7 @@ check-all: check rpkg-check
 
 clippy-all: clippy rpkg-clippy
 
-fmt-all: fmt
-    cargo fmt --manifest-path={{quote(rpkg_manifest)}}
+fmt-all: fmt rpkg-fmt
 
 fmt-check:
     cargo fmt -- --check
