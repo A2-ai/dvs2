@@ -5,8 +5,9 @@
 
 use std::path::PathBuf;
 
-use miniextendr_api::serde::AsSerialize;
-use miniextendr_api::{miniextendr, miniextendr_module, r_println, List};
+use miniextendr_api::{
+    list, miniextendr, miniextendr_module, r_println, AsSerializeRow, DataFrame, List,
+};
 
 use anyhow::{anyhow, Result};
 
@@ -31,21 +32,28 @@ pub fn dvs_init(
     init(&directory, config)?;
 
     r_println!("DVS Initialized");
-    Ok(List::from_pairs(vec![("status", "initialized")]))
+    Ok(list!("status" = "initialized"))
 }
 
 #[miniextendr]
 // TODO: should message be allowed to be _missing_?
-pub fn dvs_add(pattern: &str, message: Option<String>) -> Result<AsSerialize<Vec<AddResult>>> {
+pub fn dvs_add(
+    pattern: &str,
+    message: Option<String>,
+) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    Ok(add_files(pattern, &paths, config.backend(), message)?.into())
+    Ok(DataFrame::from_iter(
+        add_files(pattern, &paths, config.backend(), message)?
+            .into_iter()
+            .map(|x| x.into()),
+    ))
 }
 
 #[miniextendr]
-pub fn dvs_status() -> Result<AsSerialize<Vec<FileStatus>>> {
+pub fn dvs_status() -> Result<DataFrame<AsSerializeRow<FileStatus>>> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -53,18 +61,18 @@ pub fn dvs_status() -> Result<AsSerialize<Vec<FileStatus>>> {
 
     let statuses = get_status(&paths)?;
 
-    Ok(statuses.into())
+    Ok(DataFrame::from_iter(statuses.into_iter().map(|x| x.into())))
 }
 
 #[miniextendr]
-pub fn dvs_get(pattern: &str) -> Result<AsSerialize<Vec<GetResult>>> {
+pub fn dvs_get(pattern: &str) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
     let results = get_files(pattern, &paths, config.backend())?;
-    Ok(results.into())
+    Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
 miniextendr_module! {
