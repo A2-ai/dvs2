@@ -253,8 +253,8 @@ dnl Generate document.rs from template
 AC_CONFIG_FILES([src/rust/document.rs:src/rust/document.rs.in])
 
 dnl Generate Makevars, entrypoint.c, and mx_abi.c from templates
+dnl Note: Makevars.win is a static file that includes Makevars (no template vars)
 AC_CONFIG_FILES([src/Makevars:src/Makevars.in])
-AC_CONFIG_FILES([src/Makevars.win:src/Makevars.win.in])
 AC_CONFIG_FILES([src/entrypoint.c:src/entrypoint.c.in])
 AC_CONFIG_FILES([src/mx_abi.c:src/mx_abi.c.in])
 
@@ -351,10 +351,7 @@ AC_CONFIG_COMMANDS([cargo-vendor],
         if test -f "src/Makevars"; then
           $SED -i.bak 's/--locked//g' src/Makevars && rm -f src/Makevars.bak
           echo "configure: removed --locked from Makevars for tarball compatibility"
-        fi
-        if test -f "src/Makevars.win"; then
-          $SED -i.bak 's/--locked//g' src/Makevars.win && rm -f src/Makevars.win.bak
-          echo "configure: removed --locked from Makevars.win for tarball compatibility"
+          dnl Note: Makevars.win uses `include Makevars` so it inherits this change
         fi
       else
         dnl No vendor directory and no tarball - fall through to vendor from network

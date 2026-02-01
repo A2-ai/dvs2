@@ -2554,8 +2554,6 @@ ac_config_files="$ac_config_files src/rust/document.rs:src/rust/document.rs.in"
 
 ac_config_files="$ac_config_files src/Makevars:src/Makevars.in"
 
-ac_config_files="$ac_config_files src/Makevars.win:src/Makevars.win.in"
-
 ac_config_files="$ac_config_files src/entrypoint.c:src/entrypoint.c.in"
 
 ac_config_files="$ac_config_files src/mx_abi.c:src/mx_abi.c.in"
@@ -3294,7 +3292,6 @@ do
   case $ac_config_target in
     "src/rust/document.rs") CONFIG_FILES="$CONFIG_FILES src/rust/document.rs:src/rust/document.rs.in" ;;
     "src/Makevars") CONFIG_FILES="$CONFIG_FILES src/Makevars:src/Makevars.in" ;;
-    "src/Makevars.win") CONFIG_FILES="$CONFIG_FILES src/Makevars.win:src/Makevars.win.in" ;;
     "src/entrypoint.c") CONFIG_FILES="$CONFIG_FILES src/entrypoint.c:src/entrypoint.c.in" ;;
     "src/mx_abi.c") CONFIG_FILES="$CONFIG_FILES src/mx_abi.c:src/mx_abi.c.in" ;;
     "src/rust/.cargo/config.toml") CONFIG_FILES="$CONFIG_FILES src/rust/.cargo/config.toml:src/rust/cargo-config.toml.in" ;;
@@ -3784,11 +3781,7 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
                 if test -f "src/Makevars"; then
           $SED -i.bak 's/--locked//g' src/Makevars && rm -f src/Makevars.bak
           echo "configure: removed --locked from Makevars for tarball compatibility"
-        fi
-        if test -f "src/Makevars.win"; then
-          $SED -i.bak 's/--locked//g' src/Makevars.win && rm -f src/Makevars.win.bak
-          echo "configure: removed --locked from Makevars.win for tarball compatibility"
-        fi
+                  fi
       else
                 echo "configure: no cached vendors found, will fetch from network"
         _use_prevendored=0
