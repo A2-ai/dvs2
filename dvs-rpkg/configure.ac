@@ -125,11 +125,24 @@ CARGO_CMD="$CARGO $RUST_TOOLCHAIN"
 AC_SUBST([CARGO_CMD])
 
 dnl ---- Cargo configuration ----
-AC_ARG_VAR([CARGO_TARGET_DIR], [Cargo target directory (default: src/rust/target)])
-: ${CARGO_TARGET_DIR="$abs_rpkg_src/rust/target"}
+dnl Use rust-target/ at package root (outside src/) to avoid pkgbuild issues.
+dnl pkgbuild's sources() function recursively finds .rs files in src/, and
+dnl generated .rs files in target/build/.../out/ during needs_compile() checks.
+dnl If any generated file has a newer mtime than the DLL, it triggers rebuild.
+AC_ARG_VAR([CARGO_TARGET_DIR], [Cargo target directory (default: rust-target, outside src/)])
+: ${CARGO_TARGET_DIR="$abs_top_srcdir/rust-target"}
 AC_SUBST([CARGO_TARGET_DIR])
 
-CARGO_TARGET_DIR_CARGO="$abs_rpkg_src_cargo/rust/target"
+dnl Cargo-specific paths (Windows-native on MSYS2, same as shell paths otherwise)
+dnl These are used in .cargo/config.toml which Cargo reads directly
+CARGO_TARGET_DIR_CARGO="$(cd "$abs_top_srcdir" && pwd)/rust-target"
+case "$host_os" in
+  *msys*|*cygwin*|*mingw*)
+    if test "x$CYGPATH" != "xno"; then
+      CARGO_TARGET_DIR_CARGO="$($CYGPATH -m "$abs_top_srcdir")/rust-target"
+    fi
+    ;;
+esac
 AC_SUBST([CARGO_TARGET_DIR_CARGO])
 
 AC_ARG_VAR([CARGO_PROFILE], [Cargo build profile (debug or release)])
@@ -240,8 +253,8 @@ dnl Generate document.rs from template
 AC_CONFIG_FILES([src/rust/document.rs:src/rust/document.rs.in])
 
 dnl Generate Makevars, entrypoint.c, and mx_abi.c from templates
+dnl Note: Makevars.win is a static file that includes Makevars (no template vars)
 AC_CONFIG_FILES([src/Makevars:src/Makevars.in])
-AC_CONFIG_FILES([src/Makevars.win:src/Makevars.win.in])
 AC_CONFIG_FILES([src/entrypoint.c:src/entrypoint.c.in])
 AC_CONFIG_FILES([src/mx_abi.c:src/mx_abi.c.in])
 
@@ -338,10 +351,7 @@ AC_CONFIG_COMMANDS([cargo-vendor],
         if test -f "src/Makevars"; then
           $SED -i.bak 's/--locked//g' src/Makevars && rm -f src/Makevars.bak
           echo "configure: removed --locked from Makevars for tarball compatibility"
-        fi
-        if test -f "src/Makevars.win"; then
-          $SED -i.bak 's/--locked//g' src/Makevars.win && rm -f src/Makevars.win.bak
-          echo "configure: removed --locked from Makevars.win for tarball compatibility"
+          dnl Note: Makevars.win uses `include Makevars` so it inherits this change
         fi
       else
         dnl No vendor directory and no tarball - fall through to vendor from network
@@ -422,6 +432,16 @@ AC_CONFIG_COMMANDS([cargo-vendor],
         echo "configure: error: cargo generate-lockfile failed" >&2
         exit 1
       fi
+    fi
+
+    dnl Update Cargo.lock to reflect patched sources.
+    dnl When [patch.crates-io] or [patch."..."] redirects dependencies to different
+    dnl sources (git or local paths), the lock file needs updating so cargo --locked
+    dnl doesn't complain about source mismatches. This doesn't change versions,
+    dnl just updates source locations.
+    if test -f "$LOCKFILE"; then
+      $CARGO_CMD update --workspace --manifest-path "$MANIFEST" 2>/dev/null || true
+      echo "configure: updated Cargo.lock for patched sources"
     fi
 
     dnl Update vendor stamp

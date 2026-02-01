@@ -4,19 +4,31 @@
     "dvs-rpkg/src/rust/Cargo.toml"
   ],
   "rust-analyzer.cargo.features": "all",
-  "rust-analyzer.files.exclude": [
+  // IMPORTANT: target directories MUST be outside dvs-rpkg/src/ to avoid pkgbuild
+  // scanning generated .rs files in target/build/.../out/ which causes
+  // unnecessary recompilation on every devtools::load_all()
+  "rust-analyzer.cargo.targetDir": "${workspaceFolder}/dvs-rpkg/ra-target",
+  "rust-analyzer.files.excludeDirs": [
     "dvs-rpkg/src/vendor",
-    "dvs-rpkg/src/rust/target"
+    "dvs-rpkg/src/rust/target",
+    "dvs-rpkg/rust-target",
+    "dvs-rpkg/ra-target"
   ],
-  "rust-analyzer.cargo.extraEnv": {
-    "CARGO_TARGET_DIR": "target"
-  },
   "rust-analyzer.check.command": "clippy",
   "rust-analyzer.check.extraArgs": [
     "--",
     "-W",
     "clippy::all"
   ],
+  "terminal.integrated.env.osx": {
+    "CARGO_TARGET_DIR": "${workspaceFolder}/dvs-rpkg/rust-target"
+  },
+  "terminal.integrated.env.linux": {
+    "CARGO_TARGET_DIR": "${workspaceFolder}/dvs-rpkg/rust-target"
+  },
+  "terminal.integrated.env.windows": {
+    "CARGO_TARGET_DIR": "${workspaceFolder}/dvs-rpkg/rust-target"
+  },
   "[rust]": {
     "editor.formatOnSave": true,
     "editor.defaultFormatter": "rust-lang.rust-analyzer"
@@ -24,10 +36,16 @@
   "files.associations": {
     "*.in": "plaintext",
     "Cargo.toml.in": "toml",
-    "configure.ac": "autoconf"
+    "Makevars.in": "makefile",
+    "Makevars.win.in": "makefile",
+    "configure.ac": "autoconf",
+    "NAMESPACE": "r",
+    "DESCRIPTION": "yaml"
   },
   "files.exclude": {
     "**/target": true,
+    "**/rust-target": true,
+    "**/ra-target": true,
     "**/autom4te.cache": true,
     "**/*.o": true,
     "**/*.so": true,
@@ -35,6 +53,8 @@
   },
   "search.exclude": {
     "**/target": true,
+    "**/rust-target": true,
+    "**/ra-target": true,
     "**/dvs-rpkg/src/vendor": true,
     "**/Cargo.lock": true
   },
