@@ -37,7 +37,7 @@ pub fn dvs_init(
 
 #[miniextendr]
 pub fn dvs_add(
-    pattern: &str,
+    patterns: Vec<&str>,
     message: Missing<Option<String>>,
 ) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
     let message = if message.is_missing() {
@@ -50,10 +50,13 @@ pub fn dvs_add(
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    Ok(DataFrame::from_iter(
-        add_files(pattern, &paths, config.backend(), message)?
+    Ok(DataFrame::from_serialize(
+        patterns
             .into_iter()
-            .map(|x| x.into()),
+            .map(|pattern| add_files(pattern, &paths, config.backend(), message.clone()))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten(),
     ))
 }
 
@@ -66,18 +69,24 @@ pub fn dvs_status() -> Result<DataFrame<AsSerializeRow<FileStatus>>> {
 
     let statuses = get_status(&paths)?;
 
-    Ok(DataFrame::from_iter(statuses.into_iter().map(|x| x.into())))
+    Ok(DataFrame::from_serialize(statuses))
 }
 
 #[miniextendr]
-pub fn dvs_get(pattern: &str) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
+pub fn dvs_get(patterns: Vec<&str>) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let results = get_files(pattern, &paths, config.backend())?;
-    Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
+    Ok(DataFrame::from_serialize(
+        patterns
+            .into_iter()
+            .map(|pattern| get_files(pattern, &paths, config.backend()))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten(),
+    ))
 }
 
 miniextendr_module! {
