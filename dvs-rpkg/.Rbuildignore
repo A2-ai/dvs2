@@ -2,6 +2,8 @@
 ^\.github$
 ^\.vscode$
 ^src/rust/target$
+^rust-target$
+^ra-target$
 ^src/rust/\.cargo$
 ^src/vendor$
 ^\.cargo$

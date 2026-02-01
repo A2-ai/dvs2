@@ -1321,7 +1321,7 @@ Some influential environment variables:
   RUST_TOOLCHAIN
               Rust toolchain selector like '+stable' or '+nightly'
   CARGO_TARGET_DIR
-              Cargo target directory (default: src/rust/target)
+              Cargo target directory (default: rust-target, outside src/)
   CARGO_PROFILE
               Cargo build profile (debug or release)
   ENV_RUSTFLAGS
@@ -2427,10 +2427,17 @@ CARGO_CMD="$CARGO $RUST_TOOLCHAIN"
 
 
 
-: ${CARGO_TARGET_DIR="$abs_rpkg_src/rust/target"}
+: ${CARGO_TARGET_DIR="$abs_top_srcdir/rust-target"}
 
 
-CARGO_TARGET_DIR_CARGO="$abs_rpkg_src_cargo/rust/target"
+CARGO_TARGET_DIR_CARGO="$(cd "$abs_top_srcdir" && pwd)/rust-target"
+case "$host_os" in
+  *msys*|*cygwin*|*mingw*)
+    if test "x$CYGPATH" != "xno"; then
+      CARGO_TARGET_DIR_CARGO="$($CYGPATH -m "$abs_top_srcdir")/rust-target"
+    fi
+    ;;
+esac
 
 
 
@@ -3854,6 +3861,11 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
         echo "configure: error: cargo generate-lockfile failed" >&2
         exit 1
       fi
+    fi
+
+                        if test -f "$LOCKFILE"; then
+      $CARGO_CMD update --workspace --manifest-path "$MANIFEST" 2>/dev/null || true
+      echo "configure: updated Cargo.lock for patched sources"
     fi
 
         _new="$(cksum < "$LOCKFILE" | cut -d' ' -f1,2 | tr ' ' ':')"
