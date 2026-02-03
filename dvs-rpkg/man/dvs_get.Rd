@@ -4,7 +4,7 @@
 \alias{dvs_get_glob}
 \title{Retrieve data files from \code{dvs} storage}
 \usage{
-dvs_get_glob(path = NULL, glob = NULL, ...)
+dvs_get_glob(...)
 }
 \arguments{
 \item{...}{
