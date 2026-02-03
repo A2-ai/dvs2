@@ -37,7 +37,7 @@ pub fn dvs_init(
 
 #[miniextendr]
 pub fn dvs_add(
-    patterns: Vec<PathBuf>,
+    files: Vec<PathBuf>,
     message: Missing<Option<String>>,
 ) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
     let message = if message.is_missing() {
@@ -50,7 +50,7 @@ pub fn dvs_add(
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let mut is_valid_paths = paths.validate_for_add(&patterns);
+    let mut is_valid_paths = paths.validate_for_add(&files);
 
     let valid_paths = is_valid_paths
         .extract_if(.., |(_path, is_valid)| *is_valid)
@@ -89,13 +89,13 @@ pub fn dvs_status() -> Result<DataFrame<AsSerializeRow<FileStatus>>> {
 }
 
 #[miniextendr]
-pub fn dvs_get(patterns: Vec<PathBuf>) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
+pub fn dvs_get(files: Vec<PathBuf>) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let mut is_valid_paths = paths.validate_for_get(&patterns);
+    let mut is_valid_paths = paths.validate_for_get(&files);
 
     let valid_paths = is_valid_paths
         .extract_if(.., |(_path, is_valid)| *is_valid)
