@@ -2,6 +2,7 @@
 
 export(dvs_add)
 export(dvs_get)
+export(dvs_get_glob)
 export(dvs_init)
 export(dvs_status)
 useDynLib(dvs, .registration = TRUE)
