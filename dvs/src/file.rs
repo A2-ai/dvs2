@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::audit::{AuditEntry, AuditFile};
 use crate::backends::Backend;
 use crate::hashes::Hashes;
-use crate::paths::{DvsPaths, PathInput};
+use crate::paths::DvsPaths;
 use anyhow::{Context, Result, bail};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
@@ -311,21 +311,25 @@ pub struct GetResult {
 /// The pattern is matched against files relative to cwd.
 /// Files are stored with paths relative to repo_root.
 pub fn add_files(
-    input: impl Into<PathInput>,
+    files: Vec<PathBuf>,
     paths: &DvsPaths,
     backend: &dyn Backend,
     message: Option<String>,
 ) -> Result<Vec<AddResult>> {
-    let input = input.into();
-    let matched_paths = paths.resolve_for_add(&input)?;
-    if matched_paths.is_empty() {
-        bail!("No files match: {input:?}");
+    let matched_paths = paths.validate_for_add(&files);
+    let missing: Vec<_> = matched_paths
+        .iter()
+        .filter(|(_, exists)| !*exists)
+        .map(|(p, _)| p.display().to_string())
+        .collect();
+    if !missing.is_empty() {
+        bail!("The following files were not found: {}", missing.join(", "));
     }
 
     let mut results = Vec::new();
     let operation_id = Uuid::new_v4();
 
-    for relative_path in matched_paths {
+    for (relative_path, _) in matched_paths {
         let full_path = paths.file_path(&relative_path);
 
         let metadata = FileMetadata::from_file(&full_path, message.clone())?;
@@ -349,19 +353,23 @@ pub fn add_files(
 /// The pattern is matched against tracked files (paths in metadata folder).
 /// The pattern is adjusted based on cwd relative to repo root.
 pub fn get_files(
-    input: impl Into<PathInput>,
+    files: Vec<PathBuf>,
     paths: &DvsPaths,
     backend: &dyn Backend,
 ) -> Result<Vec<GetResult>> {
-    let input = input.into();
-    let matched_paths = paths.resolve_tracked(&input)?;
-    if matched_paths.is_empty() {
-        bail!("No tracked files match: {input:?}");
+    let matched_paths = paths.validate_for_get(&files);
+    let missing: Vec<_> = matched_paths
+        .iter()
+        .filter(|(_, exists)| !*exists)
+        .map(|(p, _)| p.display().to_string())
+        .collect();
+    if !missing.is_empty() {
+        bail!("The following files were not found: {}", missing.join(", "));
     }
 
     let mut results = Vec::new();
 
-    for relative_path in matched_paths {
+    for (relative_path, _) in matched_paths {
         let outcome = get_file(backend, paths, &relative_path)?;
         log::info!(
             "Successfully retrieved {} ({:?})",
@@ -385,14 +393,6 @@ mod tests {
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
         DvsPaths::new(
             root.to_path_buf(),
-            root.to_path_buf(),
-            config.metadata_folder_name(),
-        )
-    }
-
-    fn make_paths_with_cwd(cwd: &Path, root: &Path, config: &crate::config::Config) -> DvsPaths {
-        DvsPaths::new(
-            cwd.to_path_buf(),
             root.to_path_buf(),
             config.metadata_folder_name(),
         )
@@ -606,49 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn add_files_with_glob_pattern() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-
-        // Create multiple files with different extensions
-        create_file(&root, "a.txt", b"a");
-        create_file(&root, "b.txt", b"b");
-        create_file(&root, "c.csv", b"c");
-        create_file(&root, "d.json", b"d");
-
-        // Add only .txt files
-        let results = add_files("*.txt", &paths, backend, None).unwrap();
-        assert_eq!(results.len(), 2);
-
-        // All should be Copied
-        for result in &results {
-            assert_eq!(result.outcome, Outcome::Copied);
-        }
-
-        // Verify tracked
-        let statuses = get_status(&paths).unwrap();
-        assert_eq!(statuses.len(), 2);
-    }
-
-    #[test]
-    fn add_files_with_recursive_glob() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-
-        create_file(&root, "a.txt", b"a");
-        create_file(&root, "subdir/b.txt", b"b");
-        create_file(&root, "subdir/nested/c.txt", b"c");
-
-        let results = add_files("**/*.txt", &paths, backend, None).unwrap();
-        assert_eq!(results.len(), 3);
-    }
-
-    #[test]
-    fn add_files_errors_when_no_matches() {
+    fn add_files_errors_when_not_found() {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
@@ -656,100 +614,27 @@ mod tests {
 
         create_file(&root, "a.txt", b"a");
 
-        let result = add_files("*.csv", &paths, backend, None);
+        let result = add_files(vec!["nonexistent.csv".into()], &paths, backend, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No files match"));
+        assert!(result.unwrap_err().to_string().contains("not found"));
     }
 
     #[test]
-    fn get_files_with_glob_pattern() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-
-        // Add files
-        create_file(&root, "a.txt", b"a");
-        create_file(&root, "b.txt", b"b");
-        create_file(&root, "c.csv", b"c");
-        add_files("*.*", &paths, backend, None).unwrap();
-
-        // Delete original files
-        fs::remove_file(root.join("a.txt")).unwrap();
-        fs::remove_file(root.join("b.txt")).unwrap();
-        fs::remove_file(root.join("c.csv")).unwrap();
-
-        // Get only .txt files
-        let results = get_files("*.txt", &paths, backend).unwrap();
-        assert_eq!(results.len(), 2);
-
-        for result in &results {
-            assert_eq!(result.outcome, Outcome::Copied);
-        }
-
-        // Verify files restored
-        assert!(root.join("a.txt").exists());
-        assert!(root.join("b.txt").exists());
-        assert!(!root.join("c.csv").exists());
-    }
-
-    #[test]
-    fn get_files_with_cwd_relative_pattern() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-
-        // Create files in a subdirectory
-        create_file(&root, "subdir/a.txt", b"a");
-        create_file(&root, "subdir/b.txt", b"b");
-        create_file(&root, "other/c.txt", b"c");
-
-        // Add all files
-        add_files("**/*.txt", &paths, backend, None).unwrap();
-
-        // Delete files
-        fs::remove_file(root.join("subdir/a.txt")).unwrap();
-        fs::remove_file(root.join("subdir/b.txt")).unwrap();
-        fs::remove_file(root.join("other/c.txt")).unwrap();
-
-        // Get files with cwd set to "subdir"
-        let cwd = root.join("subdir");
-        let paths_subdir = make_paths_with_cwd(&cwd, &root, &config);
-        let results = get_files("*.txt", &paths_subdir, backend).unwrap();
-        assert_eq!(results.len(), 2);
-
-        // Only subdir files should be restored
-        assert!(root.join("subdir/a.txt").exists());
-        assert!(root.join("subdir/b.txt").exists());
-        assert!(!root.join("other/c.txt").exists());
-    }
-
-    #[test]
-    fn get_files_errors_when_no_matches() {
+    fn get_files_errors_when_not_found() {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
         let paths = make_paths(&root, &config);
 
         create_file(&root, "a.txt", b"a");
-        add_files("*.txt", &paths, backend, None).unwrap();
+        add_files(vec!["a.txt".into()], &paths, backend, None).unwrap();
 
-        let result = get_files("*.csv", &paths, backend);
+        let result = get_files(vec!["nonexistent.csv".into()], &paths, backend);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("No tracked files match")
-        );
+        assert!(result.unwrap_err().to_string().contains("not found"));
     }
 
-    fn run_add_get_roundtrip(
-        add_input: impl Into<PathInput>,
-        get_input: impl Into<PathInput>,
-        expected_files: &[&str],
-    ) {
+    fn run_add_get_roundtrip(file_paths: Vec<PathBuf>, expected_files: &[&str]) {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
@@ -760,7 +645,7 @@ mod tests {
         create_file(&root, "c.csv", b"c");
 
         // Add files
-        let results = add_files(add_input, &paths, backend, None).unwrap();
+        let results = add_files(file_paths.clone(), &paths, backend, None).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert_eq!(result.outcome, Outcome::Copied);
@@ -783,7 +668,7 @@ mod tests {
         }
 
         // Get files back
-        let results = get_files(get_input, &paths, backend).unwrap();
+        let results = get_files(file_paths, &paths, backend).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert_eq!(result.outcome, Outcome::Copied);
@@ -796,14 +681,9 @@ mod tests {
     }
 
     #[test]
-    fn add_get_roundtrip_with_glob() {
-        run_add_get_roundtrip("*.txt", "*.*", &["a.txt", "b.txt"]);
-    }
-
-    #[test]
     fn add_get_roundtrip_with_explicit_paths() {
         let paths: Vec<PathBuf> = vec!["a.txt".into(), "c.csv".into()];
-        run_add_get_roundtrip(paths.clone(), paths, &["a.txt", "c.csv"]);
+        run_add_get_roundtrip(paths, &["a.txt", "c.csv"]);
     }
 
     #[test]

@@ -15,7 +15,6 @@ fs-err.workspace = true
 log.workspace = true
 
 blake3.workspace = true
-globset.workspace = true
 walkdir.workspace = true
 md5.workspace = true
 jiff.workspace = true
