@@ -74,7 +74,7 @@ rpkg-update *args:
 rpkg-document:
     Rscript -e 'devtools::document("{{rpkg_dir}}")'
 
-rpkg-install:
+rpkg-install: rpkg-document
     NOT_CRAN=true Rscript -e 'install.packages("{{rpkg_dir}}", repos = NULL, type = "source")'
 alias install-rpkg := rpkg-install
 
