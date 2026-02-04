@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
+use dvs::audit::parse_audit_log;
+use dvs::find_repo_root;
+use fs_err as fs;
 use serde_json::json;
 
 use dvs::config::Config;
@@ -41,6 +44,7 @@ pub enum Command {
         #[clap(required = true)]
         paths: Vec<PathBuf>,
     },
+    Audit,
 }
 
 #[derive(Parser)]
@@ -122,6 +126,30 @@ fn try_main() -> Result<()> {
                         Outcome::Copied => println!("Retrieved: {}", result.path.display()),
                         Outcome::Present => println!("Up to date: {}", result.path.display()),
                     }
+                }
+            }
+        }
+        Command::Audit => {
+            let config =
+                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            // FIXME: should the DvsPaths contain the path to the storage directory?
+            let _dvs_paths = DvsPaths::from_cwd(&config)?;
+
+            let storage = find_repo_root(current_dir)
+                .expect("Not in a DVS repository")
+                .join(".storage");
+            let audit_path = storage.join("audit.log.jsonl");
+            assert!(audit_path.is_file());
+
+            let content = fs::read(&audit_path).unwrap();
+            let audit_log_entries = parse_audit_log(&content).unwrap();
+            if cli.json {
+                println!("{}", serde_json::to_string(&audit_log_entries)?);
+            } else if audit_log_entries.is_empty() {
+                println!("No audit log available in this DVS repository");
+            } else {
+                for entry in audit_log_entries {
+                    println!("{}", entry)
                 }
             }
         }

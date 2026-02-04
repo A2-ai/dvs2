@@ -42,3 +42,20 @@ pub fn parse_audit_log(bytes: &[u8]) -> Result<Vec<AuditEntry>> {
         .map(|line| Ok(serde_json::from_str(line)?))
         .collect()
 }
+
+impl std::fmt::Display for AuditEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let AuditEntry {
+            operation_id: _,
+            timestamp,
+            user,
+            file: _audit_file,
+        } = self;
+        let timestamp =
+            Timestamp::from_second(*timestamp).expect("timestamp found in audit log is invalid");
+        write!(f, "{}", timestamp)?;
+        write!(f, "{}", user)?;
+
+        Ok(())
+    }
+}
