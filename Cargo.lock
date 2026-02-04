@@ -222,6 +222,7 @@ dependencies = [
  "clap",
  "dvs",
  "env_logger",
+ "fs-err",
  "serde_json",
 ]
 
