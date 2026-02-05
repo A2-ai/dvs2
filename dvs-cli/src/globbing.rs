@@ -80,7 +80,6 @@ pub fn resolve_paths_for_add(
                         out.insert(relative_to_root);
                     }
                 }
-            } else {
             }
         } else {
             bail!("Path is not a file or directory: {}", path.display());
@@ -157,7 +156,7 @@ pub fn resolve_paths_for_get(
         // Apply glob if present, otherwise match all
         if glob_matcher
             .as_ref()
-            .map_or(true, |g| g.is_match(&cwd_relative))
+            .is_none_or(|g| g.is_match(&cwd_relative))
         {
             out.insert(tracked_path);
         }

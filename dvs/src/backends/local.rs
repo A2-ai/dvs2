@@ -1,12 +1,13 @@
+use std::collections::HashSet;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 
-use crate::audit::AuditEntry;
+use crate::audit::{AuditEntry, parse_audit_log};
 use crate::backends::Backend;
 use crate::{HashAlg, Hashes};
 
@@ -195,6 +196,14 @@ impl Backend for LocalBackend {
         self.apply_perms(&audit_path)?;
         Ok(())
     }
+
+    fn read_audit_file(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>> {
+        let files_to_include: HashSet<_> = HashSet::from_iter(files.iter().cloned());
+        let audit_path = self.path.join(AUDIT_LOG_FILENAME);
+        let f = fs::File::open(&audit_path)?;
+        let entries = parse_audit_log(BufReader::new(f), &files_to_include)?;
+        Ok(entries)
+    }
 }
 
 #[cfg(test)]
@@ -202,6 +211,7 @@ mod tests {
     use super::*;
     use crate::audit::{AuditEntry, AuditFile, parse_audit_log};
     use crate::hashes::Hashes;
+    use std::io::Cursor;
 
     fn test_hash(hash: &str) -> Hashes {
         Hashes {
@@ -396,7 +406,7 @@ mod tests {
         assert!(audit_path.is_file());
 
         let content = fs::read(&audit_path).unwrap();
-        let entries = parse_audit_log(&content).unwrap();
+        let entries = parse_audit_log(Cursor::new(content), &HashSet::new()).unwrap();
         assert_eq!(entries.len(), 2);
 
         assert_eq!(entries[0].operation_id, "op-1");
