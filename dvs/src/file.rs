@@ -60,7 +60,7 @@ impl FileMetadata {
         let size = content.len() as u64;
         let hashes = Hashes::from(content);
         let created_by = whoami::username()?;
-        let add_time = jiff::Zoned::now().to_string();
+        let add_time = jiff::Timestamp::now().to_string();
 
         Ok(Self {
             hashes,
