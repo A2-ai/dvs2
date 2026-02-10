@@ -1,4 +1,5 @@
 use std::io;
+use std::io::Write;
 use std::path::Path;
 
 use crate::backends::Backend as BackendTrait;
@@ -8,45 +9,48 @@ use anyhow::{Context, Result};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Compression {
     None,
+    #[default]
     Zstd,
 }
 
 impl Compression {
     pub fn compress(&self, source: &Path, dest: &Path) -> Result<()> {
-        let input = fs::File::open(source)?;
-        let output = fs::File::create(dest)?;
-
         match self {
             Compression::None => {
                 fs::copy(source, dest)?;
                 Ok(())
             }
             Compression::Zstd => {
+                let input = fs::File::open(source)?;
+                let output = fs::File::create(dest)?;
+
                 let mut encoder = zstd::stream::read::Encoder::new(input, 0)?;
                 let mut writer = io::BufWriter::new(output);
                 io::copy(&mut encoder, &mut writer)?;
+                writer.flush()?;
                 Ok(())
             }
         }
     }
 
     pub fn decompress(&self, source: &Path, dest: &Path) -> Result<()> {
-        let input = fs::File::open(source)?;
-        let output = fs::File::create(dest)?;
-
         match self {
             Compression::None => {
                 fs::copy(source, dest)?;
                 Ok(())
             }
             Compression::Zstd => {
+                let input = fs::File::open(source)?;
+                let output = fs::File::create(dest)?;
+
                 let mut decoder = zstd::stream::read::Decoder::new(input)?;
                 let mut writer = io::BufWriter::new(output);
                 io::copy(&mut decoder, &mut writer)?;
+                writer.flush()?;
                 Ok(())
             }
         }
