@@ -1,9 +1,12 @@
+mod globbing;
+
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use serde_json::json;
 
+use crate::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::config::Config;
 use dvs::file::{Outcome, add_files, get_files, get_status};
 use dvs::init::init;
@@ -27,19 +30,25 @@ pub enum Command {
         #[clap(long)]
         group: Option<String>,
     },
-    /// Adds the given files to dvs. You can use a glob or paths
+    /// Adds the given files to dvs. You can use a glob or paths.
+    /// If you pass a directory and a glob, the glob will be ran from that directory
     Add {
-        #[clap(required = true)]
+        #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
+        #[clap(long)]
+        glob: Option<String>,
         #[clap(long)]
         message: Option<String>,
     },
     /// Gets the status of each files in the current repository
     Status,
-    /// Retrieves the given files from dvs storage. You can use a glob or paths
+    /// Retrieves the given files from dvs storage. You can use a glob or paths.
+    /// If you pass a directory and a glob, the glob will be ran from that directory
     Get {
-        #[clap(required = true)]
+        #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
+        #[clap(long, short)]
+        glob: Option<String>,
     },
 }
 
@@ -78,12 +87,22 @@ fn try_main() -> Result<()> {
                 println!("DVS Initialized");
             }
         }
-        Command::Add { paths, message } => {
+        Command::Add {
+            paths,
+            glob,
+            message,
+        } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
+            let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
+                .into_iter()
+                .collect();
+            if all_paths.is_empty() {
+                return Err(anyhow!("No files to add"));
+            }
 
-            let results = add_files(paths, &dvs_paths, config.backend(), message)?;
+            let results = add_files(all_paths, &dvs_paths, config.backend(), message)?;
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
@@ -108,12 +127,18 @@ fn try_main() -> Result<()> {
                 }
             }
         }
-        Command::Get { paths } => {
+        Command::Get { paths, glob } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
+            let all_paths: Vec<_> = resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths)?
+                .into_iter()
+                .collect();
+            if all_paths.is_empty() {
+                return Err(anyhow!("No files to get"));
+            }
 
-            let results = get_files(paths, &dvs_paths, config.backend())?;
+            let results = get_files(all_paths, &dvs_paths, config.backend())?;
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {

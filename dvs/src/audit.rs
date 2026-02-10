@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::io::BufRead;
 use std::path::PathBuf;
 
 use crate::Hashes;
@@ -34,11 +36,21 @@ impl AuditEntry {
     }
 }
 
-pub fn parse_audit_log(bytes: &[u8]) -> Result<Vec<AuditEntry>> {
-    let content = std::str::from_utf8(bytes)?;
-    content
+pub fn parse_audit_log(
+    reader: impl BufRead,
+    only_files: &HashSet<PathBuf>,
+) -> Result<Vec<AuditEntry>> {
+    reader
         .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| Ok(serde_json::from_str(line)?))
+        .map(|line| line.map_err(anyhow::Error::from))
+        .filter_map(|line| match line {
+            Ok(l) if l.trim().is_empty() => None,
+            other => Some(other),
+        })
+        .map(|line| Ok(serde_json::from_str::<AuditEntry>(&line?)?))
+        .filter(|entry| match entry {
+            Ok(e) => only_files.is_empty() || only_files.contains(&e.file.path),
+            Err(_) => true, // propagate errors
+        })
         .collect()
 }
