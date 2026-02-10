@@ -41,6 +41,7 @@ pub struct FileMetadata {
     pub size: u64,
     pub created_by: String,
     pub add_time: String,
+    pub compression: Compression,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
@@ -52,7 +53,11 @@ impl PartialEq for FileMetadata {
 }
 
 impl FileMetadata {
-    pub fn from_file(path: impl AsRef<Path>, message: Option<String>) -> Result<Self> {
+    pub fn from_file(
+        path: impl AsRef<Path>,
+        compression: Compression,
+        message: Option<String>,
+    ) -> Result<Self> {
         if !path.as_ref().is_file() {
             bail!("Path {} is not a file", path.as_ref().display());
         }
@@ -69,6 +74,7 @@ impl FileMetadata {
             created_by,
             add_time,
             message,
+            compression,
         })
     }
 
@@ -81,7 +87,6 @@ impl FileMetadata {
         backend: &dyn Backend,
         paths: &DvsPaths,
         relative_path: impl AsRef<Path>,
-        compression: Compression,
     ) -> Result<Outcome> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
         let dvs_file_exists = dvs_file_path.is_file();
@@ -116,7 +121,7 @@ impl FileMetadata {
         let old_storage_content = backend.read(&self.hashes)?;
 
         // 3. Store file to backend
-        let storage_res = backend.store(&self.hashes, source_file.as_ref(), compression);
+        let storage_res = backend.store(&self.hashes, source_file.as_ref(), self.compression);
 
         // 4. Then metadata
         let old_metadata_content = fs::read(&dvs_file_path).ok();
@@ -202,7 +207,7 @@ fn get_file_status(paths: &DvsPaths, relative_path: impl AsRef<Path>) -> Result<
     if !file_path.is_file() {
         return Ok(Status::Absent);
     }
-    let current_metadata = FileMetadata::from_file(&file_path, None)?;
+    let current_metadata = FileMetadata::from_file(&file_path, Compression::None, None)?;
     if existing_metadata == current_metadata {
         Ok(Status::Current)
     } else {
@@ -242,7 +247,6 @@ fn get_file(
     backend: &dyn Backend,
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
-    compression: Compression,
 ) -> Result<Outcome> {
     log::debug!("Retrieving file: {}", relative_path.as_ref().display());
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
@@ -268,7 +272,7 @@ fn get_file(
 
     // Check if target already exists and matches
     if target_path.is_file() {
-        let current = FileMetadata::from_file(&target_path, None)?;
+        let current = FileMetadata::from_file(&target_path, Compression::None, None)?;
         if current == metadata {
             log::debug!(
                 "File {} already present locally and matches",
@@ -285,9 +289,9 @@ fn get_file(
         target_path.display()
     );
     backend
-        .retrieve(&metadata.hashes, &target_path, compression)
+        .retrieve(&metadata.hashes, &target_path, metadata.compression)
         .with_context(|| format!("Failed to retrieve {}", relative_path.as_ref().display()))?;
-    let actual = FileMetadata::from_file(&target_path, None)?;
+    let actual = FileMetadata::from_file(&target_path, Compression::None, None)?;
     if actual.hashes != metadata.hashes {
         fs::remove_file(&target_path)?;
         bail!("Retrieved file does not match expected hash");
@@ -336,15 +340,8 @@ pub fn add_files(
     for (relative_path, _) in matched_paths {
         let full_path = paths.file_path(&relative_path);
 
-        let metadata = FileMetadata::from_file(&full_path, message.clone())?;
-        let outcome = metadata.save(
-            operation_id,
-            &full_path,
-            backend,
-            paths,
-            &relative_path,
-            compression,
-        )?;
+        let metadata = FileMetadata::from_file(&full_path, compression, message.clone())?;
+        let outcome = metadata.save(operation_id, &full_path, backend, paths, &relative_path)?;
         log::info!(
             "Successfully added {} ({:?})",
             relative_path.display(),
@@ -415,8 +412,12 @@ mod tests {
         let (_tmp, root) = create_temp_git_repo();
         let file_path = create_file(&root, "test.txt", b"hello world");
 
-        let metadata =
-            FileMetadata::from_file(&file_path, Some("test message".to_string())).unwrap();
+        let metadata = FileMetadata::from_file(
+            &file_path,
+            Compression::Zstd,
+            Some("test message".to_string()),
+        )
+        .unwrap();
 
         assert_eq!(metadata.hashes.blake3.len(), 64);
         assert_eq!(metadata.hashes.md5, "5eb63bbbe01eeed093cb22bb8f5acdc3");
@@ -427,7 +428,8 @@ mod tests {
     #[test]
     fn file_metadata_from_nonexistent_file_fails() {
         let tmp = tempfile::tempdir().unwrap();
-        let result = FileMetadata::from_file(tmp.path().join("nonexistent.txt"), None);
+        let result =
+            FileMetadata::from_file(tmp.path().join("nonexistent.txt"), Compression::Zstd, None);
         assert!(result.is_err());
     }
 
@@ -439,16 +441,9 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "data.bin", b"binary data");
 
-        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         let outcome = metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "data.bin",
-                Compression::Zstd,
-            )
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
             .unwrap();
 
         assert_eq!(outcome, Outcome::Copied);
@@ -465,28 +460,14 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "data.bin", b"binary data");
 
-        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "data.bin",
-                Compression::Zstd,
-            )
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
             .unwrap();
 
         // Second save should return Present
         let outcome = metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "data.bin",
-                Compression::Zstd,
-            )
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
             .unwrap();
         assert_eq!(outcome, Outcome::Present);
     }
@@ -510,16 +491,9 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "synced.txt", b"content");
 
-        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "synced.txt",
-                Compression::Zstd,
-            )
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "synced.txt")
             .unwrap();
 
         let status = get_file_status(&paths, "synced.txt").unwrap();
@@ -534,16 +508,9 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "deleted.txt", b"content");
 
-        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "deleted.txt",
-                Compression::Zstd,
-            )
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "deleted.txt")
             .unwrap();
 
         // Delete the original file
@@ -561,16 +528,9 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "modified.txt", b"original");
 
-        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "modified.txt",
-                Compression::Zstd,
-            )
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "modified.txt")
             .unwrap();
 
         // Modify the file
@@ -588,16 +548,9 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "retrieve.txt", b"stored content");
 
-        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "retrieve.txt",
-                Compression::Zstd,
-            )
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "retrieve.txt")
             .unwrap();
 
         // Delete the original file
@@ -619,16 +572,9 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "present.txt", b"content");
 
-        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "present.txt",
-                Compression::Zstd,
-            )
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "present.txt")
             .unwrap();
 
         // File still exists and matches - should return Present
@@ -658,16 +604,9 @@ mod tests {
         // Add multiple files
         for name in ["a.txt", "b.txt", "subdir/c.txt"] {
             let file_path = create_file(&root, name, name.as_bytes());
-            let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+            let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
             metadata
-                .save(
-                    Uuid::new_v4(),
-                    &file_path,
-                    backend,
-                    &paths,
-                    name,
-                    Compression::Zstd,
-                )
+                .save(Uuid::new_v4(), &file_path, backend, &paths, name)
                 .unwrap();
         }
 
@@ -794,31 +733,17 @@ mod tests {
 
         // Add file A with content "foo" (hash H1)
         let file_a = create_file(&root, "a.txt", b"foo");
-        let metadata_a = FileMetadata::from_file(&file_a, None).unwrap();
+        let metadata_a = FileMetadata::from_file(&file_a, Compression::Zstd, None).unwrap();
         metadata_a
-            .save(
-                Uuid::new_v4(),
-                &file_a,
-                backend,
-                &paths,
-                "a.txt",
-                Compression::Zstd,
-            )
+            .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt")
             .unwrap();
         let hash_h1 = metadata_a.hashes.md5.clone();
 
         // Add file B with content "bar" (hash H2)
         let file_b = create_file(&root, "b.txt", b"bar");
-        let metadata_b = FileMetadata::from_file(&file_b, None).unwrap();
+        let metadata_b = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
         metadata_b
-            .save(
-                Uuid::new_v4(),
-                &file_b,
-                backend,
-                &paths,
-                "b.txt",
-                Compression::Zstd,
-            )
+            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt")
             .unwrap();
         let hash_h2 = metadata_b.hashes.md5.clone();
         assert_ne!(hash_h1, hash_h2);
@@ -827,18 +752,11 @@ mod tests {
         fs::write(&file_b, b"foo").unwrap();
 
         // Run add on B with new content
-        let metadata_b_new = FileMetadata::from_file(&file_b, None).unwrap();
+        let metadata_b_new = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
         assert_eq!(metadata_b_new.hashes.md5, hash_h1);
 
         metadata_b_new
-            .save(
-                Uuid::new_v4(),
-                &file_b,
-                backend,
-                &paths,
-                "b.txt",
-                Compression::Zstd,
-            )
+            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt")
             .unwrap();
 
         // Verify metadata was updated
@@ -864,16 +782,9 @@ mod tests {
 
         // Add a file
         let file_path = create_file(&root, "data.txt", b"original content");
-        let metadata = FileMetadata::from_file(&file_path, None).unwrap();
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "data.txt",
-                Compression::Zstd,
-            )
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.txt")
             .unwrap();
 
         // Delete the local file
