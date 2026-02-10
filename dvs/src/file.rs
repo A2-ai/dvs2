@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::audit::{AuditEntry, AuditFile};
 use crate::backends::Backend;
+use crate::gitignore::add_to_gitignore;
 use crate::hashes::Hashes;
 use crate::paths::DvsPaths;
 use anyhow::{Context, Result, bail};
@@ -9,7 +10,6 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use walkdir::WalkDir;
-use crate::gitignore::add_to_gitignore;
 
 /// Outcome of an add or get operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
