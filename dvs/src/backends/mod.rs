@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::Hashes;
 use crate::audit::AuditEntry;
@@ -31,4 +31,8 @@ pub trait Backend: Send + Sync {
 
     /// Log an audit entry to the backend's audit log.
     fn log_audit(&self, entry: &AuditEntry) -> Result<()>;
+
+    /// Read the whole audit file, filtered by the given file paths.
+    /// If `files` is empty, return the full audit log
+    fn read_audit_file(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>>;
 }

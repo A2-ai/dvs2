@@ -121,7 +121,7 @@ impl FileMetadata {
         log::debug!("Writing metadata to {}", dvs_file_path.display());
         let metadata_res = fs::write(
             &dvs_file_path,
-            serde_json::to_string(self).expect("valid json"),
+            serde_json::to_string_pretty(self).expect("valid json"),
         );
 
         match (storage_res, metadata_res) {

@@ -7,3 +7,9 @@ rm README.md
 cargo run -- get README.md
 cargo run  -- status
 ```
+
+- --glob for CLI with expansion inside CLI
+- pretty print .dvs metadata
+- add some filters for dvs status --absent/--current
+- add dvs history that looks in the audit log and presents all the changes
+- version number for config
