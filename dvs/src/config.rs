@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::backends::Backend as BackendTrait;
 use crate::backends::local::LocalBackend;
-use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, find_repo_root};
+use crate::paths::{CONFIG_FILE_NAME, DEFAULT_METADATA_FOLDER_NAME, find_repo_root};
 use anyhow::{Context, Result};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ pub struct Config {
     /// at the root of the repository
     /// If this option is set, dvs will use that folder name instead of `.dvs`
     metadata_folder_name: Option<String>,
-    backend: Backend,
+    pub backend: Backend,
 }
 
 impl Config {
@@ -70,7 +70,7 @@ impl Config {
         if let Some(name) = &self.metadata_folder_name {
             name.as_str()
         } else {
-            DEFAULT_FOLDER_NAME
+            DEFAULT_METADATA_FOLDER_NAME
         }
     }
 

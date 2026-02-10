@@ -4,6 +4,7 @@ pub mod config;
 pub mod file;
 mod hashes;
 pub mod init;
+pub mod migrate;
 pub mod paths;
 
 pub use backends::Backend;

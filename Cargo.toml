@@ -33,3 +33,5 @@ jiff = "0.2.18"
 anyhow = "1.0.100"
 whoami = "2"
 uuid = "1.20.0"
+# deprecated but ok for our usecase
+serde_yaml = "0.9"

@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use fs_err as fs;
 
 pub const CONFIG_FILE_NAME: &str = "dvs.toml";
-pub const DEFAULT_FOLDER_NAME: &str = ".dvs";
+pub const DEFAULT_METADATA_FOLDER_NAME: &str = ".dvs";
 
 /// Finds the root of a git repository by walking up from the given directory
 /// until a `.git` folder or `dvs.toml` is found
