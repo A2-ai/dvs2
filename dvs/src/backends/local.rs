@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit::{AuditEntry, parse_audit_log};
 use crate::backends::Backend;
+use crate::config::Compression;
 use crate::{HashAlg, Hashes};
 
 const AUDIT_LOG_FILENAME: &str = "audit.log.jsonl";
@@ -125,13 +126,13 @@ impl Backend for LocalBackend {
         Ok(())
     }
 
-    fn store(&self, hash: &Hashes, source: &Path) -> Result<()> {
+    fn store(&self, hash: &Hashes, source: &Path, compression: Compression) -> Result<()> {
         let path = self.hash_to_path(hash)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
             self.apply_perms(parent)?;
         }
-        fs::copy(source, &path)?;
+        compression.compress(source, &path)?;
         self.apply_perms(&path)?;
         Ok(())
     }
@@ -148,13 +149,13 @@ impl Backend for LocalBackend {
         Ok(())
     }
 
-    fn retrieve(&self, hash: &Hashes, target: &Path) -> Result<bool> {
+    fn retrieve(&self, hash: &Hashes, target: &Path, compression: Compression) -> Result<bool> {
         let path = self.hash_to_path(hash)?;
         if path.is_file() {
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::copy(&path, target)?;
+            compression.decompress(&path, target)?;
             Ok(true)
         } else {
             Ok(false)
@@ -210,6 +211,7 @@ impl Backend for LocalBackend {
 mod tests {
     use super::*;
     use crate::audit::{AuditEntry, AuditFile, parse_audit_log};
+    use crate::config::Compression;
     use crate::hashes::Hashes;
     use std::io::Cursor;
 
@@ -262,7 +264,7 @@ mod tests {
         fs::write(&source, b"test content").unwrap();
 
         let hash = test_hash("d41d8cd98f00b204e9800998ecf8427e");
-        backend.store(&hash, &source).unwrap();
+        backend.store(&hash, &source, Compression::None).unwrap();
 
         let stored = storage.join("d4").join("1d8cd98f00b204e9800998ecf8427e");
         assert!(stored.is_file());
@@ -282,7 +284,7 @@ mod tests {
 
         // Retrieve to new location
         let target = tmp.path().join("retrieved.txt");
-        let result = backend.retrieve(&hash, &target).unwrap();
+        let result = backend.retrieve(&hash, &target, Compression::None).unwrap();
 
         // file was copied if result == true
         assert!(result);
@@ -298,7 +300,11 @@ mod tests {
 
         let target = tmp.path().join("target.txt");
         let result = backend
-            .retrieve(&test_hash("1234567890123456789012"), &target)
+            .retrieve(
+                &test_hash("1234567890123456789012"),
+                &target,
+                Compression::None,
+            )
             .unwrap();
 
         assert!(!result);
