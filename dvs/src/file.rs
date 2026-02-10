@@ -9,6 +9,7 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use walkdir::WalkDir;
+use crate::gitignore::add_to_gitignore;
 
 /// Outcome of an add or get operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -344,6 +345,11 @@ pub fn add_files(
             outcome,
         });
     }
+
+    add_to_gitignore(
+        paths.repo_root(),
+        &results.iter().map(|r| r.path.clone()).collect::<Vec<_>>(),
+    )?;
 
     Ok(results)
 }
