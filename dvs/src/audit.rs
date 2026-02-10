@@ -8,6 +8,12 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Action {
+    Add,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditFile {
     pub path: PathBuf,
@@ -20,10 +26,11 @@ pub struct AuditEntry {
     pub timestamp: i64,
     pub user: String,
     pub file: AuditFile,
+    pub action: Action,
 }
 
 impl AuditEntry {
-    pub fn new(operation_id: Uuid, file: AuditFile) -> Self {
+    pub fn new_add(operation_id: Uuid, file: AuditFile) -> Self {
         let timestamp = Timestamp::now().as_second();
         let user = whoami::username().unwrap_or_else(|_| "unknown".to_string());
 
@@ -32,6 +39,7 @@ impl AuditEntry {
             timestamp,
             user,
             file,
+            action: Action::Add,
         }
     }
 }
