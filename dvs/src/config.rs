@@ -1,3 +1,4 @@
+use std::io;
 use std::path::Path;
 
 use crate::backends::Backend as BackendTrait;
@@ -7,6 +8,51 @@ use anyhow::{Context, Result};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Compression {
+    None,
+    Zstd,
+}
+
+impl Compression {
+    pub fn compress(&self, source: &Path, dest: &Path) -> Result<()> {
+        let input = fs::File::open(source)?;
+        let output = fs::File::create(dest)?;
+
+        match self {
+            Compression::None => {
+                fs::copy(source, dest)?;
+                Ok(())
+            }
+            Compression::Zstd => {
+                let mut encoder = zstd::stream::read::Encoder::new(input, 0)?;
+                let mut writer = io::BufWriter::new(output);
+                io::copy(&mut encoder, &mut writer)?;
+                Ok(())
+            }
+        }
+    }
+
+    pub fn decompress(&self, source: &Path, dest: &Path) -> Result<()> {
+        let input = fs::File::open(source)?;
+        let output = fs::File::create(dest)?;
+
+        match self {
+            Compression::None => {
+                fs::copy(source, dest)?;
+                Ok(())
+            }
+            Compression::Zstd => {
+                let mut decoder = zstd::stream::read::Decoder::new(input)?;
+                let mut writer = io::BufWriter::new(output);
+                io::copy(&mut decoder, &mut writer)?;
+                Ok(())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum Backend {
@@ -15,6 +61,8 @@ pub enum Backend {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Config {
+    /// Compression algorithm to use for files in the storage directory
+    compression: Compression,
     /// By default, all the metadata files (the .dvs files) will be stored in a `.dvs` folder
     /// at the root of the repository
     /// If this option is set, dvs will use that folder name instead of `.dvs`
@@ -30,6 +78,7 @@ impl Config {
     ) -> Result<Config> {
         let backend = LocalBackend::new(path.as_ref(), permissions, group)?;
         Ok(Config {
+            compression: Compression::Zstd,
             metadata_folder_name: None,
             backend: Backend::Local(backend),
         })
@@ -72,6 +121,14 @@ impl Config {
         } else {
             DEFAULT_FOLDER_NAME
         }
+    }
+
+    pub fn compression(&self) -> Compression {
+        self.compression
+    }
+
+    pub fn set_compression(&mut self, compression: Compression) {
+        self.compression = compression;
     }
 
     pub fn backend(&self) -> &dyn BackendTrait {
