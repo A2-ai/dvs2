@@ -126,7 +126,7 @@ impl FileMetadata {
 
         match (storage_res, metadata_res) {
             (Ok(_), Ok(_)) => {
-                let audit_entry = AuditEntry::new(
+                let audit_entry = AuditEntry::new_add(
                     operation_id,
                     AuditFile {
                         path: source_file.as_ref().to_path_buf(),

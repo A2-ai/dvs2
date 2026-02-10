@@ -209,7 +209,7 @@ impl Backend for LocalBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audit::{AuditEntry, AuditFile, parse_audit_log};
+    use crate::audit::{AuditEntry, AuditFile, parse_audit_log, Action};
     use crate::hashes::Hashes;
     use std::io::Cursor;
 
@@ -387,6 +387,7 @@ mod tests {
                 path: PathBuf::from("file1.txt"),
                 hashes: hash.clone(),
             },
+            action: Action::Add,
         };
 
         let entry2 = AuditEntry {
@@ -397,6 +398,7 @@ mod tests {
                 path: PathBuf::from("file2.txt"),
                 hashes: hash.clone(),
             },
+            action: Action::Add,
         };
 
         backend.log_audit(&entry1).unwrap();
