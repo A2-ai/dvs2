@@ -2,11 +2,13 @@ pub mod audit;
 pub mod backends;
 pub mod config;
 pub mod file;
+mod gitignore;
 mod hashes;
 pub mod init;
 pub mod paths;
 
 pub use backends::Backend;
+pub use config::Compression;
 pub use file::{AddResult, FileMetadata, FileStatus, GetResult, Outcome, Status};
 pub use file::{add_files, get_files, get_status};
 pub use hashes::{HashAlg, Hashes};

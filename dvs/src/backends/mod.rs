@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Hashes;
 use crate::audit::AuditEntry;
+use crate::config::Compression;
 use anyhow::Result;
 
 pub mod local;
@@ -10,15 +11,15 @@ pub trait Backend: Send + Sync {
     /// Initialize the backend storage (create directories, set permissions, etc.)
     fn init(&self) -> Result<()>;
 
-    /// Store file to backend by hash.
-    fn store(&self, hash: &Hashes, source: &Path) -> Result<()>;
+    /// Store file to backend by hash, optionally compressing.
+    fn store(&self, hash: &Hashes, source: &Path, compression: Compression) -> Result<()>;
 
     /// Store raw bytes to backend by hash (for rollback).
     fn store_bytes(&self, hash: &Hashes, content: &[u8]) -> Result<()>;
 
-    /// Retrieve content by hash to target path. Returns true if the file was copied to the target
-    /// path.
-    fn retrieve(&self, hash: &Hashes, target: &Path) -> Result<bool>;
+    /// Retrieve content by hash to target path, optionally decompressing.
+    /// Returns true if the file was copied to the target path.
+    fn retrieve(&self, hash: &Hashes, target: &Path, compression: Compression) -> Result<bool>;
 
     /// Check if the file exists in the backend
     fn exists(&self, hash: &Hashes) -> Result<bool>;

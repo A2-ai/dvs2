@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 
 use crate::globbing::{resolve_paths_for_add, resolve_paths_for_get};
+use dvs::Compression;
 use dvs::config::Config;
 use dvs::file::{Outcome, add_files, get_files, get_status};
 use dvs::init::init;
@@ -20,7 +21,7 @@ pub enum Command {
     Init {
         /// Where the data will be stored
         path: PathBuf,
-        /// If you want to use a folder name other than `.dvs` for sotring the metadata files
+        /// If you want to use a folder name other than `.dvs` for storing the metadata files
         #[clap(long)]
         metadata_folder_name: Option<String>,
         /// Unix permissions for storage directory and files (octal, e.g., "770")
@@ -29,6 +30,9 @@ pub enum Command {
         /// Unix group to set on storage directory and files
         #[clap(long)]
         group: Option<String>,
+        /// Disable compression of stored files. Compression defaults to zstd
+        #[clap(long)]
+        no_compression: bool,
     },
     /// Adds the given files to dvs. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory
@@ -75,8 +79,12 @@ fn try_main() -> Result<()> {
             metadata_folder_name,
             permissions,
             group,
+            no_compression,
         } => {
             let mut config = Config::new_local(path, permissions, group)?;
+            if no_compression {
+                config.set_compression(Compression::None);
+            }
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
             }
@@ -102,7 +110,13 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("No files to add"));
             }
 
-            let results = add_files(all_paths, &dvs_paths, config.backend(), message)?;
+            let results = add_files(
+                all_paths,
+                &dvs_paths,
+                config.backend(),
+                message,
+                config.compression(),
+            )?;
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
@@ -138,7 +152,12 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("No files to get"));
             }
 
-            let results = get_files(all_paths, &dvs_paths, config.backend())?;
+            let results = get_files(
+                all_paths,
+                &dvs_paths,
+                config.backend(),
+                config.compression(),
+            )?;
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
