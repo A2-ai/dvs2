@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::audit::{AuditEntry, AuditFile};
 use crate::backends::Backend;
+use crate::gitignore::add_to_gitignore;
 use crate::hashes::Hashes;
 use crate::paths::DvsPaths;
 use anyhow::{Context, Result, bail};
@@ -343,6 +344,13 @@ pub fn add_files(
             path: relative_path,
             outcome,
         });
+    }
+
+    if let Err(e) = add_to_gitignore(
+        paths.repo_root(),
+        &results.iter().map(|r| r.path.clone()).collect::<Vec<_>>(),
+    ) {
+        log::warn!("Failed to update .gitignore: {e}");
     }
 
     Ok(results)
