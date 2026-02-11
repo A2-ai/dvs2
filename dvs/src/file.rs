@@ -346,10 +346,12 @@ pub fn add_files(
         });
     }
 
-    add_to_gitignore(
+    if let Err(e) = add_to_gitignore(
         paths.repo_root(),
         &results.iter().map(|r| r.path.clone()).collect::<Vec<_>>(),
-    )?;
+    ) {
+        log::warn!("Failed to update .gitignore: {e}");
+    }
 
     Ok(results)
 }
