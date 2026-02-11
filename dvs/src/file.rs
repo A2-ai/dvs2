@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::audit::{AuditEntry, AuditFile};
 use crate::backends::Backend;
 use crate::config::Compression;
+use crate::gitignore::add_to_gitignore;
 use crate::hashes::Hashes;
 use crate::paths::DvsPaths;
 use anyhow::{Context, Result, bail};
@@ -66,7 +67,7 @@ impl FileMetadata {
         let size = content.len() as u64;
         let hashes = Hashes::from(content);
         let created_by = whoami::username()?;
-        let add_time = jiff::Zoned::now().to_string();
+        let add_time = jiff::Timestamp::now().to_string();
 
         Ok(Self {
             hashes,
@@ -351,6 +352,13 @@ pub fn add_files(
             path: relative_path,
             outcome,
         });
+    }
+
+    if let Err(e) = add_to_gitignore(
+        paths.repo_root(),
+        &results.iter().map(|r| r.path.clone()).collect::<Vec<_>>(),
+    ) {
+        log::warn!("Failed to update .gitignore: {e}");
     }
 
     Ok(results)

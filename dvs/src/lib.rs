@@ -2,6 +2,7 @@ pub mod audit;
 pub mod backends;
 pub mod config;
 pub mod file;
+mod gitignore;
 mod hashes;
 pub mod init;
 pub mod paths;
