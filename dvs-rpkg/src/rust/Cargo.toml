@@ -26,10 +26,9 @@ miniextendr-api = { version = "*", features = ["serde"] }
 dvs = { path = "../../../dvs" }
 serde = { version = "1", features = ["derive"] }
 anyhow = "1.0.100"
-walkdir = "2.5.0"
 
 [build-dependencies]
-miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr" }
+miniextendr-lint = "*"
 
 # Patch crates.io dependencies to use git sources
 # This is needed because miniextendr crates depend on each other via workspace deps

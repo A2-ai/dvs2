@@ -1,6 +1,6 @@
 [workspace]
 members = ["dvs", "dvs-cli"]
-exclude = ["dvsR"]
+exclude = ["dvs-rpkg"]
 resolver = "2"
 
 [profile.release]
@@ -34,3 +34,4 @@ anyhow = "1.0.100"
 whoami = "2"
 uuid = "1.20.0"
 zstd = "0.13.3"
+globset = "0.4"

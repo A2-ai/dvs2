@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
+use crate::paths::DvsPaths;
 use anyhow::{Result, anyhow, bail};
-use dvs::paths::DvsPaths;
 use globset::{GlobBuilder, GlobMatcher};
 use walkdir::WalkDir;
 

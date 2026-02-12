@@ -2,13 +2,13 @@
 # Sync or bump version between DESCRIPTION and Cargo.toml files.
 #
 # Usage (from workspace root):
-#   Rscript tools/bump-version.R dvsR                      # sync Cargo.toml to DESCRIPTION version
-#   Rscript tools/bump-version.R dvsR --bump=patch         # bump patch version (0.1.0 -> 0.1.1)
-#   Rscript tools/bump-version.R dvsR --bump=minor         # bump minor version (0.1.0 -> 0.2.0)
-#   Rscript tools/bump-version.R dvsR --bump=major         # bump major version (0.1.0 -> 1.0.0)
-#   Rscript tools/bump-version.R dvsR --bump=dev           # add dev suffix (0.1.0 -> 0.1.0.9000)
-#   Rscript tools/bump-version.R dvsR --bump=dev+          # increment dev (0.1.0.9000 -> 0.1.0.9001)
-#   Rscript tools/bump-version.R dvsR --set=1.2.3          # set specific version
+#   Rscript tools/bump-version.R dvs-rpkg                      # sync Cargo.toml to DESCRIPTION version
+#   Rscript tools/bump-version.R dvs-rpkg --bump=patch         # bump patch version (0.1.0 -> 0.1.1)
+#   Rscript tools/bump-version.R dvs-rpkg --bump=minor         # bump minor version (0.1.0 -> 0.2.0)
+#   Rscript tools/bump-version.R dvs-rpkg --bump=major         # bump major version (0.1.0 -> 1.0.0)
+#   Rscript tools/bump-version.R dvs-rpkg --bump=dev           # add dev suffix (0.1.0 -> 0.1.0.9000)
+#   Rscript tools/bump-version.R dvs-rpkg --bump=dev+          # increment dev (0.1.0.9000 -> 0.1.0.9001)
+#   Rscript tools/bump-version.R dvs-rpkg --set=1.2.3          # set specific version
 #
 # Modes (for Cargo.toml updates):
 #   --mode=auto       (default) update [workspace.package] and [package] versions
