@@ -1,16 +1,22 @@
-AC_INIT([dvs], [0.0.0.9000])
+AC_INIT([dvs], [1.0])
 
 dnl Use tools/ directory for auxiliary build files (config.guess, config.sub)
 dnl This avoids the CRAN NOTE about non-standard top-level files
 AC_CONFIG_AUX_DIR([tools])
 
+dnl Verify we're running from the R package directory (not the monorepo root)
+dnl This prevents accidental creation of src/, config.log, etc. in the wrong place
+if test ! -f "DESCRIPTION" || test ! -f "NAMESPACE"; then
+  AC_MSG_ERROR([configure must be run from the rpkg directory (where DESCRIPTION exists).
+
+  If you're in the monorepo root, run:
+    cd rpkg && ./configure
+  Or use:
+    just configure])
+fi
+
 dnl Canonicalize build/host triples for cross-compilation support
 AC_CANONICAL_HOST
-
-dnl Verify we're running from the R package directory
-if test ! -f "DESCRIPTION" || test ! -f "NAMESPACE"; then
-  AC_MSG_ERROR([configure must be run from the dvs-rpkg package directory (where DESCRIPTION exists).])
-fi
 
 dnl Ensure R_HOME is set and valid
 if test -z "$R_HOME"; then
@@ -24,8 +30,9 @@ if test ! -d "$R_HOME"; then
 fi
 
 dnl NOT_CRAN handling:
-dnl - CRAN builds: NOT_CRAN is unset or empty -> default to false (offline mode)
-dnl - Dev builds: set NOT_CRAN=true in environment to enable network
+dnl - CRAN builds: NOT_CRAN is unset or empty → default to false (offline mode)
+dnl - Dev builds: set NOT_CRAN=true in environment to enable network/vendoring
+dnl Normalize to "true" or "false" for consistent checks
 : ${NOT_CRAN:=false}
 case "$NOT_CRAN" in
   true|TRUE|1) NOT_CRAN=true ;;
@@ -33,12 +40,16 @@ case "$NOT_CRAN" in
 esac
 export NOT_CRAN
 
-dnl Set cargo offline flag based on NOT_CRAN
+dnl Set cargo offline/locked flags based on NOT_CRAN
+dnl - NOT_CRAN=true (dev): no --offline, no --locked (cargo updates lockfile for patches)
+dnl - NOT_CRAN=false (CRAN): use --offline, omit --locked (checksums cleared)
 if test "$NOT_CRAN" = "true"; then
   CARGO_OFFLINE_FLAG=""
-  CARGO_LOCKED_FLAG="--locked"
+  dnl Dev mode omits --locked so cargo can update source locations for [patch] entries
+  CARGO_LOCKED_FLAG=""
 else
   CARGO_OFFLINE_FLAG="--offline"
+  dnl CRAN mode omits --locked because checksums are cleared from vendor tarball
   CARGO_LOCKED_FLAG=""
 fi
 AC_SUBST([CARGO_OFFLINE_FLAG])
@@ -46,16 +57,27 @@ AC_SUBST([CARGO_LOCKED_FLAG])
 AC_SUBST([NOT_CRAN])
 
 dnl Set cargo features flag
-AC_ARG_VAR([DVS_FEATURES], [Comma-separated cargo features (e.g., "nonapi")])
-: ${DVS_FEATURES:=""}
+dnl
+dnl Users can enable optional features via MINIEXTENDR_FEATURES environment variable.
+dnl By default, no extra features are enabled.
+dnl
+dnl Note: 'nonapi' feature causes R CMD check warnings/errors (non-API calls).
+dnl Only enable when you specifically need those features and understand the risks.
+AC_ARG_VAR([MINIEXTENDR_FEATURES], [Comma-separated cargo features to enable (e.g., "nonapi,rayon")])
 
-if test -n "$DVS_FEATURES"; then
-  CARGO_FEATURES_FLAG="--features=$DVS_FEATURES"
+dnl Default: no extra features enabled
+dnl Users can set MINIEXTENDR_FEATURES to enable specific features
+if test -z "${MINIEXTENDR_FEATURES+x}"; then
+  dnl MINIEXTENDR_FEATURES not set - use empty (no extra features)
+  MINIEXTENDR_FEATURES=""
+fi
+
+if test -n "$MINIEXTENDR_FEATURES"; then
+  CARGO_FEATURES_FLAG="--features=$MINIEXTENDR_FEATURES"
+  # Auto-generate C preprocessor flags from cargo features
   CARGO_FEATURE_CPPFLAGS=""
-  # Auto-generate C preprocessor flags for each feature
   IFS=','
-  for _feature in $DVS_FEATURES; do
-    # Convert feature name to uppercase and replace hyphens with underscores
+  for _feature in $MINIEXTENDR_FEATURES; do
     _feature_upper=$(echo "$_feature" | tr 'a-z-' 'A-Z_')
     CARGO_FEATURE_CPPFLAGS="$CARGO_FEATURE_CPPFLAGS -DCARGO_FEATURE_$_feature_upper"
   done
@@ -67,6 +89,12 @@ fi
 AC_SUBST([CARGO_FEATURES_FLAG])
 AC_SUBST([CARGO_FEATURE_CPPFLAGS])
 
+dnl rust-analyzer configuration: For IDE support, configure rust-analyzer to use
+dnl the standalone workspace, not the vendored rpkg workspace:
+dnl   "rust-analyzer.linkedProjects": ["/path/to/miniextendr/Cargo.toml"]
+dnl This allows rust-analyzer to see the full workspace during development.
+
+
 dnl ---- canonical paths ----
 abs_top_srcdir="$(cd "$srcdir" && pwd)"
 AC_SUBST([ABS_TOP_SRCDIR], ["$abs_top_srcdir"])
@@ -74,12 +102,15 @@ abs_rpkg_src="$abs_top_srcdir/src"
 AC_SUBST([ABS_RPKG_SRCDIR], ["$abs_rpkg_src"])
 RUST_SRC_DIR="$abs_rpkg_src/rust"
 
+dnl Canonical path two levels above src (rpkg/src → miniextendr)
+root_miniextendr_repo="$(cd "$abs_rpkg_src/../.." && pwd)"
+AC_SUBST([ROOT_MINIEXTENDR_REPO], ["$root_miniextendr_repo"])
+
 dnl ---- tool discovery ----
 AC_PATH_TOOL([CARGO],[cargo],[no])
 AC_PATH_TOOL([RUSTC],[rustc],[no])
 AC_PATH_PROG([SED],[sed],[no])
 AC_PATH_PROG([CYGPATH],[cygpath],[no])
-AC_PATH_PROG([RSYNC],[rsync],[no])
 AS_IF([test "x$CARGO" = "xno"], [AC_MSG_ERROR([`cargo` not found])])
 AS_IF([test "x$RUSTC" = "xno"], [AC_MSG_ERROR([`rustc` not found])])
 AS_IF([test "x$SED" = "xno"], [AC_MSG_ERROR([`sed` not found])])
@@ -87,9 +118,10 @@ AC_SUBST([CARGO])
 AC_SUBST([RUSTC])
 AC_SUBST([SED])
 AC_SUBST([CYGPATH])
-AC_SUBST([RSYNC])
 
-dnl Use native paths for Cargo on Windows/MSYS to avoid path mangling
+dnl Use native paths for Cargo on Windows/MSYS to avoid path mangling.
+dnl MSYS2 paths like /d/a/foo become D:/d/a/foo when interpreted by Cargo,
+dnl so we convert them to proper Windows paths (D:/a/foo) with cygpath -m.
 abs_rpkg_src_cargo="$abs_rpkg_src"
 case "$host_os" in
   *msys*|*cygwin*|*mingw*)
@@ -100,11 +132,12 @@ case "$host_os" in
 esac
 AC_SUBST([ABS_RPKG_SRC_CARGO], ["$abs_rpkg_src_cargo"])
 
-dnl Report rustc version
+dnl Report rustc version (required by CRAN for Rust packages)
 RUSTC_VERSION="$($RUSTC --version)"
 AC_MSG_NOTICE([using $RUSTC_VERSION])
 
-dnl Check minimum rustc version (1.85+)
+dnl Check minimum rustc version (edition 2024 requires rustc 1.85+)
+dnl Extract version number: "rustc 1.85.0 (..." -> "1.85.0"
 RUSTC_VERSION_NUM=`echo "$RUSTC_VERSION" | "$SED" 's/rustc \(@<:@0-9@:>@*\.@<:@0-9@:>@*\.@<:@0-9@:>@*\).*/\1/'`
 RUSTC_MAJOR=`echo "$RUSTC_VERSION_NUM" | cut -d. -f1`
 RUSTC_MINOR=`echo "$RUSTC_VERSION_NUM" | cut -d. -f2`
@@ -112,10 +145,10 @@ MIN_RUSTC_MAJOR=1
 MIN_RUSTC_MINOR=85
 if test "$RUSTC_MAJOR" -lt "$MIN_RUSTC_MAJOR" || \
    (test "$RUSTC_MAJOR" -eq "$MIN_RUSTC_MAJOR" && test "$RUSTC_MINOR" -lt "$MIN_RUSTC_MINOR"); then
-  AC_MSG_ERROR([rustc $MIN_RUSTC_MAJOR.$MIN_RUSTC_MINOR+ required, found $RUSTC_VERSION_NUM])
+  AC_MSG_ERROR([rustc $MIN_RUSTC_MAJOR.$MIN_RUSTC_MINOR+ required for Rust edition 2024, found $RUSTC_VERSION_NUM])
 fi
 
-dnl Allow explicit toolchain
+dnl Allow explicit toolchain (e.g. +nightly); default empty (use default toolchain)
 AC_ARG_VAR([RUST_TOOLCHAIN],[Rust toolchain selector like '+stable' or '+nightly'])
 : ${RUST_TOOLCHAIN=""}
 AC_SUBST([RUST_TOOLCHAIN])
@@ -125,10 +158,10 @@ CARGO_CMD="$CARGO $RUST_TOOLCHAIN"
 AC_SUBST([CARGO_CMD])
 
 dnl ---- Cargo configuration ----
-dnl Use rust-target/ at package root (outside src/) to avoid pkgbuild issues.
-dnl pkgbuild's sources() function recursively finds .rs files in src/, and
+dnl IMPORTANT: target directory MUST be outside src/ to avoid pkgbuild scanning
 dnl generated .rs files in target/build/.../out/ during needs_compile() checks.
-dnl If any generated file has a newer mtime than the DLL, it triggers rebuild.
+dnl pkgbuild's sources() function recursively finds .rs files in src/, and
+dnl if any generated file has a newer mtime than the DLL, it triggers rebuild.
 AC_ARG_VAR([CARGO_TARGET_DIR], [Cargo target directory (default: rust-target, outside src/)])
 : ${CARGO_TARGET_DIR="$abs_top_srcdir/rust-target"}
 AC_SUBST([CARGO_TARGET_DIR])
@@ -145,15 +178,27 @@ case "$host_os" in
 esac
 AC_SUBST([CARGO_TARGET_DIR_CARGO])
 
-AC_ARG_VAR([CARGO_PROFILE], [Cargo build profile (debug or release)])
+AC_ARG_VAR([CARGO_PROFILE], [Cargo build profile (dev or release)])
 : ${CARGO_PROFILE="release"}
+dnl Map legacy 'debug' → 'dev' (cargo rejects --profile debug)
+if test "$CARGO_PROFILE" = "debug"; then
+  AC_MSG_WARN([CARGO_PROFILE=debug is invalid for cargo; using 'dev' instead])
+  CARGO_PROFILE="dev"
+fi
 AC_SUBST([CARGO_PROFILE])
 
-dnl Static library name - extract from Cargo.toml and convert hyphens to underscores
-CARGO_STATICLIB_NAME="$($SED -n 's/^name = "\(.*\)"/\1/p' "$RUST_SRC_DIR/Cargo.toml" | head -1 | tr '-' '_')"
-if test -z "$CARGO_STATICLIB_NAME"; then
-  AC_MSG_ERROR([Could not extract crate name from $RUST_SRC_DIR/Cargo.toml])
+dnl Cargo output directory differs from profile name:
+dnl   --profile dev     → target/debug/
+dnl   --profile release → target/release/
+if test "$CARGO_PROFILE" = "dev"; then
+  CARGO_PROFILE_DIR="debug"
+else
+  CARGO_PROFILE_DIR="$CARGO_PROFILE"
 fi
+
+dnl CARGO_STATICLIB_NAME will be extracted via cargo pkgid in AC_CONFIG_COMMANDS
+dnl Use placeholder for now - will be substituted after Cargo.toml is available
+CARGO_STATICLIB_NAME="__CARGO_STATICLIB_NAME_PLACEHOLDER__"
 AC_SUBST([CARGO_STATICLIB_NAME])
 
 AC_ARG_VAR([ENV_RUSTFLAGS], [Rust compiler flags passed as RUSTFLAGS])
@@ -165,15 +210,23 @@ if test -z "$CARGO_BUILD_TARGET"; then
   if test -n "$host" && test -n "$build" && test "$host" != "$build"; then
     CARGO_BUILD_TARGET="$host"
     AC_MSG_NOTICE([CARGO_BUILD_TARGET not set; using host triple $host])
+    AC_MSG_WARN([Autoconf host triple '$host' may differ from Rust target triple.
+  If the build fails, set CARGO_BUILD_TARGET explicitly (e.g. x86_64-unknown-linux-gnu).
+  Run 'rustc --print target-list' to see valid Rust targets.])
+  else
+    CARGO_BUILD_TARGET=""
   fi
 fi
 AC_SUBST([CARGO_BUILD_TARGET])
 
-dnl Compute Cargo libdir path
+dnl Compute Cargo libdir path:
+dnl - If CARGO_BUILD_TARGET is set, use target/<that>/<profile_dir>
+dnl - Otherwise, use target/<profile_dir>
+dnl Note: CARGO_PROFILE_DIR maps dev→debug, release→release
 if test -n "$CARGO_BUILD_TARGET"; then
-  CARGO_LIBDIR="$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/$CARGO_PROFILE"
+  CARGO_LIBDIR="$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/$CARGO_PROFILE_DIR"
 else
-  CARGO_LIBDIR="$CARGO_TARGET_DIR/$CARGO_PROFILE"
+  CARGO_LIBDIR="$CARGO_TARGET_DIR/$CARGO_PROFILE_DIR"
 fi
 AC_SUBST([CARGO_LIBDIR])
 
@@ -183,26 +236,32 @@ AC_MSG_NOTICE([NOT_CRAN              = $NOT_CRAN])
 AC_MSG_NOTICE([CARGO_TARGET_DIR      = $CARGO_TARGET_DIR])
 AC_MSG_NOTICE([CARGO_PROFILE         = $CARGO_PROFILE])
 AC_MSG_NOTICE([CARGO_STATICLIB_NAME  = $CARGO_STATICLIB_NAME])
+AC_MSG_NOTICE([ENV_RUSTFLAGS         = $ENV_RUSTFLAGS])
 AC_MSG_NOTICE([CARGO_LIBDIR          = $CARGO_LIBDIR])
 AS_IF([test -n "$RUST_TOOLCHAIN"],
       [AC_MSG_NOTICE([RUST_TOOLCHAIN        = $RUST_TOOLCHAIN])])
 AS_IF([test -n "$CARGO_BUILD_TARGET"],
       [AC_MSG_NOTICE([CARGO_BUILD_TARGET    = $CARGO_BUILD_TARGET])])
-AS_IF([test -n "$ENV_RUSTFLAGS"],
-      [AC_MSG_NOTICE([ENV_RUSTFLAGS         = $ENV_RUSTFLAGS])])
+AC_MSG_NOTICE([ROOT_MINIEXTENDR_REPO = $ROOT_MINIEXTENDR_REPO])
+AS_IF([test -n "$MINIEXTENDR_FEATURES"],
+      [AC_MSG_NOTICE([MINIEXTENDR_FEATURES  = $MINIEXTENDR_FEATURES])])
 
-dnl ---- package name variants ----
-dnl PACKAGE_NAME from AC_INIT preserves case (e.g., dvs-rpkg)
-dnl PACKAGE_TARNAME is always lowercase (e.g., dvsr)
-dnl Use PACKAGE_NAME for R_init function, PACKAGE_TARNAME_RS for Rust module
-
-dnl Rust-safe name (lowercase, underscore for hyphens)
-pkg_rs="$(echo "$PACKAGE_TARNAME" | $SED 's/-/_/g')"
+dnl ---- package name → Rust-safe variants ----
+dnl Use PACKAGE_NAME (case-preserving) not PACKAGE_TARNAME (lowercased)
+dnl so the entrypoint's R_init_*_miniextendr symbol matches the Rust module exactly.
+pkg_rs="$(echo "$PACKAGE_NAME" | $SED 's/-/_/g')"
 AC_SUBST([PACKAGE_TARNAME_RS], [$pkg_rs])
 pkg_rs_upper=`printf '%s' "$pkg_rs" | tr 'a-z' 'A-Z'`
 AC_SUBST([PACKAGE_TARNAME_RS_UPPERCASE], [$pkg_rs_upper])
 
-dnl ---- optional cargo deps ----
+dnl Generate files from .in templates (templates must be committed)
+AC_CONFIG_FILES([src/rust/document.rs])
+AC_CONFIG_SRCDIR([src/entrypoint.c.in])  dnl safety check
+
+dnl Note: R CMD build already tracks .rs files for rebuild detection via pkgbuild,
+dnl so we don't need to enumerate RUST_SOURCES for Make dependencies.
+
+dnl ---- optional cargo deps: include if present ----
 OPTIONAL_CARGO_DEPS=
 for f in \
   "$RUST_SRC_DIR/build.rs" \
@@ -214,76 +273,61 @@ do
 done
 AC_SUBST([OPTIONAL_CARGO_DEPS])
 
-dnl ---- vendoring ----
-VENDOR_OUT="$abs_rpkg_src/vendor"
+dnl ---- vendoring (at package root, outside src/) ----
+dnl IMPORTANT: vendor directory MUST be outside src/ to avoid pkgbuild scanning
+dnl thousands of .rs files in vendor/ during needs_compile() checks (same reasoning
+dnl as CARGO_TARGET_DIR above).
+VENDOR_OUT="$abs_top_srcdir/vendor"
 AC_SUBST([VENDOR_OUT])
-VENDOR_OUT_CARGO="$abs_rpkg_src_cargo/vendor"
+dnl Cargo-specific version with Windows-native paths (for .cargo/config.toml)
+abs_top_srcdir_cargo="$abs_top_srcdir"
+case "$host_os" in
+  *msys*|*cygwin*|*mingw*)
+    if test "x$CYGPATH" != "xno"; then
+      abs_top_srcdir_cargo="$($CYGPATH -m "$abs_top_srcdir")"
+    fi
+    ;;
+esac
+VENDOR_OUT_CARGO="$abs_top_srcdir_cargo/vendor"
 AC_SUBST([VENDOR_OUT_CARGO])
 
-dnl FORCE_VENDOR: Set to true to force re-vendoring even if stamp file exists
-: ${FORCE_VENDOR:=false}
-case "$FORCE_VENDOR" in
-  true|TRUE|1) FORCE_VENDOR=true ;;
-  *)           FORCE_VENDOR=false ;;
-esac
-AC_SUBST([FORCE_VENDOR])
-
-dnl Source replacement config for .cargo/config.toml
-dnl This replaces both crates-io and git sources with vendored-sources
-CARGO_SOURCE_REPLACE="$(cat <<EOF
-[source.crates-io]
-replace-with = "vendored-sources"
-
-[source."git+https://github.com/CGMossa/miniextendr"]
-git = "https://github.com/CGMossa/miniextendr"
-replace-with = "vendored-sources"
-
-[source."git+https://github.com/A2-ai/dvs2"]
-git = "https://github.com/A2-ai/dvs2"
-replace-with = "vendored-sources"
-
-[source.vendored-sources]
-directory = "$VENDOR_OUT_CARGO"
-EOF
-)"
-AC_SUBST([CARGO_SOURCE_REPLACE])
-
-
-dnl Generate document.rs from template
-AC_CONFIG_FILES([src/rust/document.rs:src/rust/document.rs.in])
-
-dnl Generate Makevars, entrypoint.c, and mx_abi.c from templates
-dnl Note: Makevars.win is a static file that includes Makevars (no template vars)
-AC_CONFIG_FILES([src/Makevars:src/Makevars.in])
-AC_CONFIG_FILES([src/entrypoint.c:src/entrypoint.c.in])
-AC_CONFIG_FILES([src/mx_abi.c:src/mx_abi.c.in])
+dnl Note: Cargo.toml uses path dependencies to vendor/ (unlike rpkg which uses git deps).
+dnl The cargo config template (cargo-config.toml.in) handles CRAN source replacement.
+dnl In dev mode, we remove the cargo config so cargo uses normal resolution.
 
 dnl ---- output files ----
-dnl Create .cargo directory
+dnl Create .cargo directory (it's a hidden dir not included in tarball)
 AS_MKDIR_P([src/rust/.cargo])
 
-dnl Generate config files from templates
-AC_CONFIG_FILES([src/rust/.cargo/config.toml:src/rust/cargo-config.toml.in])
-
-dnl ---- AC_CONFIG_COMMANDS run after AC_CONFIG_FILES generates files ----
+AC_CONFIG_FILES([
+  src/rust/.cargo/config.toml:src/rust/cargo-config.toml.in
+  src/Makevars:src/Makevars.in
+  src/entrypoint.c:src/entrypoint.c.in
+  src/mx_abi.c:src/mx_abi.c.in
+  src/dvs-win.def:src/win.def.in
+])
 
 dnl 1) Remove cargo config in dev mode (vendored sources not needed for development)
+dnl    In dev mode, Cargo.toml uses git deps directly
 AC_CONFIG_COMMANDS([dev-cargo-config],
 [
   RPKG_CFG="src/rust/.cargo/config.toml"
 
   if test "$NOT_CRAN" = "true"; then
-    dnl In dev mode, remove the generated cargo config so we use normal cargo resolution
-    dnl The vendored config is only needed for CRAN builds
+    dnl In dev mode, remove the generated cargo config so cargo uses normal resolution
     if test -f "$RPKG_CFG"; then
       rm "$RPKG_CFG"
-      echo "configure: removed cargo config (dev mode - using network sources)"
+      echo "configure: removed cargo config (dev mode - using git deps)"
     fi
   fi
 ],
 [NOT_CRAN="$NOT_CRAN"])
 
-dnl 2) Check cargo lockfile compatibility and regenerate if needed
+dnl ---- AC_CONFIG_COMMANDS run after AC_CONFIG_FILES generates files ----
+dnl Order matters: lockfile-compat, then cargo-vendor, then patch-staticlib-name
+
+dnl 2) Ensure Cargo.lock is compatible with the installed cargo version.
+dnl    Older cargo releases (e.g. 1.75) cannot read lockfile version 4.
 AC_CONFIG_COMMANDS([cargo-lockfile-compat],
 [
   LOCKFILE_PATH="src/rust/Cargo.lock"
@@ -293,177 +337,169 @@ AC_CONFIG_COMMANDS([cargo-lockfile-compat],
     LOCKFILE_VERSION=""
   fi
 
-  CARGO_VERSION="$($CARGO_CMD --version | "$SED" 's/cargo \(@<:@0-9@:>@*\.@<:@0-9@:>@*\.@<:@0-9@:>@*\).*/\1/')"
-  CARGO_MAJOR="$(echo "$CARGO_VERSION" | cut -d. -f1)"
-  CARGO_MINOR="$(echo "$CARGO_VERSION" | cut -d. -f2)"
+  CARGO_VERSION="$( $CARGO_CMD --version | "$SED" 's/cargo \(@<:@0-9@:>@*\.@<:@0-9@:>@*\.@<:@0-9@:>@*\).*/\1/' )"
+  CARGO_MAJOR=`echo "$CARGO_VERSION" | cut -d. -f1`
+  CARGO_MINOR=`echo "$CARGO_VERSION" | cut -d. -f2`
 
   if test -n "$LOCKFILE_VERSION" && test "$LOCKFILE_VERSION" -ge 4; then
     if test "$CARGO_MAJOR" -lt 1 || \
        (test "$CARGO_MAJOR" -eq 1 && test "$CARGO_MINOR" -lt 78); then
-      echo "configure: WARNING: cargo $CARGO_VERSION cannot read Cargo.lock v$LOCKFILE_VERSION; regenerating" >&2
+      dnl In CRAN/offline mode, ensure vendor sources exist before regenerating lockfile.
+      if test "$NOT_CRAN" != "true"; then
+        if test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
+          if test -f "$abs_rpkg_dir/inst/vendor.tar.xz"; then
+            echo "configure: CRAN build - unpacking inst/vendor.tar.xz (for lockfile regeneration)" >&2
+            tar -xJf "$abs_rpkg_dir/inst/vendor.tar.xz" -C "$abs_rpkg_dir"
+            if test $? -ne 0; then
+              echo "configure: error: failed to unpack vendor.tar.xz" >&2
+              exit 1
+            fi
+            dnl Strip checksums from Cargo.lock (vendored crates have empty checksums)
+            if test -f "$abs_rpkg_src/rust/Cargo.lock"; then
+              $SED -i.bak '/^checksum = /d' "$abs_rpkg_src/rust/Cargo.lock" && rm -f "$abs_rpkg_src/rust/Cargo.lock.bak"
+            fi
+          else
+            echo "configure: error: CRAN/offline build requires vendored sources to regenerate Cargo.lock" >&2
+            echo "configure:        Expected inst/vendor.tar.xz or a populated vendor/ directory." >&2
+            exit 1
+          fi
+        fi
+      fi
+      echo "configure: WARNING: cargo $CARGO_VERSION cannot read Cargo.lock v$LOCKFILE_VERSION; regenerating lockfile" >&2
       rm -f "$LOCKFILE_PATH"
       $CARGO_CMD generate-lockfile --manifest-path src/rust/Cargo.toml $CARGO_OFFLINE_FLAG
+      _gen_status=$?
+      if test $_gen_status -ne 0; then
+        echo "configure: error: cargo generate-lockfile failed with status $_gen_status" >&2
+        exit 1
+      fi
+    fi
+  fi
+],
+[CARGO_CMD="$CARGO_CMD" CARGO_OFFLINE_FLAG="$CARGO_OFFLINE_FLAG" SED="$SED" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_dir="$abs_top_srcdir" abs_rpkg_src="$abs_rpkg_src"])
+
+dnl 3) Run cargo vendor (dev mode only)
+AC_CONFIG_COMMANDS([cargo-vendor],
+[
+  dnl First: if vendor/ is missing but vendor.tar.xz exists, unpack it regardless of mode.
+  dnl This handles the devtools::install() case where R CMD build creates a tarball
+  dnl (excluding vendor/ via .Rbuildignore) and then R CMD INSTALL runs configure.
+  if test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
+    if test -f "$abs_rpkg_dir/inst/vendor.tar.xz"; then
+      echo "configure: unpacking inst/vendor.tar.xz"
+      tar -xJf "$abs_rpkg_dir/inst/vendor.tar.xz" -C "$abs_rpkg_dir"
+      if test $? -ne 0; then
+        echo "configure: error: failed to unpack vendor.tar.xz" >&2
+        exit 1
+      fi
+      dnl Strip checksums from Cargo.lock (vendored crates have empty checksums)
+      if test -f "$abs_rpkg_src/rust/Cargo.lock"; then
+        $SED -i.bak '/^checksum = /d' "$abs_rpkg_src/rust/Cargo.lock" && rm -f "$abs_rpkg_src/rust/Cargo.lock.bak"
+      fi
+    fi
+  fi
+
+  if test "$NOT_CRAN" != "true"; then
+    dnl CRAN/offline mode: vendor/ should exist (from tarball or pre-populated)
+    if test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
+      dnl No vendor available - fall back to network (e.g., GitHub installs)
+      echo "configure: no cached vendor found, will proceed with network access" >&2
+      echo "configure:   (This is normal for GitHub installs via remotes::install_github())" >&2
+      dnl Continue to dev mode vendoring logic below
+      NOT_CRAN=true
+    else
+      echo "configure: CRAN build - vendor ready"
+    fi
+  fi
+
+  if test "$NOT_CRAN" = "true"; then
+    MANIFEST="src/rust/Cargo.toml"
+    LOCKFILE="src/rust/Cargo.lock"
+    STAMP="$VENDOR_OUT/.vendor.lock.cksum"
+
+    dnl Generate Cargo.lock if missing (required for fingerprinting)
+    if test ! -f "$LOCKFILE"; then
+      echo "configure: generating Cargo.lock"
+      $CARGO_CMD generate-lockfile --manifest-path "$MANIFEST"
       if test $? -ne 0; then
         echo "configure: error: cargo generate-lockfile failed" >&2
         exit 1
       fi
     fi
-  fi
-],
-[CARGO_CMD="$CARGO_CMD" CARGO_OFFLINE_FLAG="$CARGO_OFFLINE_FLAG" SED="$SED"])
 
-dnl 3) Run cargo vendor (dev mode only, after Cargo.toml is generated)
-AC_CONFIG_COMMANDS([cargo-vendor],
-[
-  dnl Check if we should use pre-vendored sources:
-  dnl 1. CRAN/offline mode (NOT_CRAN != true), OR
-  dnl 2. Vendor directory is empty/missing BUT vendor.tar.xz exists
-  dnl    (This handles R CMD check running on an extracted tarball with NOT_CRAN=true)
-  _use_prevendored=0
-  if test "$NOT_CRAN" != "true"; then
-    _use_prevendored=1
-  elif test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
-    if test -f "$abs_rpkg_dir/inst/vendor.tar.xz"; then
-      echo "configure: vendor directory empty but vendor.tar.xz exists"
-      echo "configure: falling back to pre-vendored sources (R CMD check context)"
-      _use_prevendored=1
-    fi
-  fi
+    dnl POSIX fingerprint: checksum+size of Cargo.lock contents
+    _new="$(cksum < "$LOCKFILE" | awk '{print [$]1":"[$]2}')"
+    _old="$(cat "$STAMP" 2>/dev/null || true)"
 
-  if test $_use_prevendored -eq 1; then
-    dnl CRAN/offline mode - check for vendor directory or tarball
-    if test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
-      if test -f "$abs_rpkg_dir/inst/vendor.tar.xz"; then
-        echo "configure: CRAN build - unpacking inst/vendor.tar.xz"
-        tar -xJf "$abs_rpkg_dir/inst/vendor.tar.xz" -C "$abs_rpkg_src"
-        if test $? -ne 0; then
-          echo "configure: error: failed to unpack vendor.tar.xz" >&2
-          exit 1
-        fi
-        dnl Strip checksums from Cargo.lock (vendored crates have empty checksums)
-        if test -f "$abs_rpkg_src/rust/Cargo.lock"; then
-          $SED -i.bak '/^checksum = /d' "$abs_rpkg_src/rust/Cargo.lock" && rm -f "$abs_rpkg_src/rust/Cargo.lock.bak"
-          echo "configure: stripped checksums from Cargo.lock for vendor compatibility"
-        fi
-        dnl Mark that we unpacked from tarball (to skip compress-vendor later)
-        touch "$abs_rpkg_src/.unpacked-from-tarball"
-        dnl Remove --locked from Makevars since vendored sources have cleared checksums
-        if test -f "src/Makevars"; then
-          $SED -i.bak 's/--locked//g' src/Makevars && rm -f src/Makevars.bak
-          echo "configure: removed --locked from Makevars for tarball compatibility"
-          dnl Note: Makevars.win uses `include Makevars` so it inherits this change
-        fi
-      else
-        dnl No vendor directory and no tarball - fall through to vendor from network
-        echo "configure: no cached vendors found, will fetch from network"
-        _use_prevendored=0
-      fi
-    fi
-  fi
-
-  if test $_use_prevendored -eq 1; then
-    echo "configure: using pre-vendored sources"
-  else
-    dnl Dev mode - run cargo vendor to fetch git dependencies and crates.io deps
-    MANIFEST="src/rust/Cargo.toml"
-    LOCKFILE="src/rust/Cargo.lock"
-    STAMP="$VENDOR_OUT/.vendor.lock.cksum"
-
-    _need_vendor=0
-    if test "$FORCE_VENDOR" = "true"; then
-      echo "configure: FORCE_VENDOR=true, will re-vendor"
-      _need_vendor=1
-    elif test ! -f "$STAMP"; then
-      echo "configure: vendor stamp missing, will vendor"
-      _need_vendor=1
+    _need=0
+    if test ! -f "$STAMP"; then
+      _need=1
     elif test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
-      echo "configure: vendor directory missing or empty, will vendor"
-      _need_vendor=1
+      _need=1
+    elif test "x$_new" != "x$_old"; then
+      _need=1
     fi
 
-    if test $_need_vendor -eq 1; then
+    if test $_need -eq 1; then
       echo "configure: running cargo vendor"
       mkdir -p "$VENDOR_OUT"
-
-      dnl Temporarily move .cargo/config.toml to avoid circular vendored-sources reference
-      _cargo_cfg="src/rust/.cargo/config.toml"
-      _cargo_cfg_bak="src/rust/.cargo/config.toml.bak"
-      if test -f "$_cargo_cfg"; then
-        mv "$_cargo_cfg" "$_cargo_cfg_bak"
-      fi
-
-      dnl cargo vendor fetches all dependencies (git and crates.io) and vendors them
-      $CARGO_CMD vendor --manifest-path "$MANIFEST" "$VENDOR_OUT" > /dev/null
-      _vendor_status=$?
-
-      dnl Restore cargo config (only in CRAN mode - dev mode doesn't need vendored sources)
-      if test "$NOT_CRAN" != "true" && test -f "$_cargo_cfg_bak"; then
-        mv "$_cargo_cfg_bak" "$_cargo_cfg"
-      else
-        rm -f "$_cargo_cfg_bak"
-      fi
-
-      if test $_vendor_status -ne 0; then
+      $CARGO_CMD vendor --manifest-path "$MANIFEST" "$VENDOR_OUT"
+      if test $? -ne 0; then
         echo "configure: error: cargo vendor failed" >&2
         exit 1
       fi
-    fi
 
-    dnl Generate Cargo.lock if missing
-    if test ! -f "$LOCKFILE"; then
-      echo "configure: generating Cargo.lock"
-      dnl Need to temporarily remove config again for lockfile generation
-      _cargo_cfg="src/rust/.cargo/config.toml"
-      _cargo_cfg_bak="src/rust/.cargo/config.toml.bak"
-      if test -f "$_cargo_cfg"; then
-        mv "$_cargo_cfg" "$_cargo_cfg_bak"
+      dnl Strip tests/benches/examples/hidden files from vendored crates (CRAN portability)
+      for _crate_dir in "$VENDOR_OUT"/*/; do
+        if test -d "$_crate_dir"; then
+          rm -rf "$_crate_dir/tests" "$_crate_dir/benches" "$_crate_dir/examples" \
+                 "$_crate_dir/.github" "$_crate_dir/docs" "$_crate_dir/ci"
+          for _dotfile in "$_crate_dir"/.*; do
+            case "$(basename "$_dotfile")" in
+              .|..|.cargo-checksum.json) ;;
+              *) rm -rf "$_dotfile" ;;
+            esac
+          done
+          echo '{"files":{}}' > "$_crate_dir/.cargo-checksum.json"
+        fi
+      done
+
+      dnl Strip checksums from Cargo.lock (vendored crates have empty checksums)
+      if test -f "$LOCKFILE"; then
+        $SED -i.bak '/^checksum = /d' "$LOCKFILE" && rm -f "$LOCKFILE.bak"
       fi
-
-      $CARGO_CMD generate-lockfile --manifest-path "$MANIFEST"
-      _lock_status=$?
-
-      if test "$NOT_CRAN" != "true" && test -f "$_cargo_cfg_bak"; then
-        mv "$_cargo_cfg_bak" "$_cargo_cfg"
-      else
-        rm -f "$_cargo_cfg_bak"
-      fi
-
-      if test $_lock_status -ne 0; then
-        echo "configure: error: cargo generate-lockfile failed" >&2
-        exit 1
-      fi
+      echo "$_new" > "$STAMP"
+    else
+      echo "configure: skipping cargo vendor (Cargo.lock unchanged)"
     fi
-
-    dnl Update Cargo.lock to reflect patched sources.
-    dnl When [patch.crates-io] or [patch."..."] redirects dependencies to different
-    dnl sources (git or local paths), the lock file needs updating so cargo --locked
-    dnl doesn't complain about source mismatches. This doesn't change versions,
-    dnl just updates source locations.
-    if test -f "$LOCKFILE"; then
-      $CARGO_CMD update --workspace --manifest-path "$MANIFEST" 2>/dev/null || true
-      echo "configure: updated Cargo.lock for patched sources"
-    fi
-
-    dnl Update vendor stamp
-    _new="$(cksum < "$LOCKFILE" | cut -d' ' -f1,2 | tr ' ' ':')"
-    echo "$_new" > "$STAMP"
-
-    echo "configure: vendor complete"
   fi
 ],
-[CARGO_CMD="$CARGO_CMD" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" FORCE_VENDOR="$FORCE_VENDOR" SED="$SED"])
+[CARGO_CMD="$CARGO_CMD" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" SED="$SED"])
 
-dnl 4) Compress vendor directory for CRAN tarballs
+dnl 4) Post-vendor tasks: touch Cargo.toml to force rebuild
+AC_CONFIG_COMMANDS([post-vendor],
+[
+  dnl Touch Cargo.toml to ensure make rebuilds the staticlib.
+  dnl This is necessary because CARGO_TARGET_DIR may point to a shared location
+  dnl where the staticlib already exists (e.g., during R CMD check).
+  touch "$ABS_RPKG_SRC/rust/Cargo.toml"
+  echo "configure: touched $ABS_RPKG_SRC/rust/Cargo.toml to force rebuild" >&2
+
+  dnl Note: Cargo.lock updates for patched sources are handled by cargo build itself.
+  dnl Dev mode does not use --locked, so cargo resolves source locations at build time.
+],
+[ABS_RPKG_SRC="$abs_rpkg_src"])
+
+dnl 5) Compress vendor directory for CRAN tarballs
+dnl In NOT_CRAN mode: always create/update the vendor tarball
+dnl In CRAN mode: tarball is already bundled, don't compress
 AC_CONFIG_COMMANDS([compress-vendor],
 [
-  dnl Skip if we unpacked from tarball (R CMD check context with NOT_CRAN=true)
-  if test -f "$abs_rpkg_src/.unpacked-from-tarball"; then
-    rm -f "$abs_rpkg_src/.unpacked-from-tarball"
-    echo "configure: skipping vendor compression (using unpacked tarball)"
-  elif test "$NOT_CRAN" = "true" && test -d "$VENDOR_OUT" && test -n "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
-    VENDOR_TARBALL="$abs_rpkg_dir/inst/vendor.tar.xz"
-    VENDOR_STAMP="$abs_rpkg_dir/inst/.vendor.tar.xz.cksum"
+  VENDOR_TARBALL="$abs_rpkg_dir/inst/vendor.tar.xz"
+  VENDOR_STAMP="$abs_rpkg_dir/inst/.vendor.tar.xz.cksum"
 
+  dnl Only compress in dev mode when vendor directory exists
+  if test "$NOT_CRAN" = "true" && test -d "$VENDOR_OUT" && test -n "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
     dnl Calculate fingerprint from Cargo.lock
     _lock_ck=""
     if test -f "src/rust/Cargo.lock"; then
@@ -476,53 +512,79 @@ AC_CONFIG_COMMANDS([compress-vendor],
     _need_compress=0
     if test ! -f "$VENDOR_TARBALL"; then
       _need_compress=1
-      echo "configure: vendor.tar.xz does not exist"
+      echo "configure: creating vendor.tar.xz"
     elif test "x$_new_fingerprint" != "x$_old_fingerprint"; then
       _need_compress=1
-      echo "configure: vendor contents changed"
+      echo "configure: recompressing vendor.tar.xz (Cargo.lock changed)"
     fi
 
     if test $_need_compress -eq 1; then
-      echo "configure: compressing vendor directory to inst/vendor.tar.xz"
       mkdir -p "$abs_rpkg_dir/inst"
 
       dnl Create temp staging area
-      _staging_tmp="$abs_rpkg_src/.vendor-tarball-staging"
+      _staging_tmp="$abs_rpkg_dir/.vendor-tarball-staging"
       rm -rf "$_staging_tmp"
       mkdir -p "$_staging_tmp"
       cp -R "$VENDOR_OUT" "$_staging_tmp/vendor"
 
-      dnl Clear checksums in staging copy for tarball compatibility
-      dnl Note: When unpacking tarball, we also strip checksums from Cargo.lock to match
+      dnl Clear checksums (we exclude tests/benches/examples which are in checksums)
       for _crate_dir in "$_staging_tmp/vendor"/*/; do
         test -d "$_crate_dir" && echo '{"files":{}}' > "${_crate_dir}.cargo-checksum.json"
       done
 
-      dnl Remove unnecessary directories to reduce size
-      dnl Note: Do NOT remove 'examples' - some crates use include_str! on example files
-      find "$_staging_tmp/vendor" -type d -name 'tests' -exec rm -rf {} + 2>/dev/null || true
-      find "$_staging_tmp/vendor" -type d -name 'benches' -exec rm -rf {} + 2>/dev/null || true
-      find "$_staging_tmp/vendor" -type d -name '.github' -exec rm -rf {} + 2>/dev/null || true
-      dnl Truncate .md files (keep file but remove content)
-      find "$_staging_tmp/vendor" -name '*.md' -type f -exec cp /dev/null {} \;
+      dnl Remove unneeded directories
+      find "$_staging_tmp/vendor" -type d \( -name 'tests' -o -name 'benches' -o -name 'examples' -o -name '.github' -o -name 'docs' \) -exec rm -rf {} + 2>/dev/null || true
+      find "$_staging_tmp/vendor" -name '*.md' -type f -exec truncate -s 0 {} \; 2>/dev/null || true
 
       dnl Create tarball
       tar -cJf "$VENDOR_TARBALL" -C "$_staging_tmp" vendor
       _tar_status=$?
-
       rm -rf "$_staging_tmp"
 
-      if test $_tar_status -ne 0; then
-        echo "configure: warning: failed to compress vendor directory" >&2
-      else
+      if test $_tar_status -eq 0; then
         echo "$_new_fingerprint" > "$VENDOR_STAMP"
-        echo "configure: created inst/vendor.tar.xz"
+      else
+        echo "configure: warning: failed to compress vendor directory" >&2
       fi
     else
       echo "configure: skipping vendor compression (unchanged)"
     fi
+  else
+    echo "configure: skipping vendor compression (CRAN mode or no vendor)"
   fi
 ],
-[NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir"])
+[NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_dir="$abs_top_srcdir"])
+
+dnl 6) Extract CARGO_STATICLIB_NAME from Cargo.toml and patch generated files
+AC_CONFIG_COMMANDS([patch-staticlib-name],
+[
+  dnl Use cargo pkgid to extract the actual package name from Cargo.toml
+  dnl This handles hyphens correctly (converted to underscores for Rust lib name)
+  if test "$NOT_CRAN" = "true"; then
+    _pkgid_flags="--color=never"
+  else
+    _pkgid_flags="--offline --color=never"
+  fi
+  _pkgid_output="$( $CARGO_CMD pkgid $_pkgid_flags --manifest-path src/rust/Cargo.toml )"
+  _pkgid_status=$?
+  if test $_pkgid_status -ne 0; then
+    echo "configure: error: cargo pkgid failed with status $_pkgid_status" >&2
+    exit 1
+  fi
+  REAL_STATICLIB_NAME="$(echo "$_pkgid_output" | "$SED" 's/.*#\(@<:@^@@:>@*\)@.*/\1/' | tr '-' '_')"
+  if test -z "$REAL_STATICLIB_NAME"; then
+    echo "configure: error: Could not parse package name from cargo pkgid output" >&2
+    exit 1
+  fi
+  echo "configure: extracted CARGO_STATICLIB_NAME = $REAL_STATICLIB_NAME"
+
+  dnl Patch generated files to replace placeholder
+  for f in src/Makevars src/rust/document.rs; do
+    if test -f "$f"; then
+      "$SED" "s/__CARGO_STATICLIB_NAME_PLACEHOLDER__/$REAL_STATICLIB_NAME/g" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    fi
+  done
+],
+[CARGO_CMD="$CARGO_CMD" NOT_CRAN="$NOT_CRAN" SED="$SED"])
 
 AC_OUTPUT

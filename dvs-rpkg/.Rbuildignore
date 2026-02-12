@@ -41,3 +41,4 @@
 
 # Vendored Makefiles with GNU extensions
 ^src/vendor/r-efi/Makefile$
+^vendor$
