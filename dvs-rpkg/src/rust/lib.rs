@@ -25,6 +25,7 @@ pub fn dvs_init(
     #[miniextendr(default = "NULL")] group: Option<String>,
     #[miniextendr(default = "FALSE")] no_compression: bool,
 ) -> Result<List> {
+    let current_dir = std::env::current_dir()?;
     let mut config = Config::new_local(&path, permissions, group)?;
 
     if no_compression {
@@ -34,7 +35,7 @@ pub fn dvs_init(
         config.set_metadata_folder_name(m);
     }
 
-    init(&path, config)?;
+    init(&current_dir, config)?;
 
     r_println!("DVS Initialized");
     Ok(list!("status" = "initialized"))
