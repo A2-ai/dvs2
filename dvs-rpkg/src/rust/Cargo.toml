@@ -22,10 +22,13 @@ nonapi = ["miniextendr-api/nonapi"]
 connections = ["miniextendr-api/connections"]
 
 [dependencies]
-miniextendr-api = { git = "https://github.com/CGMossa/miniextendr", features = ["serde"]}
+miniextendr-api = { git = "https://github.com/CGMossa/miniextendr", features = [
+    "serde",
+] }
 dvs = { path = "../../../dvs" }
 serde = { version = "1", features = ["derive"] }
 anyhow = "1.0.100"
+walkdir = "2.5.0"
 
 [build-dependencies]
 miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr" }
@@ -36,5 +39,6 @@ miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr" }
 [patch.crates-io]
 miniextendr-api = { git = "https://github.com/CGMossa/miniextendr" }
 miniextendr-macros = { git = "https://github.com/CGMossa/miniextendr" }
+miniextendr-macros-core = { git = "https://github.com/CGMossa/miniextendr" }
+# miniextendr-engine = { git = "https://github.com/CGMossa/miniextendr" }
 miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr" }
-

@@ -2,7 +2,7 @@ mod globbing;
 
 use std::path::PathBuf;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use serde_json::json;
 
@@ -107,7 +107,7 @@ fn try_main() -> Result<()> {
                 .into_iter()
                 .collect();
             if all_paths.is_empty() {
-                return Err(anyhow!("No files to add"));
+                bail!("No files to add")
             }
 
             let results = add_files(
@@ -149,15 +149,10 @@ fn try_main() -> Result<()> {
                 .into_iter()
                 .collect();
             if all_paths.is_empty() {
-                return Err(anyhow!("No files to get"));
+                bail!("No files to get")
             }
 
-            let results = get_files(
-                all_paths,
-                &dvs_paths,
-                config.backend(),
-                config.compression(),
-            )?;
+            let results = get_files(all_paths, &dvs_paths, config.backend())?;
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
