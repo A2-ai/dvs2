@@ -152,12 +152,7 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("No files to get"));
             }
 
-            let results = get_files(
-                all_paths,
-                &dvs_paths,
-                config.backend(),
-                config.compression(),
-            )?;
+            let results = get_files(all_paths, &dvs_paths, config.backend())?;
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
