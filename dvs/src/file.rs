@@ -372,7 +372,6 @@ pub fn get_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
     backend: &dyn Backend,
-    compression: Compression,
 ) -> Result<Vec<GetResult>> {
     let matched_paths = paths.validate_for_get(&files);
     let missing: Vec<_> = matched_paths
@@ -387,7 +386,7 @@ pub fn get_files(
     let mut results = Vec::new();
 
     for (relative_path, _) in matched_paths {
-        let outcome = get_file(backend, paths, &relative_path, compression)?;
+        let outcome = get_file(backend, paths, &relative_path)?;
         log::info!(
             "Successfully retrieved {} ({:?})",
             relative_path.display(),

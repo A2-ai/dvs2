@@ -210,7 +210,7 @@ impl Backend for LocalBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audit::{AuditEntry, AuditFile, parse_audit_log, Action};
+    use crate::audit::{Action, AuditEntry, AuditFile, parse_audit_log};
     use crate::config::Compression;
     use crate::hashes::Hashes;
     use std::io::Cursor;
