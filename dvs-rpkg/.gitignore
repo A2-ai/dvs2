@@ -109,3 +109,4 @@ dvs-rpkg/2026-*.txt
 
 # Archived crates (server/daemon moved here)
 archived-crates.zip
+vendor/

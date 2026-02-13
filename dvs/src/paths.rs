@@ -49,6 +49,24 @@ impl DvsPaths {
         }
     }
 
+    pub fn from_dvs_root(config: &Config, path: PathBuf) -> Result<Self> {
+        let path = fs::canonicalize(path)?;
+        let repo_root = fs::canonicalize(
+            find_repo_root(&path).ok_or_else(|| anyhow!("Not in a git repository"))?,
+        )?;
+
+        log::debug!(
+            "Resolved paths: path={}, repo_root={}",
+            path.display(),
+            repo_root.display()
+        );
+        Ok(Self {
+            cwd: path,
+            repo_root,
+            metadata_folder_name: config.metadata_folder_name().to_owned(),
+        })
+    }
+
     pub fn from_cwd(config: &Config) -> Result<Self> {
         let cwd = fs::canonicalize(std::env::current_dir()?)?;
         let repo_root = fs::canonicalize(

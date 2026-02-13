@@ -25,8 +25,8 @@ just bump-version -- --mode=workspace  # only update [workspace.package]
 
 | File | Format |
 |------|--------|
-| `dvsR/DESCRIPTION` | R version (source of truth) |
-| `dvsR/configure.ac` | R version |
-| `dvsR/src/rust/Cargo.toml.in` | Cargo version |
-| `dvsR/src/rust/Cargo.toml` | Cargo version (generated) |
+| `dvs-rpkg/DESCRIPTION` | R version (source of truth) |
+| `dvs-rpkg/configure.ac` | R version |
+| `dvs-rpkg/src/rust/Cargo.toml.in` | Cargo version |
+| `dvs-rpkg/src/rust/Cargo.toml` | Cargo version (generated) |
 | `Cargo.toml` | Cargo version (workspace) |

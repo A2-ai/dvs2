@@ -1,15 +1,13 @@
-mod globbing;
-
 use std::path::PathBuf;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use serde_json::json;
 
-use crate::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::Compression;
 use dvs::config::Config;
 use dvs::file::{Outcome, add_files, get_files, get_status};
+use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 
@@ -107,7 +105,7 @@ fn try_main() -> Result<()> {
                 .into_iter()
                 .collect();
             if all_paths.is_empty() {
-                return Err(anyhow!("No files to add"));
+                bail!("No files to add")
             }
 
             let results = add_files(
@@ -149,7 +147,7 @@ fn try_main() -> Result<()> {
                 .into_iter()
                 .collect();
             if all_paths.is_empty() {
-                return Err(anyhow!("No files to get"));
+                bail!("No files to get")
             }
 
             let results = get_files(all_paths, &dvs_paths, config.backend())?;

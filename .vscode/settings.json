@@ -1,14 +1,14 @@
 {
   "rust-analyzer.linkedProjects": [
-    "Cargo.toml",
-    "dvs-rpkg/src/rust/Cargo.toml"
+    "${workspaceFolder}/Cargo.toml",
+    "${workspaceFolder}/dvs-rpkg/src/rust/Cargo.toml"
   ],
   "rust-analyzer.cargo.features": "all",
   // IMPORTANT: target directories MUST be outside dvs-rpkg/src/ to avoid pkgbuild
   // scanning generated .rs files in target/build/.../out/ which causes
   // unnecessary recompilation on every devtools::load_all()
   "rust-analyzer.cargo.targetDir": "${workspaceFolder}/dvs-rpkg/ra-target",
-  "rust-analyzer.files.excludeDirs": [
+  "rust-analyzer.files.exclude": [
     "dvs-rpkg/src/vendor",
     "dvs-rpkg/src/rust/target",
     "dvs-rpkg/rust-target",
@@ -16,6 +16,7 @@
   ],
   "rust-analyzer.check.command": "clippy",
   "rust-analyzer.check.extraArgs": [
+    "--tests",
     "--",
     "-W",
     "clippy::all"

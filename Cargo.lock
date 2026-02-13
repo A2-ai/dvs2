@@ -213,6 +213,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "fs-err",
+ "globset",
  "jiff",
  "log",
  "md5",

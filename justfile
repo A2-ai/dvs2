@@ -37,11 +37,13 @@ check-std-fs:
 
 # Install the dvs CLI binary
 install-cli *args:
-    cargo install --force --locked --path=dvs --features=cli {{args}}
+    cargo install --force --locked --path=dvs-cli {{args}}
 
 # ============================================================================
-# R package (dvsR)
+# R package ({dvs})
 # ============================================================================
+
+# FIXME: decide if we want to add NOT_CRAN (dev mode) here
 
 rpkg-configure:
     cd {{quote(rpkg_dir)}} && NOT_CRAN=true ./configure
