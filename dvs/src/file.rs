@@ -565,7 +565,7 @@ mod tests {
         assert!(!file_path.exists());
 
         // Retrieve it
-        let outcome = get_file(backend, &paths, "retrieve.txt", Compression::Zstd).unwrap();
+        let outcome = get_file(backend, &paths, "retrieve.txt").unwrap();
         assert_eq!(outcome, Outcome::Copied);
         assert!(file_path.exists());
         assert_eq!(fs::read(&file_path).unwrap(), b"stored content");
@@ -585,7 +585,7 @@ mod tests {
             .unwrap();
 
         // File still exists and matches - should return Present
-        let outcome = get_file(backend, &paths, "present.txt", Compression::Zstd).unwrap();
+        let outcome = get_file(backend, &paths, "present.txt").unwrap();
         assert_eq!(outcome, Outcome::Present);
     }
 
@@ -596,7 +596,7 @@ mod tests {
         let backend = config.backend();
         let paths = make_paths(&root, &config);
 
-        let result = get_file(backend, &paths, "untracked.txt", Compression::Zstd);
+        let result = get_file(backend, &paths, "untracked.txt");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not tracked"));
     }
@@ -663,12 +663,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = get_files(
-            vec!["nonexistent.csv".into()],
-            &paths,
-            backend,
-            Compression::Zstd,
-        );
+        let result = get_files(vec!["nonexistent.csv".into()], &paths, backend);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -708,7 +703,7 @@ mod tests {
         }
 
         // Get files back
-        let results = get_files(file_paths, &paths, backend, Compression::Zstd).unwrap();
+        let results = get_files(file_paths, &paths, backend).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert_eq!(result.outcome, Outcome::Copied);
@@ -805,7 +800,7 @@ mod tests {
         fs::write(&storage_path, b"corrupted content").unwrap();
 
         // get_file should error on decompression or hash mismatch
-        let result = get_file(backend, &paths, "data.txt", Compression::Zstd);
+        let result = get_file(backend, &paths, "data.txt");
         assert!(result.is_err());
     }
 }
