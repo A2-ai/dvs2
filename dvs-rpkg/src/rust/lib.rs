@@ -37,7 +37,7 @@ pub fn dvs_init(
 
 #[miniextendr]
 pub fn dvs_add(
-    pattern: &str,
+    files: Vec<PathBuf>,
     message: Missing<Option<String>>,
 ) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
     let message = if message.is_missing() {
@@ -51,9 +51,15 @@ pub fn dvs_add(
     let paths = DvsPaths::from_cwd(&config)?;
 
     Ok(DataFrame::from_iter(
-        add_files(pattern, &paths, config.backend(), message)?
-            .into_iter()
-            .map(|x| x.into()),
+        add_files(
+            files,
+            &paths,
+            config.backend(),
+            message,
+            config.compression(),
+        )?
+        .into_iter()
+        .map(|x| x.into()),
     ))
 }
 
@@ -70,13 +76,13 @@ pub fn dvs_status() -> Result<DataFrame<AsSerializeRow<FileStatus>>> {
 }
 
 #[miniextendr]
-pub fn dvs_get(pattern: &str) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
+pub fn dvs_get(files: Vec<PathBuf>) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let results = get_files(pattern, &paths, config.backend())?;
+    let results = get_files(files, &paths, config.backend())?;
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 

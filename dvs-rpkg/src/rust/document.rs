@@ -1,7 +1,7 @@
-use @CARGO_STATICLIB_NAME@::R_WRAPPERS_DEPS_@PACKAGE_TARNAME_RS_UPPERCASE@ as DEPS;
-use @CARGO_STATICLIB_NAME@::R_WRAPPERS_IMPL_DEPS_@PACKAGE_TARNAME_RS_UPPERCASE@ as IMPL_DEPS;
-use @CARGO_STATICLIB_NAME@::R_WRAPPERS_IMPLS_@PACKAGE_TARNAME_RS_UPPERCASE@ as IMPLS;
-use @CARGO_STATICLIB_NAME@::R_WRAPPERS_PARTS_@PACKAGE_TARNAME_RS_UPPERCASE@ as PARTS;
+use dvs::R_WRAPPERS_DEPS_DVS as DEPS;
+use dvs::R_WRAPPERS_IMPL_DEPS_DVS as IMPL_DEPS;
+use dvs::R_WRAPPERS_IMPLS_DVS as IMPLS;
+use dvs::R_WRAPPERS_PARTS_DVS as PARTS;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let impl_dep_flat: Vec<&'static str> = IMPL_DEPS.concat();
     let roots: [&[&'static str]; 4] = [PARTS, IMPLS, &dep_flat, &impl_dep_flat];
 
-    let wrapper_path = "@PACKAGE_TARNAME@-wrappers.R";
+    let wrapper_path = "dvs-wrappers.R";
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .truncate(true)

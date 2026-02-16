@@ -13,8 +13,8 @@
  * USAGE FOR CONSUMER PACKAGES:
  *
  * 1. Add to DESCRIPTION file:
- *      LinkingTo: dvs-rpkg
- *      Imports: dvs-rpkg
+ *      LinkingTo: dvs
+ *      Imports: dvs
  *
  *    LinkingTo makes this header available via:
  *      #include <mx_abi.h>
@@ -27,7 +27,7 @@
  *      static mx_wrap_fn p_mx_wrap = NULL;
  *
  *      void R_init_yourpkg(DllInfo *dll) {
- *          p_mx_wrap = (mx_wrap_fn) R_GetCCallable("dvs-rpkg", "mx_wrap");
+ *          p_mx_wrap = (mx_wrap_fn) R_GetCCallable("dvs", "mx_wrap");
  *          // ... similarly for mx_get, mx_query
  *      }
  *
@@ -45,6 +45,7 @@
 
 #include <R.h>
 #include <Rinternals.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -158,6 +159,15 @@ typedef struct mx_base_vtable {
      * @return Pointer to vtable if implemented, NULL otherwise
      */
     const void *(*query)(mx_erased *ptr, mx_tag trait_tag);
+
+    /**
+     * Byte offset from wrapper struct start to the data field.
+     *
+     * The wrapper is laid out as: { mx_erased erased; T data; }.
+     * When T has stricter alignment than mx_erased, padding exists
+     * between erased and data. This field stores the correct offset.
+     */
+    size_t data_offset;
 } mx_base_vtable;
 
 /**
@@ -190,7 +200,7 @@ struct mx_erased {
  * ============================================================================
  *
  * These functions are registered with R_RegisterCCallable and can be
- * obtained via R_GetCCallable("dvs-rpkg", "mx_*").
+ * obtained via R_GetCCallable("dvs", "mx_*").
  *
  * NOTE: Function bodies are defined in mx_abi.c.
  */
