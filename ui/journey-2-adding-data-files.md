@@ -58,3 +58,19 @@ Goal: Version a newly created dataset so others can retrieve it.
    ```r
    dvs_status("data/derived/pk_data.csv")
    ```
+
+```r
+# no dvs_init ran before
+dvs_add("contingency_table2.csv")
+```
+
+In RStudio: Check if there is an active project, then emit
+
+```r
+> Error: There is no active dvs repository in current location;
+> Use `remote_repository` parameter
+```
+
+```r
+dvs_add("contingency_table2.csv", remote_repository = "~/dvs/projectA/")
+```
