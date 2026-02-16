@@ -53,12 +53,12 @@ no project surrounding where said script is.
 
 Expected outcomes:
 
-* dvs.toml created in working directory
-* shared dir created in specified path, with default permissions of 664
+- dvs.toml created in working directory
+- shared dir created in specified path, with default permissions of 664
 
 Known Caveats:
 
-* certain linux umask setups cause folders to have default permissions like 600, or 644
+- certain linux umask setups cause folders to have default permissions like 600, or 644
 where other collaborators could not write by default, therefore,
 
 ### CLI flow
@@ -79,17 +79,17 @@ dvs_init("/data/shared/project-x-dvs")
 
 ## Journey 2: Initial Setup with shared folder locked down to group
 
-* set permissions to writeable by group, not readable if not in group (660)
-* group name projx
+- set permissions to writeable by group, not readable if not in group (660)
+- group name projx
 
 Expected outcomes:
 
-* dvs.toml created in working directory
-* shared dir created in specified path, with permissions of 660 and owned by group projx
+- dvs.toml created in working directory
+- shared dir created in specified path, with permissions of 660 and owned by group projx
 
 Edge cases:
 
-* group must resolve to known gid on system
+- group must resolve to known gid on system
 
 ### CLI flow
 
