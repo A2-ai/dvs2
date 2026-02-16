@@ -69,7 +69,7 @@ CLI users do not need the full path shown to them, but R users need that informa
 
 ## Storage
 
-- Multiple projects can be hosted within the same storage
+- (future) Multiple projects can be hosted within the same storage
   - DVS storage locations should contain a list of projects it is currently serving.
 
 ### Case: No project or specific work directory
@@ -77,9 +77,9 @@ CLI users do not need the full path shown to them, but R users need that informa
 Considering the one off scripts that scientists might create, in which there is
 no project surrounding where said script is.
 
-- User/machine storage
-- A remote project
-- One off scripts
+- (future) User/machine storage
+- (future) A remote project
+- (future) One off scripts
 
 ## Journey 1: Initial Setup with defaults
 
@@ -146,3 +146,7 @@ dvs_init("/data/shared/project-x-dvs", permissions = "660", group = "projx")
 - don't track `.RDA` files, as they are a collection of datasets
 
 Configuration: Must add these filters to the `dvs.toml`.
+
+Known annoyance: Verbosity of this can be annoying.
+There should be a way to reduce outputs on untracked data files available
+to the user.
