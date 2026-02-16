@@ -71,6 +71,10 @@ impl DvsPaths {
         self.repo_root.join(&self.metadata_folder_name)
     }
 
+    pub fn cache_folder(&self) -> PathBuf {
+        self.metadata_folder().join(".cache")
+    }
+
     pub fn metadata_path(&self, relative: &Path) -> PathBuf {
         let dvs_path = self.metadata_folder().join(relative);
         let mut s = dvs_path.into_os_string();
