@@ -9,5 +9,6 @@ repositories = [
 ]
 
 dependencies = [
-  {name = "minirextendr", git = "https://github.com/CGMossa/miniextendr", branch = "main", directory = "minirextendr"}
+  {name = "minirextendr", git = "https://github.com/CGMossa/miniextendr", branch = "main", directory = "minirextendr"},
+  {name = "dvs", path = ".", dependencies_only = true, install_suggestions = true}
 ]
