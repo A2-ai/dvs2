@@ -36,6 +36,12 @@ Options:
 
 ## R function
 
+<!-- MOSSA: DUMP THE FUNCTION SIGNATURES! -->
+
+```r
+dvs_init <- function(directory = ".", permissions = NULL, group = NULL, metadata_folder_name = NULL)
+```
+
 ## Journey 1: Initial Setup with defaults
 
 Expected outcomes:
