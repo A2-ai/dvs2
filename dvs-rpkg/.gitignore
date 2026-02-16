@@ -108,3 +108,9 @@ dvs-rpkg/2026-*.txt
 
 # Archived crates (server/daemon moved here)
 archived-crates.zip
+rust-target/
+ra-target/
+src/rust/ra_target/
+src/rust/target/
+.vendor-tarball-staging/
+vendor/
