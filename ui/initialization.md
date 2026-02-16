@@ -3,12 +3,12 @@
 Goal: Prepare shared storage and initialize DVS in directory
 
 dvs initialization will create a `dvs.toml` and a directory as specified by the
-shared area in the init command. The shared dir may also need to chown the directory
+shared area in the init command. The shared dir may also need to `chown` the directory
 to specify certain permissions. For example, for sensitive projects, setting
 ownership to a particular group, allowing write access for the group, and limiting
 read access to those not in the group.
 
-## cli
+## CLI
 
 ```default
 dvs init
@@ -44,17 +44,33 @@ DVS Repository created
 ## R function
 
 ```r
-dvs_init <- function(directory = ".", permissions = NULL, group = NULL, metadata_folder_name = NULL)
+dvs_init <- function(
+    path = ".",
+    storage_directory = getOption("dvs.global_storage") %||%  
+        stop("must provide a storage location"),
+    permissions = NULL, 
+    group = NULL, 
+    metadata_folder_name = NULL)
 ```
 
 Example output:
 
 ```r
 > dvs_init("~/Documents/projectA")
-> A DVS repository was initialised in "/Users/elea/Documents/projectA"
+> Error: `storage_path` is missing; Please provide a location to store dvs objects.
+```
+
+```r
+> dvs_init("~/Documents/projectA", storage_directory =  "~/Documents/dvs_storage")
+> A DVS repository was initialised in "/Users/elea/Documents/projectA" with storage location at "/Users/elea/Documents/dvs_storage"
 ```
 
 CLI users do not need the full path shown to them, but R users need that information.
+
+## Storage
+
+- Multiple projects can be hosted within the same storage
+  - DVS storage locations should contain a list of projects it is currently serving.
 
 ### Case: No project or specific work directory
 
@@ -69,12 +85,12 @@ no project surrounding where said script is.
 
 Expected outcomes:
 
-- dvs.toml created in working directory
+- `dvs.toml` created in working directory
 - shared dir created in specified path, with default permissions of 664
 
 Known Caveats:
 
-- certain linux umask setups cause folders to have default permissions like 600, or 644
+- certain linux `umask` setups cause folders to have default permissions like 600, or 644
 where other collaborators could not write by default, therefore,
 
 ### CLI flow
