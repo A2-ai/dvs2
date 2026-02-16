@@ -138,3 +138,11 @@ dvs init /data/dvs/sensitive-projx --permissions "660" --group projx
 ```r
 dvs_init("/data/shared/project-x-dvs", permissions = "660", group = "projx")
 ```
+
+## Data formats to track
+
+- `.csv`
+- `.rds`
+- don't track `.RDA` files, as they are a collection of datasets
+
+Configuration: Must add these filters to the `dvs.toml`.
