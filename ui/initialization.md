@@ -36,11 +36,18 @@ Options:
 
 ## R function
 
-<!-- MOSSA: DUMP THE FUNCTION SIGNATURES! -->
-
 ```r
 dvs_init <- function(directory = ".", permissions = NULL, group = NULL, metadata_folder_name = NULL)
 ```
+
+### Case: No project or specific work directory
+
+Considering the one off scripts that scientists might create, in which there is
+no project surrounding where said script is.
+
+- User/machine storage
+- A remote project
+- One off scripts
 
 ## Journey 1: Initial Setup with defaults
 
