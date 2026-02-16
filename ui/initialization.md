@@ -8,6 +8,36 @@ to specify certain permissions. For example, for sensitive projects, setting
 ownership to a particular group, allowing write access for the group, and limiting
 read access to those not in the group.
 
+## cli
+
+```
+dvs init
+Starts a new dvs project. This will create a `dvs.toml` file in the root folder of where the user is calling the CLI from. root folder being the place where we find a `.git` folder
+
+Usage: dvs init [OPTIONS] <PATH>
+
+Arguments:
+  <PATH>  Where the data will be stored
+
+Options:
+      --json
+          Output results as JSON
+      --metadata-folder-name <METADATA_FOLDER_NAME>
+          If you want to use a folder name other than `.dvs` for storing the metadata files
+      --permissions <PERMISSIONS>
+          Unix permissions for storage directory and files (octal, e.g., "770")
+      --group <GROUP>
+          Unix group to set on storage directory and files
+      --no-compression
+          Disable compression of stored files. Compression defaults to zstd
+  -h, --help
+          Print help
+```
+
+## R function:
+
+
+
 ## Journey 1: Initial Setup with defaults
 
 Expected outcomes:
@@ -49,7 +79,7 @@ Expected outcomes:
 
 Edge cases:
 
-* group must resolve to known guid on system
+* group must resolve to known gid on system
 
 ### CLI flow
 
