@@ -34,11 +34,27 @@ Options:
           Print help
 ```
 
+Example output:
+
+```shell
+$ dvs init
+DVS Repository created
+```
+
 ## R function
 
 ```r
 dvs_init <- function(directory = ".", permissions = NULL, group = NULL, metadata_folder_name = NULL)
 ```
+
+Example output:
+
+```r
+> dvs_init("~/Documents/projectA")
+> A DVS repository was initialised in "/Users/elea/Documents/projectA"
+```
+
+CLI users do not need the full path shown to them, but R users need that information.
 
 ### Case: No project or specific work directory
 
