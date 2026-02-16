@@ -1,8 +1,7 @@
 # bootstrap.R - Run before package build (Config/build/bootstrap: TRUE)
-# Sets NOT_CRAN=true so cargo vendor runs during GitHub installs
+# Sets NOT_CRAN=true so configure runs in dev mode during devtools workflows.
 
-# Build environment with NOT_CRAN set
-env <- c(NOT_CRAN = "true", FORCE_VENDOR = "true")
+env <- c(NOT_CRAN = "true")
 env_strings <- paste0(names(env), "=", env)
 
 if (.Platform$OS.type == "windows") {

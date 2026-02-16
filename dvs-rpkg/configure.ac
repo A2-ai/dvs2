@@ -220,6 +220,10 @@ AC_SUBST([VENDOR_OUT])
 VENDOR_OUT_CARGO="$abs_rpkg_src_cargo/vendor"
 AC_SUBST([VENDOR_OUT_CARGO])
 
+dnl ---- vendor-lib (monorepo library via cargo package) ----
+VENDOR_LIB="$abs_top_srcdir/inst/dvs-lib.tar.gz"
+AC_SUBST([VENDOR_LIB])
+
 dnl FORCE_VENDOR: Set to true to force re-vendoring even if stamp file exists
 : ${FORCE_VENDOR:=false}
 case "$FORCE_VENDOR" in
@@ -236,10 +240,6 @@ replace-with = "vendored-sources"
 
 [source."git+https://github.com/CGMossa/miniextendr"]
 git = "https://github.com/CGMossa/miniextendr"
-replace-with = "vendored-sources"
-
-[source."git+https://github.com/A2-ai/dvs2"]
-git = "https://github.com/A2-ai/dvs2"
 replace-with = "vendored-sources"
 
 [source.vendored-sources]
@@ -267,21 +267,28 @@ AC_CONFIG_FILES([src/rust/.cargo/config.toml:src/rust/cargo-config.toml.in])
 
 dnl ---- AC_CONFIG_COMMANDS run after AC_CONFIG_FILES generates files ----
 
-dnl 1) Remove cargo config in dev mode (vendored sources not needed for development)
+dnl 1) Remove cargo config when vendored source replacement is not needed
+dnl    - Dev mode: uses network sources directly
+dnl    - No vendor tarball: only VENDOR_LIB is used (via [patch.crates-io])
 AC_CONFIG_COMMANDS([dev-cargo-config],
 [
   RPKG_CFG="src/rust/.cargo/config.toml"
 
+  _remove_cfg=0
   if test "$NOT_CRAN" = "true"; then
-    dnl In dev mode, remove the generated cargo config so we use normal cargo resolution
-    dnl The vendored config is only needed for CRAN builds
-    if test -f "$RPKG_CFG"; then
-      rm "$RPKG_CFG"
-      echo "configure: removed cargo config (dev mode - using network sources)"
-    fi
+    _remove_cfg=1
+    echo "configure: dev mode - using network sources"
+  elif test ! -f "$abs_rpkg_dir/inst/vendor.tar.xz"; then
+    _remove_cfg=1
+    echo "configure: no vendor tarball - using VENDOR_LIB only"
+  fi
+
+  if test $_remove_cfg -eq 1 && test -f "$RPKG_CFG"; then
+    rm "$RPKG_CFG"
+    echo "configure: removed cargo config (source replacement not needed)"
   fi
 ],
-[NOT_CRAN="$NOT_CRAN"])
+[NOT_CRAN="$NOT_CRAN" abs_rpkg_dir="$abs_top_srcdir"])
 
 dnl 2) Check cargo lockfile compatibility and regenerate if needed
 AC_CONFIG_COMMANDS([cargo-lockfile-compat],
@@ -312,7 +319,7 @@ AC_CONFIG_COMMANDS([cargo-lockfile-compat],
 ],
 [CARGO_CMD="$CARGO_CMD" CARGO_OFFLINE_FLAG="$CARGO_OFFLINE_FLAG" SED="$SED"])
 
-dnl 3) Run cargo vendor (dev mode only, after Cargo.toml is generated)
+dnl 3) Run cargo vendor
 AC_CONFIG_COMMANDS([cargo-vendor],
 [
   dnl Check if we should use pre-vendored sources:
@@ -453,7 +460,53 @@ AC_CONFIG_COMMANDS([cargo-vendor],
 ],
 [CARGO_CMD="$CARGO_CMD" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" FORCE_VENDOR="$FORCE_VENDOR" SED="$SED"])
 
-dnl 4) Compress vendor directory for CRAN tarballs
+dnl 4) Vendor-lib: extract monorepo library into vendor directory and patch Cargo.toml
+AC_CONFIG_COMMANDS([vendor-lib],
+[
+  dnl In dev mode, package the monorepo library to generate/update the tarball
+  if test "$NOT_CRAN" = "true"; then
+    _dvs_manifest="$abs_rpkg_dir/../dvs/Cargo.toml"
+    if test -f "$_dvs_manifest"; then
+      echo "configure: packaging monorepo library via cargo package"
+      dnl Unset CARGO_TARGET_DIR to use the workspace's default target directory
+      (unset CARGO_TARGET_DIR; $CARGO_CMD package --manifest-path "$_dvs_manifest" --allow-dirty --no-verify 2>/dev/null)
+      _dvs_crate="$(ls -1t "$abs_rpkg_dir/../target/package"/dvs-*.crate 2>/dev/null | head -1)"
+      if test -n "$_dvs_crate"; then
+        mkdir -p "$(dirname "$VENDOR_LIB")"
+        cp "$_dvs_crate" "$VENDOR_LIB"
+        echo "configure: updated vendor-lib tarball"
+      else
+        echo "configure: warning: cargo package did not produce a .crate file" >&2
+      fi
+    fi
+  fi
+
+  dnl Always extract vendor-lib into vendor directory and update [patch.crates-io] path
+  if test -f "$VENDOR_LIB"; then
+    rm -rf "$VENDOR_OUT/dvs"
+    mkdir -p "$VENDOR_OUT"
+    tar -xzf "$VENDOR_LIB" -C "$VENDOR_OUT"
+    _dvs_lib_dir="$(ls -d "$VENDOR_OUT"/dvs-* 2>/dev/null | head -1)"
+    if test -n "$_dvs_lib_dir"; then
+      dnl Rename versioned directory to plain crate name (vendor convention)
+      mv "$_dvs_lib_dir" "$VENDOR_OUT/dvs"
+      echo "configure: extracted vendor-lib to $VENDOR_OUT/dvs"
+      dnl Update [patch.crates-io] dvs path to vendor directory
+      $SED -i.bak "s|path = \"../../../dvs\"|path = \"$VENDOR_OUT/dvs\"|" src/rust/Cargo.toml && rm -f src/rust/Cargo.toml.bak
+      echo "configure: patched Cargo.toml [patch.crates-io] to use vendor path"
+    else
+      echo "configure: error: could not find extracted vendor-lib directory" >&2
+      exit 1
+    fi
+  else
+    echo "configure: error: vendor-lib tarball not found at $VENDOR_LIB" >&2
+    echo "configure: run bootstrap.R or configure with NOT_CRAN=true to generate it" >&2
+    exit 1
+  fi
+],
+[CARGO_CMD="$CARGO_CMD" NOT_CRAN="$NOT_CRAN" VENDOR_LIB="$VENDOR_LIB" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_dir="$abs_top_srcdir" SED="$SED"])
+
+dnl 5) Compress vendor directory for CRAN tarballs
 AC_CONFIG_COMMANDS([compress-vendor],
 [
   dnl Skip if we unpacked from tarball (R CMD check context with NOT_CRAN=true)

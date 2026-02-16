@@ -41,3 +41,16 @@
 
 # Vendored Makefiles with GNU extensions
 ^src/vendor/r-efi/Makefile$
+
+^rv$
+^rproject\.toml$
+^src/.*-wrappers\.R$
+^vendor$
+^vendor/.*\.github$
+^vendor/.*\.editorconfig$
+^vendor/.*\.git-blame-ignore-revs$
+^vendor/.*\.release-plz\.toml$
+^vendor/.*\.rustfmt\.toml$
+^vendor/.*\.travis\.yml$
+^vendor/.*\.a$
+^vendor/.*\.lib$

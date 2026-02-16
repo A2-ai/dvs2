@@ -110,7 +110,7 @@ const void *mx_query(SEXP sexp, mx_tag tag) {
  *
  * @see mx_abi.h for documentation
  *
- * The package name ("@PACKAGE_NAME@") is substituted by configure
+ * The package name ("dvs") is substituted by configure
  * from the DESCRIPTION Package: field. We use PACKAGE_NAME (case-preserved)
  * rather than PACKAGE_TARNAME (lowercase) to match R's package naming.
  */
@@ -119,8 +119,8 @@ void mx_abi_register(void) {
     init_tag();
 
     /* Register C-callables for cross-package access
-     * Consumer packages use: R_GetCCallable("@PACKAGE_NAME@", "mx_wrap") */
-    R_RegisterCCallable("@PACKAGE_NAME@", "mx_wrap", (DL_FUNC)mx_wrap);
-    R_RegisterCCallable("@PACKAGE_NAME@", "mx_get", (DL_FUNC)mx_get);
-    R_RegisterCCallable("@PACKAGE_NAME@", "mx_query", (DL_FUNC)mx_query);
+     * Consumer packages use: R_GetCCallable("dvs", "mx_wrap") */
+    R_RegisterCCallable("dvs", "mx_wrap", (DL_FUNC)mx_wrap);
+    R_RegisterCCallable("dvs", "mx_get", (DL_FUNC)mx_get);
+    R_RegisterCCallable("dvs", "mx_query", (DL_FUNC)mx_query);
 }

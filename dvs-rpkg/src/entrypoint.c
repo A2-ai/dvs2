@@ -2,7 +2,7 @@
 #include <Rinternals.h>
 #include <R_ext/Rdynload.h>
 
-extern void R_init_@PACKAGE_TARNAME_RS@_miniextendr(DllInfo *dll);
+extern void R_init_dvs_miniextendr(DllInfo *dll);
 
 // NOTE: miniextendr_encoding_init() is disabled for R packages because it
 // references non-API symbols (utf8locale, etc.) that aren't exported from libR.
@@ -23,17 +23,17 @@ extern int miniextendr_init_vctrs(void);
 // Trait ABI C-callable registration (defined in mx_abi.c)
 extern void mx_abi_register(void);
 
-// NOTE: R_init function uses @PACKAGE_NAME@ (case-preserved) to match the
+// NOTE: R_init function uses dvs (case-preserved) to match the
 // package name in DESCRIPTION and NAMESPACE useDynLib(). The internal Rust
-// module uses @PACKAGE_TARNAME_RS@ (lowercase with underscores).
-void R_init_@PACKAGE_NAME@(DllInfo *dll) {
+// module uses dvs (lowercase with underscores).
+void R_init_dvs(DllInfo *dll) {
     miniextendr_panic_hook();
     miniextendr_worker_init();
     miniextendr_assert_utf8_locale();
 
     // Set ALTREP package name before ALTREP registration
-    // Use @PACKAGE_NAME@ (case-preserved) for R-facing APIs
-    miniextendr_set_altrep_pkg_name("@PACKAGE_NAME@");
+    // Use dvs (case-preserved) for R-facing APIs
+    miniextendr_set_altrep_pkg_name("dvs");
 
     // Optional: initialize vctrs C API support
     // Status 1 (not available) is fine - vctrs is optional
@@ -44,7 +44,7 @@ void R_init_@PACKAGE_NAME@(DllInfo *dll) {
     mx_abi_register();
 
     // Main module's R_init calls nonapi's R_init via "use nonapi;" statement
-    R_init_@PACKAGE_TARNAME_RS@_miniextendr(dll);
+    R_init_dvs_miniextendr(dll);
 
     R_useDynamicSymbols(dll, FALSE);
     R_forceSymbols(dll, TRUE);
