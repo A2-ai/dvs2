@@ -10,7 +10,7 @@ read access to those not in the group.
 
 ## cli
 
-```
+```default
 dvs init
 Starts a new dvs project. This will create a `dvs.toml` file in the root folder of where the user is calling the CLI from. root folder being the place where we find a `.git` folder
 
@@ -34,9 +34,7 @@ Options:
           Print help
 ```
 
-## R function:
-
-
+## R function
 
 ## Journey 1: Initial Setup with defaults
 
@@ -48,7 +46,7 @@ Expected outcomes:
 Known Caveats:
 
 * certain linux umask setups cause folders to have default permissions like 600, or 644
-where other collaborators could not write by default, therefore, 
+where other collaborators could not write by default, therefore,
 
 ### CLI flow
 
@@ -57,7 +55,6 @@ where other collaborators could not write by default, therefore,
 ```bash
 dvs init /data/dvs/example-proj
 ```
-
 
 ### R package flow
 
@@ -89,7 +86,6 @@ Edge cases:
 dvs init /data/dvs/sensitive-projx --permissions "660" --group projx
 ```
 
-
 ### R package flow
 
 1. Initialize DVS in the repo
@@ -97,6 +93,3 @@ dvs init /data/dvs/sensitive-projx --permissions "660" --group projx
 ```r
 dvs_init("/data/shared/project-x-dvs", permissions = "660", group = "projx")
 ```
-
-
-
