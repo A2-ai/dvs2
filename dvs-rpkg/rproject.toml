@@ -1,7 +1,7 @@
 use_lockfile = false
 
 [project]
-name = "dvs-rpkg2"
+name = "dvs-rpkg"
 r_version = "4.5"
 
 repositories = [
@@ -10,5 +10,5 @@ repositories = [
 
 dependencies = [
   { name = "minirextendr", git = "https://github.com/CGMossa/miniextendr", branch = "main", directory = "minirextendr" },
-  { name = "dvs", path = ".", dependencies_only = true, install_suggestions = true },
+  { name = "dvs", path = ".", dependencies_only = false, install_suggestions = true },
 ]
