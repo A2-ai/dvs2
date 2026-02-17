@@ -1,6 +1,6 @@
 # `dvs add`
 
-Goal: Add files to an initialised dvs repository.
+Goal: Add files to an initialized dvs repository.
 
 ## CLI
 
