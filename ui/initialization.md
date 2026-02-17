@@ -1,4 +1,4 @@
-# dvs initialization
+# dvs initialization / `dvs init` / `dvs_init`
 
 Goal: Prepare shared storage and initialize DVS in directory
 
@@ -13,7 +13,6 @@ read access to those not in the group.
 - [ ] Always within operating within a repository/project/workspace.
 - a dvs repository need not fall under a git or any other vcs repository
 - storage is detached from repository root
-
 
 ## CLI
 
@@ -147,6 +146,20 @@ dvs init /data/dvs/sensitive-projx --permissions "660" --group projx
 dvs_init("/data/shared/project-x-dvs", permissions = "660", group = "projx")
 ```
 
+#### Returns
+
+- [ ] implement `split_output` or do we rely on the user being familiar with dplyr?
+
+Old format: `relative_path`, `outcome`, `file_size_bytes`, `blake3_checksum`.
+
+- [ ] New format:
+  - `absolute_path`: abbreviated when printed in R (pillar)
+  - `relative path`: full path
+  - `status`: ordered factor instead of `character()`
+  - `absent|unsync|sync|present|added`
+  - `checksum`: always abbreviated in print (pillar, first 5 characters)
+  - `size`: using units and not raw `double()/numeric()`
+
 ## Data formats to track
 
 - `.csv`
@@ -158,3 +171,29 @@ Configuration: Must add these filters to the `dvs.toml`.
 Known annoyance: Verbosity of this can be annoying.
 There should be a way to reduce outputs on untracked data files available
 to the user.
+
+# TODO (to be editted)
+
+Errors
+
+dvs_init could return any of the following error types:
+
+project already initialized: dvs_init has already been run with different initialization attributes.
+
+git repository not found: dvs_init was run outside of a git repository
+
+storage directory input is not a directory: if input was an existing file
+
+storage directory absolute path not found: if the path could not be made absolute
+
+configuration file not created (dvs.yaml): failed to write to or save dvs.yaml
+
+linux primary group not found: if the group was inputted and it doesn't refer to a valid group
+
+storage directory not created: failed to create the storage directory
+
+linux file permissions invalid: if the permissions were inputted, they don't refer to actual octal linux file permissions
+
+could not check if storage directory is empty: error reading the contents of the directory
+
+storage directory permissions not set: couldn't modify the permissions of the storage directory
