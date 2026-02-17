@@ -14,6 +14,7 @@ read access to those not in the group.
 dvs init
 Starts a new dvs project. This will create a `dvs.toml` file in the root folder of where the user is calling the CLI from. root folder being the place where we find a `.git` folder
 
+```shell
 Usage: dvs init [OPTIONS] <PATH>
 
 Arguments:

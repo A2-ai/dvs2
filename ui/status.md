@@ -1,15 +1,27 @@
 # `dvs` status
 
+## CLI
+
+The option to return `--json` must be present.
+
+## R
+
+Signature:
+
 ```r
 dvs_status <- function(
-    path = ".",
-    show_storage = FALSE,
+  path = ".",
+  show_storage = FALSE,
+  by_folder = character(),
+  by_user = character(),
 )
 ```
 
+- `path` is location of dvs repository; the `dvs.toml` has to be present
+  in an ancestor to `path`.
 - `show_storage`:
   - Show location of storage(s) for the current dvs repository.
-  - Show number of projects that the storage contains
+  - (future) Show number of projects that the storage contains
 
 ## Data name format
 
