@@ -2,6 +2,10 @@
 
 Goal: Add files to an initialized dvs repository.
 
+- [ ] Currently the `message` is attached to all files checked in simultaneously. dvs has a log and audit log to
+illuminate "why" a change occurred in the data.
+<!-- TODO: how do we enchance the why illumination? -->
+
 ## CLI
 
 The option to return `--json` must be present.

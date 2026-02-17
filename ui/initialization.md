@@ -8,6 +8,13 @@ to specify certain permissions. For example, for sensitive projects, setting
 ownership to a particular group, allowing write access for the group, and limiting
 read access to those not in the group.
 
+## User site assumptions
+
+- [ ] Always within operating within a repository/project/workspace.
+- a dvs repository need not fall under a git or any other vcs repository
+- storage is detached from repository root
+
+
 ## CLI
 
 ```default

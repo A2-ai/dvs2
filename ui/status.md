@@ -23,6 +23,25 @@ dvs_status <- function(
   - Show location of storage(s) for the current dvs repository.
   - (future) Show number of projects that the storage contains
 
+## Return format
+
+### CLI JSON format
+
+<!-- TO DISCUSS -->
+
+### R format
+
+Old format: `relative_path`, `status`, `file_size_bytes`, `blake3_checksum`
+
+Proposed format:
+
+- `absolute_path`: abbreviated when printed in R (pillar)
+- `relative path`: full path
+- `status`: ordered factor instead of `character()`
+  - `absent|unsync|sync|present|added`
+- `checksum`: always abbreviated in print (pillar, first 5 characters)
+- `size`: using units and not raw `double()/numeric()`
+
 ## Data name format
 
 `dvs_status` should show untracked data files in the current dvs repository, if
