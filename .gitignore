@@ -41,3 +41,5 @@ archived-crates.zip
 .dvs/
 dvs.toml
 .storage
+# markdown rendering artefacts 
+ui/*_files

@@ -7,7 +7,7 @@ Authors@R: c(
     person("Mossa", "Merhi Reimert", , "mossa@a2-ai.com", role = "aut"),
     person("A2-Ai", role = c("cph", "fnd"))
     )
-Description: Provides version control for large binary and text files that are
+Description: Provides version control and management system for large binary and text files that are
     stored either locally or remotely. Uses content-addressable storage with
     blake3 hashing to efficiently deduplicate files while tracking metadata
     in Git-friendly .dvs files.
