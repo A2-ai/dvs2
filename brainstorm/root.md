@@ -6,7 +6,7 @@ Goal: Return the location of the dvs repository root anywhere.
 
 ## CLI
 
-Not relevant.
+<!-- TODO -->
 
 ## R package
 

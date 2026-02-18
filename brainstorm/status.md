@@ -56,7 +56,6 @@ Signature:
 
 ```r
 dvs_status <- function(
-  path = ".",
   show_storage = FALSE,
 )
 ```

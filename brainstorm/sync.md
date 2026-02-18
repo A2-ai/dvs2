@@ -29,7 +29,7 @@ $ dvs sync --before <duration/date>
 Signature:
 
 ```r
-dvs_sync <- function(path = ".",
+dvs_sync <- function(
   by_folder = character(),
   since = NULL, # date | duration (unit)
   recurse = TRUE ,

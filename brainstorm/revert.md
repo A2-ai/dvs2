@@ -9,7 +9,7 @@ The option to return `--json` must be present.
 Signature:
 
 ```r
-dvs_revert <- function(path = ".",
+dvs_revert <- function(
   commit_sha = integer(),
   date = NULL,
   before = NULL, # date | duration
