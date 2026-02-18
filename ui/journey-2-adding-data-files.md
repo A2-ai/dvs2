@@ -64,13 +64,5 @@ Goal: Version a newly created dataset so others can retrieve it.
 dvs_add("contingency_table2.csv")
 ```
 
-In RStudio: Check if there is an active project, then emit
-
-```r
-> Error: There is no active dvs repository in current location;
-> Use `remote_repository` parameter
-```
-
-```r
-dvs_add("contingency_table2.csv", remote_repository = "~/dvs/projectA/")
-```
+In RStudio: Check if there is no active folder, then emit warning.
+Similarly in VSCode and Positron, as both can be run without an active workspace.

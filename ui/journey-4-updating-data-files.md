@@ -83,7 +83,7 @@ dvs_add("data/registry/participants.csv", "added information from the second bat
 ```
 
 could be executed, in which: Previous hash is compared to the new file `data/registry/participants.csv`, but truncated
-to the level of the previous file, and then it can be known if this new event can superseed other add events, because we
+to the level of the previous file, and then it can be known if this new event can supersede other add events, because we
 know it is an addition.
 
 The hash itself cannot distinguish between a completely new file, or one with new bytes. In dvs, we only have current hash,
