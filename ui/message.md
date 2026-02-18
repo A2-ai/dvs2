@@ -12,7 +12,7 @@ Added message to `data/model_aaabb/model_summary.csv`
 ## R package
 
 ```r
-dvs_message <- function(path = ".", 
+dvs_message <- function(
   files = character(), 
   glob = character(),
   ignore.case = NULL %||% !is.empty(glob),

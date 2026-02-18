@@ -1,5 +1,9 @@
 # `dvs` status
 
+- [ ] MOSSA: don't show git status for certain folders until models have finished
+  running.
+- [ ] git hooks alert
+
 ## CLI
 
 The option to return `--json` must be present.

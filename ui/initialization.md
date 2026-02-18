@@ -10,21 +10,80 @@ read access to those not in the group.
 
 ## User site assumptions
 
-- [ ] Always within operating within a repository/project/workspace.
-- a dvs repository need not fall under a git or any other vcs repository
-- storage is detached from repository root
+- Always operating within a repository/project/workspace.
+- A dvs repository need not fall under a git or any other vcs repository
+- Storage is detached from repository root
 
 ## CLI
 
-```default
+```shell
+dvs --- Data version control and storage management system
+
+Usage:
+  dvs <COMMANDS> [OPTIONS]
+
+Commands:
+  init
+  add
+  get
+  status
+  audit
+  log
+
+Options:
+  -h, --help    Show help for command (e.g. `dvs init --help`)
+  --version     Show version information
+```
+
+The initialization command will have further subcommands.
+
+```shell
+dvs init --- Initialize a new DVS repository
+
+Usage:
+  dvs init <BACKEND> [OPTIONS]
+
+Backends:
+  local     Local, on-disk storage
+  fs        File system storage (e.g. network file system (nfs))
+  s3        S3 compatible storage
+  aws       S3 hosted via AWS
+
+Options:
+  -h, --help    Show help for command (e.g. `dvs init --help`)
+```
+
+### Local
+
+```shell
+dvs init local --- Initialize a DVS repository via on-disk storage
+
+Usage:
+  dvs init local <storage-path> [OPTIONS]
+
+Required:
+  <storage-path>    path to the local storage locations (e.g. `/data/`)
+
+```
+
+## FS / NFS
+
+
+```shell
 dvs init
 Starts a new dvs project. This will create a `dvs.toml` file in the root folder of where the user is calling the CLI from. root folder being the place where we find a `.git` folder
 
 ```shell
-Usage: dvs init [OPTIONS] <PATH>
+Usage: dvs init <backend>
 
 Arguments:
-  <PATH>  Where the data will be stored
+  
+```shell
+Usage: dvs init local [OPTIONS] <STORAGE PATH> 
+
+Arguments:
+
+  <STORAGE PATH>  Where the data will be stored
 
 Options:
       --json
@@ -44,20 +103,18 @@ Options:
 Example output:
 
 ```shell
-$ dvs init
-DVS Repository created
+$ dvs init /data/
+DVS Repository created with storage path located at <ABSOLUTE STORAGE PATH>
 ```
 
 ## R function
 
 ```r
 dvs_init <- function(
-    path = ".",
-    storage_directory = getOption("dvs.global_storage") %||%  
-        stop("must provide a storage location"),
-    permissions = NULL, 
-    group = NULL, 
-    metadata_folder_name = NULL)
+  storage_path = character(), # required
+  permissions = NULL, 
+  group = NULL, 
+  metadata_folder_name = NULL)
 ```
 
 Example output:

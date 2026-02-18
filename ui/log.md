@@ -41,7 +41,7 @@ message: "Ran nonmem model on exposure assumptions"
 Signature:
 
 ```r
-dvs_log <- function(path = ".", 
+dvs_log <- function(
   since = NULL,
   by_user = NULL,
 )

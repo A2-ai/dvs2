@@ -1,5 +1,12 @@
 # Configuration: Status
 
+- current | absent | unsynced
+- tracked file that is un-added
+
+
+
+# TODO (editting needed)
+
     relative_path: relative path to the file with respect to where the operation was called
 
     status: (doesn’t include error status)
