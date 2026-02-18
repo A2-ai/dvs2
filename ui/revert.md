@@ -16,5 +16,4 @@ dvs_revert <- function(path = ".",
 )
 ```
 
-- `path` is location of dvs repository; the `dvs.toml` has to be present
-  in an ancestor to `path`.
+
