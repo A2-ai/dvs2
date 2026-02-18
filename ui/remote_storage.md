@@ -1,4 +1,4 @@
-# dvs supported remote storage
+# dvs supported storage backends
 
 ## A2-AI hosting
 

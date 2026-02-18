@@ -2,7 +2,7 @@
 
 Goal: Provide a streamlined way to update a cloned dvs repository.
 
-Syncronisation `sync` is an alias for `dvs get **/*`, meant as a
+Synchronization `sync` is an alias for `dvs get **/*`, meant as a
 repository wide syncing from storage (local/remote).
 
 ## CLI
