@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod backends;
+mod cache;
 pub mod config;
 pub mod file;
 mod gitignore;
