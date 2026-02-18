@@ -58,11 +58,3 @@ Goal: Version a newly created dataset so others can retrieve it.
    ```r
    dvs_status("data/derived/pk_data.csv")
    ```
-
-```r
-# no dvs_init ran before
-dvs_add("contingency_table2.csv")
-```
-
-In RStudio: Check if there is no active folder, then emit warning.
-Similarly in VSCode and Positron, as both can be run without an active workspace.
