@@ -25,8 +25,7 @@ Filters:
 Options:
   -s, --state     filter for states to retain
   -i, --invert    inverts the selection provided by `--state`
-  -h, --help
-          Print help
+  -h, --help      Print help
 ```
 
 When a filter is provided, only the selected state(s) are provided.
