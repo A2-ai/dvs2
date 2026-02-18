@@ -44,22 +44,19 @@ Usage:
   dvs init <BACKEND> [OPTIONS]
 
 Backends:
-  local     Local, on-disk storage
-  fs        File system storage (e.g. network file system (nfs))
-  s3        S3 compatible storage
-  aws       S3 hosted via AWS
+  fs     Local, on-disk storage backend
 
 Options:
   -h, --help    Show help for command (e.g. `dvs init --help`)
 ```
 
-### Local
+### fs
 
 ```shell
-dvs init local --- Initialize a DVS repository via on-disk storage
+dvs init fs --- Initialize a DVS repository via on-disk storage
 
 Usage:
-  dvs init local <storage-path> [OPTIONS]
+  dvs init fs <storage-path> [OPTIONS]
 
 Required:
   <storage-path>    path to the local storage locations (e.g. `/data/`)
@@ -73,8 +70,6 @@ Options:
       Unix permissions for storage directory and files (octal, e.g., "770")
   --group <GROUP>
       Unix group to set on storage directory and files
-  --no-compression
-      Disable compression of stored files. Compression defaults to zstd
   --no-compression
       Disable compression of stored files. Compression defaults to zstd
   -h, --help
@@ -114,7 +109,7 @@ CLI users do not need the full path shown to them, but R users need that informa
 
 Different storage backends have to be initialized through specialized functions.
 
-- `dvs_init_local` with alias `dvs_init`
+- `dvs_init_fs` with alias `dvs_init`
 
 ## Journey 1: Initial Setup with defaults
 

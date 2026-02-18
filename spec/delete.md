@@ -1,6 +1,6 @@
 # `dvs delete`
 
-Goal: Remove tracked files.
+Goal:  tracked files.
 
 ## CLI
 

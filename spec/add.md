@@ -20,9 +20,6 @@ dvs_add <- function(
 
 ## Compression
 
-If the added file exceeds a certain threshold, the
-R package should provide suggest compressing the recently added file.
-
 - [ ] `getOption(dvs.large_file_size = integer()`)
   - Hard limit 100 MB [PMx-project-template](https://github.com/A2-ai/template-PMx-project-starter/blob/main/.lefthook/pre-commit/file-size)
   - Soft limit 50 MB (warning emitted) [PMx-project-template](https://github.com/A2-ai/template-PMx-project-starter/blob/main/.lefthook/pre-commit/file-size)
