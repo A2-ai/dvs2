@@ -14,9 +14,7 @@ $ dvs delete
 ```r
 dvs_delete <- function(
   files = character(), 
-  glob = character(),
-  ignore.case = NULL %||% !is.empty(glob),
-  fail = FALSE
+  glob = character()
 )
 ```
 

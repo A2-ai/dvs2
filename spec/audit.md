@@ -20,17 +20,11 @@ $ dvs audit --since <date|duration>
 Signature:
 
 ```r
-dvs_audit <- function(
-  since = NULL, # date | duration (unit)
-  by_user = character())
-
+dvs_audit <- function()
 ```
-
-
 
 ```r
 dvs_audit()
-
 ```
 
 ```r

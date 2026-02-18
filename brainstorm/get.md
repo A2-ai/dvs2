@@ -9,7 +9,7 @@ The option to return `--json` must be present.
 Signature:
 
 ```r
-dvs_get <- function(path = ".",
+dvs_get <- function(
   files = character(),
   glob = character(),
   ignore.case = NULL %||% !is.empty(glob),

@@ -10,13 +10,9 @@ read access to those not in the group.
 
 ## User site assumptions
 
-- Always operating within a repository/project/workspace.
-- A dvs repository need not fall under a git or any other vcs repository
+- Always operating within a repository/project/workspace, and will initialize 
+  at current working directory.
 - Storage is detached from repository root
-
-- [ ] If `git` is not a requirement, what alternative heuristics do we use
-  for instantiating a dvs repository? Suggestion: If a `.git` directory is not
-  available, then take current directory as the choice directory for initialization?
 
 ## CLI
 
@@ -85,10 +81,6 @@ Options:
           Print help
 ```
 
-## FS / NFS
-
-<!-- TODO -->
-
 Example output:
 
 ```shell
@@ -123,22 +115,6 @@ CLI users do not need the full path shown to them, but R users need that informa
 Different storage backends have to be initialized through specialized functions.
 
 - `dvs_init_local` with alias `dvs_init`
-- `dvs_init_fs(...)`
-- `dvs_init_s3(...)`
-- `dvs_init_aws(...)`
-
-## Storage
-
-- (future) Multiple projects can be hosted within the same storage
-
-### Case: No project or specific work directory
-
-Considering the one off scripts that scientists might create, in which there is
-no project surrounding where said script is.
-
-- (future) User/machine storage
-- (future) A remote project
-- (future) One off scripts
 
 ## Journey 1: Initial Setup with defaults
 
@@ -224,29 +200,3 @@ Configuration: Must add these filters to the `dvs.toml`.
 Known annoyance: Verbosity of this can be annoying.
 There should be a way to reduce outputs on untracked data files available
 to the user.
-
-# TODO (to be edited)
-
-Errors
-
-dvs_init could return any of the following error types:
-
-project already initialized: dvs_init has already been run with different initialization attributes.
-
-git repository not found: dvs_init was run outside of a git repository
-
-storage directory input is not a directory: if input was an existing file
-
-storage directory absolute path not found: if the path could not be made absolute
-
-configuration file not created (dvs.yaml): failed to write to or save dvs.yaml
-
-linux primary group not found: if the group was inputted and it doesn't refer to a valid group
-
-storage directory not created: failed to create the storage directory
-
-linux file permissions invalid: if the permissions were inputted, they don't refer to actual octal linux file permissions
-
-could not check if storage directory is empty: error reading the contents of the directory
-
-storage directory permissions not set: couldn't modify the permissions of the storage directory

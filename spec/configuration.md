@@ -1,5 +1,7 @@
 # `dvs.toml`
 
+The configuration toml file should contain
 
-Configuration should track which patterns are tracked [DVS Tracking](./tracking.md).
-
+- Backend
+- The default compression
+- Path to the storage directory

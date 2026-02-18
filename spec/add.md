@@ -2,12 +2,6 @@
 
 Goal: Add files to an initialized dvs repository.
 
-- [ ] Currently the `message` is attached to all files checked in simultaneously.
-  dvs has a log and audit log to
-  illuminate "why" a change occurred in the data.
-
-<!-- TODO: how do we enhance the why illumination? -->
-
 ## CLI
 
 - Assume that current directory is a dvs repository, both in cli and R-package.
@@ -21,9 +15,6 @@ Signature:
 dvs_add <- function(
   files = character(), 
   glob = character(),
-  ignore.case = NULL %||% !is.empty(glob),
-  overwrite = FALSE,
-  fail = FALSE
 )
 ```
 

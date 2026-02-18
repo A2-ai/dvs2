@@ -56,7 +56,6 @@ Signature:
 
 ```r
 dvs_status <- function(
-  path = ".",
   show_storage = FALSE,
 )
 ```
@@ -95,13 +94,3 @@ tracking is specified.
 
 We expect the end user to use `{dplyr}` in order to
 filter to users, groups, and/or folders. Therefore it is important to provide consistent data-frames.
-
-## Following Filters in Status
-
-`dvs_track(".csv")`: tracks all CSV files.
-
-`dvs_track("model_data/*")`: all files in a directory will be added to the (potentially untracked files)
-
-`dvs_track("results/*.rds")`: glob on all r data that are saved in a specific directory.
-
-These should result in additions to `[following]` table in `dvs.toml`. See [Following Formats](tracking.md).

@@ -5,7 +5,9 @@
 
 
 
-# TODO (editting needed)
+# TODO (editing needed)
+
+<!-- TODO: from the user guide, we need to trim this -->
 
     relative_path: relative path to the file with respect to where the operation was called
 
