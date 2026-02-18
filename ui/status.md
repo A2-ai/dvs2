@@ -12,12 +12,26 @@ $ dvs status --help
 Status of the DVS repository 
 
 Usage:
-  dvs status [FILTERS]
+  dvs status [FILTERS] [OPTIONS]
 
 Filters:
-  --unsynced
+  --current
+  --unsynced, --missing
   --absent
+  --no-current
+  --no-unsynced
+  --no-absent
+
+Options:
+  -s, --state     filter for states to retain
+  -i, --invert    inverts the selection provided by `--state`
+  -h, --help
+          Print help
 ```
+
+When a filter is provided, only the selected state(s) are provided.
+
+
 
 ```sh
 dvs status
