@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::backends::Backend as BackendTrait;
 use crate::backends::local::LocalBackend;
 use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, find_repo_root};
+use crate::tracking_rules::TrackingRule;
 use anyhow::{Context, Result};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
@@ -72,6 +73,8 @@ pub struct Config {
     /// If this option is set, dvs will use that folder name instead of `.dvs`
     metadata_folder_name: Option<String>,
     backend: Backend,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tracking_rules: Vec<TrackingRule>,
 }
 
 impl Config {
@@ -85,6 +88,7 @@ impl Config {
             compression: Compression::Zstd,
             metadata_folder_name: None,
             backend: Backend::Local(backend),
+            tracking_rules: Vec::new(),
         })
     }
 
@@ -133,6 +137,10 @@ impl Config {
 
     pub fn set_compression(&mut self, compression: Compression) {
         self.compression = compression;
+    }
+
+    pub fn tracking_rules(&self) -> &[TrackingRule] {
+        &self.tracking_rules
     }
 
     pub fn backend(&self) -> &dyn BackendTrait {

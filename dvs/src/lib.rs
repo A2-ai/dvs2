@@ -6,6 +6,7 @@ mod gitignore;
 mod hashes;
 pub mod init;
 pub mod paths;
+pub mod tracking_rules;
 
 pub use backends::Backend;
 pub use config::Compression;
@@ -13,6 +14,7 @@ pub use file::{AddResult, FileMetadata, FileStatus, GetResult, Outcome, Status};
 pub use file::{add_files, get_files, get_status};
 pub use hashes::{HashAlg, Hashes};
 pub use paths::{DvsPaths, find_repo_root};
+pub use tracking_rules::TrackingRule;
 
 #[cfg(test)]
 pub mod testutil {
