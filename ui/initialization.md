@@ -14,6 +14,10 @@ read access to those not in the group.
 - A dvs repository need not fall under a git or any other vcs repository
 - Storage is detached from repository root
 
+- [ ] If `git` is not a requirement, what alternative heuristics do we use
+  for instantiating a dvs repository? Suggestion: If a `.git` directory is not
+  available, then take current directory as the choice directory for initialization?
+
 ## CLI
 
 ```shell
@@ -64,41 +68,26 @@ Usage:
 Required:
   <storage-path>    path to the local storage locations (e.g. `/data/`)
 
+Options:
+  --json
+      Output results as JSON
+  --metadata-folder-name <METADATA_FOLDER_NAME>
+      If you want to use a folder name other than `.dvs` for storing the metadata files
+  --permissions <PERMISSIONS>
+      Unix permissions for storage directory and files (octal, e.g., "770")
+  --group <GROUP>
+      Unix group to set on storage directory and files
+  --no-compression
+      Disable compression of stored files. Compression defaults to zstd
+  --no-compression
+      Disable compression of stored files. Compression defaults to zstd
+  -h, --help
+          Print help
 ```
 
 ## FS / NFS
 
-
-```shell
-dvs init
-Starts a new dvs project. This will create a `dvs.toml` file in the root folder of where the user is calling the CLI from. root folder being the place where we find a `.git` folder
-
-```shell
-Usage: dvs init <backend>
-
-Arguments:
-  
-```shell
-Usage: dvs init local [OPTIONS] <STORAGE PATH> 
-
-Arguments:
-
-  <STORAGE PATH>  Where the data will be stored
-
-Options:
-      --json
-          Output results as JSON
-      --metadata-folder-name <METADATA_FOLDER_NAME>
-          If you want to use a folder name other than `.dvs` for storing the metadata files
-      --permissions <PERMISSIONS>
-          Unix permissions for storage directory and files (octal, e.g., "770")
-      --group <GROUP>
-          Unix group to set on storage directory and files
-      --no-compression
-          Disable compression of stored files. Compression defaults to zstd
-  -h, --help
-          Print help
-```
+<!-- TODO -->
 
 Example output:
 
@@ -120,21 +109,27 @@ dvs_init <- function(
 Example output:
 
 ```r
-> dvs_init("~/Documents/projectA")
+> dvs_init()
 > Error: `storage_path` is missing; Please provide a location to store dvs objects.
 ```
 
 ```r
-> dvs_init("~/Documents/projectA", storage_directory =  "~/Documents/dvs_storage")
-> A DVS repository was initialised in "/Users/elea/Documents/projectA" with storage location at "/Users/elea/Documents/dvs_storage"
+> dvs_init("/data/projectA_storage")
+> A DVS repository was initialized in "/Users/elea/Documents/projectA" with storage location at "/data/projectA_storage"
 ```
 
 CLI users do not need the full path shown to them, but R users need that information.
 
+Different storage backends have to be initialized through specialized functions.
+
+- `dvs_init_local` with alias `dvs_init`
+- `dvs_init_fs(...)`
+- `dvs_init_s3(...)`
+- `dvs_init_aws(...)`
+
 ## Storage
 
 - (future) Multiple projects can be hosted within the same storage
-  - DVS storage locations should contain a list of projects it is currently serving.
 
 ### Case: No project or specific work directory
 
@@ -149,7 +144,7 @@ no project surrounding where said script is.
 
 Expected outcomes:
 
-- `dvs.toml` created in working directory
+- `dvs.toml` created in the ancestral directory that contains `.git`, or other heuristics.
 - shared dir created in specified path, with default permissions of 664
 
 Known Caveats:
@@ -205,7 +200,8 @@ dvs_init("/data/shared/project-x-dvs", permissions = "660", group = "projx")
 
 #### Returns
 
-- [ ] implement `split_output` or do we rely on the user being familiar with dplyr?
+Return a rich data-frame that the end-user can then further subset/filter
+to fit their needs.
 
 Old format: `relative_path`, `outcome`, `file_size_bytes`, `blake3_checksum`.
 
@@ -229,7 +225,7 @@ Known annoyance: Verbosity of this can be annoying.
 There should be a way to reduce outputs on untracked data files available
 to the user.
 
-# TODO (to be editted)
+# TODO (to be edited)
 
 Errors
 
