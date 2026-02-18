@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::audit::{AuditEntry, AuditFile};
 use crate::backends::Backend;
+use crate::cache::{self, HashCache};
 use crate::config::Compression;
 use crate::gitignore::add_to_gitignore;
 use crate::hashes::Hashes;
@@ -54,6 +55,22 @@ impl PartialEq for FileMetadata {
 }
 
 impl FileMetadata {
+    pub fn from_hashes(
+        hashes: Hashes,
+        size: u64,
+        compression: Compression,
+        message: Option<String>,
+    ) -> Self {
+        Self {
+            hashes,
+            size,
+            created_by: whoami::username().unwrap_or_default(),
+            add_time: jiff::Timestamp::now().to_string(),
+            compression,
+            message,
+        }
+    }
+
     pub fn from_file(
         path: impl AsRef<Path>,
         compression: Compression,
@@ -197,7 +214,11 @@ pub struct FileStatus {
     pub status: Status,
 }
 
-fn get_file_status(paths: &DvsPaths, relative_path: impl AsRef<Path>) -> Result<Status> {
+fn get_file_status(
+    paths: &DvsPaths,
+    relative_path: impl AsRef<Path>,
+    cache: &HashCache,
+) -> Result<Status> {
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
     if !dvs_file_path.is_file() {
         return Ok(Status::Untracked);
@@ -208,8 +229,9 @@ fn get_file_status(paths: &DvsPaths, relative_path: impl AsRef<Path>) -> Result<
     if !file_path.is_file() {
         return Ok(Status::Absent);
     }
-    let current_metadata = FileMetadata::from_file(&file_path, Compression::None, None)?;
-    if existing_metadata == current_metadata {
+    let rel_str = relative_path.as_ref().to_string_lossy();
+    let (hashes, size) = cache::hashes_for_file(&file_path, &rel_str, cache)?;
+    if existing_metadata.hashes == hashes && existing_metadata.size == size {
         Ok(Status::Current)
     } else {
         Ok(Status::Unsynced)
@@ -219,6 +241,7 @@ fn get_file_status(paths: &DvsPaths, relative_path: impl AsRef<Path>) -> Result<
 pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
+    let cache = cache::open_cache(paths)?;
     let mut results = Vec::new();
     for entry in WalkDir::new(&dvs_directory)
         .into_iter()
@@ -234,7 +257,7 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
         let dvs_path = entry.path();
         // Strip dvs_directory prefix and .dvs suffix to get relative path
         let relative = dvs_path.strip_prefix(&dvs_directory)?.with_extension("");
-        let status = get_file_status(paths, &relative)?;
+        let status = get_file_status(paths, &relative, &cache)?;
         results.push(FileStatus {
             path: relative.to_path_buf(),
             status,
@@ -248,6 +271,7 @@ fn get_file(
     backend: &dyn Backend,
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
+    cache: &HashCache,
 ) -> Result<Outcome> {
     log::debug!("Retrieving file: {}", relative_path.as_ref().display());
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
@@ -270,11 +294,12 @@ fn get_file(
     }
 
     let target_path = paths.file_path(relative_path.as_ref());
+    let rel_str = relative_path.as_ref().to_string_lossy();
 
     // Check if target already exists and matches
     if target_path.is_file() {
-        let current = FileMetadata::from_file(&target_path, Compression::None, None)?;
-        if current == metadata {
+        let (hashes, size) = cache::hashes_for_file(&target_path, &rel_str, cache)?;
+        if hashes == metadata.hashes && size == metadata.size {
             log::debug!(
                 "File {} already present locally and matches",
                 relative_path.as_ref().display()
@@ -297,6 +322,14 @@ fn get_file(
         fs::remove_file(&target_path)?;
         bail!("Retrieved file does not match expected hash");
     }
+
+    // Store retrieved file's hashes in cache
+    if let Ok(stat) = cache::FileStat::from_path(&target_path) {
+        if let Err(e) = cache.insert(&rel_str, &stat, &actual.hashes) {
+            log::warn!("Cache store failed after get for {rel_str}: {e}");
+        }
+    }
+
     Ok(Outcome::Copied)
 }
 
@@ -335,13 +368,16 @@ pub fn add_files(
         bail!("The following files were not found: {}", missing.join(", "));
     }
 
+    let cache = cache::open_cache(paths)?;
     let mut results = Vec::new();
     let operation_id = Uuid::new_v4();
 
     for (relative_path, _) in matched_paths {
         let full_path = paths.file_path(&relative_path);
+        let rel_str = relative_path.to_string_lossy();
+        let (hashes, size) = cache::hashes_for_file(&full_path, &rel_str, &cache)?;
+        let metadata = FileMetadata::from_hashes(hashes, size, compression, message.clone());
 
-        let metadata = FileMetadata::from_file(&full_path, compression, message.clone())?;
         let outcome = metadata.save(operation_id, &full_path, backend, paths, &relative_path)?;
         log::info!(
             "Successfully added {} ({:?})",
@@ -383,10 +419,11 @@ pub fn get_files(
         bail!("The following files were not found: {}", missing.join(", "));
     }
 
+    let cache = cache::open_cache(paths)?;
     let mut results = Vec::new();
 
     for (relative_path, _) in matched_paths {
-        let outcome = get_file(backend, paths, &relative_path)?;
+        let outcome = get_file(backend, paths, &relative_path, &cache)?;
         log::info!(
             "Successfully retrieved {} ({:?})",
             relative_path.display(),
@@ -412,6 +449,10 @@ mod tests {
             root.to_path_buf(),
             config.metadata_folder_name(),
         )
+    }
+
+    fn make_cache(paths: &DvsPaths) -> cache::HashCache {
+        cache::HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap()
     }
 
     #[test]
@@ -486,7 +527,8 @@ mod tests {
         let paths = make_paths(&root, &config);
         create_file(&root, "new.txt", b"content");
 
-        let status = get_file_status(&paths, "new.txt").unwrap();
+        let cache = make_cache(&paths);
+        let status = get_file_status(&paths, "new.txt", &cache).unwrap();
         assert_eq!(status, Status::Untracked);
     }
 
@@ -503,7 +545,8 @@ mod tests {
             .save(Uuid::new_v4(), &file_path, backend, &paths, "synced.txt")
             .unwrap();
 
-        let status = get_file_status(&paths, "synced.txt").unwrap();
+        let cache = make_cache(&paths);
+        let status = get_file_status(&paths, "synced.txt", &cache).unwrap();
         assert_eq!(status, Status::Current);
     }
 
@@ -523,7 +566,8 @@ mod tests {
         // Delete the original file
         fs::remove_file(&file_path).unwrap();
 
-        let status = get_file_status(&paths, "deleted.txt").unwrap();
+        let cache = make_cache(&paths);
+        let status = get_file_status(&paths, "deleted.txt", &cache).unwrap();
         assert_eq!(status, Status::Absent);
     }
 
@@ -543,7 +587,8 @@ mod tests {
         // Modify the file
         fs::write(&file_path, b"changed content").unwrap();
 
-        let status = get_file_status(&paths, "modified.txt").unwrap();
+        let cache = make_cache(&paths);
+        let status = get_file_status(&paths, "modified.txt", &cache).unwrap();
         assert_eq!(status, Status::Unsynced);
     }
 
@@ -565,7 +610,8 @@ mod tests {
         assert!(!file_path.exists());
 
         // Retrieve it
-        let outcome = get_file(backend, &paths, "retrieve.txt").unwrap();
+        let cache = make_cache(&paths);
+        let outcome = get_file(backend, &paths, "retrieve.txt", &cache).unwrap();
         assert_eq!(outcome, Outcome::Copied);
         assert!(file_path.exists());
         assert_eq!(fs::read(&file_path).unwrap(), b"stored content");
@@ -585,7 +631,8 @@ mod tests {
             .unwrap();
 
         // File still exists and matches - should return Present
-        let outcome = get_file(backend, &paths, "present.txt").unwrap();
+        let cache = make_cache(&paths);
+        let outcome = get_file(backend, &paths, "present.txt", &cache).unwrap();
         assert_eq!(outcome, Outcome::Present);
     }
 
@@ -596,7 +643,8 @@ mod tests {
         let backend = config.backend();
         let paths = make_paths(&root, &config);
 
-        let result = get_file(backend, &paths, "untracked.txt");
+        let cache = make_cache(&paths);
+        let result = get_file(backend, &paths, "untracked.txt", &cache);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not tracked"));
     }
@@ -771,7 +819,8 @@ mod tests {
             "Metadata should be updated to new hash"
         );
 
-        let status = get_file_status(&paths, "b.txt").unwrap();
+        let cache = make_cache(&paths);
+        let status = get_file_status(&paths, "b.txt", &cache).unwrap();
         assert_eq!(status, Status::Current);
     }
 
@@ -800,7 +849,8 @@ mod tests {
         fs::write(&storage_path, b"corrupted content").unwrap();
 
         // get_file should error on decompression or hash mismatch
-        let result = get_file(backend, &paths, "data.txt");
+        let cache = make_cache(&paths);
+        let result = get_file(backend, &paths, "data.txt", &cache);
         assert!(result.is_err());
     }
 }
