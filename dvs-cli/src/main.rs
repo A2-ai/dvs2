@@ -7,11 +7,11 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 
 use crate::globbing::{resolve_paths_for_add, resolve_paths_for_get};
-use dvs::Compression;
 use dvs::config::Config;
 use dvs::file::{Outcome, add_files, get_files, get_status};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
+use dvs::{Compression, Status};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -45,7 +45,14 @@ pub enum Command {
         message: Option<String>,
     },
     /// Gets the status of each files in the current repository
-    Status,
+    Status {
+        #[clap(long)]
+        current: bool,
+        #[clap(long)]
+        absent: bool,
+        #[clap(long)]
+        unsynced: bool,
+    },
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory
     Get {
@@ -125,16 +132,38 @@ fn try_main() -> Result<()> {
                 }
             }
         }
-        Command::Status => {
+        Command::Status {
+            current,
+            absent,
+            unsynced,
+        } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
             let paths = DvsPaths::from_cwd(&config)?;
+            let show_all = !current && !absent && !unsynced;
 
-            let statuses = get_status(&paths)?;
+            let mut statuses = get_status(&paths)?;
+            if !show_all {
+                statuses.retain(|x| {
+                    if current {
+                        x.status == Status::Current
+                    } else if absent {
+                        x.status == Status::Absent
+                    } else if unsynced {
+                        x.status == Status::Unsynced
+                    } else {
+                        false
+                    }
+                });
+            }
             if cli.json {
                 println!("{}", serde_json::to_string(&statuses)?);
             } else if statuses.is_empty() {
-                println!("No tracked files");
+                if show_all {
+                    println!("No tracked files");
+                } else {
+                    println!("No tracked files matching the filter")
+                }
             } else {
                 for file_status in statuses {
                     println!("{}: {:?}", file_status.path.display(), file_status.status);
