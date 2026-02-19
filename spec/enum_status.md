@@ -1,7 +1,6 @@
 # Configuration: Status
 
 - current | absent | unsynced
-- tracked file that is un-added
 
 
 

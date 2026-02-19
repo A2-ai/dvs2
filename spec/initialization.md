@@ -59,7 +59,7 @@ Usage:
   dvs init fs <storage-path> [OPTIONS]
 
 Required:
-  <storage-path>    path to the local storage locations (e.g. `/data/`)
+  <storage-path>    path to the local storage locations (e.g. `/data/dvs/projx`)
 
 Options:
   --json
@@ -72,6 +72,8 @@ Options:
       Unix group to set on storage directory and files
   --no-compression
       Disable compression of stored files. Compression defaults to zstd
+  --compression
+      type of compression to use. zstd, gz
   -h, --help
           Print help
 ```
@@ -79,7 +81,7 @@ Options:
 Example output:
 
 ```shell
-$ dvs init /data/
+$ dvs init /data/dvs/projx
 DVS Repository created with storage path located at <ABSOLUTE STORAGE PATH>
 ```
 
@@ -87,29 +89,32 @@ DVS Repository created with storage path located at <ABSOLUTE STORAGE PATH>
 
 ```r
 dvs_init <- function(
-  storage_path = character(), # required
+  storage_path,
+  storage_config = fs_storage(), #default to file system storage
+  metadata_folder_name = NULL,
+  ...,
+  dir = getwd() # default to creating in wd
+  )
+```
+
+```
+fs_storage <- function(
   permissions = NULL, 
-  group = NULL, 
-  metadata_folder_name = NULL)
-```
+  group = NULL 
+) {...} 
 
-Example output:
-
-```r
-> dvs_init()
-> Error: `storage_path` is missing; Please provide a location to store dvs objects.
-```
 
 ```r
 > dvs_init("/data/projectA_storage")
-> A DVS repository was initialized in "/Users/elea/Documents/projectA" with storage location at "/data/projectA_storage"
+> A DVS project was initialized in "/Users/elea/Documents/projectA" with storage location at "/data/projectA_storage"
 ```
 
-CLI users do not need the full path shown to them, but R users need that information.
-
-Different storage backends have to be initialized through specialized functions.
-
-- `dvs_init_fs` with alias `dvs_init`
+```r
+dvs_init <- function(
+  storage_path,
+  storage_config = s3_storage(...), # different config functions can provide typed
+  )
+```
 
 ## Journey 1: Initial Setup with defaults
 
@@ -168,30 +173,3 @@ dvs init /data/dvs/sensitive-projx --permissions "660" --group projx
 ```r
 dvs_init("/data/shared/project-x-dvs", permissions = "660", group = "projx")
 ```
-
-#### Returns
-
-Return a rich data-frame that the end-user can then further subset/filter
-to fit their needs.
-
-Old format: `relative_path`, `outcome`, `file_size_bytes`, `blake3_checksum`.
-
-- [ ] New format:
-  - `absolute_path`: abbreviated when printed in R (pillar)
-  - `relative path`: full path
-  - `status`: ordered factor instead of `character()`
-  - `absent|unsync|sync|present|added`
-  - `checksum`: always abbreviated in print (pillar, first 5 characters)
-  - `size`: using units and not raw `double()/numeric()`
-
-## Data formats to track
-
-- `.csv`
-- `.rds`
-- don't track `.RDA` files, as they are a collection of datasets
-
-Configuration: Must add these filters to the `dvs.toml`.
-
-Known annoyance: Verbosity of this can be annoying.
-There should be a way to reduce outputs on untracked data files available
-to the user.
