@@ -90,7 +90,7 @@ DVS Repository created with storage path located at <ABSOLUTE STORAGE PATH>
 ```r
 dvs_init <- function(
   storage_path,
-  storage_config = fs_storage(), #default to file system storage
+  backend_config = fs_storage(), #default to file system storage
   metadata_folder_name = NULL,
   ...,
   dir = getwd() # default to creating in wd
@@ -102,11 +102,11 @@ fs_storage <- function(
   permissions = NULL, 
   group = NULL 
 ) {...} 
-
+```
 
 ```r
-> dvs_init("/data/projectA_storage")
-> A DVS project was initialized in "/Users/elea/Documents/projectA" with storage location at "/data/projectA_storage"
+> dvs_init("/data/dvs/projx")
+> A DVS project was initialized in "/Users/elea/Documents/projectA" with storage location at "/data/dvs/projx"
 ```
 
 ```r
@@ -115,6 +115,18 @@ dvs_init <- function(
   storage_config = s3_storage(...), # different config functions can provide typed
   )
 ```
+
+would result in the following toml config:
+
+```
+compression = "zstd"
+
+[backend]
+path = "/path/to/shared/storage
+```
+
+
+
 
 ## Journey 1: Initial Setup with defaults
 

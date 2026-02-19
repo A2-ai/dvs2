@@ -15,31 +15,20 @@ $ dvs sync
 ...      ...            ...
 ```
 
-The sync subcommand should also be able to act as a repository revert,
-and 
-
-```sh
-$ dvs sync --before <duration/date>
-[status] [Last modified] [Message]
-...      ...            ...
-```
 
 ## R
 
 Signature:
 
 ```r
-dvs_sync <- function(
-  by_folder = character(),
-  since = NULL, # date | duration (unit)
-  recurse = TRUE ,
-)
+dvs_sync <- function(...) {
+  dvs_get(glob = "**/*", ...)
+}
 ```
 
 - `path` is a location within a dvs repository.
   Not necessarily the root a dvs repository.
-- `by_folder` allows to sync specific folders only
-- `recurse` is whether to sync folders recursively
+
 
 ### `recurse`
 

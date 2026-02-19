@@ -1,7 +1,16 @@
 # `dvs.toml`
 
-The configuration toml file should contain
+default initialization should provide:
 
-- Backend
-- The default compression
-- Path to the storage directory
+```
+compression = "zstd"
+metadata_folder_name = ".dvs" # option
+
+[backend]
+path = "/path/to/shared/storage
+permissions = "664"
+group = NULL # default to users default group
+```
+
+compression enum - zstd | none
+hash_algorithms vector of hash algorithms - blake3, md5
