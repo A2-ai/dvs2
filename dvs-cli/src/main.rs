@@ -1,14 +1,12 @@
-mod globbing;
-
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use serde_json::json;
 
-use crate::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::config::Config;
 use dvs::file::{Outcome, add_files, get_files, get_status};
+use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{Compression, Status};

@@ -23,6 +23,7 @@ whoami.workspace = true
 zstd.workspace = true
 rusqlite.workspace = true
 uuid = { version = "1.20.0", features = ["v4"] }
+globset.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["user", "fs"] }

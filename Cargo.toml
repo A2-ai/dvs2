@@ -35,3 +35,4 @@ whoami = "2"
 uuid = "1.20.0"
 zstd = "0.13.3"
 rusqlite = { version = "0.38", features = ["bundled"] }
+globset = "0.4"

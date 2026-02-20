@@ -4,6 +4,7 @@ mod cache;
 pub mod config;
 pub mod file;
 mod gitignore;
+pub mod globbing;
 mod hashes;
 pub mod init;
 pub mod paths;
