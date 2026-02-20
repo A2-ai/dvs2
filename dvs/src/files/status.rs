@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::Result;
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::cache::HashCache;
+use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
 use crate::{DvsPaths, Status, cache};
 
@@ -18,7 +19,7 @@ pub struct FileStatus {
 fn get_file_status(
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
-    cache: Option<&HashCache>,
+    cache: Option<&Mutex<HashCache>>,
 ) -> Result<Status> {
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
     if !dvs_file_path.is_file() {
@@ -43,13 +44,7 @@ fn get_file_status(
 pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
-    let cache = match cache::open_cache(paths) {
-        Ok(c) => Some(c),
-        Err(e) => {
-            log::warn!("Failed to open hash cache: {e}");
-            None
-        }
-    };
+    let cache = try_open_cache(paths);
     let mut results = Vec::new();
     for entry in WalkDir::new(&dvs_directory)
         .into_iter()
@@ -90,8 +85,8 @@ mod tests {
         )
     }
 
-    fn make_cache(paths: &DvsPaths) -> HashCache {
-        HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap()
+    fn make_cache(paths: &DvsPaths) -> Mutex<HashCache> {
+        Mutex::new(HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap())
     }
 
     #[test]

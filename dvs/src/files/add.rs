@@ -1,15 +1,18 @@
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::Result;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::backends::Backend;
-use crate::cache::HashCache;
+use crate::cache::{HashCache, try_open_cache};
 use crate::config::Compression;
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
 use crate::paths::DvsPaths;
+use crate::utils::get_threadpool;
 use crate::{Outcome, cache};
 
 /// Result of adding a single file.
@@ -37,7 +40,7 @@ fn add_file(
     relative_path: &Path,
     paths: &DvsPaths,
     backend: &dyn Backend,
-    cache: Option<&HashCache>,
+    cache: Option<&Mutex<HashCache>>,
     operation_id: Uuid,
     message: Option<String>,
     compression: Compression,
@@ -62,62 +65,60 @@ pub fn add_files(
     compression: Compression,
 ) -> Result<Vec<AddResult>> {
     let matched_paths = paths.validate_for_add(&files);
-    let cache = match cache::open_cache(paths) {
-        Ok(c) => Some(c),
-        Err(e) => {
-            log::warn!("Failed to open hash cache: {e}");
-            None
-        }
-    };
-    let mut results = Vec::new();
+    let pool = get_threadpool(matched_paths.len())?;
+    let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
 
-    for (relative_path, exists) in matched_paths {
-        if !exists {
-            results.push(AddResult {
-                path: relative_path,
-                detail: AddDetail::Error {
-                    error: "file not found".to_string(),
-                },
-            });
-            continue;
-        }
+    let results: Vec<AddResult> = pool.install(|| {
+        matched_paths
+            .into_par_iter()
+            .map(|(relative_path, exists)| {
+                if !exists {
+                    return AddResult {
+                        path: relative_path,
+                        detail: AddDetail::Error {
+                            error: "file not found".to_string(),
+                        },
+                    };
+                }
 
-        match add_file(
-            &relative_path,
-            paths,
-            backend,
-            cache.as_ref(),
-            operation_id,
-            message.clone(),
-            compression,
-        ) {
-            Ok((outcome, metadata)) => {
-                log::info!(
-                    "Successfully added {} ({:?})",
-                    relative_path.display(),
-                    outcome
-                );
-                results.push(AddResult {
-                    path: relative_path,
-                    detail: AddDetail::Success {
-                        outcome,
-                        hash: metadata.hashes.blake3,
-                        size: metadata.size,
-                    },
-                });
-            }
-            Err(e) => {
-                log::warn!("Failed to add {}: {e}", relative_path.display());
-                results.push(AddResult {
-                    path: relative_path,
-                    detail: AddDetail::Error {
-                        error: e.to_string(),
-                    },
-                });
-            }
-        }
-    }
+                match add_file(
+                    &relative_path,
+                    paths,
+                    backend,
+                    cache.as_ref(),
+                    operation_id,
+                    message.clone(),
+                    compression,
+                ) {
+                    Ok((outcome, metadata)) => {
+                        log::info!(
+                            "Successfully added {} ({:?})",
+                            relative_path.display(),
+                            outcome
+                        );
+                        AddResult {
+                            path: relative_path,
+                            detail: AddDetail::Success {
+                                outcome,
+                                hash: metadata.hashes.blake3,
+                                size: metadata.size,
+                            },
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to add {}: {e}", relative_path.display());
+                        AddResult {
+                            path: relative_path,
+                            detail: AddDetail::Error {
+                                error: e.to_string(),
+                            },
+                        }
+                    }
+                }
+            })
+            .collect()
+    });
 
     let successful_paths: Vec<_> = results
         .iter()

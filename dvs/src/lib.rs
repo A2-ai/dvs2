@@ -8,6 +8,7 @@ pub mod globbing;
 mod hashes;
 pub mod init;
 pub mod paths;
+pub(crate) mod utils;
 
 pub use backends::Backend;
 pub use config::Compression;

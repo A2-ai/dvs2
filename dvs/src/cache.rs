@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
 use crate::gitignore::add_to_gitignore;
@@ -97,13 +98,13 @@ impl HashCache {
 pub fn hashes_for_file(
     full_path: &Path,
     relative_path: &str,
-    cache: Option<&HashCache>,
+    cache: Option<&Mutex<HashCache>>,
 ) -> Result<(Hashes, u64)> {
     let stat = FileStat::from_path(full_path)?;
 
-    // Try cache lookup
-    if let Some(cache) = cache {
-        match cache.lookup(relative_path, &stat) {
+    // Try cache lookup (brief lock)
+    if let Some(mtx) = cache {
+        match mtx.lock().unwrap().lookup(relative_path, &stat) {
             Ok(Some(hashes)) => {
                 log::debug!("Cache hit for {relative_path}");
                 return Ok((hashes, stat.size));
@@ -120,9 +121,9 @@ pub fn hashes_for_file(
     // Cache miss or no cache — stream-hash the file
     let (hashes, size) = Hashes::compute_from_path(full_path, &[])?;
 
-    // Store in cache
-    if let Some(cache) = cache {
-        if let Err(e) = cache.insert(relative_path, &stat, &hashes) {
+    // Store in cache (brief lock)
+    if let Some(mtx) = cache {
+        if let Err(e) = mtx.lock().unwrap().insert(relative_path, &stat, &hashes) {
             log::warn!("Cache store failed for {relative_path}: {e}");
         }
     }
@@ -160,6 +161,18 @@ pub fn open_cache(paths: &DvsPaths) -> Result<HashCache> {
     }
 
     Ok(cache)
+}
+
+/// Open a thread safe cache, ignoring errors when it encounters them since
+/// the cache is optional and shouldn't block actual operation
+pub(crate) fn try_open_cache(paths: &DvsPaths) -> Option<Mutex<HashCache>> {
+    match open_cache(paths) {
+        Ok(c) => Some(Mutex::new(c)),
+        Err(e) => {
+            log::warn!("Failed to open hash cache: {e}");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
