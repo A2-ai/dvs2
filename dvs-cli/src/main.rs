@@ -4,12 +4,14 @@ use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use serde_json::json;
 
+use dvs::AddDetail;
+use dvs::add_files;
 use dvs::config::Config;
-use dvs::file::{Outcome, add_files, get_files, get_status};
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{Compression, Status};
+use dvs::{Outcome, get_files, get_status};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -132,12 +134,25 @@ fn try_main() -> Result<()> {
                 message,
                 config.compression(),
             )?;
+            let has_errors = results
+                .iter()
+                .any(|r| matches!(r.detail, AddDetail::Error { .. }));
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
-                for result in results {
-                    println!("Added: {}", result.path.display());
+                for result in &results {
+                    match &result.detail {
+                        AddDetail::Error { error: err } => {
+                            eprintln!("Error adding {}: {err}", result.path.display());
+                        }
+                        AddDetail::Success { .. } => {
+                            println!("Added: {}", result.path.display());
+                        }
+                    }
                 }
+            }
+            if has_errors {
+                return Err(anyhow!("Some files failed to add"));
             }
         }
         Command::Status {

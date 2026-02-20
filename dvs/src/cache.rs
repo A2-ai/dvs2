@@ -97,21 +97,23 @@ impl HashCache {
 pub fn hashes_for_file(
     full_path: &Path,
     relative_path: &str,
-    cache: &HashCache,
+    cache: Option<&HashCache>,
 ) -> Result<(Hashes, u64)> {
     let stat = FileStat::from_path(full_path)?;
 
     // Try cache lookup
-    match cache.lookup(relative_path, &stat) {
-        Ok(Some(hashes)) => {
-            log::debug!("Cache hit for {relative_path}");
-            return Ok((hashes, stat.size));
-        }
-        Ok(None) => {
-            log::debug!("Cache miss for {relative_path}");
-        }
-        Err(e) => {
-            log::warn!("Cache lookup failed for {relative_path}: {e}");
+    if let Some(cache) = cache {
+        match cache.lookup(relative_path, &stat) {
+            Ok(Some(hashes)) => {
+                log::debug!("Cache hit for {relative_path}");
+                return Ok((hashes, stat.size));
+            }
+            Ok(None) => {
+                log::debug!("Cache miss for {relative_path}");
+            }
+            Err(e) => {
+                log::warn!("Cache lookup failed for {relative_path}: {e}");
+            }
         }
     }
 
@@ -119,8 +121,10 @@ pub fn hashes_for_file(
     let (hashes, size) = Hashes::compute_from_path(full_path, &[])?;
 
     // Store in cache
-    if let Err(e) = cache.insert(relative_path, &stat, &hashes) {
-        log::warn!("Cache store failed for {relative_path}: {e}");
+    if let Some(cache) = cache {
+        if let Err(e) = cache.insert(relative_path, &stat, &hashes) {
+            log::warn!("Cache store failed for {relative_path}: {e}");
+        }
     }
 
     Ok((hashes, size))
