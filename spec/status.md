@@ -1,4 +1,4 @@
-# `dvs` status
+# `dvs status`
 
 Goal: Provide an overview of the changed data files and potential files to track
 via the traced data file filters.
@@ -12,7 +12,10 @@ $ dvs status --help
 Status of the DVS repository 
 
 Usage:
-  dvs status [FILTERS] [OPTIONS]
+  dvs status [PATHS] [FILTERS] [OPTIONS]
+
+Paths:
+  
 
 Filters:
   --current
