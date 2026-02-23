@@ -95,11 +95,11 @@ fn try_main() -> Result<()> {
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
             }
-            init(&current_dir, config)?;
+            let repo_root = init(&current_dir, config)?;
             if cli.json {
                 println!("{}", json!({"status": "initialized"}));
             } else {
-                println!("DVS Initialized");
+                println!("DVS Initialized at {repo_root:?}");
             }
         }
         Command::Add {

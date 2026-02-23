@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
 use fs_err as fs;
@@ -9,7 +9,7 @@ use crate::paths::find_repo_root;
 /// Starts a new dvs project.
 /// We need a ready to use Config object + the current directory the user is in
 /// The library handles finding where to create the config file and metadata folder
-pub fn init(current_dir: impl AsRef<Path>, config: Config) -> Result<()> {
+pub fn init(current_dir: impl AsRef<Path>, config: Config) -> Result<PathBuf> {
     if Config::find(&current_dir).is_some() {
         bail!(
             "Configuration already exists in {}",
@@ -27,7 +27,7 @@ pub fn init(current_dir: impl AsRef<Path>, config: Config) -> Result<()> {
     log::debug!("Initializing backend");
     config.backend().init()?;
     log::info!("DVS repository initialized successfully");
-    Ok(())
+    Ok(repo_root)
 }
 
 #[cfg(test)]
