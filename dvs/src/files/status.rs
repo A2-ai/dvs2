@@ -1,0 +1,243 @@
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use anyhow::Result;
+use fs_err as fs;
+use serde::{Deserialize, Serialize};
+use walkdir::WalkDir;
+
+use crate::cache::{HashCache, try_open_cache};
+use crate::files::metadata::FileMetadata;
+use crate::{DvsPaths, Status, cache};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileStatus {
+    pub path: PathBuf,
+    pub status: Status,
+}
+
+fn get_file_status(
+    paths: &DvsPaths,
+    relative_path: impl AsRef<Path>,
+    cache: Option<&Mutex<HashCache>>,
+) -> Result<Status> {
+    let dvs_file_path = paths.metadata_path(relative_path.as_ref());
+    if !dvs_file_path.is_file() {
+        return Ok(Status::Untracked);
+    }
+    let existing_metadata: FileMetadata = serde_json::from_reader(fs::File::open(dvs_file_path)?)?;
+    // If we have read the metadata, but we can't find the original file
+    let file_path = paths.file_path(relative_path.as_ref());
+    if !file_path.is_file() {
+        return Ok(Status::Absent);
+    }
+    let rel_str = relative_path.as_ref().to_string_lossy();
+    let (hashes, size) = cache::hashes_for_file(&file_path, &rel_str, cache)?;
+
+    if existing_metadata.hashes == hashes && existing_metadata.size == size {
+        Ok(Status::Current)
+    } else {
+        Ok(Status::Unsynced)
+    }
+}
+
+pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
+    let dvs_directory = paths.metadata_folder();
+    log::debug!("Scanning metadata folder: {}", dvs_directory.display());
+    let cache = try_open_cache(paths);
+    let mut results = Vec::new();
+    for entry in WalkDir::new(&dvs_directory)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "dvs")
+                .unwrap_or(false)
+        })
+    {
+        let dvs_path = entry.path();
+        // Strip dvs_directory prefix and .dvs suffix to get relative path
+        let relative = dvs_path.strip_prefix(&dvs_directory)?.with_extension("");
+        let status = get_file_status(paths, &relative, cache.as_ref())?;
+        results.push(FileStatus {
+            path: relative.to_path_buf(),
+            status,
+        });
+    }
+    log::debug!("Found {} tracked files", results.len());
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Compression;
+    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
+    use uuid::Uuid;
+
+    fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
+        DvsPaths::new(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            config.metadata_folder_name(),
+        )
+    }
+
+    fn make_cache(paths: &DvsPaths) -> Mutex<HashCache> {
+        Mutex::new(HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap())
+    }
+
+    #[test]
+    fn get_file_status_returns_untracked_for_new_file() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let paths = make_paths(&root, &config);
+        create_file(&root, "new.txt", b"content");
+
+        let cache = make_cache(&paths);
+        let status = get_file_status(&paths, "new.txt", Some(&cache)).unwrap();
+        assert_eq!(status, Status::Untracked);
+    }
+
+    #[test]
+    fn get_file_status_returns_current_for_synced_file() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+        let file_path = create_file(&root, "synced.txt", b"content");
+
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        metadata
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "synced.txt")
+            .unwrap();
+
+        let cache = make_cache(&paths);
+        let status = get_file_status(&paths, "synced.txt", Some(&cache)).unwrap();
+        assert_eq!(status, Status::Current);
+    }
+
+    #[test]
+    fn get_file_status_returns_absent_when_file_deleted() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+        let file_path = create_file(&root, "deleted.txt", b"content");
+
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        metadata
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "deleted.txt")
+            .unwrap();
+
+        // Delete the original file
+        fs::remove_file(&file_path).unwrap();
+
+        let cache = make_cache(&paths);
+        let status = get_file_status(&paths, "deleted.txt", Some(&cache)).unwrap();
+        assert_eq!(status, Status::Absent);
+    }
+
+    #[test]
+    fn get_file_status_returns_unsynced_when_file_modified() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+        let file_path = create_file(&root, "modified.txt", b"original");
+
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        metadata
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "modified.txt")
+            .unwrap();
+
+        // Modify the file
+        fs::write(&file_path, b"changed content").unwrap();
+
+        let cache = make_cache(&paths);
+        let status = get_file_status(&paths, "modified.txt", Some(&cache)).unwrap();
+        assert_eq!(status, Status::Unsynced);
+    }
+
+    #[test]
+    fn get_status_returns_all_tracked_files() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+
+        // Add multiple files
+        for name in ["a.txt", "b.txt", "subdir/c.txt"] {
+            let file_path = create_file(&root, name, name.as_bytes());
+            let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+            metadata
+                .save(Uuid::new_v4(), &file_path, backend, &paths, name)
+                .unwrap();
+        }
+
+        let statuses = get_status(&paths).unwrap();
+        assert_eq!(statuses.len(), 3);
+
+        // All should be Current
+        for status in &statuses {
+            assert_eq!(status.status, Status::Current);
+        }
+    }
+
+    #[test]
+    fn save_local_updates_metadata_when_content_matches_different_file() {
+        // - Add file A with content "foo" (hash H1)
+        // - Add file B with content "bar" (hash H2)
+        // - Change file B's content to "foo" (now hash H1)
+        // - Run `add` on B
+        // => B's metadata is updated to hash H1
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+
+        // Add file A with content "foo" (hash H1)
+        let file_a = create_file(&root, "a.txt", b"foo");
+        let metadata_a = FileMetadata::from_file(&file_a, Compression::Zstd, None).unwrap();
+        metadata_a
+            .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt")
+            .unwrap();
+        let hash_h1 = metadata_a.hashes.blake3.clone();
+
+        // Add file B with content "bar" (hash H2)
+        let file_b = create_file(&root, "b.txt", b"bar");
+        let metadata_b = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
+        metadata_b
+            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt")
+            .unwrap();
+        let hash_h2 = metadata_b.hashes.blake3.clone();
+        assert_ne!(hash_h1, hash_h2);
+
+        // Change file B's content to "foo" (now hash H1)
+        fs::write(&file_b, b"foo").unwrap();
+
+        // Run add on B with new content
+        let metadata_b_new = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
+        assert_eq!(metadata_b_new.hashes.blake3, hash_h1);
+
+        metadata_b_new
+            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt")
+            .unwrap();
+
+        // Verify metadata was updated
+        let dvs_file = dvs_dir.join("b.txt.dvs");
+        let stored: FileMetadata =
+            serde_json::from_reader(fs::File::open(&dvs_file).unwrap()).unwrap();
+
+        assert_eq!(
+            stored.hashes.blake3, hash_h1,
+            "Metadata should be updated to new hash"
+        );
+
+        let cache = make_cache(&paths);
+        let status = get_file_status(&paths, "b.txt", Some(&cache)).unwrap();
+        assert_eq!(status, Status::Current);
+    }
+}

@@ -2,16 +2,21 @@ pub mod audit;
 pub mod backends;
 mod cache;
 pub mod config;
-pub mod file;
+mod files;
 mod gitignore;
+pub mod globbing;
 mod hashes;
 pub mod init;
 pub mod paths;
+pub(crate) mod utils;
 
 pub use backends::Backend;
 pub use config::Compression;
-pub use file::{AddResult, FileMetadata, FileStatus, GetResult, Outcome, Status};
-pub use file::{add_files, get_files, get_status};
+pub use files::add::{AddDetail, AddResult, add_files};
+pub use files::get::{GetResult, get_files};
+pub use files::metadata::FileMetadata;
+pub use files::status::{FileStatus, get_status};
+pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use paths::{DvsPaths, find_repo_root};
 
