@@ -97,7 +97,7 @@ impl Config {
     }
 
     pub fn find(current_directory: impl AsRef<Path>) -> Option<Result<Self>> {
-        let repo_root = find_repo_root(current_directory)?;
+        let repo_root = find_repo_root(current_directory);
         let config_path = repo_root.join(CONFIG_FILE_NAME);
         log::debug!("Looking for config at {}", config_path.display());
         if config_path.exists() {

@@ -7,10 +7,10 @@ use anyhow::{Result, anyhow, bail};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 
+use crate::Hashes;
 use crate::audit::{AuditEntry, parse_audit_log};
 use crate::backends::Backend;
 use crate::config::Compression;
-use crate::{HashAlg, Hashes};
 
 const AUDIT_LOG_FILENAME: &str = "audit.log.jsonl";
 
@@ -52,7 +52,6 @@ pub struct LocalBackend {
     pub path: PathBuf,
     permissions: Option<String>,
     group: Option<String>,
-    hash_alg: HashAlg,
 }
 
 impl LocalBackend {
@@ -73,7 +72,6 @@ impl LocalBackend {
             path: path.as_ref().to_path_buf(),
             permissions,
             group,
-            hash_alg: HashAlg::Blake3,
         })
     }
 
@@ -108,7 +106,7 @@ impl LocalBackend {
     }
 
     fn hash_to_path(&self, hashes: &Hashes) -> Result<PathBuf> {
-        let hash = hashes.get_by_alg(self.hash_alg);
+        let hash = hashes.get_blake3();
         if hash.len() < 3 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
             bail!("Invalid hash: {hash}");
         }
@@ -218,7 +216,7 @@ mod tests {
     fn test_hash(hash: &str) -> Hashes {
         Hashes {
             blake3: hash.to_string(),
-            md5: hash.to_string(),
+            md5: None,
         }
     }
 

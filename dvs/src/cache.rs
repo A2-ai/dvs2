@@ -49,7 +49,7 @@ impl HashCache {
                  mtime_ns  INTEGER NOT NULL,
                  size      INTEGER NOT NULL,
                  blake3    TEXT NOT NULL,
-                 md5       TEXT NOT NULL
+                 md5       TEXT
              );",
         )?;
         Ok(Self { conn })
@@ -67,7 +67,7 @@ impl HashCache {
         match rows.next()? {
             Some(row) => {
                 let blake3: String = row.get(0)?;
-                let md5: String = row.get(1)?;
+                let md5: Option<String> = row.get(1)?;
                 Ok(Some(Hashes { blake3, md5 }))
             }
             None => Ok(None),
@@ -84,7 +84,7 @@ impl HashCache {
             relative_path,
             stat.mtime_ns,
             stat.size as i64,
-            hashes.blake3,
+            &hashes.blake3,
             hashes.md5,
         ])?;
         Ok(())
@@ -115,16 +115,15 @@ pub fn hashes_for_file(
         }
     }
 
-    // Cache miss or no cache — read and hash
-    let content = fs::read(full_path)?;
-    let hashes = Hashes::from(content);
+    // Cache miss or no cache — stream-hash the file
+    let (hashes, size) = Hashes::compute_from_path(full_path, &[])?;
 
     // Store in cache
     if let Err(e) = cache.insert(relative_path, &stat, &hashes) {
         log::warn!("Cache store failed for {relative_path}: {e}");
     }
 
-    Ok((hashes, stat.size))
+    Ok((hashes, size))
 }
 
 /// Try to open the hash cache, handling corruption gracefully.
@@ -174,7 +173,7 @@ mod tests {
     fn sample_hashes() -> Hashes {
         Hashes {
             blake3: "abc123".to_string(),
-            md5: "def456".to_string(),
+            md5: None,
         }
     }
 
@@ -235,7 +234,7 @@ mod tests {
         let hashes1 = sample_hashes();
         let hashes2 = Hashes {
             blake3: "new_blake3".to_string(),
-            md5: "new_md5".to_string(),
+            md5: None,
         };
 
         cache.insert("file.txt", &stat, &hashes1).unwrap();

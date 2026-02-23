@@ -80,9 +80,7 @@ impl FileMetadata {
             bail!("Path {} is not a file", path.as_ref().display());
         }
 
-        let content = fs::read(path.as_ref())?;
-        let size = content.len() as u64;
-        let hashes = Hashes::from(content);
+        let (hashes, size) = Hashes::compute_from_path(path.as_ref(), &[])?;
         let created_by = whoami::username()?;
         let add_time = jiff::Timestamp::now().to_string();
 
@@ -451,8 +449,8 @@ mod tests {
         )
     }
 
-    fn make_cache(paths: &DvsPaths) -> cache::HashCache {
-        cache::HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap()
+    fn make_cache(paths: &DvsPaths) -> HashCache {
+        HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap()
     }
 
     #[test]
@@ -468,7 +466,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(metadata.hashes.blake3.len(), 64);
-        assert_eq!(metadata.hashes.md5, "5eb63bbbe01eeed093cb22bb8f5acdc3");
+        assert!(metadata.hashes.md5.is_none());
         assert_eq!(metadata.size, 11);
         assert_eq!(metadata.message, Some("test message".to_string()));
     }
@@ -780,14 +778,13 @@ mod tests {
         let (config, dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
         let paths = make_paths(&root, &config);
-
         // Add file A with content "foo" (hash H1)
         let file_a = create_file(&root, "a.txt", b"foo");
         let metadata_a = FileMetadata::from_file(&file_a, Compression::Zstd, None).unwrap();
         metadata_a
             .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt")
             .unwrap();
-        let hash_h1 = metadata_a.hashes.md5.clone();
+        let hash_h1 = metadata_a.hashes.get_blake3().to_string();
 
         // Add file B with content "bar" (hash H2)
         let file_b = create_file(&root, "b.txt", b"bar");
@@ -795,7 +792,7 @@ mod tests {
         metadata_b
             .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt")
             .unwrap();
-        let hash_h2 = metadata_b.hashes.md5.clone();
+        let hash_h2 = metadata_b.hashes.get_blake3();
         assert_ne!(hash_h1, hash_h2);
 
         // Change file B's content to "foo" (now hash H1)
@@ -803,7 +800,7 @@ mod tests {
 
         // Run add on B with new content
         let metadata_b_new = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
-        assert_eq!(metadata_b_new.hashes.md5, hash_h1);
+        assert_eq!(metadata_b_new.hashes.get_blake3(), hash_h1);
 
         metadata_b_new
             .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt")
@@ -815,7 +812,8 @@ mod tests {
             serde_json::from_reader(fs::File::open(&dvs_file).unwrap()).unwrap();
 
         assert_eq!(
-            stored.hashes.md5, hash_h1,
+            stored.hashes.get_blake3(),
+            hash_h1,
             "Metadata should be updated to new hash"
         );
 
@@ -830,7 +828,6 @@ mod tests {
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
         let paths = make_paths(&root, &config);
-
         // Add a file
         let file_path = create_file(&root, "data.txt", b"original content");
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
@@ -842,10 +839,11 @@ mod tests {
         fs::remove_file(&file_path).unwrap();
 
         // Corrupt the storage file
+        let blake3_hash = &metadata.hashes.blake3;
         let storage_path = root
             .join(".storage")
-            .join(&metadata.hashes.blake3[..2])
-            .join(&metadata.hashes.blake3[2..]);
+            .join(&blake3_hash[..2])
+            .join(&blake3_hash[2..]);
         fs::write(&storage_path, b"corrupted content").unwrap();
 
         // get_file should error on decompression or hash mismatch

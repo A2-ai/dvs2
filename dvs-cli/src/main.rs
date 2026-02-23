@@ -16,11 +16,14 @@ use dvs::{Compression, Status};
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Starts a new dvs project.
-    /// This will create a `dvs.toml` file in the root folder of where the user is calling the CLI
-    /// from. root folder being the place where we find a `.git` folder
+    /// This will create a `dvs.toml` file in the current folder of where the user is calling the CLI
+    /// from.
     Init {
         /// Where the data will be stored
         path: PathBuf,
+        /// If you want to use a root folder other than the current directory
+        #[clap(long)]
+        root_dir: Option<PathBuf>,
         /// If you want to use a folder name other than `.dvs` for storing the metadata files
         #[clap(long)]
         metadata_folder_name: Option<String>,
@@ -83,6 +86,7 @@ fn try_main() -> Result<()> {
     match cli.command {
         Command::Init {
             path,
+            root_dir,
             metadata_folder_name,
             permissions,
             group,
@@ -95,11 +99,17 @@ fn try_main() -> Result<()> {
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
             }
-            init(&current_dir, config)?;
+            let root = if let Some(root) = root_dir {
+                root
+            } else {
+                current_dir
+            };
+
+            let repo_root = init(&root, config)?;
             if cli.json {
                 println!("{}", json!({"status": "initialized"}));
             } else {
-                println!("DVS Initialized");
+                println!("DVS Initialized at {repo_root:?}");
             }
         }
         Command::Add {
