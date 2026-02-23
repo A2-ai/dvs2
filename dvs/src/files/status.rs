@@ -204,7 +204,7 @@ mod tests {
         metadata_a
             .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt")
             .unwrap();
-        let hash_h1 = metadata_a.hashes.md5.clone();
+        let hash_h1 = metadata_a.hashes.blake3.clone();
 
         // Add file B with content "bar" (hash H2)
         let file_b = create_file(&root, "b.txt", b"bar");
@@ -212,7 +212,7 @@ mod tests {
         metadata_b
             .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt")
             .unwrap();
-        let hash_h2 = metadata_b.hashes.md5.clone();
+        let hash_h2 = metadata_b.hashes.blake3.clone();
         assert_ne!(hash_h1, hash_h2);
 
         // Change file B's content to "foo" (now hash H1)
@@ -220,7 +220,7 @@ mod tests {
 
         // Run add on B with new content
         let metadata_b_new = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
-        assert_eq!(metadata_b_new.hashes.md5, hash_h1);
+        assert_eq!(metadata_b_new.hashes.blake3, hash_h1);
 
         metadata_b_new
             .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt")
@@ -232,7 +232,7 @@ mod tests {
             serde_json::from_reader(fs::File::open(&dvs_file).unwrap()).unwrap();
 
         assert_eq!(
-            stored.hashes.md5, hash_h1,
+            stored.hashes.blake3, hash_h1,
             "Metadata should be updated to new hash"
         );
 

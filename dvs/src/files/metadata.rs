@@ -52,9 +52,7 @@ impl FileMetadata {
             bail!("Path {} is not a file", path.as_ref().display());
         }
 
-        let content = fs::read(path.as_ref())?;
-        let size = content.len() as u64;
-        let hashes = Hashes::from(content);
+        let (hashes, size) = Hashes::compute_from_path(path.as_ref(), &[])?;
         let created_by = whoami::username()?;
         let add_time = jiff::Timestamp::now().to_string();
 
@@ -206,7 +204,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(metadata.hashes.blake3.len(), 64);
-        assert_eq!(metadata.hashes.md5, "5eb63bbbe01eeed093cb22bb8f5acdc3");
         assert_eq!(metadata.size, 11);
         assert_eq!(metadata.message, Some("test message".to_string()));
     }
