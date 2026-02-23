@@ -1,33 +1,27 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use fs_err as fs;
 
 use crate::config::Config;
-use crate::paths::find_repo_root;
 
 /// Starts a new dvs project.
 /// We need a ready to use Config object + the current directory the user is in
-/// The library handles finding where to create the config file and metadata folder
-pub fn init(current_dir: impl AsRef<Path>, config: Config) -> Result<()> {
-    if Config::find(&current_dir).is_some() {
-        bail!(
-            "Configuration already exists in {}",
-            current_dir.as_ref().display()
-        );
+pub fn init(root_dir: impl AsRef<Path>, config: Config) -> Result<PathBuf> {
+    let root_dir = root_dir.as_ref();
+    if Config::find(&root_dir).is_some() {
+        bail!("Configuration already exists in {}", root_dir.display());
     }
-    let repo_root =
-        find_repo_root(&current_dir).ok_or_else(|| anyhow!("Cannot find repository root"))?;
-    config.save(&repo_root)?;
+    config.save(&root_dir)?;
     log::debug!(
         "Creating metadata folder: {}",
-        repo_root.join(config.metadata_folder_name()).display()
+        root_dir.join(config.metadata_folder_name()).display()
     );
-    fs::create_dir(repo_root.join(config.metadata_folder_name()))?;
+    fs::create_dir(root_dir.join(config.metadata_folder_name()))?;
     log::debug!("Initializing backend");
     config.backend().init()?;
     log::info!("DVS repository initialized successfully");
-    Ok(())
+    Ok(root_dir.to_path_buf())
 }
 
 #[cfg(test)]
@@ -63,32 +57,5 @@ mod tests {
         let result = init(&root, config);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
-    }
-
-    #[test]
-    fn init_fails_without_git_repo() {
-        let tmp = tempfile::tempdir().unwrap();
-        let storage = tmp.path().join(".storage");
-
-        let config = Config::new_local(&storage, None, None).unwrap();
-        let result = init(tmp.path(), config);
-
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("repository root"));
-    }
-
-    #[test]
-    fn init_from_subdirectory_creates_at_repo_root() {
-        let (_tmp, root) = create_temp_git_repo();
-        let subdir = root.join("nested/deep");
-        fs::create_dir_all(&subdir).unwrap();
-        let storage = root.join(".storage");
-
-        let config = Config::new_local(&storage, None, None).unwrap();
-        init(&subdir, config).unwrap();
-
-        // Config should be at repo root, not in subdirectory
-        assert!(root.join("dvs.toml").is_file());
-        assert!(!subdir.join("dvs.toml").exists());
     }
 }
