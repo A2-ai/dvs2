@@ -3,9 +3,11 @@ use std::sync::Mutex;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
+use crate::utils::get_threadpool;
 use crate::{Backend, Compression, DvsPaths, Outcome, cache};
 use anyhow::{Context, Result, bail};
 use fs_err as fs;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 fn get_file(
@@ -81,7 +83,15 @@ fn get_file(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetResult {
     pub path: PathBuf,
-    pub outcome: Outcome,
+    #[serde(flatten)]
+    pub detail: GetDetail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GetDetail {
+    Success { outcome: Outcome },
+    Error { error: String },
 }
 
 /// Gets files matching a glob pattern from DVS storage.
@@ -94,30 +104,47 @@ pub fn get_files(
     backend: &dyn Backend,
 ) -> Result<Vec<GetResult>> {
     let matched_paths = paths.validate_for_get(&files);
-    let missing: Vec<_> = matched_paths
-        .iter()
-        .filter(|(_, exists)| !*exists)
-        .map(|(p, _)| p.display().to_string())
-        .collect();
-    if !missing.is_empty() {
-        bail!("The following files were not found: {}", missing.join(", "));
-    }
-
+    let pool = get_threadpool(matched_paths.len())?;
     let cache = try_open_cache(paths);
-    let mut results = Vec::new();
 
-    for (relative_path, _) in matched_paths {
-        let outcome = get_file(backend, paths, &relative_path, cache.as_ref())?;
-        log::info!(
-            "Successfully retrieved {} ({:?})",
-            relative_path.display(),
-            outcome
-        );
-        results.push(GetResult {
-            path: relative_path,
-            outcome,
-        });
-    }
+    let results: Vec<GetResult> = pool.install(|| {
+        matched_paths
+            .into_par_iter()
+            .map(|(relative_path, exists)| {
+                if !exists {
+                    return GetResult {
+                        path: relative_path,
+                        detail: GetDetail::Error {
+                            error: "file not found".to_string(),
+                        },
+                    };
+                }
+
+                match get_file(backend, paths, &relative_path, cache.as_ref()) {
+                    Ok(outcome) => {
+                        log::info!(
+                            "Successfully retrieved {} ({:?})",
+                            relative_path.display(),
+                            outcome
+                        );
+                        GetResult {
+                            path: relative_path,
+                            detail: GetDetail::Success { outcome },
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to get {}: {e}", relative_path.display());
+                        GetResult {
+                            path: relative_path,
+                            detail: GetDetail::Error {
+                                error: e.to_string(),
+                            },
+                        }
+                    }
+                }
+            })
+            .collect()
+    });
 
     Ok(results)
 }
@@ -201,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn get_files_errors_when_not_found() {
+    fn get_files_reports_not_found_per_file() {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
@@ -217,9 +244,11 @@ mod tests {
         )
         .unwrap();
 
-        let result = get_files(vec!["nonexistent.csv".into()], &paths, backend);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not found"));
+        let results = get_files(vec!["nonexistent.csv".into()], &paths, backend).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(
+            matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not found"))
+        );
     }
 
     fn run_add_get_roundtrip(file_paths: Vec<PathBuf>, expected_files: &[&str]) {
@@ -266,7 +295,12 @@ mod tests {
         let results = get_files(file_paths, &paths, backend).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
-            assert_eq!(result.outcome, Outcome::Copied);
+            assert!(matches!(
+                result.detail,
+                GetDetail::Success {
+                    outcome: Outcome::Copied,
+                }
+            ));
         }
 
         // Verify files restored

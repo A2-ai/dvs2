@@ -3,11 +3,13 @@ use std::sync::Mutex;
 
 use anyhow::Result;
 use fs_err as fs;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
+use crate::utils::get_threadpool;
 use crate::{DvsPaths, Status, cache};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,8 +47,9 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
     let cache = try_open_cache(paths);
-    let mut results = Vec::new();
-    for entry in WalkDir::new(&dvs_directory)
+
+    // Collect entries first so we can process in parallel
+    let entries: Vec<PathBuf> = WalkDir::new(&dvs_directory)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
@@ -56,16 +59,33 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
                 .map(|ext| ext == "dvs")
                 .unwrap_or(false)
         })
-    {
-        let dvs_path = entry.path();
-        // Strip dvs_directory prefix and .dvs suffix to get relative path
-        let relative = dvs_path.strip_prefix(&dvs_directory)?.with_extension("");
-        let status = get_file_status(paths, &relative, cache.as_ref())?;
-        results.push(FileStatus {
-            path: relative.to_path_buf(),
-            status,
-        });
-    }
+        .map(|e| e.into_path())
+        .collect();
+
+    let pool = get_threadpool(entries.len())?;
+
+    let results: Vec<FileStatus> = pool.install(|| {
+        entries
+            .into_par_iter()
+            .filter_map(|dvs_path| {
+                let relative = dvs_path
+                    .strip_prefix(&dvs_directory)
+                    .ok()?
+                    .with_extension("");
+                match get_file_status(paths, &relative, cache.as_ref()) {
+                    Ok(status) => Some(FileStatus {
+                        path: relative.to_path_buf(),
+                        status,
+                    }),
+                    Err(e) => {
+                        log::warn!("Failed to get status for {}: {e}", relative.display());
+                        None
+                    }
+                }
+            })
+            .collect()
+    });
+
     log::debug!("Found {} tracked files", results.len());
     Ok(results)
 }

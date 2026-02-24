@@ -209,9 +209,18 @@ fn try_main() -> Result<()> {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
                 for result in results {
-                    match result.outcome {
-                        Outcome::Copied => println!("Retrieved: {}", result.path.display()),
-                        Outcome::Present => println!("Up to date: {}", result.path.display()),
+                    match &result.detail {
+                        dvs::GetDetail::Success { outcome } => match outcome {
+                            Outcome::Copied => {
+                                println!("Retrieved: {}", result.path.display())
+                            }
+                            Outcome::Present => {
+                                println!("Up to date: {}", result.path.display())
+                            }
+                        },
+                        dvs::GetDetail::Error { error } => {
+                            eprintln!("Error: {} - {}", result.path.display(), error)
+                        }
                     }
                 }
             }
