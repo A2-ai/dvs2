@@ -64,7 +64,7 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
 
     let pool = get_threadpool(entries.len())?;
 
-    let results: Vec<FileStatus> = pool.install(|| {
+    let mut results: Vec<FileStatus> = pool.install(|| {
         entries
             .into_par_iter()
             .filter_map(|dvs_path| {
@@ -85,6 +85,7 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
             })
             .collect()
     });
+    results.sort_by(|a, b| a.path.cmp(&b.path));
 
     log::debug!("Found {} tracked files", results.len());
     Ok(results)

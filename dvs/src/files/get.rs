@@ -107,7 +107,7 @@ pub fn get_files(
     let pool = get_threadpool(matched_paths.len())?;
     let cache = try_open_cache(paths);
 
-    let results: Vec<GetResult> = pool.install(|| {
+    let mut results: Vec<GetResult> = pool.install(|| {
         matched_paths
             .into_par_iter()
             .map(|(relative_path, exists)| {
@@ -145,6 +145,7 @@ pub fn get_files(
             })
             .collect()
     });
+    results.sort_by(|a, b| a.path.cmp(&b.path));
 
     Ok(results)
 }

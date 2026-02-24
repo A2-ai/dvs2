@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 
 use dvs::AddDetail;
+use dvs::GetDetail;
 use dvs::add_files;
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
@@ -205,12 +206,15 @@ fn try_main() -> Result<()> {
             }
 
             let results = get_files(all_paths, &dvs_paths, config.backend())?;
+            let has_errors = results
+                .iter()
+                .any(|r| matches!(r.detail, GetDetail::Error { .. }));
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
-                for result in results {
+                for result in &results {
                     match &result.detail {
-                        dvs::GetDetail::Success { outcome } => match outcome {
+                        GetDetail::Success { outcome } => match outcome {
                             Outcome::Copied => {
                                 println!("Retrieved: {}", result.path.display())
                             }
@@ -218,11 +222,14 @@ fn try_main() -> Result<()> {
                                 println!("Up to date: {}", result.path.display())
                             }
                         },
-                        dvs::GetDetail::Error { error } => {
+                        GetDetail::Error { error } => {
                             eprintln!("Error: {} - {}", result.path.display(), error)
                         }
                     }
                 }
+            }
+            if has_errors {
+                return Err(anyhow!("Some files failed to get"));
             }
         }
     }
