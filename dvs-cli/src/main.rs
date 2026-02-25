@@ -45,7 +45,7 @@ pub enum Command {
         paths: Vec<PathBuf>,
         #[clap(long)]
         glob: Option<String>,
-        #[clap(long)]
+        #[clap(long, short)]
         message: Option<String>,
     },
     /// Gets the status of each files in the current repository
