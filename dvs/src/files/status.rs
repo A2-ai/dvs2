@@ -15,7 +15,15 @@ use crate::{DvsPaths, Status, cache};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileStatus {
     pub path: PathBuf,
-    pub status: Status,
+    #[serde(flatten)]
+    pub detail: StatusDetail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StatusDetail {
+    Success { status: Status },
+    Error { error: String },
 }
 
 fn get_file_status(
@@ -67,20 +75,27 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
     let mut results: Vec<FileStatus> = pool.install(|| {
         entries
             .into_par_iter()
-            .filter_map(|dvs_path| {
-                let relative = dvs_path
-                    .strip_prefix(&dvs_directory)
-                    .ok()?
-                    .with_extension("");
-                match get_file_status(paths, &relative, cache.as_ref()) {
-                    Ok(status) => Some(FileStatus {
-                        path: relative.to_path_buf(),
-                        status,
-                    }),
+            .map(|dvs_path| {
+                let relative = match dvs_path.strip_prefix(&dvs_directory) {
+                    Ok(r) => r.with_extension(""),
                     Err(e) => {
-                        log::warn!("Failed to get status for {}: {e}", relative.display());
-                        None
+                        return FileStatus {
+                            path: dvs_path,
+                            detail: StatusDetail::Error {
+                                error: format!("failed to determine relative path: {e}"),
+                            },
+                        };
                     }
+                };
+                let detail = match get_file_status(paths, &relative, cache.as_ref()) {
+                    Ok(status) => StatusDetail::Success { status },
+                    Err(e) => StatusDetail::Error {
+                        error: e.to_string(),
+                    },
+                };
+                FileStatus {
+                    path: relative.to_path_buf(),
+                    detail,
                 }
             })
             .collect()
@@ -203,7 +218,10 @@ mod tests {
 
         // All should be Current
         for status in &statuses {
-            assert_eq!(status.status, Status::Current);
+            match &status.detail {
+                StatusDetail::Success { status } => assert_eq!(*status, Status::Current),
+                StatusDetail::Error { error } => panic!("unexpected error: {error}"),
+            }
         }
     }
 

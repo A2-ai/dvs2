@@ -3,8 +3,8 @@ use std::sync::Mutex;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
-use crate::utils::get_threadpool;
 use crate::paths::GetPathStatus;
+use crate::utils::get_threadpool;
 use crate::{Backend, Compression, DvsPaths, Outcome, cache};
 use anyhow::{Context, Result, bail};
 use fs_err as fs;

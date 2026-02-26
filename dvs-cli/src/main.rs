@@ -6,6 +6,7 @@ use serde_json::json;
 
 use dvs::AddDetail;
 use dvs::GetDetail;
+use dvs::StatusDetail;
 use dvs::add_files;
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
@@ -168,18 +169,18 @@ fn try_main() -> Result<()> {
 
             let mut statuses = get_status(&paths)?;
             if !show_all {
-                statuses.retain(|x| {
-                    if current {
-                        x.status == Status::Current
-                    } else if absent {
-                        x.status == Status::Absent
-                    } else if unsynced {
-                        x.status == Status::Unsynced
-                    } else {
-                        false
+                statuses.retain(|x| match &x.detail {
+                    StatusDetail::Success { status } => {
+                        (current && *status == Status::Current)
+                            || (absent && *status == Status::Absent)
+                            || (unsynced && *status == Status::Unsynced)
                     }
+                    StatusDetail::Error { .. } => true,
                 });
             }
+            let has_errors = statuses
+                .iter()
+                .any(|s| matches!(s.detail, StatusDetail::Error { .. }));
             if cli.json {
                 println!("{}", serde_json::to_string(&statuses)?);
             } else if statuses.is_empty() {
@@ -189,9 +190,22 @@ fn try_main() -> Result<()> {
                     println!("No tracked files matching the filter")
                 }
             } else {
-                for file_status in statuses {
-                    println!("{}: {:?}", file_status.path.display(), file_status.status);
+                for file_status in &statuses {
+                    match &file_status.detail {
+                        StatusDetail::Success { status } => {
+                            println!("{}: {:?}", file_status.path.display(), status);
+                        }
+                        StatusDetail::Error { error } => {
+                            eprintln!(
+                                "Error getting status for {}: {error}",
+                                file_status.path.display()
+                            );
+                        }
+                    }
                 }
+            }
+            if has_errors {
+                return Err(anyhow!("Some files failed to get status"));
             }
         }
         Command::Get { paths, glob } => {
