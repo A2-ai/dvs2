@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
@@ -15,7 +14,7 @@ fn get_file(
     backend: &dyn Backend,
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
-    cache: Option<&Mutex<HashCache>>,
+    cache: Option<&HashCache>,
 ) -> Result<Outcome> {
     log::debug!("Retrieving file: {}", relative_path.as_ref().display());
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
@@ -69,9 +68,9 @@ fn get_file(
     }
 
     // Store retrieved file's hashes in cache
-    if let Some(mtx) = cache {
+    if let Some(c) = cache {
         if let Ok(stat) = cache::FileStat::from_path(&target_path) {
-            if let Err(e) = mtx.lock().unwrap().insert(&rel_str, &stat, &actual.hashes) {
+            if let Err(e) = c.insert(&rel_str, &stat, &actual.hashes) {
                 log::warn!("Cache store failed after get for {rel_str}: {e}");
             }
         }
@@ -179,8 +178,8 @@ mod tests {
         )
     }
 
-    fn make_cache(paths: &DvsPaths) -> Mutex<cache::HashCache> {
-        Mutex::new(cache::HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap())
+    fn make_cache(paths: &DvsPaths) -> cache::HashCache {
+        cache::HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap()
     }
 
     #[test]

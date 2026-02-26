@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
@@ -7,7 +8,6 @@ use crate::hashes::Hashes;
 use crate::paths::DvsPaths;
 use anyhow::{Result, bail};
 use fs_err as fs;
-use rusqlite::Connection;
 
 /// Filesystem stat used as cache key: mtime + size
 #[derive(Debug, Clone, PartialEq)]
@@ -30,10 +30,20 @@ impl FileStat {
     }
 }
 
-/// SQLite-backed hash cache.
-/// All errors are non-fatal — callers fall back to re-hashing.
+// Each thread lazily opens its own read-only connection.
+// Keyed by db_path so different HashCache instances (e.g. in tests) get fresh connections.
+thread_local! {
+    static TL_READER: RefCell<Option<(PathBuf, sqlite::Connection)>> = const { RefCell::new(None) };
+}
+
+/// SQLite-backed hash cache with lock-free reads.
+///
+/// Uses WAL mode with separate per-thread read-only connections (via thread_local)
+/// and a single Mutex-protected writer connection for inserts.
+/// This allows truly concurrent reads from rayon threads without serialization.
 pub struct HashCache {
-    conn: Connection,
+    db_path: PathBuf,
+    writer: Mutex<sqlite::ConnectionThreadSafe>,
 }
 
 impl HashCache {
@@ -41,8 +51,10 @@ impl HashCache {
         if let Some(parent) = db_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(db_path)?;
-        conn.execute_batch(
+
+        // Use a temporary connection to create the schema
+        let setup_conn = sqlite::Connection::open(db_path)?;
+        setup_conn.execute(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
              CREATE TABLE IF NOT EXISTS hash_cache (
@@ -53,41 +65,80 @@ impl HashCache {
                  md5       TEXT
              );",
         )?;
-        Ok(Self { conn })
+        drop(setup_conn);
+
+        // Open the thread-safe writer connection
+        let mut writer = sqlite::Connection::open_thread_safe(db_path)?;
+        writer.execute("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+        writer.set_busy_timeout(5000)?;
+
+        Ok(Self {
+            db_path: db_path.to_path_buf(),
+            writer: Mutex::new(writer),
+        })
+    }
+
+    /// Run a closure with this thread's read-only connection, creating it if needed.
+    fn with_reader<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&sqlite::Connection) -> Result<T>,
+    {
+        TL_READER.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            let needs_open = match slot.as_ref() {
+                Some((path, _)) => path != &self.db_path,
+                None => true,
+            };
+            if needs_open {
+                let conn = sqlite::Connection::open_with_flags(
+                    &self.db_path,
+                    sqlite::OpenFlags::new().with_read_only(),
+                )?;
+                *slot = Some((self.db_path.clone(), conn));
+            }
+            f(&slot.as_ref().unwrap().1)
+        })
     }
 
     pub fn lookup(&self, relative_path: &str, stat: &FileStat) -> Result<Option<Hashes>> {
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT blake3, md5 FROM hash_cache WHERE path = ?1 AND mtime_ns = ?2 AND size = ?3",
-        )?;
-        let mut rows = stmt.query(rusqlite::params![
-            relative_path,
-            stat.mtime_ns,
-            stat.size as i64,
-        ])?;
-        match rows.next()? {
-            Some(row) => {
-                let blake3: String = row.get(0)?;
-                let md5: Option<String> = row.get(1)?;
-                Ok(Some(Hashes { blake3, md5 }))
+        self.with_reader(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT blake3, md5 FROM hash_cache WHERE path = ? AND mtime_ns = ? AND size = ?",
+            )?;
+            stmt.bind((1, relative_path))?;
+            stmt.bind((2, stat.mtime_ns))?;
+            stmt.bind((3, stat.size as i64))?;
+
+            match stmt.next()? {
+                sqlite::State::Row => {
+                    let blake3 = stmt.read::<String, _>(0)?;
+                    let md5: Option<String> = match stmt.read::<sqlite::Value, _>(1)? {
+                        sqlite::Value::String(s) => Some(s),
+                        _ => None,
+                    };
+                    Ok(Some(Hashes { blake3, md5 }))
+                }
+                sqlite::State::Done => Ok(None),
             }
-            None => Ok(None),
-        }
+        })
     }
 
     pub fn insert(&self, relative_path: &str, stat: &FileStat, hashes: &Hashes) -> Result<()> {
-        let mut stmt = self.conn.prepare_cached(
+        let writer = self.writer.lock().unwrap();
+        let mut stmt = writer.prepare(
             "INSERT INTO hash_cache (path, mtime_ns, size, blake3, md5)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(path) DO UPDATE SET mtime_ns=?2, size=?3, blake3=?4, md5=?5",
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(path) DO UPDATE SET mtime_ns=excluded.mtime_ns, size=excluded.size, blake3=excluded.blake3, md5=excluded.md5",
         )?;
-        stmt.execute(rusqlite::params![
-            relative_path,
-            stat.mtime_ns,
-            stat.size as i64,
-            &hashes.blake3,
-            hashes.md5,
-        ])?;
+        stmt.bind((1, relative_path))?;
+        stmt.bind((2, stat.mtime_ns))?;
+        stmt.bind((3, stat.size as i64))?;
+        stmt.bind((4, hashes.blake3.as_str()))?;
+        match &hashes.md5 {
+            Some(md5) => stmt.bind((5, md5.as_str()))?,
+            None => stmt.bind((5, ()))?,
+        }
+        stmt.next()?;
         Ok(())
     }
 }
@@ -98,13 +149,13 @@ impl HashCache {
 pub fn hashes_for_file(
     full_path: &Path,
     relative_path: &str,
-    cache: Option<&Mutex<HashCache>>,
+    cache: Option<&HashCache>,
 ) -> Result<(Hashes, u64)> {
     let stat = FileStat::from_path(full_path)?;
 
-    // Try cache lookup (brief lock)
-    if let Some(mtx) = cache {
-        match mtx.lock().unwrap().lookup(relative_path, &stat) {
+    // Try cache lookup (no mutex — each thread has its own reader)
+    if let Some(c) = cache {
+        match c.lookup(relative_path, &stat) {
             Ok(Some(hashes)) => {
                 log::debug!("Cache hit for {relative_path}");
                 return Ok((hashes, stat.size));
@@ -121,9 +172,9 @@ pub fn hashes_for_file(
     // Cache miss or no cache — stream-hash the file
     let (hashes, size) = Hashes::compute_from_path(full_path, &[])?;
 
-    // Store in cache (brief lock)
-    if let Some(mtx) = cache {
-        if let Err(e) = mtx.lock().unwrap().insert(relative_path, &stat, &hashes) {
+    // Store in cache (brief mutex lock for writer only)
+    if let Some(c) = cache {
+        if let Err(e) = c.insert(relative_path, &stat, &hashes) {
             log::warn!("Cache store failed for {relative_path}: {e}");
         }
     }
@@ -163,11 +214,10 @@ pub fn open_cache(paths: &DvsPaths) -> Result<HashCache> {
     Ok(cache)
 }
 
-/// Open a thread safe cache, ignoring errors when it encounters them since
-/// the cache is optional and shouldn't block actual operation
-pub(crate) fn try_open_cache(paths: &DvsPaths) -> Option<Mutex<HashCache>> {
+/// Open cache, ignoring errors since the cache is optional and shouldn't block operation
+pub(crate) fn try_open_cache(paths: &DvsPaths) -> Option<HashCache> {
     match open_cache(paths) {
-        Ok(c) => Some(Mutex::new(c)),
+        Ok(c) => Some(c),
         Err(e) => {
             log::warn!("Failed to open hash cache: {e}");
             None

@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use anyhow::Result;
 use fs_err as fs;
@@ -29,7 +28,7 @@ pub enum StatusDetail {
 fn get_file_status(
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
-    cache: Option<&Mutex<HashCache>>,
+    cache: Option<&HashCache>,
 ) -> Result<Status> {
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
     if !dvs_file_path.is_file() {
@@ -121,8 +120,8 @@ mod tests {
         )
     }
 
-    fn make_cache(paths: &DvsPaths) -> Mutex<HashCache> {
-        Mutex::new(HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap())
+    fn make_cache(paths: &DvsPaths) -> HashCache {
+        HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap()
     }
 
     #[test]

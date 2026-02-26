@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use anyhow::Result;
 use rayon::prelude::*;
@@ -40,7 +39,7 @@ fn add_file(
     relative_path: &Path,
     paths: &DvsPaths,
     backend: &dyn Backend,
-    cache: Option<&Mutex<HashCache>>,
+    cache: Option<&HashCache>,
     operation_id: Uuid,
     message: Option<String>,
     compression: Compression,
