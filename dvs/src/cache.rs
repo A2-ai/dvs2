@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
 use crate::gitignore::add_to_gitignore;
@@ -39,11 +38,11 @@ thread_local! {
 /// SQLite-backed hash cache with lock-free reads.
 ///
 /// Uses WAL mode with separate per-thread read-only connections (via thread_local)
-/// and a single Mutex-protected writer connection for inserts.
+/// and a single `ConnectionThreadSafe` writer for inserts (SQLite serializes internally).
 /// This allows truly concurrent reads from rayon threads without serialization.
 pub struct HashCache {
     db_path: PathBuf,
-    writer: Mutex<sqlite::ConnectionThreadSafe>,
+    writer: sqlite::ConnectionThreadSafe,
 }
 
 impl HashCache {
@@ -74,7 +73,7 @@ impl HashCache {
 
         Ok(Self {
             db_path: db_path.to_path_buf(),
-            writer: Mutex::new(writer),
+            writer,
         })
     }
 
@@ -124,8 +123,7 @@ impl HashCache {
     }
 
     pub fn insert(&self, relative_path: &str, stat: &FileStat, hashes: &Hashes) -> Result<()> {
-        let writer = self.writer.lock().unwrap();
-        let mut stmt = writer.prepare(
+        let mut stmt = self.writer.prepare(
             "INSERT INTO hash_cache (path, mtime_ns, size, blake3, md5)
              VALUES (?, ?, ?, ?, ?)
              ON CONFLICT(path) DO UPDATE SET mtime_ns=excluded.mtime_ns, size=excluded.size, blake3=excluded.blake3, md5=excluded.md5",
@@ -172,7 +170,7 @@ pub fn hashes_for_file(
     // Cache miss or no cache — stream-hash the file
     let (hashes, size) = Hashes::compute_from_path(full_path, &[])?;
 
-    // Store in cache (brief mutex lock for writer only)
+    // Store in cache
     if let Some(c) = cache {
         if let Err(e) = c.insert(relative_path, &stat, &hashes) {
             log::warn!("Cache store failed for {relative_path}: {e}");
