@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
 use crate::utils::get_threadpool;
+use crate::paths::GetPathStatus;
 use crate::{Backend, Compression, DvsPaths, Outcome, cache};
 use anyhow::{Context, Result, bail};
 use fs_err as fs;
@@ -110,14 +111,25 @@ pub fn get_files(
     let mut results: Vec<GetResult> = pool.install(|| {
         matched_paths
             .into_par_iter()
-            .map(|(relative_path, exists)| {
-                if !exists {
-                    return GetResult {
-                        path: relative_path,
-                        detail: GetDetail::Error {
-                            error: "file not found".to_string(),
-                        },
-                    };
+            .map(|(relative_path, validation)| {
+                match validation {
+                    GetPathStatus::NotFound => {
+                        return GetResult {
+                            path: relative_path,
+                            detail: GetDetail::Error {
+                                error: "file not found".to_string(),
+                            },
+                        };
+                    }
+                    GetPathStatus::NotTracked => {
+                        return GetResult {
+                            path: relative_path,
+                            detail: GetDetail::Error {
+                                error: "not tracked by DVS".to_string(),
+                            },
+                        };
+                    }
+                    GetPathStatus::Tracked => {}
                 }
 
                 match get_file(backend, paths, &relative_path, cache.as_ref()) {
@@ -249,6 +261,23 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not found"))
+        );
+    }
+
+    #[test]
+    fn get_files_reports_not_tracked_for_untracked_file() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+
+        // Create a file on disk but don't dvs add it
+        create_file(&root, "untracked.txt", b"hello");
+
+        let results = get_files(vec!["untracked.txt".into()], &paths, backend).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(
+            matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not tracked"))
         );
     }
 
