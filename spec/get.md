@@ -22,8 +22,22 @@ Options:
 Signature:
 
 ```r
+#' @param files,glob provide a list of files to sync from backend, either explicitly `files` or via glob expression `glob`.
+#' @param progress provide a progress bar
+#' @param parallel control number of threads to use, `FALSE`/`0`, while `TRUE` implies at most 16 threads, or provide non-zero integer for more.
 dvs_get <- function(
   files = character(),
   glob = character(),
+  progress = FALSE, 
+  parallel = TRUE
 )
 ```
+
+## Initial release concerns
+
+### Timeout / cancellation
+
+In case of retrieving large amount of data (either a lot of files, or big files, or both) the user may cancel the operation via `Ctrl+C`, or a connection can timeout, or similar. The `get` command ought to be able to continue from elapsed progress, and it should tell the user, that indeed,
+it is resuming a previous retrieval.
+
+
