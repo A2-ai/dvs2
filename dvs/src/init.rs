@@ -9,10 +9,10 @@ use crate::config::Config;
 /// We need a ready to use Config object + the current directory the user is in
 pub fn init(root_dir: impl AsRef<Path>, config: Config) -> Result<PathBuf> {
     let root_dir = root_dir.as_ref();
-    if Config::find(&root_dir).is_some() {
+    if Config::find(root_dir).is_some() {
         bail!("Configuration already exists in {}", root_dir.display());
     }
-    config.save(&root_dir)?;
+    config.save(root_dir)?;
     log::debug!(
         "Creating metadata folder: {}",
         root_dir.join(config.metadata_folder_name()).display()
