@@ -76,6 +76,8 @@ $ dvs init /data/dvs/projx
 DVS Repository created with storage path located at <ABSOLUTE STORAGE PATH>
 ```
 
+this will instantiate a DVS repository in the current directory, while setting om a local file-system backend, for which more than one projects may be stored. The example shows a system-wide directory called `/data` that is meant to be the root to dvs file system backends.
+
 ## R function
 
 ```r
