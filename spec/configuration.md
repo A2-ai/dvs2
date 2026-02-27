@@ -27,3 +27,14 @@ The local backend format follows the structure that files
 are stored via their hashing, in which the first two characters determine the sub-directory, and the remainder of the hash denotes the name of the binary instantiation of the tracked datafile.
 
 Note that storage directory is not meant to be manipulated or explored. The binary blobs do not have file extensions, and the compression is discernable from the encoded compression byte in the file.
+
+## Audit log
+
+The audit log is responsible for tracking the version control events that has occurred.
+
+- `dvs add`-event (user, hash, file path, time of addition, message, ???)
+- `dvs get`-event: Don't track these events.
+- `dvs delete` / `dvs remove`: Track if files has been added then deleted (creator(user), remover(user), time of deletion, hash, ???)
+
+The audit log is on the backend, always, and not a property of the particular dvs repositories. Two dvs repositories that have the same backend will also have their own dedicated audit log events, and these will not be collated, combined, collapsed, consolidated, or otherwise.
+
