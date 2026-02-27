@@ -3,6 +3,10 @@
 Goal: Provide an overview of the changed data files and potential files to track
 via the traced data file filters.
 
+- [ ] The checksum shown will be determined by the backend used.
+      The default hashing algorithm is blake3, but if S3 is used,
+      then it could be CRC-64, CRC-32, CRC-32C, SHA-1, SHA-256, or MD5.
+
 ## CLI
 
 The option to return `--json` must be present.
