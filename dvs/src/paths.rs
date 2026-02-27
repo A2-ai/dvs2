@@ -7,6 +7,19 @@ use fs_err as fs;
 pub const CONFIG_FILE_NAME: &str = "dvs.toml";
 pub const DEFAULT_FOLDER_NAME: &str = ".dvs";
 
+/// Result of validating a file path for `add`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddPathStatus {
+    /// File exists and is inside the project
+    Valid,
+    /// File does not exist on disk
+    NotFound,
+    /// Path is a directory, not a file
+    IsDirectory,
+    /// Path resolves to outside the project root
+    OutsideProject,
+}
+
 /// Result of validating a file path for `get`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GetPathStatus {
@@ -117,13 +130,25 @@ impl DvsPaths {
         self.repo_root.join(relative)
     }
 
-    pub fn validate_for_add(&self, paths: &[PathBuf]) -> Vec<(PathBuf, bool)> {
+    pub fn validate_for_add(&self, paths: &[PathBuf]) -> Vec<(PathBuf, AddPathStatus)> {
         let mut found = Vec::new();
         for path in paths {
-            // For add: check if file exists on disk
             let file_path = self.file_path(path);
-            let exists = file_path.is_file();
-            found.push((path.clone(), exists));
+            let status = match file_path.canonicalize() {
+                Ok(canonical) => {
+                    if !canonical.starts_with(&self.repo_root) {
+                        AddPathStatus::OutsideProject
+                    } else if canonical.is_dir() {
+                        AddPathStatus::IsDirectory
+                    } else if canonical.is_file() {
+                        AddPathStatus::Valid
+                    } else {
+                        AddPathStatus::NotFound
+                    }
+                }
+                Err(_) => AddPathStatus::NotFound,
+            };
+            found.push((path.clone(), status));
         }
         found
     }
@@ -157,5 +182,40 @@ mod tests {
 
         let result = paths.metadata_path(Path::new("sub/file.txt"));
         assert_eq!(result, root.join(".meta/sub/file.txt.dvs"));
+    }
+
+    #[test]
+    fn validate_for_add() {
+        let (_tmp, root) = create_temp_git_repo();
+        let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs");
+
+        // Valid: existing file inside repo
+        fs_err::write(root.join("test.txt"), b"content").unwrap();
+
+        // OutsideProject: file in a sibling temp dir
+        let outside_tmp = tempfile::tempdir().unwrap();
+        fs_err::write(outside_tmp.path().join("outside.txt"), b"outside").unwrap();
+        let outside_relative = PathBuf::from("..").join(
+            outside_tmp
+                .path()
+                .join("outside.txt")
+                .strip_prefix(root.parent().unwrap())
+                .unwrap(),
+        );
+
+        // IsDirectory: a subdirectory inside the repo
+        fs_err::create_dir(root.join("subdir")).unwrap();
+
+        let result = paths.validate_for_add(&[
+            PathBuf::from("test.txt"),
+            PathBuf::from("nonexistent.txt"),
+            outside_relative,
+            PathBuf::from("subdir"),
+        ]);
+
+        assert_eq!(result[0].1, AddPathStatus::Valid);
+        assert_eq!(result[1].1, AddPathStatus::NotFound);
+        assert_eq!(result[2].1, AddPathStatus::OutsideProject);
+        assert_eq!(result[3].1, AddPathStatus::IsDirectory);
     }
 }

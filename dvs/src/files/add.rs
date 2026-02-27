@@ -11,7 +11,7 @@ use crate::cache::{HashCache, try_open_cache};
 use crate::config::Compression;
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
-use crate::paths::DvsPaths;
+use crate::paths::{AddPathStatus, DvsPaths};
 use crate::utils::get_threadpool;
 use crate::{Outcome, cache};
 
@@ -72,14 +72,33 @@ pub fn add_files(
     let mut results: Vec<AddResult> = pool.install(|| {
         matched_paths
             .into_par_iter()
-            .map(|(relative_path, exists)| {
-                if !exists {
-                    return AddResult {
-                        path: relative_path,
-                        detail: AddDetail::Error {
-                            error: "file not found".to_string(),
-                        },
-                    };
+            .map(|(relative_path, status)| {
+                match status {
+                    AddPathStatus::NotFound => {
+                        return AddResult {
+                            path: relative_path,
+                            detail: AddDetail::Error {
+                                error: "file not found".to_string(),
+                            },
+                        };
+                    }
+                    AddPathStatus::OutsideProject => {
+                        return AddResult {
+                            path: relative_path,
+                            detail: AddDetail::Error {
+                                error: "path is outside project".to_string(),
+                            },
+                        };
+                    }
+                    AddPathStatus::IsDirectory => {
+                        return AddResult {
+                            path: relative_path,
+                            detail: AddDetail::Error {
+                                error: "path is a directory".to_string(),
+                            },
+                        };
+                    }
+                    AddPathStatus::Valid => {}
                 }
 
                 let full_path = paths.file_path(&relative_path);
@@ -194,68 +213,67 @@ mod tests {
     }
 
     #[test]
-    fn add_files_rejects_path_outside_repo() {
-        let outer_tmp = tempfile::tempdir().unwrap();
-        let repo_dir = outer_tmp.path().join("repo");
-        std::fs::create_dir(&repo_dir).unwrap();
-
-        let (config, _dvs_dir) = init_dvs_repo(&repo_dir);
-        let backend = config.backend();
-        let paths = make_paths(&repo_dir, &config);
-
-        // Create a real file outside the repo so canonicalize succeeds
-        std::fs::write(outer_tmp.path().join("outside.txt"), b"outside").unwrap();
-
-        // ../outside.txt from repo_dir resolves to outer_tmp/outside.txt
-        let mut test_paths: Vec<PathBuf> = vec![Path::new("..").join("outside.txt")];
-
-        let another_dir = tempfile::tempdir().unwrap();
-        std::fs::write(another_dir.path().join("outside.txt"), b"outside").unwrap();
-        test_paths.push(another_dir.path().join("outside.txt"));
-
-        let results =
-            add_files(test_paths.clone(), &paths, backend, None, Compression::Zstd).unwrap();
-
-        assert_eq!(results.len(), test_paths.len());
-        for result in &results {
-            assert!(
-                matches!(&result.detail, AddDetail::Error { error } if error.contains("outside")),
-                "Expected outside-repo error for {:?}, got {:?}",
-                result.path,
-                result.detail,
-            );
-        }
-    }
-
-    #[test]
-    fn add_files_mixed_valid_and_missing() {
+    fn add_files_mixed_statuses() {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
         let paths = make_paths(&root, &config);
 
+        // Valid file
         create_file(&root, "a.txt", b"a");
 
+        // Outside-project file
+        let outside_tmp = tempfile::tempdir().unwrap();
+        let outside_file = outside_tmp.path().join("outside.txt");
+        std::fs::write(&outside_file, b"outside").unwrap();
+        let outside_relative =
+            PathBuf::from("..").join(outside_file.strip_prefix(root.parent().unwrap()).unwrap());
+
+        // Directory inside the repo
+        std::fs::create_dir(root.join("subdir")).unwrap();
+
         let results = add_files(
-            vec!["a.txt".into(), "missing.csv".into()],
+            vec![
+                "a.txt".into(),
+                "missing.csv".into(),
+                outside_relative,
+                "subdir".into(),
+            ],
             &paths,
             backend,
             None,
             Compression::Zstd,
         )
         .unwrap();
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 4);
 
-        // First file succeeded
+        let valid = results
+            .iter()
+            .find(|r| r.path == PathBuf::from("a.txt"))
+            .unwrap();
         assert!(matches!(
-            &results[0].detail,
+            &valid.detail,
             AddDetail::Success { outcome: Outcome::Copied, hash, size }
             if !hash.is_empty() && *size > 0
         ));
 
-        // Second file failed
+        let missing = results
+            .iter()
+            .find(|r| r.path == PathBuf::from("missing.csv"))
+            .unwrap();
         assert!(
-            matches!(&results[1].detail, AddDetail::Error { error } if error.contains("not found"))
+            matches!(&missing.detail, AddDetail::Error { error } if error.contains("not found"))
         );
+
+        let outside = results.iter().find(|r| {
+            matches!(&r.detail, AddDetail::Error { error } if error.contains("outside project"))
+        });
+        assert!(outside.is_some());
+
+        let dir = results
+            .iter()
+            .find(|r| r.path == PathBuf::from("subdir"))
+            .unwrap();
+        assert!(matches!(&dir.detail, AddDetail::Error { error } if error.contains("directory")));
     }
 }
