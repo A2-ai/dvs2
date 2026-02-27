@@ -64,7 +64,7 @@ Options:
   --no-compression
       Disable compression of stored files. Compression defaults to zstd
   --compression
-      type of compression to use. zstd, gz
+      type of compression to use zstd (default), gz
   -h, --help
           Print help
 ```
@@ -103,23 +103,35 @@ fs_storage <- function(
 ```
 
 ```r
+#' @param storage_config choose the storage backend, see [`dvs::fs_storage()`], [`dvs::s3_storage`], etc.
 dvs_init <- function(
   storage_path,
   storage_config = s3_storage(...), # different config functions can provide typed
+  compression = NULL, # use dvs default compression, which is zstd
   )
 ```
 
 would result in the following toml config:
 
-```
+```toml
 compression = "zstd"
 
 [backend]
 path = "/path/to/shared/storage
 ```
 
+### Backend / Storage configuration
 
+#### Local / `fs` backend
 
+```r
+fs_storage <- function(
+  permissions = NULL, # dvs defaults to "770"
+  group = NULL
+)
+```
+
+Remains to specify other backends. 
 
 ## Journey 1: Initial Setup with defaults
 
