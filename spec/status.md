@@ -49,6 +49,8 @@ We do not need to display the user in unsynced files, as they are likely to be o
 Signature:
 
 ```r
+#' @param path,glob provide either `path` or `glob`, but not neither, nor noth
+#' @return data-frame showing the each file, status, hash (abbreviated), hash (full), user, and time of update, and time of tracking
 dvs_status <- function(
   path = c() # paths to explit files or dirs
   glob = c(),
