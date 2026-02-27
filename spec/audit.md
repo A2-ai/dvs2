@@ -19,6 +19,7 @@ Paths:
 
 Options:
     --glob              glob expression describing which files and folders to retrieve dvs events for
+    --users=[users..]   list of users that are responsible for dvs events
     --filter-added      retrieve audit log of the added files
     --filter-deleted    retrieve audit log of the deleted files
     --filter-updated    retrieve audit log of the updated (added multiple times) files
@@ -46,6 +47,7 @@ Signature:
 dvs_audit <- function(
     paths = c(),    # optional, filters the audit log to the files/directories shown
     glob = c(),     # optional, glob expression representing `paths`
+    users = c(),    # optional, list of users that caused dvs events of interest
     filter = c(),   # optional, which dvs-event should be shown?
     invert = FALSE, # opposite of selection in `filter`
 )
