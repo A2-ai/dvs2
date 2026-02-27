@@ -51,11 +51,11 @@ pub fn resolve_paths_for_add(
 
         // Explicit file: we ignore the glob and add it to the file
         if full_path.is_file() {
-            // Ensure it's in the repo
-            let relative_to_root = full_path
-                .strip_prefix(&repo_root)
-                .map_err(|_| anyhow!("Path is outside repository: {}", path.display()))?
-                .to_path_buf();
+            let relative_to_root = match full_path.strip_prefix(&repo_root) {
+                Ok(p) => p.to_path_buf(),
+                // Outside repo: insert original user path; validate_for_add will catch it
+                Err(_) => path.clone(),
+            };
             out.insert(relative_to_root);
         } else if full_path.is_dir() {
             if let Some(matcher) = &glob_matcher {
