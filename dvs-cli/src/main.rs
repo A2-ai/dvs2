@@ -5,6 +5,8 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 
 use dvs::AddDetail;
+use dvs::GetDetail;
+use dvs::StatusDetail;
 use dvs::add_files;
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
@@ -44,7 +46,7 @@ pub enum Command {
         paths: Vec<PathBuf>,
         #[clap(long)]
         glob: Option<String>,
-        #[clap(long)]
+        #[clap(long, short)]
         message: Option<String>,
     },
     /// Gets the status of each files in the current repository
@@ -167,18 +169,18 @@ fn try_main() -> Result<()> {
 
             let mut statuses = get_status(&paths)?;
             if !show_all {
-                statuses.retain(|x| {
-                    if current {
-                        x.status == Status::Current
-                    } else if absent {
-                        x.status == Status::Absent
-                    } else if unsynced {
-                        x.status == Status::Unsynced
-                    } else {
-                        false
+                statuses.retain(|x| match &x.detail {
+                    StatusDetail::Success { status } => {
+                        (current && *status == Status::Current)
+                            || (absent && *status == Status::Absent)
+                            || (unsynced && *status == Status::Unsynced)
                     }
+                    StatusDetail::Error { .. } => true,
                 });
             }
+            let has_errors = statuses
+                .iter()
+                .any(|s| matches!(s.detail, StatusDetail::Error { .. }));
             if cli.json {
                 println!("{}", serde_json::to_string(&statuses)?);
             } else if statuses.is_empty() {
@@ -188,9 +190,22 @@ fn try_main() -> Result<()> {
                     println!("No tracked files matching the filter")
                 }
             } else {
-                for file_status in statuses {
-                    println!("{}: {:?}", file_status.path.display(), file_status.status);
+                for file_status in &statuses {
+                    match &file_status.detail {
+                        StatusDetail::Success { status } => {
+                            println!("{}: {:?}", file_status.path.display(), status);
+                        }
+                        StatusDetail::Error { error } => {
+                            eprintln!(
+                                "Error getting status for {}: {error}",
+                                file_status.path.display()
+                            );
+                        }
+                    }
                 }
+            }
+            if has_errors {
+                return Err(anyhow!("Some files failed to get status"));
             }
         }
         Command::Get { paths, glob } => {
@@ -205,15 +220,30 @@ fn try_main() -> Result<()> {
             }
 
             let results = get_files(all_paths, &dvs_paths, config.backend())?;
+            let has_errors = results
+                .iter()
+                .any(|r| matches!(r.detail, GetDetail::Error { .. }));
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
-                for result in results {
-                    match result.outcome {
-                        Outcome::Copied => println!("Retrieved: {}", result.path.display()),
-                        Outcome::Present => println!("Up to date: {}", result.path.display()),
+                for result in &results {
+                    match &result.detail {
+                        GetDetail::Success { outcome } => match outcome {
+                            Outcome::Copied => {
+                                println!("Retrieved: {}", result.path.display())
+                            }
+                            Outcome::Present => {
+                                println!("Up to date: {}", result.path.display())
+                            }
+                        },
+                        GetDetail::Error { error } => {
+                            eprintln!("Error: {} - {}", result.path.display(), error)
+                        }
                     }
                 }
+            }
+            if has_errors {
+                return Err(anyhow!("Some files failed to get"));
             }
         }
     }

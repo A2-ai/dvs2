@@ -7,6 +7,17 @@ use fs_err as fs;
 pub const CONFIG_FILE_NAME: &str = "dvs.toml";
 pub const DEFAULT_FOLDER_NAME: &str = ".dvs";
 
+/// Result of validating a file path for `get`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GetPathStatus {
+    /// Metadata exists: file is tracked
+    Tracked,
+    /// No metadata and no file on disk
+    NotFound,
+    /// File exists on disk but is not tracked by DVS
+    NotTracked,
+}
+
 /// Finds the root of a project by walking up from the given directory
 /// until a `dvs.toml` is found
 ///
@@ -117,13 +128,18 @@ impl DvsPaths {
         found
     }
 
-    pub fn validate_for_get(&self, paths: &[PathBuf]) -> Vec<(PathBuf, bool)> {
+    pub fn validate_for_get(&self, paths: &[PathBuf]) -> Vec<(PathBuf, GetPathStatus)> {
         let mut found = Vec::new();
         for path in paths {
-            // For get: check if file is tracked (metadata exists)
             let metadata_path = self.metadata_path(path);
-            let exists = metadata_path.is_file();
-            found.push((path.clone(), exists));
+            let validation = if metadata_path.is_file() {
+                GetPathStatus::Tracked
+            } else if self.file_path(path).is_file() {
+                GetPathStatus::NotTracked
+            } else {
+                GetPathStatus::NotFound
+            };
+            found.push((path.clone(), validation));
         }
         found
     }

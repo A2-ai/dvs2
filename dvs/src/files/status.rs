@@ -3,17 +3,27 @@ use std::sync::Mutex;
 
 use anyhow::Result;
 use fs_err as fs;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
+use crate::utils::get_threadpool;
 use crate::{DvsPaths, Status, cache};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileStatus {
     pub path: PathBuf,
-    pub status: Status,
+    #[serde(flatten)]
+    pub detail: StatusDetail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StatusDetail {
+    Success { status: Status },
+    Error { error: String },
 }
 
 fn get_file_status(
@@ -45,8 +55,9 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
     let cache = try_open_cache(paths);
-    let mut results = Vec::new();
-    for entry in WalkDir::new(&dvs_directory)
+
+    // Collect entries first so we can process in parallel
+    let entries: Vec<PathBuf> = WalkDir::new(&dvs_directory)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
@@ -56,16 +67,41 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
                 .map(|ext| ext == "dvs")
                 .unwrap_or(false)
         })
-    {
-        let dvs_path = entry.path();
-        // Strip dvs_directory prefix and .dvs suffix to get relative path
-        let relative = dvs_path.strip_prefix(&dvs_directory)?.with_extension("");
-        let status = get_file_status(paths, &relative, cache.as_ref())?;
-        results.push(FileStatus {
-            path: relative.to_path_buf(),
-            status,
-        });
-    }
+        .map(|e| e.into_path())
+        .collect();
+
+    let pool = get_threadpool(entries.len())?;
+
+    let mut results: Vec<FileStatus> = pool.install(|| {
+        entries
+            .into_par_iter()
+            .map(|dvs_path| {
+                let relative = match dvs_path.strip_prefix(&dvs_directory) {
+                    Ok(r) => r.with_extension(""),
+                    Err(e) => {
+                        return FileStatus {
+                            path: dvs_path,
+                            detail: StatusDetail::Error {
+                                error: format!("failed to determine relative path: {e}"),
+                            },
+                        };
+                    }
+                };
+                let detail = match get_file_status(paths, &relative, cache.as_ref()) {
+                    Ok(status) => StatusDetail::Success { status },
+                    Err(e) => StatusDetail::Error {
+                        error: e.to_string(),
+                    },
+                };
+                FileStatus {
+                    path: relative.to_path_buf(),
+                    detail,
+                }
+            })
+            .collect()
+    });
+    results.sort_by(|a, b| a.path.cmp(&b.path));
+
     log::debug!("Found {} tracked files", results.len());
     Ok(results)
 }
@@ -182,7 +218,10 @@ mod tests {
 
         // All should be Current
         for status in &statuses {
-            assert_eq!(status.status, Status::Current);
+            match &status.detail {
+                StatusDetail::Success { status } => assert_eq!(*status, Status::Current),
+                StatusDetail::Error { error } => panic!("unexpected error: {error}"),
+            }
         }
     }
 

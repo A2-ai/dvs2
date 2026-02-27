@@ -69,7 +69,7 @@ pub fn add_files(
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
 
-    let results: Vec<AddResult> = pool.install(|| {
+    let mut results: Vec<AddResult> = pool.install(|| {
         matched_paths
             .into_par_iter()
             .map(|(relative_path, exists)| {
@@ -119,6 +119,7 @@ pub fn add_files(
             })
             .collect()
     });
+    results.sort_by(|a, b| a.path.cmp(&b.path));
 
     let successful_paths: Vec<_> = results
         .iter()
