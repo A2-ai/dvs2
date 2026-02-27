@@ -29,8 +29,9 @@ Unlike `dvs get`, providing no arguments to `dvs delete` will not delete all the
 
 ```r
 dvs_delete <- function(
-  files = character(), 
-  glob = character()
+  files = character(),
+  glob = character(),
+  delete_cached = TRUE
 )
 ```
 
