@@ -82,6 +82,27 @@ pub fn add_files(
                     };
                 }
 
+                let full_path = paths.file_path(&relative_path);
+                match full_path.canonicalize() {
+                    Ok(canonical) if !canonical.starts_with(paths.repo_root()) => {
+                        return AddResult {
+                            path: relative_path,
+                            detail: AddDetail::Error {
+                                error: "path is outside the dvs repository".to_string(),
+                            },
+                        };
+                    }
+                    Err(e) => {
+                        return AddResult {
+                            path: relative_path,
+                            detail: AddDetail::Error {
+                                error: format!("failed to resolve path: {e}"),
+                            },
+                        };
+                    }
+                    _ => {} // ok
+                }
+
                 match add_file(
                     &relative_path,
                     paths,
@@ -170,6 +191,40 @@ mod tests {
         assert!(
             matches!(&results[0].detail, AddDetail::Error { error } if error.contains("not found"))
         );
+    }
+
+    #[test]
+    fn add_files_rejects_path_outside_repo() {
+        let outer_tmp = tempfile::tempdir().unwrap();
+        let repo_dir = outer_tmp.path().join("repo");
+        std::fs::create_dir(&repo_dir).unwrap();
+
+        let (config, _dvs_dir) = init_dvs_repo(&repo_dir);
+        let backend = config.backend();
+        let paths = make_paths(&repo_dir, &config);
+
+        // Create a real file outside the repo so canonicalize succeeds
+        std::fs::write(outer_tmp.path().join("outside.txt"), b"outside").unwrap();
+
+        // ../outside.txt from repo_dir resolves to outer_tmp/outside.txt
+        let mut test_paths: Vec<PathBuf> = vec![Path::new("..").join("outside.txt")];
+
+        let another_dir = tempfile::tempdir().unwrap();
+        std::fs::write(another_dir.path().join("outside.txt"), b"outside").unwrap();
+        test_paths.push(another_dir.path().join("outside.txt"));
+
+        let results =
+            add_files(test_paths.clone(), &paths, backend, None, Compression::Zstd).unwrap();
+
+        assert_eq!(results.len(), test_paths.len());
+        for result in &results {
+            assert!(
+                matches!(&result.detail, AddDetail::Error { error } if error.contains("outside")),
+                "Expected outside-repo error for {:?}, got {:?}",
+                result.path,
+                result.detail,
+            );
+        }
     }
 
     #[test]
