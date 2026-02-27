@@ -90,6 +90,14 @@ pub fn add_files(
                             },
                         };
                     }
+                    AddPathStatus::IsDirectory => {
+                        return AddResult {
+                            path: relative_path,
+                            detail: AddDetail::Error {
+                                error: "path is a directory".to_string(),
+                            },
+                        };
+                    }
                     AddPathStatus::Valid => {}
                 }
 
@@ -221,15 +229,23 @@ mod tests {
         let outside_relative =
             PathBuf::from("..").join(outside_file.strip_prefix(root.parent().unwrap()).unwrap());
 
+        // Directory inside the repo
+        std::fs::create_dir(root.join("subdir")).unwrap();
+
         let results = add_files(
-            vec!["a.txt".into(), "missing.csv".into(), outside_relative],
+            vec![
+                "a.txt".into(),
+                "missing.csv".into(),
+                outside_relative,
+                "subdir".into(),
+            ],
             &paths,
             backend,
             None,
             Compression::Zstd,
         )
         .unwrap();
-        assert_eq!(results.len(), 3);
+        assert_eq!(results.len(), 4);
 
         let valid = results
             .iter()
@@ -253,5 +269,11 @@ mod tests {
             matches!(&r.detail, AddDetail::Error { error } if error.contains("outside project"))
         });
         assert!(outside.is_some());
+
+        let dir = results
+            .iter()
+            .find(|r| r.path == PathBuf::from("subdir"))
+            .unwrap();
+        assert!(matches!(&dir.detail, AddDetail::Error { error } if error.contains("directory")));
     }
 }

@@ -14,6 +14,8 @@ pub enum AddPathStatus {
     Valid,
     /// File does not exist on disk
     NotFound,
+    /// Path is a directory, not a file
+    IsDirectory,
     /// Path resolves to outside the project root
     OutsideProject,
 }
@@ -136,6 +138,8 @@ impl DvsPaths {
                 Ok(canonical) => {
                     if !canonical.starts_with(&self.repo_root) {
                         AddPathStatus::OutsideProject
+                    } else if canonical.is_dir() {
+                        AddPathStatus::IsDirectory
                     } else if canonical.is_file() {
                         AddPathStatus::Valid
                     } else {
@@ -199,14 +203,19 @@ mod tests {
                 .unwrap(),
         );
 
+        // IsDirectory: a subdirectory inside the repo
+        fs_err::create_dir(root.join("subdir")).unwrap();
+
         let result = paths.validate_for_add(&[
             PathBuf::from("test.txt"),
             PathBuf::from("nonexistent.txt"),
             outside_relative,
+            PathBuf::from("subdir"),
         ]);
 
         assert_eq!(result[0].1, AddPathStatus::Valid);
         assert_eq!(result[1].1, AddPathStatus::NotFound);
         assert_eq!(result[2].1, AddPathStatus::OutsideProject);
+        assert_eq!(result[3].1, AddPathStatus::IsDirectory);
     }
 }
