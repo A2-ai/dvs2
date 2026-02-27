@@ -15,19 +15,18 @@ Usage:
   dvs status [PATHS] [FILTERS] [OPTIONS]
 
 Paths:
-  
-
+    Path to files or directories that the we wish the tracking status for
 Filters:
-  --current
-  --unsynced, 
-  --absent
+  --current  return only the status of currently tracked files
+  --unsynced return only the status of untracked files
+  --absent   return only the status of deleted files
  
+Options:
+  --json   Return status in JSON format
   -h, --help      Print help
 ```
 
 When a filter is provided, only the selected state(s) are provided.
-
-
 
 ```sh
 dvs status
@@ -49,12 +48,13 @@ We do not need to display the user in unsynced files, as they are likely to be o
 Signature:
 
 ```r
-#' @param path,glob provide either `path` or `glob`, but not neither, nor noth
+#' @param path,glob provide either `path` or `glob`, but not neither, nor both
 #' @return data-frame showing the each file, status, hash (abbreviated), hash (full), user, and time of update, and time of tracking
 dvs_status <- function(
-  path = c() # paths to explit files or dirs
+  path = c() # paths to explicit files or dirs
   glob = c(),
-  recurse = FALSE # if true, any directories provided in the path should check all files within 
+  recurse = FALSE, # if true, any directories provided in the path should check all files within
+  parallel = TRUE # control if parallel retrieval occurs
 )
 ```
 
@@ -77,3 +77,6 @@ Proposed format:
 - `<alg>_checksum`: always abbreviated in print (pillar, first 12 characters)
 - `size`: using units and not raw `double()/numeric()`
 
+## User interruptions
+
+No need to handle user-initiated interruptions (e.g., Ctrl+C, or SIGINT/SIGTSTP/SIGTERM/SIGKILL) in the initial version.
