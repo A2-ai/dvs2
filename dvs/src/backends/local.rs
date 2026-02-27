@@ -2,17 +2,20 @@ use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::{Result, anyhow, bail};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 
+use crate::Hashes;
 use crate::audit::{AuditEntry, parse_audit_log};
 use crate::backends::Backend;
 use crate::config::Compression;
-use crate::{HashAlg, Hashes};
 
 const AUDIT_LOG_FILENAME: &str = "audit.log.jsonl";
+/// Only protects the current dvs process, not concurrent dvs processes
+static AUDIT_LOG_LOCK: Mutex<()> = Mutex::new(());
 
 /// Parse a permission string as an octal mode.
 /// Returns the mode as an u32.
@@ -52,7 +55,6 @@ pub struct LocalBackend {
     pub path: PathBuf,
     permissions: Option<String>,
     group: Option<String>,
-    hash_alg: HashAlg,
 }
 
 impl LocalBackend {
@@ -73,7 +75,6 @@ impl LocalBackend {
             path: path.as_ref().to_path_buf(),
             permissions,
             group,
-            hash_alg: HashAlg::Blake3,
         })
     }
 
@@ -108,7 +109,7 @@ impl LocalBackend {
     }
 
     fn hash_to_path(&self, hashes: &Hashes) -> Result<PathBuf> {
-        let hash = hashes.get_by_alg(self.hash_alg);
+        let hash = hashes.get_blake3();
         if hash.len() < 3 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
             bail!("Invalid hash: {hash}");
         }
@@ -186,6 +187,9 @@ impl Backend for LocalBackend {
     }
 
     fn log_audit(&self, entry: &AuditEntry) -> Result<()> {
+        let _guard = AUDIT_LOG_LOCK
+            .lock()
+            .expect("audit log lock should not be poisoned");
         log::debug!("Appending {entry:?} to audit log");
         let audit_path = self.path.join(AUDIT_LOG_FILENAME);
         let mut file = OpenOptions::new()
@@ -218,7 +222,7 @@ mod tests {
     fn test_hash(hash: &str) -> Hashes {
         Hashes {
             blake3: hash.to_string(),
-            md5: hash.to_string(),
+            md5: None,
         }
     }
 
@@ -424,5 +428,44 @@ mod tests {
         assert_eq!(entries[1].operation_id, "op-2");
         assert_eq!(entries[1].timestamp, 2000000000);
         assert_eq!(entries[1].user, "bob");
+    }
+
+    #[test]
+    fn log_audit_is_valid_jsonl_under_concurrency() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("storage");
+        let backend = LocalBackend::new(&storage, None, None).unwrap();
+        backend.init().unwrap();
+
+        let hash = test_hash("abc123def456789012345678901234ab");
+        let workers = 4;
+        let entries_per_worker = 64;
+
+        std::thread::scope(|scope| {
+            let backend = &backend;
+            for worker in 0..workers {
+                let hash = hash.clone();
+                scope.spawn(move || {
+                    for idx in 0..entries_per_worker {
+                        let entry = AuditEntry {
+                            operation_id: format!("op-{worker}-{idx}"),
+                            timestamp: (worker * entries_per_worker + idx) as i64,
+                            user: format!("user-{worker}"),
+                            file: AuditFile {
+                                path: PathBuf::from(format!("file-{worker}-{idx}.txt")),
+                                hashes: hash.clone(),
+                            },
+                            action: Action::Add,
+                        };
+                        backend.log_audit(&entry).unwrap();
+                    }
+                });
+            }
+        });
+
+        let audit_path = storage.join("audit.log.jsonl");
+        let content = fs::read(&audit_path).unwrap();
+        let entries = parse_audit_log(Cursor::new(content), &HashSet::new()).unwrap();
+        assert_eq!(entries.len(), workers * entries_per_worker);
     }
 }

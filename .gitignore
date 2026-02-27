@@ -43,4 +43,4 @@ dvs.toml
 .storage
 # markdown rendering artefacts 
 ui/*_files
-background/
+/README.md

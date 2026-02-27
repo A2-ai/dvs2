@@ -1,26 +1,31 @@
-mod globbing;
-
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use serde_json::json;
 
-use crate::globbing::{resolve_paths_for_add, resolve_paths_for_get};
-use dvs::Compression;
+use dvs::AddDetail;
+use dvs::GetDetail;
+use dvs::StatusDetail;
+use dvs::add_files;
 use dvs::config::Config;
-use dvs::file::{Outcome, add_files, get_files, get_status};
+use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
+use dvs::{Compression, Status};
+use dvs::{Outcome, get_files, get_status};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Starts a new dvs project.
-    /// This will create a `dvs.toml` file in the root folder of where the user is calling the CLI
-    /// from. root folder being the place where we find a `.git` folder
+    /// This will create a `dvs.toml` file in the current folder of where the user is calling the CLI
+    /// from.
     Init {
         /// Where the data will be stored
         path: PathBuf,
+        /// If you want to use a root folder other than the current directory
+        #[clap(long)]
+        root_dir: Option<PathBuf>,
         /// If you want to use a folder name other than `.dvs` for storing the metadata files
         #[clap(long)]
         metadata_folder_name: Option<String>,
@@ -41,11 +46,18 @@ pub enum Command {
         paths: Vec<PathBuf>,
         #[clap(long)]
         glob: Option<String>,
-        #[clap(long)]
+        #[clap(long, short)]
         message: Option<String>,
     },
     /// Gets the status of each files in the current repository
-    Status,
+    Status {
+        #[clap(long)]
+        current: bool,
+        #[clap(long)]
+        absent: bool,
+        #[clap(long)]
+        unsynced: bool,
+    },
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory
     Get {
@@ -76,6 +88,7 @@ fn try_main() -> Result<()> {
     match cli.command {
         Command::Init {
             path,
+            root_dir,
             metadata_folder_name,
             permissions,
             group,
@@ -88,11 +101,17 @@ fn try_main() -> Result<()> {
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
             }
-            init(&current_dir, config)?;
+            let root = if let Some(root) = root_dir {
+                root
+            } else {
+                current_dir
+            };
+
+            let repo_root = init(&root, config)?;
             if cli.json {
                 println!("{}", json!({"status": "initialized"}));
             } else {
-                println!("DVS Initialized");
+                println!("DVS Initialized at {repo_root:?}");
             }
         }
         Command::Add {
@@ -117,28 +136,76 @@ fn try_main() -> Result<()> {
                 message,
                 config.compression(),
             )?;
+            let has_errors = results
+                .iter()
+                .any(|r| matches!(r.detail, AddDetail::Error { .. }));
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
-                for result in results {
-                    println!("Added: {}", result.path.display());
+                for result in &results {
+                    match &result.detail {
+                        AddDetail::Error { error: err } => {
+                            eprintln!("Error adding {}: {err}", result.path.display());
+                        }
+                        AddDetail::Success { .. } => {
+                            println!("Added: {}", result.path.display());
+                        }
+                    }
                 }
             }
+            if has_errors {
+                return Err(anyhow!("Some files failed to add"));
+            }
         }
-        Command::Status => {
+        Command::Status {
+            current,
+            absent,
+            unsynced,
+        } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
             let paths = DvsPaths::from_cwd(&config)?;
+            let show_all = !current && !absent && !unsynced;
 
-            let statuses = get_status(&paths)?;
+            let mut statuses = get_status(&paths)?;
+            if !show_all {
+                statuses.retain(|x| match &x.detail {
+                    StatusDetail::Success { status } => {
+                        (current && *status == Status::Current)
+                            || (absent && *status == Status::Absent)
+                            || (unsynced && *status == Status::Unsynced)
+                    }
+                    StatusDetail::Error { .. } => true,
+                });
+            }
+            let has_errors = statuses
+                .iter()
+                .any(|s| matches!(s.detail, StatusDetail::Error { .. }));
             if cli.json {
                 println!("{}", serde_json::to_string(&statuses)?);
             } else if statuses.is_empty() {
-                println!("No tracked files");
-            } else {
-                for file_status in statuses {
-                    println!("{}: {:?}", file_status.path.display(), file_status.status);
+                if show_all {
+                    println!("No tracked files");
+                } else {
+                    println!("No tracked files matching the filter")
                 }
+            } else {
+                for file_status in &statuses {
+                    match &file_status.detail {
+                        StatusDetail::Success { status } => {
+                            println!("{}: {:?}", file_status.path.display(), status);
+                        }
+                        StatusDetail::Error { error } => {
+                            eprintln!(
+                                "Error getting status for {}: {error}",
+                                file_status.path.display()
+                            );
+                        }
+                    }
+                }
+            }
+            if has_errors {
+                return Err(anyhow!("Some files failed to get status"));
             }
         }
         Command::Get { paths, glob } => {
@@ -153,15 +220,30 @@ fn try_main() -> Result<()> {
             }
 
             let results = get_files(all_paths, &dvs_paths, config.backend())?;
+            let has_errors = results
+                .iter()
+                .any(|r| matches!(r.detail, GetDetail::Error { .. }));
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
-                for result in results {
-                    match result.outcome {
-                        Outcome::Copied => println!("Retrieved: {}", result.path.display()),
-                        Outcome::Present => println!("Up to date: {}", result.path.display()),
+                for result in &results {
+                    match &result.detail {
+                        GetDetail::Success { outcome } => match outcome {
+                            Outcome::Copied => {
+                                println!("Retrieved: {}", result.path.display())
+                            }
+                            Outcome::Present => {
+                                println!("Up to date: {}", result.path.display())
+                            }
+                        },
+                        GetDetail::Error { error } => {
+                            eprintln!("Error: {} - {}", result.path.display(), error)
+                        }
                     }
                 }
+            }
+            if has_errors {
+                return Err(anyhow!("Some files failed to get"));
             }
         }
     }

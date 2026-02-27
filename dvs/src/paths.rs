@@ -1,29 +1,45 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use fs_err as fs;
 
 pub const CONFIG_FILE_NAME: &str = "dvs.toml";
 pub const DEFAULT_FOLDER_NAME: &str = ".dvs";
 
-/// Finds the root of a git repository by walking up from the given directory
-/// until a `.git` folder or `dvs.toml` is found
-/// TODO: add more heuristics than .git
+/// Result of validating a file path for `get`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GetPathStatus {
+    /// Metadata exists: file is tracked
+    Tracked,
+    /// No metadata and no file on disk
+    NotFound,
+    /// File exists on disk but is not tracked by DVS
+    NotTracked,
+}
+
+/// Finds the root of a project by walking up from the given directory
+/// until a `dvs.toml` is found
 ///
-/// Returns `None` if no `.git` folder is found before reaching the filesystem root.
-pub fn find_repo_root(start_dir: impl AsRef<Path>) -> Option<PathBuf> {
+/// Returns the `start_dir` if no `dvs.toml` has been found.
+pub fn find_repo_root(start_dir: impl AsRef<Path>) -> PathBuf {
     let mut dir = start_dir.as_ref();
     log::debug!("Searching for repo root starting from {}", dir.display());
 
     loop {
-        if dir.join(".git").exists() || dir.join(CONFIG_FILE_NAME).exists() {
+        if dir.join(CONFIG_FILE_NAME).exists() {
             log::debug!("Found repo root at {}", dir.display());
-            return Some(dir.to_path_buf());
+            return dir.to_path_buf();
         }
 
-        dir = dir.parent()?;
+        if let Some(parent) = dir.parent() {
+            dir = parent;
+        } else {
+            break;
+        }
     }
+
+    start_dir.as_ref().to_path_buf()
 }
 
 /// We always need to figure out where the user is in a project,
@@ -51,9 +67,7 @@ impl DvsPaths {
 
     pub fn from_cwd(config: &Config) -> Result<Self> {
         let cwd = fs::canonicalize(std::env::current_dir()?)?;
-        let repo_root = fs::canonicalize(
-            find_repo_root(&cwd).ok_or_else(|| anyhow!("Not in a git repository"))?,
-        )?;
+        let repo_root = fs::canonicalize(find_repo_root(&cwd))?;
 
         log::debug!(
             "Resolved paths: cwd={}, repo_root={}",
@@ -69,6 +83,10 @@ impl DvsPaths {
 
     pub fn metadata_folder(&self) -> PathBuf {
         self.repo_root.join(&self.metadata_folder_name)
+    }
+
+    pub fn cache_folder(&self) -> PathBuf {
+        self.metadata_folder().join(".cache")
     }
 
     pub fn metadata_path(&self, relative: &Path) -> PathBuf {
@@ -110,13 +128,18 @@ impl DvsPaths {
         found
     }
 
-    pub fn validate_for_get(&self, paths: &[PathBuf]) -> Vec<(PathBuf, bool)> {
+    pub fn validate_for_get(&self, paths: &[PathBuf]) -> Vec<(PathBuf, GetPathStatus)> {
         let mut found = Vec::new();
         for path in paths {
-            // For get: check if file is tracked (metadata exists)
             let metadata_path = self.metadata_path(path);
-            let exists = metadata_path.is_file();
-            found.push((path.clone(), exists));
+            let validation = if metadata_path.is_file() {
+                GetPathStatus::Tracked
+            } else if self.file_path(path).is_file() {
+                GetPathStatus::NotTracked
+            } else {
+                GetPathStatus::NotFound
+            };
+            found.push((path.clone(), validation));
         }
         found
     }
@@ -126,26 +149,6 @@ impl DvsPaths {
 mod tests {
     use super::*;
     use crate::testutil::create_temp_git_repo;
-
-    #[test]
-    fn find_repo_root_at_root() {
-        let (_tmp, root) = create_temp_git_repo();
-        assert_eq!(find_repo_root(&root), Some(root));
-    }
-
-    #[test]
-    fn find_repo_root_from_subdirectory() {
-        let (_tmp, root) = create_temp_git_repo();
-        let subdir = root.join("a/b/c");
-        fs::create_dir_all(&subdir).unwrap();
-        assert_eq!(find_repo_root(&subdir), Some(root));
-    }
-
-    #[test]
-    fn find_repo_root_returns_none_without_git() {
-        let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(find_repo_root(tmp.path()), None);
-    }
 
     #[test]
     fn metadata_path_returns_dvs_file_path() {
