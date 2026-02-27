@@ -5,7 +5,7 @@ Goal: Add files to an initialized dvs project.
 ## CLI
 
 ```sh
-dvs add [FILES] [OPTIONS]
+dvs add <FILES> [OPTIONS]
 
 Files:
     List of files to add
@@ -17,6 +17,8 @@ Options:
     -h, --help
 
 ```
+
+`dvs add` will not accept directories as input. However, if all files following a glob expression is to be added, the end-user can use `--glob`/`glob=` in the cli and R package resp.
 
 ## R
 
