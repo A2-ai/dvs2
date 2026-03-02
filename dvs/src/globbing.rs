@@ -89,7 +89,6 @@ pub fn resolve_paths_for_add(
     Ok(out)
 }
 
-
 /// Resolve paths for `get` command by scanning tracked metadata:
 /// - Explicit files or directories: filtered to tracked files under them
 /// - Glob: applied to cwd-relative paths within matched files
