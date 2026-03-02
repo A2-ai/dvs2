@@ -50,7 +50,9 @@ A file in a `dvs` project can be in 4 states:
 
 ### init
 
-init will always error if a `dvs.toml` already exists in the folder where it's meant to create it.
+init will always error if a `dvs.toml` already exists in the target directory. This check is local — a `dvs.toml` in a parent directory does not prevent initializing a nested project.
+
+On partial failure (e.g., metadata folder or storage creation fails after `dvs.toml` is written), init attempts best-effort cleanup of local artifacts (`dvs.toml` and metadata folder) so that a retry is possible.
 
 #### CLI
 
