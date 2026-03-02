@@ -51,10 +51,13 @@ pub enum Command {
     },
     /// Gets the status of each files in the current repository
     Status {
+        /// Include the files that are current
         #[clap(long)]
         current: bool,
+        /// Include the files that are absent
         #[clap(long)]
         absent: bool,
+        /// Include the files that are unsynced
         #[clap(long)]
         unsynced: bool,
     },

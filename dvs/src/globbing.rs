@@ -89,6 +89,11 @@ pub fn resolve_paths_for_add(
     Ok(out)
 }
 
+
+/// Resolve paths for `get` command by scanning tracked metadata:
+/// - Explicit files or directories: filtered to tracked files under them
+/// - Glob: applied to cwd-relative paths within matched files
+/// - No paths + no glob: returns all tracked files under cwd
 pub fn resolve_paths_for_get(
     paths: Vec<PathBuf>,
     glob_pattern: Option<&str>,
