@@ -19,6 +19,7 @@ pub use files::status::{FileStatus, StatusDetail, get_status};
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use paths::{AddPathStatus, DvsPaths, find_repo_root};
+pub use utils::format_size;
 
 #[cfg(test)]
 pub mod testutil {

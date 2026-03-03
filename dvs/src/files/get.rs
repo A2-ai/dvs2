@@ -16,7 +16,7 @@ fn get_file(
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
     cache: Option<&Mutex<HashCache>>,
-) -> Result<Outcome> {
+) -> Result<(Outcome, u64)> {
     log::debug!("Retrieving file: {}", relative_path.as_ref().display());
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
     if !dvs_file_path.is_file() {
@@ -49,7 +49,7 @@ fn get_file(
                 "File {} already present locally and matches",
                 relative_path.as_ref().display()
             );
-            return Ok(Outcome::Present);
+            return Ok((Outcome::Present, metadata.size));
         }
     }
 
@@ -77,7 +77,7 @@ fn get_file(
         }
     }
 
-    Ok(Outcome::Copied)
+    Ok((Outcome::Copied, metadata.size))
 }
 
 /// Result of getting a single file.
@@ -91,7 +91,7 @@ pub struct GetResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum GetDetail {
-    Success { outcome: Outcome },
+    Success { outcome: Outcome, size: u64 },
     Error { error: String },
 }
 
@@ -133,7 +133,7 @@ pub fn get_files(
                 }
 
                 match get_file(backend, paths, &relative_path, cache.as_ref()) {
-                    Ok(outcome) => {
+                    Ok((outcome, size)) => {
                         log::info!(
                             "Successfully retrieved {} ({:?})",
                             relative_path.display(),
@@ -141,7 +141,7 @@ pub fn get_files(
                         );
                         GetResult {
                             path: relative_path,
-                            detail: GetDetail::Success { outcome },
+                            detail: GetDetail::Success { outcome, size },
                         }
                     }
                     Err(e) => {
@@ -202,7 +202,7 @@ mod tests {
 
         // Retrieve it
         let cache = make_cache(&paths);
-        let outcome = get_file(backend, &paths, "retrieve.txt", Some(&cache)).unwrap();
+        let (outcome, _size) = get_file(backend, &paths, "retrieve.txt", Some(&cache)).unwrap();
         assert_eq!(outcome, Outcome::Copied);
         assert!(file_path.exists());
         assert_eq!(fs::read(&file_path).unwrap(), b"stored content");
@@ -223,7 +223,7 @@ mod tests {
 
         // File still exists and matches - should return Present
         let cache = make_cache(&paths);
-        let outcome = get_file(backend, &paths, "present.txt", Some(&cache)).unwrap();
+        let (outcome, _size) = get_file(backend, &paths, "present.txt", Some(&cache)).unwrap();
         assert_eq!(outcome, Outcome::Present);
     }
 
@@ -337,6 +337,7 @@ mod tests {
                 result.detail,
                 GetDetail::Success {
                     outcome: Outcome::Copied,
+                    size: _,
                 }
             ));
         }
