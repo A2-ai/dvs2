@@ -47,8 +47,12 @@ pub enum Command {
         paths: Vec<PathBuf>,
         #[clap(long)]
         glob: Option<String>,
+        /// An optional message to add
         #[clap(long, short)]
         message: Option<String>,
+        /// Show what would be added without making any actual changes
+        #[clap(long)]
+        dry_run: bool,
     },
     /// Gets the status of each files in the current repository
     Status {
@@ -123,6 +127,7 @@ fn try_main() -> Result<()> {
             paths,
             glob,
             message,
+            dry_run,
         } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -140,6 +145,7 @@ fn try_main() -> Result<()> {
                 config.backend(),
                 message,
                 config.compression(),
+                dry_run,
             )?;
             let has_errors = results
                 .iter()
