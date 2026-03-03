@@ -254,6 +254,7 @@ mod tests {
             backend,
             None,
             Compression::Zstd,
+            false,
         )
         .unwrap();
 
@@ -292,8 +293,15 @@ mod tests {
         create_file(&root, "c.csv", b"c");
 
         // Add files
-        let results =
-            add_files(file_paths.clone(), &paths, backend, None, Compression::Zstd).unwrap();
+        let results = add_files(
+            file_paths.clone(),
+            &paths,
+            backend,
+            None,
+            Compression::Zstd,
+            false,
+        )
+        .unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert!(matches!(

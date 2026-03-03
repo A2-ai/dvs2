@@ -111,10 +111,12 @@ Symlinks are resolved before adding. If a symlink target resolves to a path outs
 Each `add` operation is atomic: the storage write and metadata update either both succeed or both roll back. A
 failure writing to storage will not leave behind a partial metadata file, and vice versa.
 
+You can also do a dry run from the CLI or the library that will return the outcome that would have happened  for each file but 
+without actually doing them.
+
 #### CLI
 
 ```
- dvs add --help
 Adds the given files to dvs. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided
 
 Usage: dvs add [OPTIONS] [PATHS]...
@@ -125,9 +127,9 @@ Arguments:
 Options:
       --glob <GLOB>        
       --json               Output results as JSON
-  -m, --message <MESSAGE>  
+  -m, --message <MESSAGE>  An optional message to add
+      --dry-run            Show what would be added without making any actual changes
   -h, --help               Print help
-
 ```
 
 You can run `dvs add *.csv` and it will be expanded by your shell before calling `dvs`.

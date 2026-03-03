@@ -44,13 +44,32 @@ fn add_file(
     operation_id: Uuid,
     message: Option<String>,
     compression: Compression,
+    dry_run: bool,
 ) -> Result<(Outcome, FileMetadata)> {
     let full_path = paths.file_path(relative_path);
     let rel_str = relative_path.to_string_lossy();
     let (hashes, size) = cache::hashes_for_file(&full_path, &rel_str, cache)?;
     let metadata = FileMetadata::from_hashes(hashes, size, compression, message);
-    let outcome = metadata.save(operation_id, &full_path, backend, paths, relative_path)?;
-    Ok((outcome, metadata))
+    if dry_run {
+        let dvs_file_path = paths.metadata_path(relative_path);
+        let dvs_file_exists = dvs_file_path.is_file();
+        let storage_exists = backend.exists(&metadata.hashes)?;
+        let outcome = if dvs_file_exists && storage_exists {
+            let existing: FileMetadata =
+                serde_json::from_reader(fs_err::File::open(&dvs_file_path)?)?;
+            if existing == metadata {
+                Outcome::Present
+            } else {
+                Outcome::Copied
+            }
+        } else {
+            Outcome::Copied
+        };
+        Ok((outcome, metadata))
+    } else {
+        let outcome = metadata.save(operation_id, &full_path, backend, paths, relative_path)?;
+        Ok((outcome, metadata))
+    }
 }
 
 /// Adds files matching a glob pattern to DVS.
@@ -63,6 +82,7 @@ pub fn add_files(
     backend: &dyn Backend,
     message: Option<String>,
     compression: Compression,
+    dry_run: bool,
 ) -> Result<Vec<AddResult>> {
     let matched_paths = paths.validate_for_add(&files);
     let pool = get_threadpool(matched_paths.len())?;
@@ -130,6 +150,7 @@ pub fn add_files(
                     operation_id,
                     message.clone(),
                     compression,
+                    dry_run,
                 ) {
                     Ok((outcome, metadata)) => {
                         log::info!(
@@ -166,7 +187,7 @@ pub fn add_files(
         .filter(|r| matches!(r.detail, AddDetail::Success { .. }))
         .map(|r| r.path.clone())
         .collect();
-    if !successful_paths.is_empty() {
+    if !dry_run && !successful_paths.is_empty() {
         if let Err(e) = add_to_gitignore(paths.repo_root(), &successful_paths) {
             log::warn!("Failed to update .gitignore: {e}");
         }
@@ -204,6 +225,7 @@ mod tests {
             backend,
             None,
             Compression::Zstd,
+            false,
         )
         .unwrap();
         assert_eq!(results.len(), 1);
@@ -243,6 +265,7 @@ mod tests {
             backend,
             None,
             Compression::Zstd,
+            false,
         )
         .unwrap();
         assert_eq!(results.len(), 4);
