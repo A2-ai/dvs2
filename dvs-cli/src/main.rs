@@ -13,7 +13,7 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{Compression, Status};
-use dvs::{Outcome, get_files, get_status};
+use dvs::{Outcome, format_size, get_files, get_status};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -237,20 +237,24 @@ fn try_main() -> Result<()> {
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
+                let mut total_files = 0u64;
+                let mut total_bytes = 0u64;
                 for result in &results {
                     match &result.detail {
-                        GetDetail::Success { outcome } => match outcome {
-                            Outcome::Copied => {
-                                println!("Retrieved: {}", result.path.display())
+                        GetDetail::Success { outcome, size } => {
+                            if *outcome == Outcome::Copied {
+                                println!("{} [{}]", result.path.display(), format_size(*size));
+                                total_files += 1;
+                                total_bytes += size;
                             }
-                            Outcome::Present => {
-                                println!("Up to date: {}", result.path.display())
-                            }
-                        },
+                        }
                         GetDetail::Error { error } => {
                             eprintln!("Error: {} - {}", result.path.display(), error)
                         }
                     }
+                }
+                if total_files > 0 {
+                    println!("Total: {} files, {}", total_files, format_size(total_bytes));
                 }
             }
             if has_errors {

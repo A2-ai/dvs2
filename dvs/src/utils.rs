@@ -2,6 +2,27 @@ use anyhow::Result;
 
 const MAX_THREADS: usize = 16;
 
+const KB: u64 = 1_024;
+const MB: u64 = 1_024 * 1_024;
+const GB: u64 = 1_024 * 1_024 * 1_024;
+const TB: u64 = 1_024 * 1_024 * 1_024 * 1_024;
+
+/// Formats a byte count into a human-readable string (e.g. "10.5 MB").
+/// Uses base-1024 divisors to match `ls -h` / `du -h` output.
+pub fn format_size(bytes: u64) -> String {
+    if bytes >= TB {
+        format!("{:.1} TB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 /// Creates a rayon threadpool.
 ///
 /// Respects `DVS_NUM_THREADS` env var if it's a number higher than 0.
