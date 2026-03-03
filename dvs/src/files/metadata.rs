@@ -36,7 +36,7 @@ impl FileMetadata {
         Self {
             hashes,
             size,
-            created_by: whoami::username().unwrap_or_default(),
+            created_by: whoami::username().unwrap_or_else(|_| "unknown".to_string()),
             add_time: jiff::Timestamp::now().to_string(),
             compression,
             message,
