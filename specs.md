@@ -161,6 +161,9 @@ is deleted and the operation fails for that file.
 Users can use `get` with specific paths or globs. In practice those will be ran on the metadata folder rather
 than the actual project, to know what to pull but the resolution works the same way as `add`.
 
+You can also do a dry run from the CLI or the library that will return the outcome that would have happened for each file but
+without actually doing them.
+
 #### CLI
 
 ```
@@ -175,6 +178,7 @@ Arguments:
 Options:
   -g, --glob <GLOB>  
       --json         Output results as JSON
+      --dry-run      Show what would be retrieved without making any actual changes
   -h, --help         Print help
 ```
 
