@@ -50,9 +50,11 @@ A file in a `dvs` project can be in 4 states:
 
 ### init
 
-init will always error if a `dvs.toml` already exists in the target directory. This check is local — a `dvs.toml` in a parent directory does not prevent initializing a nested project.
+init will always error if a `dvs.toml` already exists in the target directory.
+This check is local: a `dvs.toml` in a parent directory does not prevent initializing a nested project.
 
-On partial failure (e.g., metadata folder or storage creation fails after `dvs.toml` is written), init attempts best-effort cleanup of local artifacts (`dvs.toml` and metadata folder) so that a retry is possible.
+On partial failure (e.g., metadata folder or storage creation fails after `dvs.toml` is written),
+init attempts best-effort cleanup of local artifacts (`dvs.toml` and, if it didn't exist beforehand, the metadata folder) so that a retry is possible.
 
 #### CLI
 
@@ -113,7 +115,7 @@ failure writing to storage will not leave behind a partial metadata file, and vi
 
 ```
  dvs add --help
-Adds the given files to dvs. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory
+Adds the given files to dvs. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided
 
 Usage: dvs add [OPTIONS] [PATHS]...
 
@@ -125,6 +127,7 @@ Options:
       --json               Output results as JSON
   -m, --message <MESSAGE>  
   -h, --help               Print help
+
 ```
 
 You can run `dvs add *.csv` and it will be expanded by your shell before calling `dvs`.
@@ -160,7 +163,7 @@ than the actual project, to know what to pull but the resolution works the same 
 
 ```
  dvs get --help
-Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory
+Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided
 
 Usage: dvs get [OPTIONS] [PATHS]...
 

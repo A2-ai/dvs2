@@ -40,7 +40,8 @@ pub enum Command {
         no_compression: bool,
     },
     /// Adds the given files to dvs. You can use a glob or paths.
-    /// If you pass a directory and a glob, the glob will be ran from that directory
+    /// If you pass a directory and a glob, the glob will be ran from that directory.
+    /// At least one path or --glob must be provided
     Add {
         #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
@@ -62,7 +63,8 @@ pub enum Command {
         unsynced: bool,
     },
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
-    /// If you pass a directory and a glob, the glob will be ran from that directory
+    /// If you pass a directory and a glob, the glob will be ran from that directory.
+    /// At least one path or --glob must be provided
     Get {
         #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
