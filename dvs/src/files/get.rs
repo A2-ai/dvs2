@@ -16,6 +16,7 @@ fn get_file(
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
     cache: Option<&Mutex<HashCache>>,
+    dry_run: bool,
 ) -> Result<(Outcome, u64)> {
     log::debug!("Retrieving file: {}", relative_path.as_ref().display());
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
@@ -51,6 +52,10 @@ fn get_file(
             );
             return Ok((Outcome::Present, metadata.size));
         }
+    }
+
+    if dry_run {
+        return Ok((Outcome::Copied, metadata.size));
     }
 
     // Retrieve from backend to target path
@@ -103,6 +108,7 @@ pub fn get_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
     backend: &dyn Backend,
+    dry_run: bool,
 ) -> Result<Vec<GetResult>> {
     let matched_paths = paths.validate_for_get(&files);
     let pool = get_threadpool(matched_paths.len())?;
@@ -132,7 +138,7 @@ pub fn get_files(
                     GetPathStatus::Tracked => {}
                 }
 
-                match get_file(backend, paths, &relative_path, cache.as_ref()) {
+                match get_file(backend, paths, &relative_path, cache.as_ref(), dry_run) {
                     Ok((outcome, size)) => {
                         log::info!(
                             "Successfully retrieved {} ({:?})",
@@ -202,7 +208,7 @@ mod tests {
 
         // Retrieve it
         let cache = make_cache(&paths);
-        let (outcome, _size) = get_file(backend, &paths, "retrieve.txt", Some(&cache)).unwrap();
+        let (outcome, _size) = get_file(backend, &paths, "retrieve.txt", Some(&cache), false).unwrap();
         assert_eq!(outcome, Outcome::Copied);
         assert!(file_path.exists());
         assert_eq!(fs::read(&file_path).unwrap(), b"stored content");
@@ -223,7 +229,7 @@ mod tests {
 
         // File still exists and matches - should return Present
         let cache = make_cache(&paths);
-        let (outcome, _size) = get_file(backend, &paths, "present.txt", Some(&cache)).unwrap();
+        let (outcome, _size) = get_file(backend, &paths, "present.txt", Some(&cache), false).unwrap();
         assert_eq!(outcome, Outcome::Present);
     }
 
@@ -235,7 +241,7 @@ mod tests {
         let paths = make_paths(&root, &config);
 
         let cache = make_cache(&paths);
-        let result = get_file(backend, &paths, "untracked.txt", Some(&cache));
+        let result = get_file(backend, &paths, "untracked.txt", Some(&cache), false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not tracked"));
     }
@@ -258,7 +264,7 @@ mod tests {
         )
         .unwrap();
 
-        let results = get_files(vec!["nonexistent.csv".into()], &paths, backend).unwrap();
+        let results = get_files(vec!["nonexistent.csv".into()], &paths, backend, false).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not found"))
@@ -275,7 +281,7 @@ mod tests {
         // Create a file on disk but don't dvs add it
         create_file(&root, "untracked.txt", b"hello");
 
-        let results = get_files(vec!["untracked.txt".into()], &paths, backend).unwrap();
+        let results = get_files(vec!["untracked.txt".into()], &paths, backend, false).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not tracked"))
@@ -330,7 +336,7 @@ mod tests {
         }
 
         // Get files back
-        let results = get_files(file_paths, &paths, backend).unwrap();
+        let results = get_files(file_paths, &paths, backend, false).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert!(matches!(
@@ -380,7 +386,7 @@ mod tests {
 
         // get_file should error on decompression or hash mismatch
         let cache = make_cache(&paths);
-        let result = get_file(backend, &paths, "data.txt", Some(&cache));
+        let result = get_file(backend, &paths, "data.txt", Some(&cache), false);
         assert!(result.is_err());
     }
 }
