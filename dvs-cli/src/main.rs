@@ -74,6 +74,9 @@ pub enum Command {
         paths: Vec<PathBuf>,
         #[clap(long, short)]
         glob: Option<String>,
+        /// Show what would be retrieved without making any actual changes
+        #[clap(long)]
+        dry_run: bool,
     },
 }
 
@@ -219,7 +222,11 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("Some files failed to get status"));
             }
         }
-        Command::Get { paths, glob } => {
+        Command::Get {
+            paths,
+            glob,
+            dry_run,
+        } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
@@ -230,7 +237,7 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("No files to get"));
             }
 
-            let results = get_files(all_paths, &dvs_paths, config.backend())?;
+            let results = get_files(all_paths, &dvs_paths, config.backend(), dry_run)?;
             let has_errors = results
                 .iter()
                 .any(|r| matches!(r.detail, GetDetail::Error { .. }));
