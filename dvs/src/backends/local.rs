@@ -17,25 +17,6 @@ const AUDIT_LOG_FILENAME: &str = "audit.log.jsonl";
 /// Only protects the current dvs process, not concurrent dvs processes
 static AUDIT_LOG_LOCK: Mutex<()> = Mutex::new(());
 
-/// Parse a permission string as an octal mode.
-/// Returns the mode as an u32.
-fn parse_permissions(perms: &str) -> Result<u32> {
-    let mode = u32::from_str_radix(perms, 8).map_err(|_| {
-        anyhow!(
-            "Invalid permission mode '{}': must be octal (e.g., '770')",
-            perms
-        )
-    })?;
-    if mode > 0o7777 {
-        bail!(
-            "Invalid permission mode '{}': value {} exceeds maximum 7777",
-            perms,
-            mode
-        );
-    }
-    Ok(mode)
-}
-
 /// Resolve a group name to its GID.
 #[cfg(unix)]
 fn resolve_group(group_name: &str) -> Result<nix::unistd::Gid> {
@@ -50,61 +31,52 @@ fn resolve_group(_: &str) -> Result<()> {
     Ok(())
 }
 
+fn make_readonly(path: impl AsRef<Path>) -> Result<()> {
+    let mut perms = fs::metadata(path.as_ref())?.permissions();
+    perms.set_readonly(true);
+    fs::set_permissions(path.as_ref(), perms)?;
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct LocalBackend {
     pub path: PathBuf,
-    permissions: Option<String>,
     group: Option<String>,
 }
 
 impl LocalBackend {
-    pub fn new(
-        path: impl AsRef<Path>,
-        permissions: Option<String>,
-        group: Option<String>,
-    ) -> Result<Self> {
-        // Validate permissions and group before creating config
-        if let Some(ref perms) = permissions {
-            parse_permissions(perms)?;
-        }
+    pub fn new(path: impl AsRef<Path>, group: Option<String>) -> Result<Self> {
         if let Some(ref grp) = group {
             resolve_group(grp)?;
         }
 
         Ok(Self {
             path: path.as_ref().to_path_buf(),
-            permissions,
             group,
         })
     }
 
-    /// Apply configured permissions and group to a path.
-    /// No-op on non-Unix or if neither permissions nor group are set.
+    /// Apply configured group ownership to a path.
+    /// No-op on non-Unix or if no group is set.
     #[cfg(unix)]
-    pub fn apply_perms(&self, path: impl AsRef<Path>) -> Result<()> {
+    fn apply_group(&self, path: impl AsRef<Path>) -> Result<()> {
         use nix::unistd::chown;
-        use std::os::unix::fs::PermissionsExt;
-
-        let path = path.as_ref();
-
-        if let Some(perms) = &self.permissions {
-            log::debug!("Setting permissions {} on {}", perms, path.display());
-            let mode = parse_permissions(perms)?;
-            let permissions = std::fs::Permissions::from_mode(mode);
-            fs::set_permissions(path, permissions)?;
-        }
 
         if let Some(group_name) = &self.group {
-            log::debug!("Setting group {} on {}", group_name, path.display());
+            log::debug!(
+                "Setting group {} on {}",
+                group_name,
+                path.as_ref().display()
+            );
             let gid = resolve_group(group_name)?;
-            chown(path, None, Some(gid))?;
+            chown(path.as_ref(), None, Some(gid))?;
         }
 
         Ok(())
     }
 
     #[cfg(not(unix))]
-    pub fn apply_perms(&self, _path: impl AsRef<Path>) -> Result<()> {
+    fn apply_group(&self, _path: impl AsRef<Path>) -> Result<()> {
         Ok(())
     }
 
@@ -122,7 +94,7 @@ impl Backend for LocalBackend {
     fn init(&self) -> Result<()> {
         log::debug!("Creating storage directory: {}", self.path.display());
         fs::create_dir_all(&self.path)?;
-        self.apply_perms(&self.path)?;
+        self.apply_group(&self.path)?;
         log::info!("Initialized local storage at {}", self.path.display());
         Ok(())
     }
@@ -131,12 +103,13 @@ impl Backend for LocalBackend {
         let path = self.hash_to_path(hash)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
-            self.apply_perms(parent)?;
+            self.apply_group(parent)?;
         }
         let tmp_path = path.with_extension("tmp");
         compression.compress(source, &tmp_path)?;
         fs::rename(&tmp_path, &path)?;
-        self.apply_perms(&path)?;
+        make_readonly(&path)?;
+        self.apply_group(&path)?;
         Ok(())
     }
 
@@ -145,12 +118,13 @@ impl Backend for LocalBackend {
         log::debug!("Storing {} bytes to {path:?}", content.len());
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
-            self.apply_perms(parent)?;
+            self.apply_group(parent)?;
         }
         let tmp_path = path.with_extension("tmp");
         fs::write(&tmp_path, content)?;
         fs::rename(&tmp_path, &path)?;
-        self.apply_perms(&path)?;
+        make_readonly(&path)?;
+        self.apply_group(&path)?;
         Ok(())
     }
 
@@ -202,7 +176,7 @@ impl Backend for LocalBackend {
             .open(&audit_path)?;
         let json = serde_json::to_string(entry)?;
         writeln!(file, "{}", json)?;
-        self.apply_perms(&audit_path)?;
+        self.apply_group(&audit_path)?;
         Ok(())
     }
 
@@ -232,7 +206,7 @@ mod tests {
 
     #[test]
     fn hash_to_path_rejects_bad_hash() {
-        let backend = LocalBackend::new("/tmp/storage", None, None).unwrap();
+        let backend = LocalBackend::new("/tmp/storage", None).unwrap();
 
         // These should error or be sanitized
         assert!(
@@ -253,7 +227,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage_path = tmp.path().join("storage");
 
-        let backend = LocalBackend::new(&storage_path, None, None).unwrap();
+        let backend = LocalBackend::new(&storage_path, None).unwrap();
         assert!(!storage_path.exists());
 
         backend.init().unwrap();
@@ -264,7 +238,7 @@ mod tests {
     fn store_creates_hash_prefixed_path() {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
-        let backend = LocalBackend::new(&storage, None, None).unwrap();
+        let backend = LocalBackend::new(&storage, None).unwrap();
         backend.init().unwrap();
 
         // Create source file
@@ -283,7 +257,7 @@ mod tests {
     fn retrieve_copies_to_target() {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
-        let backend = LocalBackend::new(&storage, None, None).unwrap();
+        let backend = LocalBackend::new(&storage, None).unwrap();
         backend.init().unwrap();
 
         // Store content
@@ -303,7 +277,7 @@ mod tests {
     fn retrieve_returns_false_when_missing() {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
-        let backend = LocalBackend::new(&storage, None, None).unwrap();
+        let backend = LocalBackend::new(&storage, None).unwrap();
         backend.init().unwrap();
 
         let target = tmp.path().join("target.txt");
@@ -323,7 +297,7 @@ mod tests {
     fn exists_returns_true_for_stored() {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
-        let backend = LocalBackend::new(&storage, None, None).unwrap();
+        let backend = LocalBackend::new(&storage, None).unwrap();
         backend.init().unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
@@ -336,7 +310,7 @@ mod tests {
     fn remove_deletes_stored_file() {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
-        let backend = LocalBackend::new(&storage, None, None).unwrap();
+        let backend = LocalBackend::new(&storage, None).unwrap();
         backend.init().unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
@@ -353,7 +327,7 @@ mod tests {
     fn read_returns_content() {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
-        let backend = LocalBackend::new(&storage, None, None).unwrap();
+        let backend = LocalBackend::new(&storage, None).unwrap();
         backend.init().unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
@@ -366,29 +340,26 @@ mod tests {
         assert_eq!(content, None);
     }
 
-    #[cfg(unix)]
     #[test]
-    fn apply_perms_works() {
-        use std::os::unix::fs::PermissionsExt;
-
+    fn stored_files_are_readonly() {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
-        let backend = LocalBackend::new(&storage, Some("750".to_string()), None).unwrap();
+        let backend = LocalBackend::new(&storage, None).unwrap();
         backend.init().unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
         backend.store_bytes(&hash, b"content").unwrap();
 
         let stored = storage.join("ab").join("c123def456789012345678901234ab");
-        let mode = fs::metadata(&stored).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o750);
+        let perms = fs::metadata(&stored).unwrap().permissions();
+        assert!(perms.readonly());
     }
 
     #[test]
     fn log_audit_appends_to_jsonl() {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
-        let backend = LocalBackend::new(&storage, None, None).unwrap();
+        let backend = LocalBackend::new(&storage, None).unwrap();
         backend.init().unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
@@ -438,7 +409,7 @@ mod tests {
     fn log_audit_is_valid_jsonl_under_concurrency() {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
-        let backend = LocalBackend::new(&storage, None, None).unwrap();
+        let backend = LocalBackend::new(&storage, None).unwrap();
         backend.init().unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");

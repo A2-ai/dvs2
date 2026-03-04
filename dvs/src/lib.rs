@@ -58,7 +58,7 @@ pub mod testutil {
     /// Returns (config, dvs_metadata_dir).
     pub fn init_dvs_repo(repo_root: &Path) -> (Config, PathBuf) {
         let storage_dir = repo_root.join(".storage");
-        let config = Config::new_local(&storage_dir, None, None).unwrap();
+        let config = Config::new_local(&storage_dir, None).unwrap();
         init(repo_root, config.clone()).unwrap();
         let dvs_dir = repo_root.join(".dvs");
         (config, dvs_dir)

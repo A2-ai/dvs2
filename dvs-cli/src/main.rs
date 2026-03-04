@@ -29,9 +29,6 @@ pub enum Command {
         /// If you want to use a folder name other than `.dvs` for storing the metadata files
         #[clap(long)]
         metadata_folder_name: Option<String>,
-        /// Unix permissions for storage directory and files (octal, e.g., "770")
-        #[clap(long)]
-        permissions: Option<String>,
         /// Unix group to set on storage directory and files
         #[clap(long)]
         group: Option<String>,
@@ -102,11 +99,10 @@ fn try_main() -> Result<()> {
             path,
             root_dir,
             metadata_folder_name,
-            permissions,
             group,
             no_compression,
         } => {
-            let mut config = Config::new_local(path, permissions, group)?;
+            let mut config = Config::new_local(path, group)?;
             if no_compression {
                 config.set_compression(Compression::None);
             }

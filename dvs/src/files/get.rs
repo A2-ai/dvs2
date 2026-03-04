@@ -379,11 +379,14 @@ mod tests {
         // Delete the local file
         fs::remove_file(&file_path).unwrap();
 
-        // Corrupt the storage file
+        // Corrupt the storage file (must remove read-only first)
         let storage_path = root
             .join(".storage")
             .join(&metadata.hashes.blake3[..2])
             .join(&metadata.hashes.blake3[2..]);
+        let mut perms = fs::metadata(&storage_path).unwrap().permissions();
+        perms.set_readonly(false);
+        fs::set_permissions(&storage_path, perms).unwrap();
         fs::write(&storage_path, b"corrupted content").unwrap();
 
         // get_file should error on decompression or hash mismatch
