@@ -74,8 +74,6 @@ Options:
           If you want to use a root folder other than the current directory
       --metadata-folder-name <METADATA_FOLDER_NAME>
           If you want to use a folder name other than `.dvs` for storing the metadata files
-      --permissions <PERMISSIONS>
-          Unix permissions for storage directory and files (octal, e.g., "770")
       --group <GROUP>
           Unix group to set on storage directory and files
       --no-compression
@@ -273,6 +271,8 @@ previously added files — `get` always reads the compression from the file's me
 Writes to storage are atomic: data is first written to a temporary file (with a `.tmp` extension) in the
 same directory, then renamed into place. Since rename is atomic on POSIX within the same filesystem, this
 prevents partial blobs from appearing in storage mapping to an expected file.
+
+Stored files are set read-only after writing.
 
 
 ### Audit trail

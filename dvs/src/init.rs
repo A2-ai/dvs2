@@ -49,7 +49,7 @@ mod tests {
         let (_tmp, root) = create_temp_git_repo();
         let storage = root.join(".storage");
 
-        let config = Config::new_local(&storage, None, None).unwrap();
+        let config = Config::new_local(&storage, None).unwrap();
         init(&root, config).unwrap();
 
         // Config file should exist
@@ -65,7 +65,7 @@ mod tests {
         let (_tmp, root) = create_temp_git_repo();
         let storage = root.join(".storage");
 
-        let config = Config::new_local(&storage, None, None).unwrap();
+        let config = Config::new_local(&storage, None).unwrap();
         init(&root, config.clone()).unwrap();
 
         // Second init should fail
@@ -80,14 +80,14 @@ mod tests {
         let storage = root.join(".storage");
 
         // Initialize the parent project
-        let config = Config::new_local(&storage, None, None).unwrap();
+        let config = Config::new_local(&storage, None).unwrap();
         init(&root, config).unwrap();
 
         // Create a subdirectory and initialize a nested project there
         let subdir = root.join("nested");
         fs::create_dir(&subdir).unwrap();
         let nested_storage = subdir.join(".storage");
-        let nested_config = Config::new_local(&nested_storage, None, None).unwrap();
+        let nested_config = Config::new_local(&nested_storage, None).unwrap();
         let result = init(&subdir, nested_config);
         assert!(
             result.is_ok(),
@@ -103,7 +103,7 @@ mod tests {
         // Point storage at an impossible path so backend init fails
         let storage = Path::new("/dev/null/impossible");
 
-        let config = Config::new_local(storage, None, None).unwrap();
+        let config = Config::new_local(storage, None).unwrap();
         let result = init(&root, config);
         assert!(result.is_err());
 
@@ -116,7 +116,7 @@ mod tests {
 
         // A retry with a valid storage path should now succeed
         let valid_storage = root.join(".storage");
-        let config = Config::new_local(&valid_storage, None, None).unwrap();
+        let config = Config::new_local(&valid_storage, None).unwrap();
         init(&root, config).unwrap();
         assert!(root.join("dvs.toml").is_file());
         assert!(root.join(".dvs").is_dir());
@@ -132,7 +132,7 @@ mod tests {
         fs::write(&marker, "keep me").unwrap();
 
         let storage = Path::new("/dev/null/impossible");
-        let config = Config::new_local(storage, None, None).unwrap();
+        let config = Config::new_local(storage, None).unwrap();
         let result = init(&root, config);
         assert!(result.is_err());
 
