@@ -133,7 +133,9 @@ impl Backend for LocalBackend {
             fs::create_dir_all(parent)?;
             self.apply_perms(parent)?;
         }
-        compression.compress(source, &path)?;
+        let tmp_path = path.with_extension("tmp");
+        compression.compress(source, &tmp_path)?;
+        fs::rename(&tmp_path, &path)?;
         self.apply_perms(&path)?;
         Ok(())
     }
@@ -145,7 +147,9 @@ impl Backend for LocalBackend {
             fs::create_dir_all(parent)?;
             self.apply_perms(parent)?;
         }
-        fs::write(&path, content)?;
+        let tmp_path = path.with_extension("tmp");
+        fs::write(&tmp_path, content)?;
+        fs::rename(&tmp_path, &path)?;
         self.apply_perms(&path)?;
         Ok(())
     }
