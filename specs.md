@@ -270,6 +270,10 @@ Files in storage are compressed with zstd by default. The two compression modes 
 per-file in the metadata, so changing the project's compression setting does not affect retrieval of
 previously added files — `get` always reads the compression from the file's metadata.
 
+Writes to storage are atomic: data is first written to a temporary file (with a `.tmp` extension) in the
+same directory, then renamed into place. Since rename is atomic on POSIX within the same filesystem, this
+prevents partial blobs from appearing in storage mapping to an expected file.
+
 
 ### Audit trail
 

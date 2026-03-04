@@ -208,7 +208,8 @@ mod tests {
 
         // Retrieve it
         let cache = make_cache(&paths);
-        let (outcome, _size) = get_file(backend, &paths, "retrieve.txt", Some(&cache), false).unwrap();
+        let (outcome, _size) =
+            get_file(backend, &paths, "retrieve.txt", Some(&cache), false).unwrap();
         assert_eq!(outcome, Outcome::Copied);
         assert!(file_path.exists());
         assert_eq!(fs::read(&file_path).unwrap(), b"stored content");
@@ -229,7 +230,8 @@ mod tests {
 
         // File still exists and matches - should return Present
         let cache = make_cache(&paths);
-        let (outcome, _size) = get_file(backend, &paths, "present.txt", Some(&cache), false).unwrap();
+        let (outcome, _size) =
+            get_file(backend, &paths, "present.txt", Some(&cache), false).unwrap();
         assert_eq!(outcome, Outcome::Present);
     }
 
