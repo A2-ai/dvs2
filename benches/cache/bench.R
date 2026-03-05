@@ -86,57 +86,35 @@ record <- function(op, type, sz, nf, rep, elapsed) {
   )
 }
 
-# ---- Single file sizes ----
+# ---- Configuration ----
 single_sizes <- c(1, 5, 10, 50, 100, 500, 1000, 10000)
+par_sizes <- c(1, 5, 10, 50, 100)
 
-# ---- 1. Single file add ----
-cat("\n--- Single File Add ---\n")
+# ===========================================================
+# Phase 1: Setup — create projects, init dvs, copy data files
+# ===========================================================
+cat("\n--- Setup: creating projects and copying data ---\n")
+
+single_projects <- list()
 for (sz in single_sizes) {
   src <- file.path(data_dir, "single", sprintf("data_%05dmb.tab", sz))
-  if (!file.exists(src)) { cat(sprintf("  SKIP %d MB\n", sz)); next }
+  if (!file.exists(src)) { cat(sprintf("  SKIP single %d MB (source missing)\n", sz)); next }
 
   proj <- file.path(base_dir, mode, sprintf("single_%05dmb", sz))
   stor <- file.path(storage_base, mode, sprintf("single_%05dmb", sz))
   setup_project(proj, stor)
-
   file.copy(src, file.path(proj, basename(src)))
 
-  cat(sprintf("  %5d MB ... ", sz))
-  elapsed <- tryCatch(
-    bench_op(proj, do_add(basename(src))),
-    error = function(e) { message("ERROR: ", e$message); NA_real_ }
+  single_projects[[length(single_projects) + 1]] <- list(
+    proj = proj, sz = sz, file = basename(src)
   )
-  if (is.na(elapsed)) next
-  cat(sprintf("%.2f sec\n", elapsed))
-  record("add", "single", sz, 1, 1, elapsed)
+  cat(sprintf("  single %5d MB -> %s\n", sz, proj))
 }
 
-# ---- 2. Single file status (5 reps, cycling through sizes) ----
-cat("\n--- Single File Status (5 replicates) ---\n")
-for (rep in 1:5) {
-  cat(sprintf("  Rep %d: ", rep))
-  for (sz in single_sizes) {
-    proj <- file.path(base_dir, mode, sprintf("single_%05dmb", sz))
-    if (!dir.exists(proj)) next
-
-    elapsed <- tryCatch(
-      bench_op(proj, do_status()),
-      error = function(e) { message("ERROR: ", e$message); NA_real_ }
-    )
-    if (is.na(elapsed)) next
-    cat(sprintf("%dMB=%.2fs ", sz, elapsed))
-    record("status", "single", sz, 1, rep, elapsed)
-  }
-  cat("\n")
-}
-
-# ---- 3. Parallel add (20 files per size) ----
-par_sizes <- c(1, 5, 10, 50, 100)
-
-cat("\n--- Parallel Add (20 files each) ---\n")
+par_projects <- list()
 for (sz in par_sizes) {
   pdata <- file.path(data_dir, "parallel", sprintf("size_%03dmb", sz))
-  if (!dir.exists(pdata)) { cat(sprintf("  SKIP %d MB\n", sz)); next }
+  if (!dir.exists(pdata)) { cat(sprintf("  SKIP parallel %d MB (source missing)\n", sz)); next }
 
   proj <- file.path(base_dir, mode, sprintf("parallel_%03dmb", sz))
   stor <- file.path(storage_base, mode, sprintf("parallel_%03dmb", sz))
@@ -145,32 +123,72 @@ for (sz in par_sizes) {
   files <- list.files(pdata, pattern = "\\.tab$", full.names = TRUE)
   for (f in files) file.copy(f, file.path(proj, basename(f)))
 
-  cat(sprintf("  %3d MB x %d files ... ", sz, length(files)))
+  par_projects[[length(par_projects) + 1]] <- list(
+    proj = proj, sz = sz, n_files = length(files)
+  )
+  cat(sprintf("  parallel %3d MB x %d files -> %s\n", sz, length(files), proj))
+}
+
+cat("Setup complete.\n")
+
+# ===========================================================
+# Phase 2: Benchmark add
+# ===========================================================
+
+cat("\n--- Single File Add ---\n")
+for (p in single_projects) {
+  cat(sprintf("  %5d MB ... ", p$sz))
   elapsed <- tryCatch(
-    bench_op(proj, do_add("*.tab")),
+    bench_op(p$proj, do_add(p$file)),
     error = function(e) { message("ERROR: ", e$message); NA_real_ }
   )
   if (is.na(elapsed)) next
   cat(sprintf("%.2f sec\n", elapsed))
-  record("add", "parallel", sz, length(files), 1, elapsed)
+  record("add", "single", p$sz, 1, 1, elapsed)
 }
 
-# ---- 4. Parallel status (5 reps, cycling through sizes) ----
-cat("\n--- Parallel Status (5 replicates) ---\n")
+cat("\n--- Parallel Add ---\n")
+for (p in par_projects) {
+  cat(sprintf("  %3d MB x %d files ... ", p$sz, p$n_files))
+  elapsed <- tryCatch(
+    bench_op(p$proj, do_add("*.tab")),
+    error = function(e) { message("ERROR: ", e$message); NA_real_ }
+  )
+  if (is.na(elapsed)) next
+  cat(sprintf("%.2f sec\n", elapsed))
+  record("add", "parallel", p$sz, p$n_files, 1, elapsed)
+}
+
+# ===========================================================
+# Phase 3: Benchmark status (5 replicates)
+# ===========================================================
+
+cat("\n--- Single File Status (5 replicates) ---\n")
 for (rep in 1:5) {
   cat(sprintf("  Rep %d: ", rep))
-  for (sz in par_sizes) {
-    proj <- file.path(base_dir, mode, sprintf("parallel_%03dmb", sz))
-    if (!dir.exists(proj)) next
-
-    n_files <- length(list.files(proj, pattern = "\\.tab$"))
+  for (p in single_projects) {
     elapsed <- tryCatch(
-      bench_op(proj, do_status()),
+      bench_op(p$proj, do_status()),
       error = function(e) { message("ERROR: ", e$message); NA_real_ }
     )
     if (is.na(elapsed)) next
-    cat(sprintf("%dMB=%.2fs ", sz, elapsed))
-    record("status", "parallel", sz, n_files, rep, elapsed)
+    cat(sprintf("%dMB=%.2fs ", p$sz, elapsed))
+    record("status", "single", p$sz, 1, rep, elapsed)
+  }
+  cat("\n")
+}
+
+cat("\n--- Parallel Status (5 replicates) ---\n")
+for (rep in 1:5) {
+  cat(sprintf("  Rep %d: ", rep))
+  for (p in par_projects) {
+    elapsed <- tryCatch(
+      bench_op(p$proj, do_status()),
+      error = function(e) { message("ERROR: ", e$message); NA_real_ }
+    )
+    if (is.na(elapsed)) next
+    cat(sprintf("%dMB=%.2fs ", p$sz, elapsed))
+    record("status", "parallel", p$sz, p$n_files, rep, elapsed)
   }
   cat("\n")
 }
