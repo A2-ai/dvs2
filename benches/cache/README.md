@@ -1,5 +1,10 @@
 # DVS: Benchmarks
 
+Claude:
+
+>   Workflow: install old dvs → run.sh rpkg → install new dvs → run.sh rpkg (or cli) → compare the two CSVs.
+
+Devin:
 
 > 
 > using devcluster - create a project/git repo with script(s) in it that generate data that is approximately 1, 5, 10, 50, 100, 500, 1000, 10000MB in size. This does not need to be exact, just in the ballpark. 

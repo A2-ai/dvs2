@@ -24,7 +24,7 @@ calibrate <- function() {
   file.size(tf) / 10000
 }
 
-generate_file <- function(path, target_mb, bpr, file_idx = 1) {
+generate_file <- function(path, target_mb, bpr) {
   target_rows <- ceiling(target_mb * 1024^2 / bpr)
   rows_written <- 0
   chunk <- 0
@@ -32,7 +32,7 @@ generate_file <- function(path, target_mb, bpr, file_idx = 1) {
   while (rows_written < target_rows) {
     chunk <- chunk + 1
     n <- min(CHUNK_ROWS, target_rows - rows_written)
-    set.seed(as.integer((target_mb * 1000 + file_idx) * 100 + chunk))
+    set.seed(as.integer(target_mb * 100 + chunk))
     df <- data.frame(matrix(rnorm(n * NCOL), ncol = NCOL))
     write_tab(df, path, append = (rows_written > 0))
     rows_written <- rows_written + n
@@ -50,36 +50,19 @@ generate_file <- function(path, target_mb, bpr, file_idx = 1) {
 }
 
 # ---- Main ----
-cat("DVS Benchmark: Data Generation\n")
+sizes <- c(1, 5, 10, 50, 100, 500, 1000, 10000)
 
-total_gb <- (sum(c(1, 5, 10, 50, 100, 500, 1000, 10000)) +
-             20 * sum(c(1, 5, 10, 50, 100))) / 1024
+total_gb <- sum(sizes) / 1024
+cat(sprintf("DVS Benchmark: Data Generation\n"))
 cat(sprintf("This will generate ~%.0f GB of test data in %s\n", total_gb, output_dir))
 
 bpr <- calibrate()
 cat(sprintf("Calibrated: %.1f bytes/row (%d cols)\n\n", bpr, NCOL))
 
-# Single files: 1, 5, 10, 50, 100, 500, 1000, 10000 MB
-single_sizes <- c(1, 5, 10, 50, 100, 500, 1000, 10000)
-single_dir <- file.path(output_dir, "single")
-dir.create(single_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
-cat("Single files:\n")
-for (sz in single_sizes) {
-  generate_file(file.path(single_dir, sprintf("data_%05dmb.tab", sz)), sz, bpr)
-}
-
-# Parallel files: 20 files each of 1, 5, 10, 50, 100 MB
-par_sizes <- c(1, 5, 10, 50, 100)
-cat("\nParallel files (20 each):\n")
-for (sz in par_sizes) {
-  pdir <- file.path(output_dir, "parallel", sprintf("size_%03dmb", sz))
-  dir.create(pdir, recursive = TRUE, showWarnings = FALSE)
-  cat(sprintf("\n  %d MB x 20:\n", sz))
-  for (i in 1:20) {
-    generate_file(file.path(pdir, sprintf("data_%02d.tab", i)), sz, bpr,
-                  file_idx = i)
-  }
+for (sz in sizes) {
+  generate_file(file.path(output_dir, sprintf("data_%05dmb.tab", sz)), sz, bpr)
 }
 
 cat("\nData generation complete.\n")
