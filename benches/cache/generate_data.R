@@ -19,7 +19,8 @@ calibrate <- function() {
   on.exit(unlink(tf))
   set.seed(42)
   df <- data.frame(matrix(rnorm(10000 * NCOL), ncol = NCOL))
-  write_tab(df, tf)
+  write.table(df, tf, sep = "\t", row.names = FALSE, eol = "\n",
+              col.names = FALSE)
   file.size(tf) / 10000
 }
 
@@ -50,6 +51,10 @@ generate_file <- function(path, target_mb, bpr, file_idx = 1) {
 
 # ---- Main ----
 cat("DVS Benchmark: Data Generation\n")
+
+total_gb <- (sum(c(1, 5, 10, 50, 100, 500, 1000, 10000)) +
+             20 * sum(c(1, 5, 10, 50, 100))) / 1024
+cat(sprintf("This will generate ~%.0f GB of test data in %s\n", total_gb, output_dir))
 
 bpr <- calibrate()
 cat(sprintf("Calibrated: %.1f bytes/row (%d cols)\n\n", bpr, NCOL))

@@ -28,28 +28,36 @@ if (mode == "rpkg") {
   }
 }
 
+# ---- CLI runner (stderr passes through to console, exit code checked) ----
+run_dvs <- function(...) {
+  out <- system2("dvs", c(...), stdout = TRUE, stderr = "")
+  status <- attr(out, "status")
+  if (!is.null(status) && status != 0) {
+    stop(sprintf("dvs %s failed (exit %d)", paste(c(...), collapse = " "), status))
+  }
+  invisible(out)
+}
+
 # ---- Tool wrappers ----
 do_init <- switch(mode,
   rpkg = function(storage_dir) dvs_init(storage_dir),
-  cli  = function(storage_dir) {
-    system2("dvs", c("init", storage_dir), stdout = TRUE, stderr = TRUE)
-  }
+  cli  = function(storage_dir) run_dvs("init", storage_dir)
 )
 
 do_add <- switch(mode,
   rpkg = function(pattern) dvs_add(pattern),
   cli  = function(pattern) {
     if (grepl("[*?]", pattern)) {
-      system2("dvs", c("add", "--glob", pattern), stdout = TRUE, stderr = TRUE)
+      run_dvs("add", "--glob", pattern)
     } else {
-      system2("dvs", c("add", pattern), stdout = TRUE, stderr = TRUE)
+      run_dvs("add", pattern)
     }
   }
 )
 
 do_status <- switch(mode,
   rpkg = function() dvs_status(),
-  cli  = function() system2("dvs", c("status"), stdout = TRUE, stderr = TRUE)
+  cli  = function() run_dvs("status")
 )
 
 # ---- Helpers ----
@@ -62,22 +70,20 @@ setup_project <- function(proj_dir, storage_dir) {
   do_init(storage_dir)
 }
 
-link_or_copy <- function(from, to) {
-  if (!file.link(from, to)) file.copy(from, to)
+bench_op <- function(dir, expr) {
+  owd <- setwd(dir)
+  on.exit(setwd(owd))
+  system.time(expr)[["elapsed"]]
 }
 
-results <- data.frame(
-  tool = character(), operation = character(), test_type = character(),
-  size_mb = integer(), n_files = integer(), replicate = integer(),
-  elapsed_sec = numeric(), stringsAsFactors = FALSE
-)
+results_list <- list()
 
 record <- function(op, type, sz, nf, rep, elapsed) {
-  results <<- rbind(results, data.frame(
+  results_list[[length(results_list) + 1]] <<- data.frame(
     tool = mode, operation = op, test_type = type,
     size_mb = sz, n_files = nf, replicate = rep,
     elapsed_sec = elapsed, stringsAsFactors = FALSE
-  ))
+  )
 }
 
 # ---- Single file sizes ----
@@ -93,13 +99,14 @@ for (sz in single_sizes) {
   stor <- file.path(storage_base, mode, sprintf("single_%05dmb", sz))
   setup_project(proj, stor)
 
-  link_or_copy(src, file.path(proj, basename(src)))
-  setwd(proj)
+  file.copy(src, file.path(proj, basename(src)))
 
   cat(sprintf("  %5d MB ... ", sz))
-  elapsed <- system.time(
-    tryCatch(do_add(basename(src)), error = function(e) message("ERROR: ", e$message))
-  )[["elapsed"]]
+  elapsed <- tryCatch(
+    bench_op(proj, do_add(basename(src))),
+    error = function(e) { message("ERROR: ", e$message); NA_real_ }
+  )
+  if (is.na(elapsed)) next
   cat(sprintf("%.2f sec\n", elapsed))
   record("add", "single", sz, 1, 1, elapsed)
 }
@@ -112,10 +119,11 @@ for (rep in 1:5) {
     proj <- file.path(base_dir, mode, sprintf("single_%05dmb", sz))
     if (!dir.exists(proj)) next
 
-    setwd(proj)
-    elapsed <- system.time(
-      tryCatch(do_status(), error = function(e) message("ERROR"))
-    )[["elapsed"]]
+    elapsed <- tryCatch(
+      bench_op(proj, do_status()),
+      error = function(e) { message("ERROR: ", e$message); NA_real_ }
+    )
+    if (is.na(elapsed)) next
     cat(sprintf("%dMB=%.2fs ", sz, elapsed))
     record("status", "single", sz, 1, rep, elapsed)
   }
@@ -135,13 +143,14 @@ for (sz in par_sizes) {
   setup_project(proj, stor)
 
   files <- list.files(pdata, pattern = "\\.tab$", full.names = TRUE)
-  for (f in files) link_or_copy(f, file.path(proj, basename(f)))
+  for (f in files) file.copy(f, file.path(proj, basename(f)))
 
-  setwd(proj)
   cat(sprintf("  %3d MB x %d files ... ", sz, length(files)))
-  elapsed <- system.time(
-    tryCatch(do_add("*.tab"), error = function(e) message("ERROR: ", e$message))
-  )[["elapsed"]]
+  elapsed <- tryCatch(
+    bench_op(proj, do_add("*.tab")),
+    error = function(e) { message("ERROR: ", e$message); NA_real_ }
+  )
+  if (is.na(elapsed)) next
   cat(sprintf("%.2f sec\n", elapsed))
   record("add", "parallel", sz, length(files), 1, elapsed)
 }
@@ -154,17 +163,20 @@ for (rep in 1:5) {
     proj <- file.path(base_dir, mode, sprintf("parallel_%03dmb", sz))
     if (!dir.exists(proj)) next
 
-    setwd(proj)
-    elapsed <- system.time(
-      tryCatch(do_status(), error = function(e) message("ERROR"))
-    )[["elapsed"]]
+    n_files <- length(list.files(proj, pattern = "\\.tab$"))
+    elapsed <- tryCatch(
+      bench_op(proj, do_status()),
+      error = function(e) { message("ERROR: ", e$message); NA_real_ }
+    )
+    if (is.na(elapsed)) next
     cat(sprintf("%dMB=%.2fs ", sz, elapsed))
-    record("status", "parallel", sz, 20, rep, elapsed)
+    record("status", "parallel", sz, n_files, rep, elapsed)
   }
   cat("\n")
 }
 
 # ---- Save results ----
+results <- do.call(rbind, results_list)
 out_file <- file.path(base_dir, sprintf("results_%s.csv", mode))
 write.csv(results, out_file, row.names = FALSE)
 cat(sprintf("\nResults saved: %s\n", out_file))
