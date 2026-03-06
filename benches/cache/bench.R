@@ -1,17 +1,19 @@
 #!/usr/bin/env Rscript
 # DVS Benchmark: Add + Status performance
-# Usage: Rscript bench.R <rpkg|cli> <base_dir> <storage_base> [data_dir]
+# Usage: Rscript bench.R <rpkg|cli> <base_dir> <storage_base>
 #
 # Measures dvs via either the R package or CLI interface.
 # Run once per dvs install (old vs new) and compare the output CSVs.
+# Source data is read from script_dir/data/ (generated once by generate_data.R).
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 3) stop("Usage: Rscript bench.R <rpkg|cli> <base_dir> <storage_base> [data_dir]")
+if (length(args) < 3) stop("Usage: Rscript bench.R <rpkg|cli> <base_dir> <storage_base>")
 
 mode <- args[1]
 base_dir <- args[2]
 storage_base <- args[3]
-data_dir <- if (length(args) >= 4) args[4] else file.path(base_dir, "data")
+script_dir <- dirname(sub("^--file=", "",
+  grep("--file=", commandArgs(trailingOnly = FALSE), value = TRUE)))
 
 stopifnot(mode %in% c("rpkg", "cli"))
 
@@ -73,7 +75,9 @@ setup_project <- function(proj_dir, storage_dir) {
 bench_op <- function(dir, expr) {
   owd <- setwd(dir)
   on.exit(setwd(owd))
-  system.time(expr)[["elapsed"]]
+  t0 <- proc.time()[["elapsed"]]
+  expr
+  proc.time()[["elapsed"]] - t0
 }
 
 results_list <- list()
@@ -86,28 +90,27 @@ record <- function(op, sz, rep, elapsed) {
   )
 }
 
-# ---- Configuration ----
-sizes <- c(1, 5, 10, 50, 100, 500, 1000, 10000)
+# ===========================================================
+# Phase 1: Setup — discover projects and init dvs
+# ===========================================================
+cat("\n--- Setup: initializing projects ---\n")
 
-# ===========================================================
-# Phase 1: Setup — create projects, init dvs, copy data files
-# ===========================================================
-cat("\n--- Setup: creating projects and copying data ---\n")
+proj_root <- file.path(base_dir, mode)
+proj_dirs <- sort(list.dirs(proj_root, recursive = FALSE, full.names = TRUE))
 
 projects <- list()
-for (sz in sizes) {
-  src <- file.path(data_dir, sprintf("data_%05dmb.tab", sz))
-  if (!file.exists(src)) { cat(sprintf("  SKIP %d MB (source missing)\n", sz)); next }
+for (proj in proj_dirs) {
+  tabs <- list.files(proj, pattern = "\\.tab$")
+  if (length(tabs) == 0) next
 
-  proj <- file.path(base_dir, mode, sprintf("bench_%05dmb", sz))
-  stor <- file.path(storage_base, mode, sprintf("bench_%05dmb", sz))
+  sz <- as.numeric(sub("^bench_0*([0-9]+)mb$", "\\1", basename(proj)))
+  stor <- file.path(storage_base, mode, basename(proj))
   setup_project(proj, stor)
-  file.copy(src, file.path(proj, basename(src)))
 
   projects[[length(projects) + 1]] <- list(
-    proj = proj, sz = sz, file = basename(src)
+    proj = proj, sz = sz, file = tabs[1]
   )
-  cat(sprintf("  %5d MB -> %s\n", sz, proj))
+  cat(sprintf("  %5.0f MB: git init + dvs init -> %s\n", sz, proj))
 }
 
 cat("Setup complete.\n")
@@ -148,22 +151,43 @@ for (rep in 1:5) {
 }
 
 # ---- Save results ----
+if (length(results_list) == 0) stop("No results recorded. Check that run.sh copied data into: ", base_dir)
 results <- do.call(rbind, results_list)
-out_file <- file.path(base_dir, sprintf("results_%s.csv", mode))
-write.csv(results, out_file, row.names = FALSE)
+
+summaries <- list()
+
+add_res <- results[results$operation == "add", ]
+if (nrow(add_res) > 0) {
+  summaries$add <- data.frame(
+    interface = mode, operation = "add",
+    size_mb = add_res$size_mb,
+    mean_sec = add_res$elapsed_sec,
+    std_sec = NA_real_,
+    n = 1L
+  )
+}
+
+stat_res <- results[results$operation == "status", ]
+if (nrow(stat_res) > 0) {
+  summaries$status <- do.call(rbind, lapply(split(stat_res, stat_res$size_mb), function(d) {
+    data.frame(
+      interface = mode, operation = "status",
+      size_mb = d$size_mb[1],
+      mean_sec = mean(d$elapsed_sec),
+      std_sec = sd(d$elapsed_sec),
+      n = nrow(d)
+    )
+  }))
+}
+
+summary_results <- do.call(rbind, summaries)
+
+cache_dir <- file.path(script_dir, "benches", "cache")
+dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+out_file <- file.path(cache_dir, sprintf("results_%s.csv", mode))
+write.csv(summary_results, out_file, row.names = FALSE)
 cat(sprintf("\nResults saved: %s\n", out_file))
 
 # ---- Summary ----
 cat(sprintf("\n--- Summary (%s) ---\n", mode))
-
-cat("\nAdd (seconds):\n")
-add_res <- results[results$operation == "add", ]
-print(add_res[, c("size_mb", "elapsed_sec")], row.names = FALSE)
-
-cat("\nStatus mean ± sd (seconds):\n")
-stat_res <- results[results$operation == "status", ]
-if (nrow(stat_res) > 0) {
-  agg <- aggregate(elapsed_sec ~ size_mb, data = stat_res,
-                   FUN = function(x) sprintf("%.3f ± %.3f", mean(x), sd(x)))
-  print(agg, row.names = FALSE)
-}
+print(summary_results[, c("operation", "size_mb", "mean_sec", "std_sec")], row.names = FALSE)
