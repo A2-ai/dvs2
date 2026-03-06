@@ -82,8 +82,20 @@ alias install-rpkg := rpkg-install
 # dvs1 (old R package for benchmarking)
 # ============================================================================
 
+build-dvs1:
+    NOT_CRAN=true R CMD build dvs1
+
 install-dvs1:
-    NOT_CRAN=true R CMD INSTALL dvs1
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tarball=$(ls -t dvs1_*.tar.gz 2>/dev/null | head -n1)
+    if [ -n "$tarball" ]; then
+      echo "Installing from tarball: $tarball"
+      NOT_CRAN=true R CMD INSTALL "$tarball"
+    else
+      echo "No tarball found, installing from source directory"
+      NOT_CRAN=true R CMD INSTALL dvs1
+    fi
 
 # ============================================================================
 # Combined

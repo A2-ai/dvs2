@@ -70,6 +70,9 @@ write_config() {
     echo "r_version: $(Rscript -e 'cat(R.version.string)' 2>/dev/null || echo unknown)"
     echo "dvs_cli_version: $(dvs --version 2>/dev/null || echo unknown)"
     echo "dvs1_version: $(Rscript -e 'cat(as.character(packageVersion("dvs1")))' 2>/dev/null || echo unknown)"
+
+    # Git
+    echo "commit: $(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
   } > "$config_file"
 }
 

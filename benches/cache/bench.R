@@ -17,6 +17,7 @@ out_file <- args[4]
 version_label <- switch(mode, rpkg = "dvs1", cli = "dvs2")
 
 stopifnot(mode %in% c("rpkg", "cli"))
+options(scipen = 999)
 
 cat(sprintf("\n========================================\n"))
 cat(sprintf("DVS Benchmark (%s interface)\n", mode))
