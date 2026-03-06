@@ -1,19 +1,20 @@
 #!/usr/bin/env Rscript
 # DVS Benchmark: Add + Status performance
-# Usage: Rscript bench.R <rpkg|cli> <base_dir> <storage_base>
+# Usage: Rscript bench.R <rpkg|cli> <base_dir> <storage_base> <out_csv>
 #
 # Measures dvs via either the R package or CLI interface.
-# Run once per dvs install (old vs new) and compare the output CSVs.
+# Appends results to <out_csv> with an interface column (dvs1 or dvs2).
 # Source data is read from script_dir/data/ (generated once by generate_data.R).
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 3) stop("Usage: Rscript bench.R <rpkg|cli> <base_dir> <storage_base>")
+if (length(args) < 4) stop("Usage: Rscript bench.R <rpkg|cli> <base_dir> <storage_base> <out_csv>")
 
 mode <- args[1]
 base_dir <- args[2]
 storage_base <- args[3]
-script_dir <- dirname(sub("^--file=", "",
-  grep("--file=", commandArgs(trailingOnly = FALSE), value = TRUE)))
+out_file <- args[4]
+
+version_label <- switch(mode, rpkg = "dvs1", cli = "dvs2")
 
 stopifnot(mode %in% c("rpkg", "cli"))
 
@@ -23,7 +24,7 @@ cat(sprintf("========================================\n"))
 
 # ---- Preflight ----
 if (mode == "rpkg") {
-  library(dvs)
+  library(dvs1)
 } else {
   if (system2("dvs", "--version", stdout = FALSE, stderr = FALSE) != 0) {
     stop("dvs CLI not found in PATH")
@@ -84,7 +85,7 @@ results_list <- list()
 
 record <- function(op, sz, rep, elapsed) {
   results_list[[length(results_list) + 1]] <<- data.frame(
-    interface = mode, operation = op,
+    interface = version_label, operation = op,
     size_mb = sz, replicate = rep,
     elapsed_sec = elapsed, stringsAsFactors = FALSE
   )
@@ -159,7 +160,7 @@ summaries <- list()
 add_res <- results[results$operation == "add", ]
 if (nrow(add_res) > 0) {
   summaries$add <- data.frame(
-    interface = mode, operation = "add",
+    interface = version_label, operation = "add",
     size_mb = add_res$size_mb,
     mean_sec = add_res$elapsed_sec,
     std_sec = NA_real_,
@@ -171,7 +172,7 @@ stat_res <- results[results$operation == "status", ]
 if (nrow(stat_res) > 0) {
   summaries$status <- do.call(rbind, lapply(split(stat_res, stat_res$size_mb), function(d) {
     data.frame(
-      interface = mode, operation = "status",
+      interface = version_label, operation = "status",
       size_mb = d$size_mb[1],
       mean_sec = mean(d$elapsed_sec),
       std_sec = sd(d$elapsed_sec),
@@ -182,12 +183,11 @@ if (nrow(stat_res) > 0) {
 
 summary_results <- do.call(rbind, summaries)
 
-cache_dir <- file.path(script_dir, "benches", "cache")
-dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
-out_file <- file.path(cache_dir, sprintf("results_%s.csv", mode))
-write.csv(summary_results, out_file, row.names = FALSE)
-cat(sprintf("\nResults saved: %s\n", out_file))
+append <- file.exists(out_file)
+write.table(summary_results, out_file, sep = ",", row.names = FALSE,
+            col.names = !append, append = append)
+cat(sprintf("\nResults appended to: %s\n", out_file))
 
 # ---- Summary ----
-cat(sprintf("\n--- Summary (%s) ---\n", mode))
+cat(sprintf("\n--- Summary (%s) ---\n", version_label))
 print(summary_results[, c("operation", "size_mb", "mean_sec", "std_sec")], row.names = FALSE)
