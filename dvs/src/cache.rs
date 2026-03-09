@@ -99,6 +99,7 @@ pub fn hashes_for_file(
     full_path: &Path,
     relative_path: &str,
     cache: Option<&Mutex<HashCache>>,
+    verbose: bool,
 ) -> Result<(Hashes, u64)> {
     let stat = FileStat::from_path(full_path)?;
 
@@ -107,6 +108,9 @@ pub fn hashes_for_file(
         match mtx.lock().unwrap().lookup(relative_path, &stat) {
             Ok(Some(hashes)) => {
                 log::debug!("Cache hit for {relative_path}");
+                if verbose {
+                    eprintln!("  [{relative_path}] Hash cache hit");
+                }
                 return Ok((hashes, stat.size));
             }
             Ok(None) => {
@@ -119,7 +123,15 @@ pub fn hashes_for_file(
     }
 
     // Cache miss or no cache — stream-hash the file
+    let hash_start = verbose.then(std::time::Instant::now);
     let (hashes, size) = Hashes::compute_from_path(full_path, &[])?;
+    if let Some(hash_start) = hash_start {
+        let elapsed = hash_start.elapsed();
+        eprintln!(
+            "  [{relative_path}] Hashed in {elapsed:.2?} (blake3: {})",
+            &hashes.blake3[..12]
+        );
+    }
 
     // Store in cache (brief lock)
     if let Some(mtx) = cache {

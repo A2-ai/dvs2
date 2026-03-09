@@ -75,14 +75,16 @@ impl FileMetadata {
         backend: &dyn Backend,
         paths: &DvsPaths,
         relative_path: impl AsRef<Path>,
+        verbose: bool,
     ) -> Result<Outcome> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
         let dvs_file_exists = dvs_file_path.is_file();
         let storage_exists = backend.exists(&self.hashes)?;
+        let rel_display = relative_path.as_ref().display();
 
         log::debug!(
             "Saving {}: metadata_exists={}, storage_exists={}",
-            relative_path.as_ref().display(),
+            rel_display,
             dvs_file_exists,
             storage_exists
         );
@@ -91,10 +93,10 @@ impl FileMetadata {
             // we read the file anyway to make sure it's not 2 files having the same hash
             let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)?;
             if existing == *self {
-                log::debug!(
-                    "File {} is already in sync",
-                    relative_path.as_ref().display()
-                );
+                log::debug!("File {} is already in sync", rel_display);
+                if verbose {
+                    eprintln!("  [{rel_display}] Already up to date, skipping");
+                }
                 return Ok(Outcome::Present);
             }
         }
@@ -107,13 +109,29 @@ impl FileMetadata {
 
         // 2. Store file to backend if it doesn't already exist
         let storage_res = if storage_exists {
+            if verbose {
+                eprintln!("  [{rel_display}] File already in storage, skipping upload");
+            }
             Ok(())
         } else {
-            backend.store(&self.hashes, source_file.as_ref(), self.compression)
+            if verbose {
+                eprintln!("  [{rel_display}] Storing to backend...");
+            }
+            let store_start = verbose.then(std::time::Instant::now);
+            let res = backend.store(&self.hashes, source_file.as_ref(), self.compression);
+            if let Some(store_start) = store_start {
+                if res.is_ok() {
+                    eprintln!("  [{rel_display}] Stored to backend in {:.2?}", store_start.elapsed());
+                }
+            }
+            res
         };
 
         // 3. Then metadata
         let old_metadata_content = fs::read(&dvs_file_path).ok();
+        if verbose {
+            eprintln!("  [{rel_display}] Writing metadata...");
+        }
         log::debug!("Writing metadata to {}", dvs_file_path.display());
         let metadata_res = fs::write(
             &dvs_file_path,
@@ -122,6 +140,9 @@ impl FileMetadata {
 
         match (storage_res, metadata_res) {
             (Ok(_), Ok(_)) => {
+                if verbose {
+                    eprintln!("  [{rel_display}] Writing audit log...");
+                }
                 let audit_entry = AuditEntry::new_add(
                     operation_id,
                     AuditFile {
@@ -229,7 +250,7 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         let outcome = metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin", false)
             .unwrap();
 
         assert_eq!(outcome, Outcome::Copied);
@@ -248,12 +269,12 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin", false)
             .unwrap();
 
         // Second save should return Present
         let outcome = metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin", false)
             .unwrap();
         assert_eq!(outcome, Outcome::Present);
     }

@@ -43,7 +43,7 @@ fn get_file(
 
     // Check if target already exists and matches
     if target_path.is_file() {
-        let (hashes, size) = cache::hashes_for_file(&target_path, &rel_str, cache)?;
+        let (hashes, size) = cache::hashes_for_file(&target_path, &rel_str, cache, false)?;
 
         if hashes == metadata.hashes && size == metadata.size {
             log::debug!(
@@ -200,7 +200,7 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "retrieve.txt")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "retrieve.txt", false)
             .unwrap();
 
         // Delete the original file
@@ -226,7 +226,7 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "present.txt")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "present.txt", false)
             .unwrap();
 
         // File still exists and matches - should return Present
@@ -263,6 +263,7 @@ mod tests {
             backend,
             None,
             Compression::Zstd,
+            false,
             false,
         )
         .unwrap();
@@ -308,6 +309,7 @@ mod tests {
             backend,
             None,
             Compression::Zstd,
+            false,
             false,
         )
         .unwrap();
@@ -374,7 +376,7 @@ mod tests {
         let file_path = create_file(&root, "data.txt", b"original content");
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.txt")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.txt", false)
             .unwrap();
 
         // Delete the local file
