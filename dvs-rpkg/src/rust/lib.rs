@@ -57,6 +57,7 @@ pub fn dvs_add(
             message,
             config.compression(),
             false,
+            false,
         )?
         .into_iter()
         .map(|x| x.into()),
