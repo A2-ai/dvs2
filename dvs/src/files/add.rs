@@ -213,6 +213,12 @@ pub fn add_files(
                         }
                     }
                     Err(e) => {
+                        if let Some(file_start) = file_start {
+                            eprintln!(
+                                "  [{rel_display}] Failed in {:.2?}: {e}",
+                                file_start.elapsed()
+                            );
+                        }
                         log::warn!("Failed to add {}: {e}", relative_path.display());
                         AddResult {
                             path: relative_path,
