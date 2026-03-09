@@ -13,6 +13,7 @@ use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
 use crate::paths::{AddPathStatus, DvsPaths};
 use crate::utils::get_threadpool;
+use crate::utils::format_size;
 use crate::{Outcome, cache};
 
 /// Result of adding a single file.
@@ -45,10 +46,18 @@ fn add_file(
     message: Option<String>,
     compression: Compression,
     dry_run: bool,
+    verbose: bool,
 ) -> Result<(Outcome, FileMetadata)> {
     let full_path = paths.file_path(relative_path);
     let rel_str = relative_path.to_string_lossy();
-    let (hashes, size) = cache::hashes_for_file(&full_path, &rel_str, cache)?;
+    let (hashes, size) = cache::hashes_for_file(&full_path, &rel_str, cache, verbose)?;
+    if verbose {
+        eprintln!(
+            "  [{}] File size: {}",
+            rel_str,
+            format_size(size)
+        );
+    }
     let metadata = FileMetadata::from_hashes(hashes, size, compression, message);
     if dry_run {
         let dvs_file_path = paths.metadata_path(relative_path);
@@ -65,9 +74,12 @@ fn add_file(
         } else {
             Outcome::Copied
         };
+        if verbose {
+            eprintln!("  [{rel_str}] Dry run: would be {outcome:?}");
+        }
         Ok((outcome, metadata))
     } else {
-        let outcome = metadata.save(operation_id, &full_path, backend, paths, relative_path)?;
+        let outcome = metadata.save(operation_id, &full_path, backend, paths, relative_path, verbose)?;
         Ok((outcome, metadata))
     }
 }
@@ -83,18 +95,31 @@ pub fn add_files(
     message: Option<String>,
     compression: Compression,
     dry_run: bool,
+    verbose: bool,
 ) -> Result<Vec<AddResult>> {
+    if verbose {
+        eprintln!(
+            "Adding {} file{} (hash: blake3, compression: {compression:?})...",
+            files.len(),
+            if files.len() == 1 { "" } else { "s" }
+        );
+    }
     let matched_paths = paths.validate_for_add(&files);
     let pool = get_threadpool(matched_paths.len())?;
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
 
+    let total_start = verbose.then(std::time::Instant::now);
     let mut results: Vec<AddResult> = pool.install(|| {
         matched_paths
             .into_par_iter()
             .map(|(relative_path, status)| {
+                let rel_display = relative_path.display();
                 match status {
                     AddPathStatus::NotFound => {
+                        if verbose {
+                            eprintln!("  [{rel_display}] Skipped: file not found");
+                        }
                         return AddResult {
                             path: relative_path,
                             detail: AddDetail::Error {
@@ -103,6 +128,9 @@ pub fn add_files(
                         };
                     }
                     AddPathStatus::OutsideProject => {
+                        if verbose {
+                            eprintln!("  [{rel_display}] Skipped: path is outside project");
+                        }
                         return AddResult {
                             path: relative_path,
                             detail: AddDetail::Error {
@@ -111,6 +139,9 @@ pub fn add_files(
                         };
                     }
                     AddPathStatus::IsDirectory => {
+                        if verbose {
+                            eprintln!("  [{rel_display}] Skipped: path is a directory");
+                        }
                         return AddResult {
                             path: relative_path,
                             detail: AddDetail::Error {
@@ -124,6 +155,9 @@ pub fn add_files(
                 let full_path = paths.file_path(&relative_path);
                 match full_path.canonicalize() {
                     Ok(canonical) if !canonical.starts_with(paths.repo_root()) => {
+                        if verbose {
+                            eprintln!("  [{rel_display}] Skipped: path is outside the dvs repository");
+                        }
                         return AddResult {
                             path: relative_path,
                             detail: AddDetail::Error {
@@ -132,6 +166,9 @@ pub fn add_files(
                         };
                     }
                     Err(e) => {
+                        if verbose {
+                            eprintln!("  [{rel_display}] Skipped: failed to resolve path: {e}");
+                        }
                         return AddResult {
                             path: relative_path,
                             detail: AddDetail::Error {
@@ -142,6 +179,7 @@ pub fn add_files(
                     _ => {} // ok
                 }
 
+                let file_start = verbose.then(std::time::Instant::now);
                 match add_file(
                     &relative_path,
                     paths,
@@ -151,8 +189,15 @@ pub fn add_files(
                     message.clone(),
                     compression,
                     dry_run,
+                    verbose,
                 ) {
                     Ok((outcome, metadata)) => {
+                        if let Some(file_start) = file_start {
+                            eprintln!(
+                                "  [{rel_display}] Completed in {:.2?}",
+                                file_start.elapsed()
+                            );
+                        }
                         log::info!(
                             "Successfully added {} ({:?})",
                             relative_path.display(),
@@ -188,9 +233,19 @@ pub fn add_files(
         .map(|r| r.path.clone())
         .collect();
     if !dry_run && !successful_paths.is_empty() {
+        if verbose {
+            eprintln!("Updating .gitignore...");
+        }
         if let Err(e) = add_to_gitignore(paths.repo_root(), &successful_paths) {
             log::warn!("Failed to update .gitignore: {e}");
         }
+    }
+
+    if let Some(total_start) = total_start {
+        let total_elapsed = total_start.elapsed();
+        let n_ok = successful_paths.len();
+        let n_err = results.len() - n_ok;
+        eprintln!("Done in {total_elapsed:.2?}: {n_ok} succeeded, {n_err} failed");
     }
 
     Ok(results)
@@ -225,6 +280,7 @@ mod tests {
             backend,
             None,
             Compression::Zstd,
+            false,
             false,
         )
         .unwrap();
@@ -265,6 +321,7 @@ mod tests {
             backend,
             None,
             Compression::Zstd,
+            false,
             false,
         )
         .unwrap();

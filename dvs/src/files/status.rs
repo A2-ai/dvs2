@@ -42,7 +42,7 @@ fn get_file_status(
         return Ok(Status::Absent);
     }
     let rel_str = relative_path.as_ref().to_string_lossy();
-    let (hashes, size) = cache::hashes_for_file(&file_path, &rel_str, cache)?;
+    let (hashes, size) = cache::hashes_for_file(&file_path, &rel_str, cache, false)?;
 
     if existing_metadata.hashes == hashes && existing_metadata.size == size {
         Ok(Status::Current)
@@ -147,7 +147,7 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "synced.txt")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "synced.txt", false)
             .unwrap();
 
         let cache = make_cache(&paths);
@@ -165,7 +165,7 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "deleted.txt")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "deleted.txt", false)
             .unwrap();
 
         // Delete the original file
@@ -186,7 +186,7 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "modified.txt")
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "modified.txt", false)
             .unwrap();
 
         // Modify the file
@@ -209,7 +209,7 @@ mod tests {
             let file_path = create_file(&root, name, name.as_bytes());
             let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
             metadata
-                .save(Uuid::new_v4(), &file_path, backend, &paths, name)
+                .save(Uuid::new_v4(), &file_path, backend, &paths, name, false)
                 .unwrap();
         }
 
@@ -241,7 +241,7 @@ mod tests {
         let file_a = create_file(&root, "a.txt", b"foo");
         let metadata_a = FileMetadata::from_file(&file_a, Compression::Zstd, None).unwrap();
         metadata_a
-            .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt")
+            .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt", false)
             .unwrap();
         let hash_h1 = metadata_a.hashes.blake3.clone();
 
@@ -249,7 +249,7 @@ mod tests {
         let file_b = create_file(&root, "b.txt", b"bar");
         let metadata_b = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
         metadata_b
-            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt")
+            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", false)
             .unwrap();
         let hash_h2 = metadata_b.hashes.blake3.clone();
         assert_ne!(hash_h1, hash_h2);
@@ -262,7 +262,7 @@ mod tests {
         assert_eq!(metadata_b_new.hashes.blake3, hash_h1);
 
         metadata_b_new
-            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt")
+            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", false)
             .unwrap();
 
         // Verify metadata was updated

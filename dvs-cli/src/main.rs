@@ -84,6 +84,10 @@ pub struct Cli {
     #[clap(long, global = true)]
     pub json: bool,
 
+    /// Print verbose progress messages to stderr
+    #[clap(long, short, global = true)]
+    pub verbose: bool,
+
     #[clap(subcommand)]
     pub command: Command,
 }
@@ -131,9 +135,15 @@ fn try_main() -> Result<()> {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
+            if cli.verbose {
+                eprintln!("Resolving paths...");
+            }
             let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
                 .into_iter()
                 .collect();
+            if cli.verbose {
+                eprintln!("Resolved {} path{}", all_paths.len(), if all_paths.len() == 1 { "" } else { "s" });
+            }
             if all_paths.is_empty() {
                 return Err(anyhow!("No files to add"));
             }
@@ -145,6 +155,7 @@ fn try_main() -> Result<()> {
                 message,
                 config.compression(),
                 dry_run,
+                cli.verbose,
             )?;
             let has_errors = results
                 .iter()
