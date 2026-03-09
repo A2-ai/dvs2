@@ -115,7 +115,11 @@ impl FileMetadata {
             Ok(())
         } else {
             if verbose {
-                eprintln!("  [{rel_display}] Storing to backend...");
+                let compress_label = match self.compression {
+                    Compression::Zstd => "compressing + storing",
+                    Compression::None => "storing",
+                };
+                eprintln!("  [{rel_display}] {compress_label} to backend...");
             }
             let store_start = verbose.then(std::time::Instant::now);
             let res = backend.store(&self.hashes, source_file.as_ref(), self.compression);
