@@ -32,7 +32,7 @@ pub fn init(root_dir: impl AsRef<Path>, config: Config) -> Result<PathBuf> {
             let _ = fs::remove_dir_all(&metadata_dir);
         }
         let _ = fs::remove_file(&config_path);
-        return Err(e.into());
+        return Err(e);
     }
 
     log::info!("DVS repository initialized successfully");

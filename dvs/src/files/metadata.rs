@@ -105,13 +105,14 @@ impl FileMetadata {
             fs::create_dir_all(parent)?;
         }
 
-        // 2. Read old storage content for rollback (if any)
-        let old_storage_content = backend.read(&self.hashes)?;
+        // 2. Store file to backend if it doesn't already exist
+        let storage_res = if storage_exists {
+            Ok(())
+        } else {
+            backend.store(&self.hashes, source_file.as_ref(), self.compression)
+        };
 
-        // 3. Store file to backend
-        let storage_res = backend.store(&self.hashes, source_file.as_ref(), self.compression);
-
-        // 4. Then metadata
+        // 3. Then metadata
         let old_metadata_content = fs::read(&dvs_file_path).ok();
         log::debug!("Writing metadata to {}", dvs_file_path.display());
         let metadata_res = fs::write(
@@ -150,9 +151,12 @@ impl FileMetadata {
                     "Metadata write failed, rolling back storage for {}",
                     relative_path.as_ref().display()
                 );
-                if let Some(old) = old_storage_content {
-                    backend.store_bytes(&self.hashes, &old)?;
+                if let Some(old) = old_metadata_content {
+                    let _ = fs::write(&dvs_file_path, &old);
                 } else {
+                    let _ = fs::remove_file(&dvs_file_path);
+                }
+                if !storage_exists {
                     backend.remove(&self.hashes)?;
                 }
                 bail!("Failed to write metadata file: {dvs_file_path:?}")
@@ -167,9 +171,7 @@ impl FileMetadata {
                 } else {
                     fs::remove_file(&dvs_file_path)?;
                 }
-                if let Some(old) = old_storage_content {
-                    backend.store_bytes(&self.hashes, &old)?;
-                } else {
+                if !storage_exists {
                     backend.remove(&self.hashes)?;
                 }
                 bail!("Failed to write metadata file: {dvs_file_path:?}: {e}")

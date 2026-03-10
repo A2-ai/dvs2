@@ -14,9 +14,6 @@ pub trait Backend: Send + Sync {
     /// Store file to backend by hash, optionally compressing.
     fn store(&self, hash: &Hashes, source: &Path, compression: Compression) -> Result<()>;
 
-    /// Store raw bytes to backend by hash (for rollback).
-    fn store_bytes(&self, hash: &Hashes, content: &[u8]) -> Result<()>;
-
     /// Retrieve content by hash to target path, optionally decompressing.
     /// Returns true if the file was copied to the target path.
     fn retrieve(&self, hash: &Hashes, target: &Path, compression: Compression) -> Result<bool>;
@@ -26,9 +23,6 @@ pub trait Backend: Send + Sync {
 
     /// Remove content by hash (for rollback). Best-effort, may silently fail.
     fn remove(&self, hash: &Hashes) -> Result<()>;
-
-    /// Read content by hash. Returns None if not found.
-    fn read(&self, hash: &Hashes) -> Result<Option<Vec<u8>>>;
 
     /// Log an audit entry to the backend's audit log.
     fn log_audit(&self, entry: &AuditEntry) -> Result<()>;
