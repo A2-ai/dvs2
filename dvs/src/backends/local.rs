@@ -113,21 +113,6 @@ impl Backend for LocalBackend {
         Ok(())
     }
 
-    fn store_bytes(&self, hash: &Hashes, content: &[u8]) -> Result<()> {
-        let path = self.hash_to_path(hash)?;
-        log::debug!("Storing {} bytes to {path:?}", content.len());
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-            self.apply_group(parent)?;
-        }
-        let tmp_path = path.with_extension("tmp");
-        fs::write(&tmp_path, content)?;
-        fs::rename(&tmp_path, &path)?;
-        make_readonly(&path)?;
-        self.apply_group(&path)?;
-        Ok(())
-    }
-
     fn retrieve(&self, hash: &Hashes, target: &Path, compression: Compression) -> Result<bool> {
         let path = self.hash_to_path(hash)?;
         if path.is_file() {
@@ -152,16 +137,6 @@ impl Backend for LocalBackend {
             fs::remove_file(path)?;
         }
         Ok(())
-    }
-
-    fn read(&self, hash: &Hashes) -> Result<Option<Vec<u8>>> {
-        let path = self.hash_to_path(hash)?;
-        if path.is_file() {
-            log::debug!("Reading {path:?} from storage");
-            Ok(Some(fs::read(&path)?))
-        } else {
-            Ok(None)
-        }
     }
 
     fn log_audit(&self, entry: &AuditEntry) -> Result<()> {
@@ -260,9 +235,11 @@ mod tests {
         let backend = LocalBackend::new(&storage, None).unwrap();
         backend.init().unwrap();
 
-        // Store content
+        // Store content via store()
         let hash = test_hash("abc123def456789012345678901234ab");
-        backend.store_bytes(&hash, b"stored content").unwrap();
+        let source = tmp.path().join("source.txt");
+        fs::write(&source, b"stored content").unwrap();
+        backend.store(&hash, &source, Compression::None).unwrap();
 
         // Retrieve to new location
         let target = tmp.path().join("retrieved.txt");
@@ -302,7 +279,9 @@ mod tests {
 
         let hash = test_hash("abc123def456789012345678901234ab");
         assert!(!backend.exists(&hash).unwrap());
-        backend.store_bytes(&hash, b"content").unwrap();
+        let source = tmp.path().join("source.txt");
+        fs::write(&source, b"content").unwrap();
+        backend.store(&hash, &source, Compression::None).unwrap();
         assert!(backend.exists(&hash).unwrap());
     }
 
@@ -314,30 +293,15 @@ mod tests {
         backend.init().unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
-        backend.store_bytes(&hash, b"content").unwrap();
+        let source = tmp.path().join("source.txt");
+        fs::write(&source, b"content").unwrap();
+        backend.store(&hash, &source, Compression::None).unwrap();
         assert!(backend.exists(&hash).unwrap());
 
         backend.remove(&hash).unwrap();
         assert!(!backend.exists(&hash).unwrap());
         // removing something that doesn't exist is a noop
         backend.remove(&hash).unwrap();
-    }
-
-    #[test]
-    fn read_returns_content() {
-        let tmp = tempfile::tempdir().unwrap();
-        let storage = tmp.path().join("storage");
-        let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
-
-        let hash = test_hash("abc123def456789012345678901234ab");
-        backend.store_bytes(&hash, b"read me").unwrap();
-
-        let content = backend.read(&hash).unwrap();
-        assert_eq!(content, Some(b"read me".to_vec()));
-        // None if hash is not found
-        let content = backend.read(&test_hash("1234567890123456789012")).unwrap();
-        assert_eq!(content, None);
     }
 
     #[test]
@@ -348,7 +312,9 @@ mod tests {
         backend.init().unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
-        backend.store_bytes(&hash, b"content").unwrap();
+        let source = tmp.path().join("source.txt");
+        fs::write(&source, b"content").unwrap();
+        backend.store(&hash, &source, Compression::None).unwrap();
 
         let stored = storage.join("ab").join("c123def456789012345678901234ab");
         let perms = fs::metadata(&stored).unwrap().permissions();
