@@ -161,6 +161,7 @@ mod tests {
         assert!(Config::find(&root).is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn new_local_validates_group_exists() {
         let tmp = tempfile::tempdir().unwrap();

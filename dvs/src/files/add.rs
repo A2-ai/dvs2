@@ -200,6 +200,7 @@ pub fn add_files(
 mod tests {
     use super::*;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
+    use std::fs;
     use std::path::Path;
 
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
@@ -208,6 +209,7 @@ mod tests {
             root.to_path_buf(),
             config.metadata_folder_name(),
         )
+        .unwrap()
     }
 
     #[test]
@@ -246,7 +248,9 @@ mod tests {
 
         // Outside-project file
         let outside_tmp = tempfile::tempdir().unwrap();
-        let outside_file = outside_tmp.path().join("outside.txt");
+        let outside_file = fs::canonicalize(outside_tmp.path())
+            .unwrap()
+            .join("outside.txt");
         std::fs::write(&outside_file, b"outside").unwrap();
         let outside_relative =
             PathBuf::from("..").join(outside_file.strip_prefix(root.parent().unwrap()).unwrap());
