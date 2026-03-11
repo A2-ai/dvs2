@@ -67,8 +67,8 @@ impl TimingHandle {
         self.tx.take();
         if let Some(join) = self.join.take() {
             let _ = join.join();
+            eprintln!("Timing log saved: {}", self.path.display());
         }
-        eprintln!("Timing log saved: {}", self.path.display());
     }
 }
 

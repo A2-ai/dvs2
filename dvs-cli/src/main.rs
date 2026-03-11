@@ -193,6 +193,10 @@ fn try_main() -> Result<()> {
                 output,
             };
             let results = add_files(all_paths, &dvs_paths, config.backend(), &add_opts)?;
+            // Drop add_opts (and its cloned Sender) before finishing the timing
+            // handle, otherwise the receiver thread never sees all senders dropped
+            // and blocks forever — leaving the CSV empty.
+            drop(add_opts);
             if let Some(h) = timing_handle {
                 h.finish();
             }
@@ -229,6 +233,7 @@ fn try_main() -> Result<()> {
 
             let (output, timing_handle) = make_output(verbosity, false);
             let mut statuses = get_status(&paths, &output)?;
+            drop(output);
             if let Some(h) = timing_handle {
                 h.finish();
             }
@@ -299,6 +304,7 @@ fn try_main() -> Result<()> {
 
             let (output, timing_handle) = make_output(verbosity, dry_run);
             let results = get_files(all_paths, &dvs_paths, config.backend(), &output)?;
+            drop(output);
             if let Some(h) = timing_handle {
                 h.finish();
             }
