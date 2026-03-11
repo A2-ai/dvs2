@@ -4,12 +4,13 @@ set -euo pipefail
 # Run all 8 benchmark scripts sequentially, storing results in a
 # commit-named directory. Cleans up temp dirs between runs.
 #
-# Usage: ./run_all.sh [DEST_DIR]
+# Usage: ./run_all.sh <STORAGE_DIR> [DEST_DIR]
 # Default DEST_DIR: benchmark_log/<current git commit hash>
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+STORAGE="${1:?Usage: $0 <STORAGE_DIR> [DEST_DIR]}"
 COMMIT=$(git -C "$SCRIPT_DIR" rev-parse HEAD)
-DEST="${1:-$SCRIPT_DIR/$COMMIT}"
+DEST="${2:-$SCRIPT_DIR/$COMMIT}"
 
 SCRIPTS=(
   bench_single_serial
@@ -31,7 +32,6 @@ for s in "${SCRIPTS[@]}"; do
   echo "=== $s ==="
   TMPDIR=$(mktemp -d)
   PROJECT_DIR="$TMPDIR/prj-dvs2"
-  STORAGE="$TMPDIR/dvs-bench-storage"
   bash "$SCRIPT_DIR/${s}.sh" "$STORAGE" "$PROJECT_DIR" 2>&1 | tail -1
   if [ -f "$SCRIPT_DIR/${s}_results.csv" ]; then
     mv "$SCRIPT_DIR/${s}_results.csv" "$DEST/"
