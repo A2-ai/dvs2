@@ -65,10 +65,14 @@ This runs `cargo update` on the R package's Cargo.toml. After updating, the R pa
 
 `R/dvs-wrappers.R` is **auto-generated** from `dvs-rpkg/src/rust/lib.rs` -- do not edit it manually. Any invocation that rebuilds the R package (e.g. `devtools::load_all("dvs-rpkg")`) regenerates the wrappers.
 
+## Policy: fix issues when you see them
+
+When tests fail or issues are encountered during work on a branch, fix them immediately rather than leaving them as "pre-existing". Backpropagate fixes to affected branches (cherry-pick) and propose PRs against main when the fix applies there too. Do not push directly to main — always use a PR.
+
 ## Key conventions
 
 - Edition 2024, rust-version 1.85
 - Verbose output goes to stderr via `eprintln!`
 - Parallel file processing uses rayon; verbose messages are prefixed with `[filename]`
-- `OutputOptions { dry_run, verbose }` is the shared options struct across all commands
+- `OutputOptions { dry_run, verbosity, timing_tx }` is the shared options struct across all commands
 - `AddOptions` wraps `OutputOptions` with add-specific fields (message, compression)
