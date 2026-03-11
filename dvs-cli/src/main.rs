@@ -5,7 +5,9 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 
 use dvs::AddDetail;
+use dvs::AddOptions;
 use dvs::GetDetail;
+use dvs::OutputOptions;
 use dvs::StatusDetail;
 use dvs::add_files;
 use dvs::config::Config;
@@ -148,14 +150,16 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("No files to add"));
             }
 
+            let add_opts = AddOptions {
+                message,
+                compression: config.compression(),
+                output: OutputOptions { dry_run, verbose: cli.verbose },
+            };
             let results = add_files(
                 all_paths,
                 &dvs_paths,
                 config.backend(),
-                message,
-                config.compression(),
-                dry_run,
-                cli.verbose,
+                &add_opts,
             )?;
             let has_errors = results
                 .iter()
@@ -188,7 +192,7 @@ fn try_main() -> Result<()> {
             let paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !unsynced;
 
-            let mut statuses = get_status(&paths, cli.verbose)?;
+            let mut statuses = get_status(&paths, &OutputOptions { verbose: cli.verbose, ..Default::default() })?;
             if !show_all {
                 statuses.retain(|x| match &x.detail {
                     StatusDetail::Success { status } => {
@@ -250,7 +254,7 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("No files to get"));
             }
 
-            let results = get_files(all_paths, &dvs_paths, config.backend(), dry_run, cli.verbose)?;
+            let results = get_files(all_paths, &dvs_paths, config.backend(), &OutputOptions { dry_run, verbose: cli.verbose })?;
             let has_errors = results
                 .iter()
                 .any(|r| matches!(r.detail, GetDetail::Error { .. }));

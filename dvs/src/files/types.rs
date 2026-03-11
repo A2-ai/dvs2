@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+/// Common options shared across all DVS commands.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OutputOptions {
+    pub dry_run: bool,
+    pub verbose: bool,
+}
+
 /// Outcome of an add or get operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
