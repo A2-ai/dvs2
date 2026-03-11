@@ -1,39 +1,37 @@
-# syncronisation / `dvs sync` / `dvs::dvs_sync`
+# `dvs sync`
 
-Goal: Provide a streamlined way to update a cloned dvs repository.
+**Status: not implemented as a separate command.** The same result can be achieved with `dvs get --glob "**/*"`.
 
-Synchronization `sync` is an alias for `dvs get **/*`, meant as a
-repository wide syncing from storage (local/remote backend).
+Retrieves all tracked files in the project from storage. Intended as a convenience command for pulling all data after cloning a repository.
 
-- [ ] Should `dvs get` (no other arguments) imply `dvs sync`?
+## Proposed behavior
 
-## CLI
+- Equivalent to `dvs get --glob "**/*"` run from the project root.
+- Retrieves every tracked file regardless of the user's current directory within the project.
+- Follows the same outcome semantics as `get`: files already matching metadata are skipped (`present`), others are copied (`copied`).
 
-The option to return `--json` must be present.
+## Proposed CLI
 
-```sh
-$ dvs sync
-[status] [Last modified] [Message]
-...      ...            ...
+```
+dvs sync [OPTIONS]
+
+Options:
+      --json       Output as JSON
+      --dry-run    Show what would be retrieved without making changes
+  -h, --help       Print help
 ```
 
+No path or glob arguments. Always operates on the entire project.
 
-## R
+### Exit codes
 
-Signature:
+- `0`: all files retrieved successfully.
+- `1`: one or more files failed.
+
+## Proposed R package
 
 ```r
-dvs_sync <- function(...) {
-  dvs_get(glob = "**/*", ...)
-}
+dvs_sync()
 ```
 
-- `path` is a location within a dvs repository.
-  Not necessarily the root a dvs repository.
-
-
-### `recurse`
-
-When there is no `by_folder`, recurse will update the entire dvs repository, even if
-current directory is a sub-directory in a dvs repository. The current location of the
-user might be incidental to their intent with dvs.
+Thin wrapper around `dvs_get` with a project-wide glob.
