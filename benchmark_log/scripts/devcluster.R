@@ -9,8 +9,11 @@ devcluster_benches <-
   fs::dir_ls(type = "file", "benchmark_log/devcluster/", glob = "*.csv") %>%
   enframe() %>% 
   mutate(
-    results = value %>% readr::read_csv(lazy = FALSE, num_threads = 1)
+    results = value %>% map(. %>% readr::read_csv(lazy = FALSE, num_threads = 1))
   )
+devcluster_benches %>% 
+  unnest(results) %>% 
+  View()
 
 # # BUG in readr!
 # readr::read_csv(

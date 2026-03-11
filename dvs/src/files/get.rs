@@ -374,7 +374,15 @@ mod tests {
         let paths = make_paths(&root, &config);
 
         create_file(&root, "a.txt", b"a");
-        add_files(vec!["a.txt".into()], &paths, backend, None, Compression::Zstd, &OutputOptions::default()).unwrap();
+        add_files(
+            vec!["a.txt".into()],
+            &paths,
+            backend,
+            None,
+            Compression::Zstd,
+            &OutputOptions::default(),
+        )
+        .unwrap();
 
         let results = get_files(
             vec!["nonexistent.csv".into()],
@@ -423,7 +431,15 @@ mod tests {
         create_file(&root, "c.csv", b"c");
 
         // Add files
-        let results = add_files(file_paths.clone(), &paths, backend, None, Compression::Zstd, &OutputOptions::default()).unwrap();
+        let results = add_files(
+            file_paths.clone(),
+            &paths,
+            backend,
+            None,
+            Compression::Zstd,
+            &OutputOptions::default(),
+        )
+        .unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert!(matches!(

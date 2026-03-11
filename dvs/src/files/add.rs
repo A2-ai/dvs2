@@ -116,7 +116,10 @@ pub fn add_files(
     let pool = get_threadpool(matched_paths.len())?;
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
-    let canon_root = paths.repo_root().canonicalize().unwrap_or_else(|_| paths.repo_root().to_path_buf());
+    let canon_root = paths
+        .repo_root()
+        .canonicalize()
+        .unwrap_or_else(|_| paths.repo_root().to_path_buf());
 
     let total_start = v1.then(std::time::Instant::now);
     let mut results: Vec<AddResult> = pool.install(|| {
