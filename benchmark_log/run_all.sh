@@ -34,7 +34,7 @@ echo ""
 
 for s in "${SCRIPTS[@]}"; do
   echo "=== $s ==="
-  bash "$SCRIPT_DIR/${s}.sh" "$STORAGE" "$PROJECT_DIR" 2>&1 | tail -1
+  bash "$SCRIPT_DIR/${s}.sh" "$STORAGE" "$PROJECT_DIR"
   if [ -f "$SCRIPT_DIR/${s}_results.csv" ]; then
     mv "$SCRIPT_DIR/${s}_results.csv" "$DEST/"
   fi
