@@ -135,12 +135,13 @@ impl DvsPaths {
     }
 
     pub fn validate_for_add(&self, paths: &[PathBuf]) -> Vec<(PathBuf, AddPathStatus)> {
+        let canon_root = self.repo_root.canonicalize().unwrap_or_else(|_| self.repo_root.clone());
         let mut found = Vec::new();
         for path in paths {
             let file_path = self.file_path(path);
             let status = match file_path.canonicalize() {
                 Ok(canonical) => {
-                    if !canonical.starts_with(&self.repo_root) {
+                    if !canonical.starts_with(&canon_root) {
                         AddPathStatus::OutsideProject
                     } else if canonical.is_dir() {
                         AddPathStatus::IsDirectory
