@@ -1,86 +1,143 @@
 # `dvs status`
 
-Goal: Provide an overview of the changed data files and potential files to track
-via the traced data file filters.
+Reports the status of all tracked files in the project.
 
-- [ ] The checksum shown will be determined by the backend used.
-      The default hashing algorithm is blake3, but if S3 is used,
-      then it could be CRC-64, CRC-32, CRC-32C, SHA-1, SHA-256, or MD5.
+## Behavior
+
+- Scans all `.dvs` sidecar files in the metadata folder to discover tracked files.
+- For each tracked file, compares the local file against stored metadata.
+- Does not accept paths or globs. It always reports on all tracked files in the project.
+- Best-effort: individual files that cannot be inspected (e.g., permission errors) are reported as per-file errors. The function never errors as a whole.
+- Results are sorted alphabetically by path.
+
+### Statuses
+
+Each tracked file reports one of:
+
+- `current`: local file exists and its hash and size match the metadata.
+- `absent`: metadata exists but the local file is missing.
+- `unsynced`: local file exists but its hash or size differs from the metadata.
+
+Note: `untracked` is an internal status used when checking individual files. `dvs status` only reports on tracked files (those with metadata), so `untracked` does not appear in its output.
+
+### Filter flags
+
+By default (no flags), all tracked files are shown regardless of state. The `--current`, `--absent`, and `--unsynced` flags are filters: when one or more are provided, only files matching those states are shown. Multiple flags can be combined.
+
+### Parallelism
+
+File status checks run in parallel. Thread count is controlled by the `DVS_NUM_THREADS` environment variable, capped at 16 and clamped to the number of files.
+
+### Hash cache
+
+Status checks use the SQLite hash cache. Files whose `mtime` and `size` match a cache entry skip re-hashing.
 
 ## CLI
 
-The option to return `--json` must be present.
+```
+dvs status [OPTIONS]
 
-```shell
-$ dvs status --help
-Status of the DVS repository 
-
-Usage:
-  dvs status [PATHS] [FILTERS] [OPTIONS]
-
-Paths:
-    Path to files or directories that the we wish the tracking status for
-Filters:
-  --current  return only the status of currently tracked files
-  --unsynced return only the status of untracked files
-  --absent   return only the status of deleted files
- 
 Options:
-  --json   Return status in JSON format
+      --current   Include files that are current
+      --json      Output results as JSON
+      --absent    Include files that are absent
+      --unsynced  Include files that are unsynced
   -h, --help      Print help
 ```
 
-When a filter is provided, only the selected state(s) are provided.
+### Output
 
-```sh
-dvs status
-
-Current files:
-  <display all current files>
-
-Changed files (unsynced):
-  <display all current files> 
-
-Absent:
-  <display all absent files>
+Default:
+```
+<path>: <Status>
 ```
 
-We do not need to display the user in unsynced files, as they are likely to be owned by the current user.
+When no tracked files exist:
+```
+No tracked files
+```
 
-## R
+When filters are active but no files match:
+```
+No tracked files matching the filter
+```
 
-Signature:
+Errors are printed to stderr:
+```
+Error getting status for <path>: <reason>
+```
+
+JSON (`--json`):
+```json
+[
+  {"path": "data.csv", "status": "current"},
+  {"path": "old.csv", "status": "absent"},
+  {"path": "model.rds", "error": "permission denied"}
+]
+```
+
+### Exit codes
+
+- `0`: all statuses retrieved successfully.
+- `1`: one or more files failed to get status.
+
+## Rust library
+
+```rust
+pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>>
+```
+
+The only error the function itself can return is failure to set up the thread pool. All per-file outcomes are in the returned `Vec<FileStatus>`.
+
+```rust
+pub struct FileStatus {
+    pub path: PathBuf,
+    pub detail: StatusDetail,
+}
+
+pub enum StatusDetail {
+    Success { status: Status },
+    Error { error: String },
+}
+
+pub enum Status {
+    Untracked,
+    Current,
+    Absent,
+    Unsynced,
+}
+```
+
+## R package
 
 ```r
-#' @param path,glob provide either `path` or `glob`, but not neither, nor both
-#' @return data-frame showing the each file, status, hash (abbreviated), hash (full), user, and time of update, and time of tracking
-dvs_status <- function(
-  path = c() # paths to explicit files or dirs
-  glob = c(),
-  recurse = FALSE, # if true, any directories provided in the path should check all files within
-  parallel = TRUE # control if parallel retrieval occurs
-)
+dvs_status()
 ```
 
-## Return format
+Takes no arguments. Returns a data frame with columns: `path`, `status`, `error`.
 
-### CLI JSON format
+## Examples
 
-<!-- TO DISCUSS -->
+### Show all tracked files
 
-### R format
+```bash
+dvs status
+```
 
-Old format: `relative_path`, `status`, `file_size_bytes`, `blake3_checksum`
+### Show only absent files
 
-Proposed format:
+```bash
+dvs status --absent
+```
 
-- `absolute_path`: abbreviated when printed in R (pillar)
-- `relative path`: full path
-- `status`: ordered factor instead of `character()`
-  - `absent|unsync|sync|present|added`
-- `<alg>_checksum`: always abbreviated in print (pillar, first 12 characters)
-- `size`: using units and not raw `double()/numeric()`
+### Show absent and unsynced files
 
-## User interruptions
+```bash
+dvs status --absent --unsynced
+```
 
-No need to handle user-initiated interruptions (e.g., Ctrl+C, or SIGINT/SIGTSTP/SIGTERM/SIGKILL) in the initial version.
+### JSON output
+
+```bash
+dvs status --json
+```
