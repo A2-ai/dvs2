@@ -273,6 +273,7 @@ pub fn add_files(
             step: "add_total".into(),
             duration_ms: total_elapsed.as_secs_f64() * 1000.0,
             file_size_bytes: None,
+            num_files: Some(results.len()),
             compression: format!("{:?}", compression),
             ..output.timing_template("add")
         });

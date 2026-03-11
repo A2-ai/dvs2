@@ -149,6 +149,7 @@ pub fn get_status(paths: &DvsPaths, output: &OutputOptions) -> Result<Vec<FileSt
             step: "status_total".into(),
             duration_ms: total_elapsed.as_secs_f64() * 1000.0,
             file_size_bytes: None,
+            num_files: Some(results.len()),
             ..output.timing_template("status")
         });
     }

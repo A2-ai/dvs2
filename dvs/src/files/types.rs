@@ -17,6 +17,7 @@ pub struct TimingRecord {
     pub step: String,
     pub duration_ms: f64,
     pub file_size_bytes: Option<u64>,
+    pub num_files: Option<usize>,
     pub compression: String,
     pub hash_algorithm: String,
 }
@@ -61,6 +62,7 @@ impl OutputOptions {
             step: String::new(),
             duration_ms: 0.0,
             file_size_bytes: None,
+            num_files: None,
             compression: String::new(),
             hash_algorithm: "blake3".into(),
         }
