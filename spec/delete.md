@@ -1,44 +1,70 @@
 # `dvs delete`
 
-Goal: Provide a controlled way to delete / untrack datafiles from DVS.
+**Status: not implemented.** This spec describes proposed behavior.
 
-- delete from dvs storage (backend)
-- delete the metadata file
-- delete the data file
-- delete (and commit) the `*.dvs` metafile from `git` if relevant
-- document the reason behind deletion (audit log entry)
+Provides a controlled way to delete files from DVS tracking and optionally from storage.
 
-## CLI
+## Proposed behavior
 
-```shell
-$ dvs delete [OPTIONS] <PATHS>
+- Deletes the metadata sidecar file (`.dvs` file).
+- Optionally deletes the local data file.
+- Optionally deletes the blob from backend storage.
+- Removes the file's entry from `.gitignore`.
+- Logs a deletion event to the audit trail.
+- Best-effort: if some files fail, the rest are still processed.
+- Providing no arguments does not delete all tracked files. Explicit paths are required.
+- Files that are not tracked produce an error.
 
-Paths:
-    Files to delete from the dvs backend, the current directory, delete metadata file, and also untrack metadata file from `git`
+### `--cached` mode
 
-Options:
-    -c, --cached do not delete the files within the project, but delete from backend and the associated metadatafile, plus add audit log entry about the deletion event.
-    -m, --message (optional) message explaining why the file was deleted
-    -h, --help 
+With `--cached`, only the metadata file and storage blob are removed. The local data file is preserved. This is useful for untracking a file without deleting the working copy.
+
+### Audit trail
+
+A deletion event should be logged with `action: "delete"`. This requires extending the `Action` enum.
+
+## Proposed CLI
 
 ```
+dvs delete [OPTIONS] <PATHS>...
 
-Unlike `dvs get`, providing no arguments to `dvs delete` will not delete all the tracked files from the repository.
+Arguments:
+  <PATHS>...              Files to delete from DVS
 
-## R package
+Options:
+  -c, --cached            Keep local file, delete metadata and storage only
+  -m, --message <MESSAGE> Optional message explaining the deletion
+      --json              Output as JSON
+  -h, --help              Print help
+```
+
+### Exit codes
+
+- `0`: all files deleted successfully.
+- `1`: one or more files failed.
+
+## Proposed Rust library
+
+```rust
+pub fn delete_files(
+    files: Vec<PathBuf>,
+    paths: &DvsPaths,
+    backend: &dyn Backend,
+    cached_only: bool,
+    message: Option<String>,
+) -> Result<Vec<DeleteResult>>
+```
+
+## Proposed R package
 
 ```r
-dvs_delete <- function(
-  files = character(),
-  glob = character(),
-  delete_cached = TRUE
+dvs_delete(
+  files,
+  cached = TRUE,
+  message = NULL
 )
 ```
 
-Aliases: `dvs_delete`, `dvs_remove`, `dvs_rm`.
-
-- `files`: list of files that are to be deleted.
-
-### Non-existing files
-
-Emit a warning, but still remove the files that do exist and are tracked.
+- `files`: character vector of file paths.
+- `cached`: if `TRUE` (default), keep local file.
+- `message`: optional deletion reason.

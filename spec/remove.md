@@ -1,35 +1,48 @@
-# dvs remove / `dvs remove` / `dvs::dvs_remove`
+# `dvs remove`
 
-Goal: Provide a way to untrack a file without deleting it from the project.
+**Status: not implemented.** This spec describes proposed behavior.
 
-## CLI
+Untracks a file from DVS without deleting it from the project or from storage.
 
-```sh
-dvs -- Remove files from dvs tracking
+## Proposed behavior
 
-Usage:
-    dvs remove <FILES> [OPTIONS]
-    dvs rm <FILES> [OPTIONS] # alias
- 
-Files:
-    Paths to tracked files that must be untracked
+- Deletes the metadata sidecar file (`.dvs` file).
+- Does not delete the local data file.
+- Does not delete the blob from backend storage. Other files or projects may reference the same content-addressed blob.
+- Removes the file's entry from `.gitignore`.
+- Files that are not tracked produce an error.
+- Best-effort: if some files fail, the rest are still processed.
+
+This is functionally equivalent to `dvs delete --cached` without removing from storage.
+
+## Proposed CLI
+
+```
+dvs remove [OPTIONS] <PATHS>...
+
+Arguments:
+  <PATHS>...              Tracked files to untrack
 
 Options:
-    --json Command output as a JSON format
-    -m, --message (optional) message describing why a file was removed from tracking
-    -h, --help
+  -m, --message <MESSAGE> Optional message explaining why the file was removed
+      --json              Output as JSON
+  -h, --help              Print help
 ```
 
-Files that are not tracked, but provided to `dvs remove` must result in an error. Deletion is a sensitive operation.
+`dvs rm` is an alias for `dvs remove`.
 
-## R
+### Exit codes
 
-Functionally an alias to `dvs_delete` by
+- `0`: all files untracked successfully.
+- `1`: one or more files failed.
+
+## Proposed R package
 
 ```r
-dvs_remove <- function(...) {
-    dvs_delete(delete_cached=FALSE, ...)
-}
-# alias
-dvs_untrack <- dvs_remove
+dvs_remove(
+  files,
+  message = NULL
+)
 ```
+
+Alias: `dvs_untrack`.
