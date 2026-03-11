@@ -88,6 +88,7 @@ pub fn add_files(
     let pool = get_threadpool(matched_paths.len())?;
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
+    let canon_root = paths.repo_root().canonicalize().unwrap_or_else(|_| paths.repo_root().to_path_buf());
 
     let mut results: Vec<AddResult> = pool.install(|| {
         matched_paths
@@ -123,7 +124,7 @@ pub fn add_files(
 
                 let full_path = paths.file_path(&relative_path);
                 match full_path.canonicalize() {
-                    Ok(canonical) if !canonical.starts_with(paths.repo_root()) => {
+                    Ok(canonical) if !canonical.starts_with(&canon_root) => {
                         return AddResult {
                             path: relative_path,
                             detail: AddDetail::Error {
