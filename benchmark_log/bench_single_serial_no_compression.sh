@@ -5,8 +5,8 @@ set -euo pipefail
 
 STORAGE="${1:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR>}"
 PROJECT_DIR="${2:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR>}"
-SIZES_MB=(1 2 5 10 50)
-REPS=25
+SIZES_MB=(${SIZES_MB:-1 2 5 10 50})
+REPS="${REPS:-25}"
 
 mkdir -p "$STORAGE" "$PROJECT_DIR"
 STORAGE="$(cd "$STORAGE" && pwd)"

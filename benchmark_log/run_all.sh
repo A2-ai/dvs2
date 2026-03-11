@@ -6,12 +6,21 @@ set -euo pipefail
 #
 # Usage: ./run_all.sh <STORAGE_DIR> <PROJECT_DIR> [RESULT_DEST_DIR]
 # Default RESULT_DEST_DIR: benchmark_log/<current git commit hash>
+#
+# Environment variables (passed through to bench scripts):
+#   SIZES_MB  - space-separated file sizes in MB (default: "1 2 5 10 50")
+#   REPS      - repetitions per size (default: 25)
+#   BATCH     - files per dvs add in batch scripts (default: REPS)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STORAGE="${1:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR> [RESULT_DEST_DIR]}"
 PROJECT_DIR="${2:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR> [RESULT_DEST_DIR]}"
 COMMIT=$(git -C "$SCRIPT_DIR" rev-parse HEAD)
 DEST="${3:-$SCRIPT_DIR}/$COMMIT"
+
+export SIZES_MB="${SIZES_MB:-1 2 5 10 50}"
+export REPS="${REPS:-25}"
+export BATCH="${BATCH:-$REPS}"
 
 SCRIPTS=(
   bench_single_serial
