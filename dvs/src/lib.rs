@@ -12,7 +12,7 @@ pub(crate) mod utils;
 
 pub use backends::Backend;
 pub use config::Compression;
-pub use files::add::{AddDetail, AddOptions, AddResult, add_files};
+pub use files::add::{AddDetail, AddResult, add_files};
 pub use files::get::{GetDetail, GetResult, get_files};
 pub use files::metadata::FileMetadata;
 pub use files::status::{FileStatus, StatusDetail, get_status};

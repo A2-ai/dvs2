@@ -47,7 +47,7 @@ for size in "${SIZES_MB[@]}"; do
         dvs add -vvv "$file" > /dev/null 2> "$LOG_FILE" || true
 
         # Find and read the timing CSV produced by dvs
-        TIMING_CSV=$(ls "$PROJECT_DIR"/dvs-timings-*.csv 2>/dev/null | head -1 || true)
+        TIMING_CSV=$(find "$PROJECT_DIR" -maxdepth 1 -name 'dvs-timings-*.csv' -print -quit 2>/dev/null || true)
         if [ -n "$TIMING_CSV" ] && [ -s "$TIMING_CSV" ]; then
             # Extract step timings from the CSV (skip header)
             hash_ms=$(awk -F, '$7 == "hash" { print $8 }' "$TIMING_CSV" | head -1)

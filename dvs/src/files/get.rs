@@ -256,18 +256,10 @@ pub fn get_files(
 mod tests {
     use super::*;
     use crate::add_files;
-    use crate::files::add::{AddDetail, AddOptions};
+    use crate::files::add::AddDetail;
     use crate::files::status::get_status;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
     use uuid::Uuid;
-
-    fn default_add_opts() -> AddOptions {
-        AddOptions {
-            message: None,
-            compression: Compression::Zstd,
-            output: OutputOptions::default(),
-        }
-    }
 
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
         DvsPaths::new(
@@ -381,7 +373,7 @@ mod tests {
         let paths = make_paths(&root, &config);
 
         create_file(&root, "a.txt", b"a");
-        add_files(vec!["a.txt".into()], &paths, backend, &default_add_opts()).unwrap();
+        add_files(vec!["a.txt".into()], &paths, backend, None, Compression::Zstd, &OutputOptions::default()).unwrap();
 
         let results = get_files(
             vec!["nonexistent.csv".into()],
@@ -430,7 +422,7 @@ mod tests {
         create_file(&root, "c.csv", b"c");
 
         // Add files
-        let results = add_files(file_paths.clone(), &paths, backend, &default_add_opts()).unwrap();
+        let results = add_files(file_paths.clone(), &paths, backend, None, Compression::Zstd, &OutputOptions::default()).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert!(matches!(

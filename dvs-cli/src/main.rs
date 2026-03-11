@@ -5,7 +5,6 @@ use clap::{ArgAction, Parser, Subcommand};
 use serde_json::json;
 
 use dvs::AddDetail;
-use dvs::AddOptions;
 use dvs::GetDetail;
 use dvs::OutputOptions;
 use dvs::StatusDetail;
@@ -187,16 +186,18 @@ fn try_main() -> Result<()> {
             }
 
             let (output, timing_handle) = make_output(verbosity, dry_run);
-            let add_opts = AddOptions {
+            let results = add_files(
+                all_paths,
+                &dvs_paths,
+                config.backend(),
                 message,
-                compression: config.compression(),
-                output,
-            };
-            let results = add_files(all_paths, &dvs_paths, config.backend(), &add_opts)?;
-            // Drop add_opts (and its cloned Sender) before finishing the timing
-            // handle, otherwise the receiver thread never sees all senders dropped
+                config.compression(),
+                &output,
+            )?;
+            // Drop output (and its Sender) before finishing the timing handle,
+            // otherwise the receiver thread never sees all senders dropped
             // and blocks forever — leaving the CSV empty.
-            drop(add_opts);
+            drop(output);
             if let Some(h) = timing_handle {
                 h.finish();
             }

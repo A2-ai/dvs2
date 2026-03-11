@@ -15,7 +15,7 @@ use anyhow::{anyhow, Result};
 use dvs::config::Config;
 use dvs::init::init;
 use dvs::paths::DvsPaths;
-use dvs::{add_files, get_files, get_status, AddOptions, AddResult, FileStatus, GetResult, OutputOptions};
+use dvs::{add_files, get_files, get_status, AddResult, FileStatus, GetResult, OutputOptions};
 
 /// Initialize a new DVS repository.
 ///
@@ -65,13 +65,9 @@ pub fn dvs_add(
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let add_opts = AddOptions {
-        message,
-        compression: config.compression(),
-        output: OutputOptions { dry_run: false, verbosity: verbose.max(0) as u8, ..Default::default() },
-    };
+    let output = OutputOptions { dry_run: false, verbosity: verbose.max(0) as u8, ..Default::default() };
     Ok(DataFrame::from_iter(
-        add_files(files, &paths, config.backend(), &add_opts)?
+        add_files(files, &paths, config.backend(), message, config.compression(), &output)?
             .into_iter()
             .map(|x| x.into()),
     ))

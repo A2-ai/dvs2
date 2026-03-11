@@ -10,21 +10,12 @@ use crate::backends::Backend;
 use crate::cache::{HashCache, try_open_cache};
 use crate::config::Compression;
 use crate::files::metadata::FileMetadata;
-use crate::files::types::{OutputOptions, TimingRecord};
+use crate::files::types::TimingRecord;
 use crate::gitignore::add_to_gitignore;
 use crate::paths::{AddPathStatus, DvsPaths};
 use crate::utils::format_size;
 use crate::utils::get_threadpool;
-use crate::{Outcome, cache};
-
-/// Options specific to the add command.
-#[derive(Debug, Clone)]
-pub struct AddOptions {
-    pub message: Option<String>,
-    pub compression: Compression,
-    #[allow(dead_code)]
-    pub output: OutputOptions,
-}
+use crate::{Outcome, OutputOptions, cache};
 
 /// Result of adding a single file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,23 +38,26 @@ pub enum AddDetail {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_file(
     relative_path: &Path,
     paths: &DvsPaths,
     backend: &dyn Backend,
     cache: Option<&Mutex<HashCache>>,
     operation_id: Uuid,
-    opts: &AddOptions,
+    message: Option<String>,
+    compression: Compression,
+    output: &OutputOptions,
 ) -> Result<(Outcome, FileMetadata)> {
-    let v2 = opts.output.verbosity >= 2;
+    let v2 = output.verbosity >= 2;
     let full_path = paths.file_path(relative_path);
     let rel_str = relative_path.to_string_lossy();
-    let (hashes, size) = cache::hashes_for_file(&full_path, &rel_str, cache, &opts.output)?;
+    let (hashes, size) = cache::hashes_for_file(&full_path, &rel_str, cache, output)?;
     if v2 {
         eprintln!("  [{}] File size: {}", rel_str, format_size(size));
     }
-    let metadata = FileMetadata::from_hashes(hashes, size, opts.compression, opts.message.clone());
-    if opts.output.dry_run {
+    let metadata = FileMetadata::from_hashes(hashes, size, compression, message);
+    if output.dry_run {
         let dvs_file_path = paths.metadata_path(relative_path);
         let dvs_file_exists = dvs_file_path.is_file();
         let storage_exists = backend.exists(&metadata.hashes)?;
@@ -89,7 +83,7 @@ fn add_file(
             backend,
             paths,
             relative_path,
-            &opts.output,
+            output,
         )?;
         Ok((outcome, metadata))
     }
@@ -99,20 +93,23 @@ fn add_file(
 ///
 /// The pattern is matched against files relative to cwd.
 /// Files are stored with paths relative to repo_root.
+#[allow(clippy::too_many_arguments)]
 pub fn add_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
     backend: &dyn Backend,
-    opts: &AddOptions,
+    message: Option<String>,
+    compression: Compression,
+    output: &OutputOptions,
 ) -> Result<Vec<AddResult>> {
-    let v1 = opts.output.verbosity >= 1;
-    let v2 = opts.output.verbosity >= 2;
+    let v1 = output.verbosity >= 1;
+    let v2 = output.verbosity >= 2;
     if v1 {
         eprintln!(
             "Adding {} file{} (hash: blake3, compression: {:?})...",
             files.len(),
             if files.len() == 1 { "" } else { "s" },
-            opts.compression,
+            compression,
         );
     }
     let matched_paths = paths.validate_for_add(&files);
@@ -200,19 +197,21 @@ pub fn add_files(
                     backend,
                     cache.as_ref(),
                     operation_id,
-                    opts,
+                    message.clone(),
+                    compression,
+                    output,
                 ) {
                     Ok((outcome, metadata)) => {
                         if let Some(file_start) = file_start {
                             let elapsed = file_start.elapsed();
                             eprintln!("  [{rel_display}] Completed in {elapsed:.2?}",);
-                            opts.output.send_timing(TimingRecord {
+                            output.send_timing(TimingRecord {
                                 file: relative_path.display().to_string(),
                                 step: "add_file_total".into(),
                                 duration_ms: elapsed.as_secs_f64() * 1000.0,
                                 file_size_bytes: Some(metadata.size),
-                                compression: format!("{:?}", opts.compression),
-                                ..opts.output.timing_template("add")
+                                compression: format!("{:?}", compression),
+                                ..output.timing_template("add")
                             });
                         }
                         log::info!(
@@ -255,7 +254,7 @@ pub fn add_files(
         .filter(|r| matches!(r.detail, AddDetail::Success { .. }))
         .map(|r| r.path.clone())
         .collect();
-    if !opts.output.dry_run && !successful_paths.is_empty() {
+    if !output.dry_run && !successful_paths.is_empty() {
         if v2 {
             eprintln!("Updating .gitignore...");
         }
@@ -269,13 +268,13 @@ pub fn add_files(
         let n_ok = successful_paths.len();
         let n_err = results.len() - n_ok;
         eprintln!("Done in {total_elapsed:.2?}: {n_ok} succeeded, {n_err} failed");
-        opts.output.send_timing(TimingRecord {
+        output.send_timing(TimingRecord {
             file: String::new(),
             step: "add_total".into(),
             duration_ms: total_elapsed.as_secs_f64() * 1000.0,
             file_size_bytes: None,
-            compression: format!("{:?}", opts.compression),
-            ..opts.output.timing_template("add")
+            compression: format!("{:?}", compression),
+            ..output.timing_template("add")
         });
     }
 
@@ -298,14 +297,6 @@ mod tests {
         .unwrap()
     }
 
-    fn default_add_opts() -> AddOptions {
-        AddOptions {
-            message: None,
-            compression: Compression::Zstd,
-            output: OutputOptions::default(),
-        }
-    }
-
     #[test]
     fn add_files_reports_not_found_per_file() {
         let (_tmp, root) = create_temp_git_repo();
@@ -319,7 +310,9 @@ mod tests {
             vec!["nonexistent.csv".into()],
             &paths,
             backend,
-            &default_add_opts(),
+            None,
+            Compression::Zstd,
+            &OutputOptions::default(),
         )
         .unwrap();
         assert_eq!(results.len(), 1);
@@ -359,7 +352,9 @@ mod tests {
             ],
             &paths,
             backend,
-            &default_add_opts(),
+            None,
+            Compression::Zstd,
+            &OutputOptions::default(),
         )
         .unwrap();
         assert_eq!(results.len(), 4);
