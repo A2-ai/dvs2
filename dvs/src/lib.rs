@@ -36,7 +36,7 @@ pub mod testutil {
     /// otherwise the directory gets deleted.
     pub fn create_temp_git_repo() -> (TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
-        let repo_root = tmp.path().to_path_buf();
+        let repo_root = fs::canonicalize(tmp.path().to_path_buf()).unwrap();
         fs::create_dir(repo_root.join(".git")).unwrap();
         (tmp, repo_root)
     }

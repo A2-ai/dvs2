@@ -70,12 +70,16 @@ pub struct DvsPaths {
 
 impl DvsPaths {
     /// Create with explicit paths (for testing or R package)
-    pub fn new(cwd: PathBuf, repo_root: PathBuf, metadata_folder_name: impl Into<String>) -> Self {
-        Self {
+    pub fn new(
+        cwd: PathBuf,
+        repo_root: PathBuf,
+        metadata_folder_name: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(Self {
             cwd,
-            repo_root,
+            repo_root: fs::canonicalize(&repo_root)?,
             metadata_folder_name: metadata_folder_name.into(),
-        }
+        })
     }
 
     pub fn from_cwd(config: &Config) -> Result<Self> {
@@ -178,7 +182,7 @@ mod tests {
     #[test]
     fn metadata_path_returns_dvs_file_path() {
         let (_tmp, root) = create_temp_git_repo();
-        let paths = DvsPaths::new(root.clone(), root.clone(), ".meta");
+        let paths = DvsPaths::new(root.clone(), root.clone(), ".meta").unwrap();
 
         let result = paths.metadata_path(Path::new("sub/file.txt"));
         assert_eq!(result, root.join(".meta/sub/file.txt.dvs"));
@@ -187,17 +191,17 @@ mod tests {
     #[test]
     fn validate_for_add() {
         let (_tmp, root) = create_temp_git_repo();
-        let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs");
+        let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs").unwrap();
 
         // Valid: existing file inside repo
         fs_err::write(root.join("test.txt"), b"content").unwrap();
 
         // OutsideProject: file in a sibling temp dir
         let outside_tmp = tempfile::tempdir().unwrap();
-        fs_err::write(outside_tmp.path().join("outside.txt"), b"outside").unwrap();
+        let outside_path = fs::canonicalize(outside_tmp.path()).unwrap();
+        fs_err::write(outside_path.join("outside.txt"), b"outside").unwrap();
         let outside_relative = PathBuf::from("..").join(
-            outside_tmp
-                .path()
+            outside_path
                 .join("outside.txt")
                 .strip_prefix(root.parent().unwrap())
                 .unwrap(),

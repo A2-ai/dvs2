@@ -197,7 +197,7 @@ mod tests {
         File::create(root.join(".dvs/data/a.csv.dvs")).unwrap();
         File::create(root.join(".dvs/data/subdir/c.csv.dvs")).unwrap();
 
-        let dvs_paths = DvsPaths::new(root.to_path_buf(), root.to_path_buf(), ".dvs");
+        let dvs_paths = DvsPaths::new(root.to_path_buf(), root.to_path_buf(), ".dvs").unwrap();
         (temp, dvs_paths)
     }
 
