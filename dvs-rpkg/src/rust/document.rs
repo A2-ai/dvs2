@@ -1,6 +1,6 @@
 use dvs_rpkg::R_WRAPPERS_DEPS_DVS as DEPS;
-use dvs_rpkg::R_WRAPPERS_IMPLS_DVS as IMPLS;
 use dvs_rpkg::R_WRAPPERS_IMPL_DEPS_DVS as IMPL_DEPS;
+use dvs_rpkg::R_WRAPPERS_IMPLS_DVS as IMPLS;
 use dvs_rpkg::R_WRAPPERS_PARTS_DVS as PARTS;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -6,7 +6,7 @@
 \alias{dvs-package}
 \title{dvs: Data Version Control System by A2-AI}
 \description{
-Provides version control for large binary and text files that are stored either locally or remotely. Uses content-addressable storage with blake3 hashing to efficiently deduplicate files while tracking metadata in Git-friendly .dvs files.
+Provides version control and management system for large binary and text files that are stored either locally or remotely. Uses content-addressable storage with blake3 hashing to efficiently deduplicate files while tracking metadata in Git-friendly .dvs files.
 }
 \author{
 \strong{Maintainer}: Jenna Johnson \email{jenna@a2-ai.com}

@@ -38,4 +38,4 @@ miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr" }
 miniextendr-api = { git = "https://github.com/CGMossa/miniextendr" }
 miniextendr-macros = { git = "https://github.com/CGMossa/miniextendr" }
 miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr" }
-dvs = { path = "../../../dvs" }
+dvs = { path = "/Users/elea/Documents/a2ai_github/dvs2/dvs-rpkg/src/vendor/dvs" }
