@@ -10,11 +10,21 @@ use crate::backends::Backend;
 use crate::cache::{HashCache, try_open_cache};
 use crate::config::Compression;
 use crate::files::metadata::FileMetadata;
+use crate::files::types::OutputOptions;
 use crate::gitignore::add_to_gitignore;
 use crate::paths::{AddPathStatus, DvsPaths};
 use crate::utils::get_threadpool;
 use crate::utils::format_size;
 use crate::{Outcome, cache};
+
+/// Options specific to the add command.
+#[derive(Debug, Clone)]
+pub struct AddOptions {
+    pub message: Option<String>,
+    pub compression: Compression,
+    #[allow(dead_code)]
+    pub output: OutputOptions,
+}
 
 /// Result of adding a single file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,18 +47,15 @@ pub enum AddDetail {
     },
 }
 
-#[allow(clippy::too_many_arguments)]
 fn add_file(
     relative_path: &Path,
     paths: &DvsPaths,
     backend: &dyn Backend,
     cache: Option<&Mutex<HashCache>>,
     operation_id: Uuid,
-    message: Option<String>,
-    compression: Compression,
-    dry_run: bool,
-    verbose: bool,
+    opts: &AddOptions,
 ) -> Result<(Outcome, FileMetadata)> {
+    let verbose = opts.output.verbose;
     let full_path = paths.file_path(relative_path);
     let rel_str = relative_path.to_string_lossy();
     let (hashes, size) = cache::hashes_for_file(&full_path, &rel_str, cache, verbose)?;
@@ -59,8 +66,8 @@ fn add_file(
             format_size(size)
         );
     }
-    let metadata = FileMetadata::from_hashes(hashes, size, compression, message);
-    if dry_run {
+    let metadata = FileMetadata::from_hashes(hashes, size, opts.compression, opts.message.clone());
+    if opts.output.dry_run {
         let dvs_file_path = paths.metadata_path(relative_path);
         let dvs_file_exists = dvs_file_path.is_file();
         let storage_exists = backend.exists(&metadata.hashes)?;
@@ -93,16 +100,15 @@ pub fn add_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
     backend: &dyn Backend,
-    message: Option<String>,
-    compression: Compression,
-    dry_run: bool,
-    verbose: bool,
+    opts: &AddOptions,
 ) -> Result<Vec<AddResult>> {
+    let verbose = opts.output.verbose;
     if verbose {
         eprintln!(
-            "Adding {} file{} (hash: blake3, compression: {compression:?})...",
+            "Adding {} file{} (hash: blake3, compression: {:?})...",
             files.len(),
-            if files.len() == 1 { "" } else { "s" }
+            if files.len() == 1 { "" } else { "s" },
+            opts.compression,
         );
     }
     let matched_paths = paths.validate_for_add(&files);
@@ -187,10 +193,7 @@ pub fn add_files(
                     backend,
                     cache.as_ref(),
                     operation_id,
-                    message.clone(),
-                    compression,
-                    dry_run,
-                    verbose,
+                    opts,
                 ) {
                     Ok((outcome, metadata)) => {
                         if let Some(file_start) = file_start {
@@ -239,7 +242,7 @@ pub fn add_files(
         .filter(|r| matches!(r.detail, AddDetail::Success { .. }))
         .map(|r| r.path.clone())
         .collect();
-    if !dry_run && !successful_paths.is_empty() {
+    if !opts.output.dry_run && !successful_paths.is_empty() {
         if verbose {
             eprintln!("Updating .gitignore...");
         }
@@ -272,6 +275,14 @@ mod tests {
         )
     }
 
+    fn default_add_opts() -> AddOptions {
+        AddOptions {
+            message: None,
+            compression: Compression::Zstd,
+            output: OutputOptions::default(),
+        }
+    }
+
     #[test]
     fn add_files_reports_not_found_per_file() {
         let (_tmp, root) = create_temp_git_repo();
@@ -285,10 +296,7 @@ mod tests {
             vec!["nonexistent.csv".into()],
             &paths,
             backend,
-            None,
-            Compression::Zstd,
-            false,
-            false,
+            &default_add_opts(),
         )
         .unwrap();
         assert_eq!(results.len(), 1);
@@ -326,10 +334,7 @@ mod tests {
             ],
             &paths,
             backend,
-            None,
-            Compression::Zstd,
-            false,
-            false,
+            &default_add_opts(),
         )
         .unwrap();
         assert_eq!(results.len(), 4);

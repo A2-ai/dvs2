@@ -9,6 +9,7 @@ use walkdir::WalkDir;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
+use crate::files::types::OutputOptions;
 use crate::utils::get_threadpool;
 use crate::{DvsPaths, Status, cache};
 
@@ -30,8 +31,9 @@ fn get_file_status(
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
     cache: Option<&Mutex<HashCache>>,
-    verbose: bool,
+    output: &OutputOptions,
 ) -> Result<Status> {
+    let verbose = output.verbose;
     let rel_display = relative_path.as_ref().display();
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
     if !dvs_file_path.is_file() {
@@ -65,7 +67,8 @@ fn get_file_status(
     }
 }
 
-pub fn get_status(paths: &DvsPaths, verbose: bool) -> Result<Vec<FileStatus>> {
+pub fn get_status(paths: &DvsPaths, output: &OutputOptions) -> Result<Vec<FileStatus>> {
+    let verbose = output.verbose;
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
     if verbose {
@@ -113,7 +116,7 @@ pub fn get_status(paths: &DvsPaths, verbose: bool) -> Result<Vec<FileStatus>> {
                         };
                     }
                 };
-                let detail = match get_file_status(paths, &relative, cache.as_ref(), verbose) {
+                let detail = match get_file_status(paths, &relative, cache.as_ref(), output) {
                     Ok(status) => StatusDetail::Success { status },
                     Err(e) => {
                         if verbose {
@@ -168,7 +171,7 @@ mod tests {
         create_file(&root, "new.txt", b"content");
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "new.txt", Some(&cache), false).unwrap();
+        let status = get_file_status(&paths, "new.txt", Some(&cache), &OutputOptions::default()).unwrap();
         assert_eq!(status, Status::Untracked);
     }
 
@@ -186,7 +189,7 @@ mod tests {
             .unwrap();
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "synced.txt", Some(&cache), false).unwrap();
+        let status = get_file_status(&paths, "synced.txt", Some(&cache), &OutputOptions::default()).unwrap();
         assert_eq!(status, Status::Current);
     }
 
@@ -207,7 +210,7 @@ mod tests {
         fs::remove_file(&file_path).unwrap();
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "deleted.txt", Some(&cache), false).unwrap();
+        let status = get_file_status(&paths, "deleted.txt", Some(&cache), &OutputOptions::default()).unwrap();
         assert_eq!(status, Status::Absent);
     }
 
@@ -228,7 +231,7 @@ mod tests {
         fs::write(&file_path, b"changed content").unwrap();
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "modified.txt", Some(&cache), false).unwrap();
+        let status = get_file_status(&paths, "modified.txt", Some(&cache), &OutputOptions::default()).unwrap();
         assert_eq!(status, Status::Unsynced);
     }
 
@@ -248,7 +251,7 @@ mod tests {
                 .unwrap();
         }
 
-        let statuses = get_status(&paths, false).unwrap();
+        let statuses = get_status(&paths, &OutputOptions::default()).unwrap();
         assert_eq!(statuses.len(), 3);
 
         // All should be Current
@@ -311,7 +314,7 @@ mod tests {
         );
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "b.txt", Some(&cache), false).unwrap();
+        let status = get_file_status(&paths, "b.txt", Some(&cache), &OutputOptions::default()).unwrap();
         assert_eq!(status, Status::Current);
     }
 }

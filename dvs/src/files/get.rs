@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
+use crate::files::types::OutputOptions;
 use crate::paths::GetPathStatus;
 use crate::utils::get_threadpool;
 use crate::{Backend, Compression, DvsPaths, Outcome, cache};
@@ -16,9 +17,9 @@ fn get_file(
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
     cache: Option<&Mutex<HashCache>>,
-    dry_run: bool,
-    verbose: bool,
+    output: &OutputOptions,
 ) -> Result<(Outcome, u64)> {
+    let verbose = output.verbose;
     let rel_display = relative_path.as_ref().display();
     log::debug!("Retrieving file: {}", rel_display);
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
@@ -65,7 +66,7 @@ fn get_file(
         }
     }
 
-    if dry_run {
+    if output.dry_run {
         if verbose {
             eprintln!("  [{rel_display}] Dry run: would retrieve ({} bytes)", metadata.size);
         }
@@ -137,9 +138,9 @@ pub fn get_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
     backend: &dyn Backend,
-    dry_run: bool,
-    verbose: bool,
+    output: &OutputOptions,
 ) -> Result<Vec<GetResult>> {
+    let verbose = output.verbose;
     if verbose {
         eprintln!(
             "Getting {} file{}...",
@@ -184,7 +185,7 @@ pub fn get_files(
                 }
 
                 let file_start = verbose.then(std::time::Instant::now);
-                match get_file(backend, paths, &relative_path, cache.as_ref(), dry_run, verbose) {
+                match get_file(backend, paths, &relative_path, cache.as_ref(), output) {
                     Ok((outcome, size)) => {
                         if let Some(file_start) = file_start {
                             eprintln!(
@@ -240,10 +241,18 @@ pub fn get_files(
 mod tests {
     use super::*;
     use crate::add_files;
-    use crate::files::add::AddDetail;
+    use crate::files::add::{AddDetail, AddOptions};
     use crate::files::status::get_status;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
     use uuid::Uuid;
+
+    fn default_add_opts() -> AddOptions {
+        AddOptions {
+            message: None,
+            compression: Compression::Zstd,
+            output: OutputOptions::default(),
+        }
+    }
 
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
         DvsPaths::new(
@@ -277,7 +286,7 @@ mod tests {
         // Retrieve it
         let cache = make_cache(&paths);
         let (outcome, _size) =
-            get_file(backend, &paths, "retrieve.txt", Some(&cache), false, false).unwrap();
+            get_file(backend, &paths, "retrieve.txt", Some(&cache), &OutputOptions::default()).unwrap();
         assert_eq!(outcome, Outcome::Copied);
         assert!(file_path.exists());
         assert_eq!(fs::read(&file_path).unwrap(), b"stored content");
@@ -299,7 +308,7 @@ mod tests {
         // File still exists and matches - should return Present
         let cache = make_cache(&paths);
         let (outcome, _size) =
-            get_file(backend, &paths, "present.txt", Some(&cache), false, false).unwrap();
+            get_file(backend, &paths, "present.txt", Some(&cache), &OutputOptions::default()).unwrap();
         assert_eq!(outcome, Outcome::Present);
     }
 
@@ -311,7 +320,7 @@ mod tests {
         let paths = make_paths(&root, &config);
 
         let cache = make_cache(&paths);
-        let result = get_file(backend, &paths, "untracked.txt", Some(&cache), false, false);
+        let result = get_file(backend, &paths, "untracked.txt", Some(&cache), &OutputOptions::default());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not tracked"));
     }
@@ -328,14 +337,11 @@ mod tests {
             vec!["a.txt".into()],
             &paths,
             backend,
-            None,
-            Compression::Zstd,
-            false,
-            false,
+            &default_add_opts(),
         )
         .unwrap();
 
-        let results = get_files(vec!["nonexistent.csv".into()], &paths, backend, false, false).unwrap();
+        let results = get_files(vec!["nonexistent.csv".into()], &paths, backend, &OutputOptions::default()).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not found"))
@@ -352,7 +358,7 @@ mod tests {
         // Create a file on disk but don't dvs add it
         create_file(&root, "untracked.txt", b"hello");
 
-        let results = get_files(vec!["untracked.txt".into()], &paths, backend, false, false).unwrap();
+        let results = get_files(vec!["untracked.txt".into()], &paths, backend, &OutputOptions::default()).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not tracked"))
@@ -374,10 +380,7 @@ mod tests {
             file_paths.clone(),
             &paths,
             backend,
-            None,
-            Compression::Zstd,
-            false,
-            false,
+            &default_add_opts(),
         )
         .unwrap();
         assert_eq!(results.len(), expected_files.len());
@@ -392,7 +395,7 @@ mod tests {
         }
 
         // Verify correct files are tracked
-        let statuses = get_status(&paths, false).unwrap();
+        let statuses = get_status(&paths, &OutputOptions::default()).unwrap();
         assert_eq!(statuses.len(), expected_files.len());
         let tracked_names: Vec<_> = statuses.iter().map(|s| s.path.to_str().unwrap()).collect();
         for expected in expected_files {
@@ -408,7 +411,7 @@ mod tests {
         }
 
         // Get files back
-        let results = get_files(file_paths, &paths, backend, false, false).unwrap();
+        let results = get_files(file_paths, &paths, backend, &OutputOptions::default()).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert!(matches!(
@@ -471,7 +474,7 @@ mod tests {
 
         // get_file should error on decompression or hash mismatch
         let cache = make_cache(&paths);
-        let result = get_file(backend, &paths, "data.txt", Some(&cache), false, false);
+        let result = get_file(backend, &paths, "data.txt", Some(&cache), &OutputOptions::default());
         assert!(result.is_err());
     }
 }
