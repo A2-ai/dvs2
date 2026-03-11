@@ -3,11 +3,10 @@ set -euo pipefail
 
 # Benchmark: single file per dvs add, sizes in order.
 
-STORAGE="${1:-/data/dvs/benchmark-mossa-experiment-dvs}"
+STORAGE="${1:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR>}"
+PROJECT_DIR="${2:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR>}"
 SIZES_MB=(1 2 5 10 50)
 REPS=25
-
-PROJECT_DIR="$(mktemp -d)/prj-dvs2"
 SCRIPT_NAME="$(basename "$0" .sh)"
 CSV="$PROJECT_DIR/${SCRIPT_NAME}_results.csv"
 HEADER_WRITTEN=0

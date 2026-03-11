@@ -29,13 +29,14 @@ echo ""
 
 for s in "${SCRIPTS[@]}"; do
   echo "=== $s ==="
-  STORAGE=$(mktemp -d)/dvs-bench-storage
-  bash "$SCRIPT_DIR/${s}.sh" "$STORAGE" 2>&1 | tail -1
+  TMPDIR=$(mktemp -d)
+  PROJECT_DIR="$TMPDIR/prj-dvs2"
+  STORAGE="$TMPDIR/dvs-bench-storage"
+  bash "$SCRIPT_DIR/${s}.sh" "$STORAGE" "$PROJECT_DIR" 2>&1 | tail -1
   if [ -f "$SCRIPT_DIR/${s}_results.csv" ]; then
     mv "$SCRIPT_DIR/${s}_results.csv" "$DEST/"
   fi
-  rm -rf "$(dirname "$STORAGE")"
-  find /private/var/folders/ -maxdepth 4 -name "prj-dvs2" -type d -exec rm -rf {} + 2>/dev/null || true
+  rm -rf "$TMPDIR"
 done
 
 echo ""
