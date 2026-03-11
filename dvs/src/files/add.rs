@@ -37,6 +37,7 @@ pub enum AddDetail {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_file(
     relative_path: &Path,
     paths: &DvsPaths,
