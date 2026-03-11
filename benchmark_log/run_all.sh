@@ -4,12 +4,12 @@ set -euo pipefail
 # Run all 8 benchmark scripts sequentially, storing results in a
 # commit-named directory. Cleans up temp dirs between runs.
 #
-# Usage: ./run_all.sh <STORAGE_DIR> <PROJECT_DIR> [DEST_DIR]
-# Default DEST_DIR: benchmark_log/<current git commit hash>
+# Usage: ./run_all.sh <STORAGE_DIR> <PROJECT_DIR> [RESULT_DEST_DIR]
+# Default RESULT_DEST_DIR: benchmark_log/<current git commit hash>
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-STORAGE="${1:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR> [DEST_DIR]}"
-PROJECT_DIR="${2:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR> [DEST_DIR]}"
+STORAGE="${1:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR> [RESULT_DEST_DIR]}"
+PROJECT_DIR="${2:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR> [RESULT_DEST_DIR]}"
 COMMIT=$(git -C "$SCRIPT_DIR" rev-parse HEAD)
 DEST="${3:-$SCRIPT_DIR/$COMMIT}"
 
