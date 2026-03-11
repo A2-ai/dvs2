@@ -15,7 +15,7 @@ HEADER_WRITTEN=0
 mkdir -p "$PROJECT_DIR"
 cd "$PROJECT_DIR"
 git init -q
-dvs init "$STORAGE" > /dev/null 2>&1
+dvs init "$STORAGE" > /dev/null
 
 drain_timing() {
     local size="$1" rep="$2"
@@ -38,7 +38,7 @@ for size in "${SIZES_MB[@]}"; do
             dd if=/dev/urandom of="f${i}.bin" bs=1048576 count="$size" 2>/dev/null
             files+=("f${i}.bin")
         done
-        dvs add -vvv "${files[@]}" > /dev/null 2>/dev/null || true
+        dvs add -vvv "${files[@]}" > /dev/null || true
         drain_timing "$size" "$rep"
         printf "  %3dMB  rep %2d/%d  (%d files)\n" "$size" "$rep" "$REPS" "$BATCH"
     done
