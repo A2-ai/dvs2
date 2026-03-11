@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Benchmark: single file per dvs add, sizes in order.
 
-STORAGE="${1:-/data/dvs/benchmark-mossa-dvs-test}"
+STORAGE="${1:-/data/dvs/benchmark-mossa-experiment-dvs}"
 SIZES_MB=(1 2 5 10 50)
 REPS=25
 

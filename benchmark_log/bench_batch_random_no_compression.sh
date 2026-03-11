@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Benchmark: batch of files per dvs add, sizes randomized. No compression.
 
-STORAGE="${1:-/data/dvs/benchmark-mossa-dvs-test}"
+STORAGE="${1:-/data/dvs/benchmark-mossa-experiment-dvs}"
 SIZES_MB=(1 2 5 10 50)
 REPS=25
 BATCH=5
@@ -48,7 +48,7 @@ for item in "${WORK[@]}"; do
     I=$((I + 1))
     files=()
     for i in $(seq 1 "$BATCH"); do
-        dd if=/dev/urandom of="f${i}.bin" bs=1048576 count="$size" 2>/dev/null
+        dd if=/dev/urandom of="f${i}.bin" bs=1M count="$size" 2>/dev/null
         files+=("f${i}.bin")
     done
     dvs add -vvv "${files[@]}" > /dev/null 2>/dev/null || true
