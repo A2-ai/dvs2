@@ -336,7 +336,7 @@ mod tests {
 
         let valid = results
             .iter()
-            .find(|r| r.path == PathBuf::from("a.txt"))
+            .find(|r| r.path == Path::new("a.txt"))
             .unwrap();
         assert!(matches!(
             &valid.detail,
@@ -346,7 +346,7 @@ mod tests {
 
         let missing = results
             .iter()
-            .find(|r| r.path == PathBuf::from("missing.csv"))
+            .find(|r| r.path == Path::new("missing.csv"))
             .unwrap();
         assert!(
             matches!(&missing.detail, AddDetail::Error { error } if error.contains("not found"))
@@ -359,7 +359,7 @@ mod tests {
 
         let dir = results
             .iter()
-            .find(|r| r.path == PathBuf::from("subdir"))
+            .find(|r| r.path == Path::new("subdir"))
             .unwrap();
         assert!(matches!(&dir.detail, AddDetail::Error { error } if error.contains("directory")));
     }

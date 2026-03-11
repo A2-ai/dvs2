@@ -454,9 +454,19 @@ mod tests {
             .join(".storage")
             .join(&metadata.hashes.blake3[..2])
             .join(&metadata.hashes.blake3[2..]);
-        let mut perms = fs::metadata(&storage_path).unwrap().permissions();
-        perms.set_readonly(false);
-        fs::set_permissions(&storage_path, perms).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o644);
+            fs::set_permissions(&storage_path, perms).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            let mut perms = fs::metadata(&storage_path).unwrap().permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            fs::set_permissions(&storage_path, perms).unwrap();
+        }
         fs::write(&storage_path, b"corrupted content").unwrap();
 
         // get_file should error on decompression or hash mismatch
