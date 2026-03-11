@@ -17,20 +17,25 @@ fn get_file(
     relative_path: impl AsRef<Path>,
     cache: Option<&Mutex<HashCache>>,
     dry_run: bool,
+    verbose: bool,
 ) -> Result<(Outcome, u64)> {
-    log::debug!("Retrieving file: {}", relative_path.as_ref().display());
+    let rel_display = relative_path.as_ref().display();
+    log::debug!("Retrieving file: {}", rel_display);
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
     if !dvs_file_path.is_file() {
         bail!(
             "File {} is not tracked by DVS",
-            relative_path.as_ref().display()
+            rel_display
         );
     }
 
+    if verbose {
+        eprintln!("  [{rel_display}] Reading metadata...");
+    }
     let metadata: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)?;
     log::debug!(
         "Read metadata for {}: {}",
-        relative_path.as_ref().display(),
+        rel_display,
         metadata.hashes
     );
 
@@ -43,18 +48,27 @@ fn get_file(
 
     // Check if target already exists and matches
     if target_path.is_file() {
-        let (hashes, size) = cache::hashes_for_file(&target_path, &rel_str, cache, false)?;
+        if verbose {
+            eprintln!("  [{rel_display}] Local file exists, verifying hash...");
+        }
+        let (hashes, size) = cache::hashes_for_file(&target_path, &rel_str, cache, verbose)?;
 
         if hashes == metadata.hashes && size == metadata.size {
             log::debug!(
                 "File {} already present locally and matches",
-                relative_path.as_ref().display()
+                rel_display
             );
+            if verbose {
+                eprintln!("  [{rel_display}] Already up to date, skipping");
+            }
             return Ok((Outcome::Present, metadata.size));
         }
     }
 
     if dry_run {
+        if verbose {
+            eprintln!("  [{rel_display}] Dry run: would retrieve ({} bytes)", metadata.size);
+        }
         return Ok((Outcome::Copied, metadata.size));
     }
 
@@ -64,9 +78,24 @@ fn get_file(
         metadata.hashes,
         target_path.display()
     );
+    if verbose {
+        let decompress_label = match metadata.compression {
+            Compression::Zstd => "retrieving + decompressing",
+            Compression::None => "retrieving",
+        };
+        eprintln!("  [{rel_display}] {decompress_label} from backend...");
+    }
+    let retrieve_start = verbose.then(std::time::Instant::now);
     backend
         .retrieve(&metadata.hashes, &target_path, metadata.compression)
-        .with_context(|| format!("Failed to retrieve {}", relative_path.as_ref().display()))?;
+        .with_context(|| format!("Failed to retrieve {}", rel_display))?;
+    if let Some(retrieve_start) = retrieve_start {
+        eprintln!("  [{rel_display}] Retrieved from backend in {:.2?}", retrieve_start.elapsed());
+    }
+
+    if verbose {
+        eprintln!("  [{rel_display}] Verifying retrieved file hash...");
+    }
     let actual = FileMetadata::from_file(&target_path, Compression::None, None)?;
     if actual.hashes != metadata.hashes {
         fs::remove_file(&target_path)?;
@@ -109,17 +138,30 @@ pub fn get_files(
     paths: &DvsPaths,
     backend: &dyn Backend,
     dry_run: bool,
+    verbose: bool,
 ) -> Result<Vec<GetResult>> {
+    if verbose {
+        eprintln!(
+            "Getting {} file{}...",
+            files.len(),
+            if files.len() == 1 { "" } else { "s" }
+        );
+    }
     let matched_paths = paths.validate_for_get(&files);
     let pool = get_threadpool(matched_paths.len())?;
     let cache = try_open_cache(paths);
 
+    let total_start = verbose.then(std::time::Instant::now);
     let mut results: Vec<GetResult> = pool.install(|| {
         matched_paths
             .into_par_iter()
             .map(|(relative_path, validation)| {
+                let rel_display = relative_path.display();
                 match validation {
                     GetPathStatus::NotFound => {
+                        if verbose {
+                            eprintln!("  [{rel_display}] Skipped: file not found");
+                        }
                         return GetResult {
                             path: relative_path,
                             detail: GetDetail::Error {
@@ -128,6 +170,9 @@ pub fn get_files(
                         };
                     }
                     GetPathStatus::NotTracked => {
+                        if verbose {
+                            eprintln!("  [{rel_display}] Skipped: not tracked by DVS");
+                        }
                         return GetResult {
                             path: relative_path,
                             detail: GetDetail::Error {
@@ -138,8 +183,15 @@ pub fn get_files(
                     GetPathStatus::Tracked => {}
                 }
 
-                match get_file(backend, paths, &relative_path, cache.as_ref(), dry_run) {
+                let file_start = verbose.then(std::time::Instant::now);
+                match get_file(backend, paths, &relative_path, cache.as_ref(), dry_run, verbose) {
                     Ok((outcome, size)) => {
+                        if let Some(file_start) = file_start {
+                            eprintln!(
+                                "  [{rel_display}] Completed in {:.2?}",
+                                file_start.elapsed()
+                            );
+                        }
                         log::info!(
                             "Successfully retrieved {} ({:?})",
                             relative_path.display(),
@@ -151,6 +203,12 @@ pub fn get_files(
                         }
                     }
                     Err(e) => {
+                        if let Some(file_start) = file_start {
+                            eprintln!(
+                                "  [{rel_display}] Failed in {:.2?}: {e}",
+                                file_start.elapsed()
+                            );
+                        }
                         log::warn!("Failed to get {}: {e}", relative_path.display());
                         GetResult {
                             path: relative_path,
@@ -164,6 +222,16 @@ pub fn get_files(
             .collect()
     });
     results.sort_by(|a, b| a.path.cmp(&b.path));
+
+    if let Some(total_start) = total_start {
+        let total_elapsed = total_start.elapsed();
+        let n_ok = results
+            .iter()
+            .filter(|r| matches!(r.detail, GetDetail::Success { .. }))
+            .count();
+        let n_err = results.len() - n_ok;
+        eprintln!("Done in {total_elapsed:.2?}: {n_ok} succeeded, {n_err} failed");
+    }
 
     Ok(results)
 }
@@ -210,7 +278,7 @@ mod tests {
         // Retrieve it
         let cache = make_cache(&paths);
         let (outcome, _size) =
-            get_file(backend, &paths, "retrieve.txt", Some(&cache), false).unwrap();
+            get_file(backend, &paths, "retrieve.txt", Some(&cache), false, false).unwrap();
         assert_eq!(outcome, Outcome::Copied);
         assert!(file_path.exists());
         assert_eq!(fs::read(&file_path).unwrap(), b"stored content");
@@ -232,7 +300,7 @@ mod tests {
         // File still exists and matches - should return Present
         let cache = make_cache(&paths);
         let (outcome, _size) =
-            get_file(backend, &paths, "present.txt", Some(&cache), false).unwrap();
+            get_file(backend, &paths, "present.txt", Some(&cache), false, false).unwrap();
         assert_eq!(outcome, Outcome::Present);
     }
 
@@ -244,7 +312,7 @@ mod tests {
         let paths = make_paths(&root, &config);
 
         let cache = make_cache(&paths);
-        let result = get_file(backend, &paths, "untracked.txt", Some(&cache), false);
+        let result = get_file(backend, &paths, "untracked.txt", Some(&cache), false, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not tracked"));
     }
@@ -268,7 +336,7 @@ mod tests {
         )
         .unwrap();
 
-        let results = get_files(vec!["nonexistent.csv".into()], &paths, backend, false).unwrap();
+        let results = get_files(vec!["nonexistent.csv".into()], &paths, backend, false, false).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not found"))
@@ -285,7 +353,7 @@ mod tests {
         // Create a file on disk but don't dvs add it
         create_file(&root, "untracked.txt", b"hello");
 
-        let results = get_files(vec!["untracked.txt".into()], &paths, backend, false).unwrap();
+        let results = get_files(vec!["untracked.txt".into()], &paths, backend, false, false).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not tracked"))
@@ -325,7 +393,7 @@ mod tests {
         }
 
         // Verify correct files are tracked
-        let statuses = get_status(&paths).unwrap();
+        let statuses = get_status(&paths, false).unwrap();
         assert_eq!(statuses.len(), expected_files.len());
         let tracked_names: Vec<_> = statuses.iter().map(|s| s.path.to_str().unwrap()).collect();
         for expected in expected_files {
@@ -341,7 +409,7 @@ mod tests {
         }
 
         // Get files back
-        let results = get_files(file_paths, &paths, backend, false).unwrap();
+        let results = get_files(file_paths, &paths, backend, false, false).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert!(matches!(
@@ -394,7 +462,7 @@ mod tests {
 
         // get_file should error on decompression or hash mismatch
         let cache = make_cache(&paths);
-        let result = get_file(backend, &paths, "data.txt", Some(&cache), false);
+        let result = get_file(backend, &paths, "data.txt", Some(&cache), false, false);
         assert!(result.is_err());
     }
 }
