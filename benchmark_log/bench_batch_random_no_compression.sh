@@ -8,11 +8,15 @@ PROJECT_DIR="${2:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR>}"
 SIZES_MB=(1 2 5 10 50)
 REPS=25
 BATCH=5
+
+mkdir -p "$STORAGE" "$PROJECT_DIR"
+STORAGE="$(cd "$STORAGE" && pwd)"
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
+
 SCRIPT_NAME="$(basename "$0" .sh)"
 CSV="$PROJECT_DIR/${SCRIPT_NAME}_results.csv"
 HEADER_WRITTEN=0
 
-mkdir -p "$PROJECT_DIR"
 cd "$PROJECT_DIR"
 git init -q
 dvs init --no-compression "$STORAGE" > /dev/null

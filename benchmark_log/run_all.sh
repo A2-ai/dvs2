@@ -24,7 +24,10 @@ SCRIPTS=(
   bench_batch_random_no_compression
 )
 
-mkdir -p "$DEST"
+mkdir -p "$STORAGE" "$PROJECT_DIR" "$DEST"
+STORAGE="$(cd "$STORAGE" && pwd)"
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
+DEST="$(cd "$DEST" && pwd)"
 echo "Commit:  $COMMIT"
 echo "Results: $DEST"
 echo ""
