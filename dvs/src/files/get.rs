@@ -183,6 +183,7 @@ mod tests {
             root.to_path_buf(),
             config.metadata_folder_name(),
         )
+        .unwrap()
     }
 
     fn make_cache(paths: &DvsPaths) -> Mutex<cache::HashCache> {

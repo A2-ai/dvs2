@@ -191,6 +191,7 @@ mod tests {
             root.to_path_buf(),
             config.metadata_folder_name(),
         )
+        .unwrap()
     }
 
     #[test]

@@ -97,6 +97,7 @@ mod tests {
         assert!(subdir.join(".dvs").is_dir());
     }
 
+    #[cfg(unix)]
     #[test]
     fn init_cleans_up_on_backend_failure() {
         let (_tmp, root) = create_temp_git_repo();
