@@ -1,192 +1,128 @@
-# initialization of DVS repository / `dvs init` / `dvs::dvs_init`
+# `dvs init`
 
-Goal: Prepare shared storage and initialize DVS in directory
+Creates a `dvs.toml` configuration file and prepares the storage backend.
 
-dvs initialization will create a `dvs.toml` and a directory as specified by the
-storage area in the init command. The shared directory may also need to `chown` the directory
-to specify certain permissions. For example, for sensitive projects, setting
-ownership to a particular group, allowing write access for the group, and limiting
-read access to those not in the group.
+## Behavior
 
-The storage directory will should not be regarded as a shared backend amongst
-multiple projects. Achieving and snapshotting a project state will become
-complicated, if storage directory was shared amongst other projects, concerning
-different datasets (beyond those that are common amongst projects).
+- Errors if `dvs.toml` already exists in the target directory.
+- A `dvs.toml` in a parent directory does not prevent initializing a nested project.
+- Creates the storage directory if it does not exist.
+- Creates the metadata folder (default `.dvs`) in the project root.
+- On partial failure, attempts best-effort cleanup of `dvs.toml` and the metadata folder so a retry is possible.
+- Git is not required. DVS operates independently of git.
+- The storage directory should be dedicated to one project. Sharing storage across projects complicates state management.
 
-## User site assumptions
+### Storage layout
 
-- Always operating within a repository/project/workspace.
-- Git repository is not a requirement for a DVS repository.
-- 
-- We assume that storage directory is detached from project-tree. The data will
-  is located in-tree, and thus the storage, which is a backend storage,
-  should not appear there, under most typical projects.
+Storage uses content-addressable paths derived from blake3 hashes. Files are split into a 2-character directory prefix and the remaining hash as filename. See `specs.md` for full details.
 
+### Compression
+
+Default: zstd. Can be disabled with `--no-compression`. The setting is recorded per-file in metadata, so changing it after init does not affect previously stored files.
+
+### Group ownership
+
+When `--group` is specified, the storage directory and files are set to the given Unix group. The group must resolve to a known GID on the system.
 
 ## CLI
 
-The initialization command will have further subcommands.
-
-```shell
-dvs init --- Initialize a new DVS repository
-
-Usage:
-  dvs init <BACKEND> [OPTIONS]
-
-Backends:
-  fs     Local, on-disk storage backend
-
-Options:
-  -h, --help    Show help for command (e.g. `dvs init --help`)
 ```
+dvs init [OPTIONS] <PATH>
 
-### fs
-
-```shell
-dvs init fs --- Initialize a DVS repository via on-disk storage
-
-Usage:
-  dvs init fs <storage-path> [OPTIONS]
-
-Required:
-  <storage-path>    path to the local storage locations (e.g. `/data/dvs/projx`)
+Arguments:
+  <PATH>                    Path to the storage directory
 
 Options:
-  --json
-      Output results as JSON
-  --root <PATH> specify the location that the DVS repository ought to be set
-  --metadata-folder-name <METADATA_FOLDER_NAME>
-      If you want to use a folder name other than `.dvs` for storing the metadata files
-  --permissions <PERMISSIONS>
-      Unix permissions for storage directory and files (octal, e.g., "770")
-  --group <GROUP>
-      Unix group to set on storage directory and files
-  --no-compression
-      Disable compression of stored files. Compression defaults to zstd
-  --compression
-      type of compression to use zstd (default), gz
+      --root-dir <ROOT_DIR>
+          Project root directory (default: current directory)
+      --metadata-folder-name <NAME>
+          Metadata folder name (default: .dvs)
+      --group <GROUP>
+          Unix group for storage directory and files
+      --no-compression
+          Disable compression (default: zstd)
+      --json
+          Output as JSON
   -h, --help
           Print help
 ```
 
-Example output:
+### Output
 
-```shell
-$ dvs init /data/dvs/projx
-DVS Repository created with storage path located at <ABSOLUTE STORAGE PATH>
+Default:
+```
+DVS Initialized at "<absolute path>"
 ```
 
-this will instantiate a DVS repository in the current directory, while setting om a local file-system backend, for which more than one projects may be stored. The example shows a system-wide directory called `/data` that is meant to be the root to dvs file system backends.
+JSON (`--json`):
+```json
+{"status": "initialized"}
+```
 
-## R function
+### Exit codes
+
+- `0`: success
+- `1`: error (e.g., `dvs.toml` already exists, storage path not writable)
+
+## Rust library
+
+```rust
+pub fn init(root: &Path, config: Config) -> Result<PathBuf>
+```
+
+Takes the project root directory and a `Config`. Returns the path to the initialized project root. Config is constructed via `Config::new_local(storage_path, group)`.
+
+## R package
 
 ```r
-dvs_init <- function(
-  storage_path,
-  backend_config = fs_storage(), #default to file system storage
-  metadata_folder_name = NULL,
-  ...,
-  dir = getwd() # default to creating in wd
-  )
+dvs_init(
+  directory = ".",
+  group = NULL,
+  metadata_folder_name = NULL
+)
 ```
 
-```
-fs_storage <- function(
-  permissions = NULL, 
-  group = NULL 
-) {...} 
-```
+- `directory`: path to the storage directory.
+- `group`: optional Unix group name.
+- `metadata_folder_name`: optional override for the metadata folder (default `.dvs`).
 
-```r
-> dvs_init("/data/dvs/projx")
-> A DVS project was initialized in "/Users/elea/Documents/projectA" with storage location at "/data/dvs/projx"
-```
+Returns a list with `status = "initialized"`.
 
-```r
-#' @param storage_config choose the storage backend, see [`dvs::fs_storage()`], [`dvs::s3_storage`], etc.
-dvs_init <- function(
-  storage_path,
-  storage_config = s3_storage(...), # different config functions can provide typed
-  compression = NULL, # use dvs default compression, which is zstd
-  )
-```
+## Configuration file
 
-would result in the following toml config:
+`dvs init` produces a `dvs.toml`:
 
 ```toml
 compression = "zstd"
 
 [backend]
-path = "/path/to/shared/storage
+path = "/absolute/path/to/storage"
 ```
 
-### Backend / Storage configuration
+When `--group` is specified:
 
-#### Local / `fs` backend
+```toml
+compression = "zstd"
 
-```r
-fs_storage <- function(
-  permissions = NULL, # dvs defaults to "770"
-  group = NULL
-)
+[backend]
+path = "/absolute/path/to/storage"
+group = "groupname"
 ```
 
-Remains to specify other backends. 
+## Examples
 
-## Journey 1: Initial Setup with defaults
-
-Expected outcomes:
-
-- `dvs.toml` created in the ancestral directory that contains `.git`, or other heuristics.
-- shared dir created in specified path, with default permissions of 664
-
-Known Caveats:
-
-- certain linux `umask` setups cause folders to have default permissions like 600, or 644
-where other collaborators could not write by default, therefore,
-
-### CLI flow
-
-1. initialize dvs from a project directory
+### Default setup
 
 ```bash
-dvs init /data/dvs/example-proj
+dvs init /data/dvs/project-x
 ```
 
-### R package flow
+Creates `dvs.toml` in the current directory pointing to `/data/dvs/project-x`. Storage uses zstd compression. No group restriction.
 
-1. Initialize DVS in the repo
-
-```r
-dvs_init("/data/shared/project-x-dvs")
-```
-
-## Journey 2: Initial Setup with shared folder locked down to group
-
-- set permissions to writeable by group, not readable if not in group (660)
-- group name projx
-
-Expected outcomes:
-
-- dvs.toml created in working directory
-- shared dir created in specified path, with permissions of 660 and owned by group projx
-
-Edge cases:
-
-- group must resolve to known gid on system
-
-### CLI flow
-
-1. initialize dvs from a project directory
+### Group-restricted setup
 
 ```bash
-dvs init /data/dvs/sensitive-projx --permissions "660" --group projx
+dvs init /data/dvs/project-x --group projx
 ```
 
-### R package flow
-
-1. Initialize DVS in the repo
-
-```r
-dvs_init("/data/shared/project-x-dvs", permissions = "660", group = "projx")
-```
+Same as above, but storage directory and files are owned by group `projx`.
