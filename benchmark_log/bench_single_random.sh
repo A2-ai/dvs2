@@ -38,7 +38,7 @@ for size in "${SIZES_MB[@]}"; do
         WORK+=("${size},${rep}")
     done
 done
-mapfile -t WORK < <(printf '%s\n' "${WORK[@]}" | shuf)
+mapfile -t WORK < <(printf '%s\n' "${WORK[@]}" | awk 'BEGIN{srand()}{print rand()"\t"$0}' | sort -n | cut -f2-)
 
 TOTAL=${#WORK[@]}
 I=0
