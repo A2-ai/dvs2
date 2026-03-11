@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
-use crate::files::types::OutputOptions;
+use crate::files::types::{OutputOptions, TimingRecord};
 use crate::paths::GetPathStatus;
 use crate::utils::get_threadpool;
 use crate::{Backend, Compression, DvsPaths, Outcome, cache};
@@ -19,26 +19,19 @@ fn get_file(
     cache: Option<&Mutex<HashCache>>,
     output: &OutputOptions,
 ) -> Result<(Outcome, u64)> {
-    let verbose = output.verbose;
+    let v2 = output.verbosity >= 2;
     let rel_display = relative_path.as_ref().display();
     log::debug!("Retrieving file: {}", rel_display);
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
     if !dvs_file_path.is_file() {
-        bail!(
-            "File {} is not tracked by DVS",
-            rel_display
-        );
+        bail!("File {} is not tracked by DVS", rel_display);
     }
 
-    if verbose {
+    if v2 {
         eprintln!("  [{rel_display}] Reading metadata...");
     }
     let metadata: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)?;
-    log::debug!(
-        "Read metadata for {}: {}",
-        rel_display,
-        metadata.hashes
-    );
+    log::debug!("Read metadata for {}: {}", rel_display, metadata.hashes);
 
     if !backend.exists(&metadata.hashes)? {
         bail!("Storage file missing for hash: {}", metadata.hashes);
@@ -49,17 +42,14 @@ fn get_file(
 
     // Check if target already exists and matches
     if target_path.is_file() {
-        if verbose {
+        if v2 {
             eprintln!("  [{rel_display}] Local file exists, verifying hash...");
         }
-        let (hashes, size) = cache::hashes_for_file(&target_path, &rel_str, cache, verbose)?;
+        let (hashes, size) = cache::hashes_for_file(&target_path, &rel_str, cache, output)?;
 
         if hashes == metadata.hashes && size == metadata.size {
-            log::debug!(
-                "File {} already present locally and matches",
-                rel_display
-            );
-            if verbose {
+            log::debug!("File {} already present locally and matches", rel_display);
+            if v2 {
                 eprintln!("  [{rel_display}] Already up to date, skipping");
             }
             return Ok((Outcome::Present, metadata.size));
@@ -67,8 +57,11 @@ fn get_file(
     }
 
     if output.dry_run {
-        if verbose {
-            eprintln!("  [{rel_display}] Dry run: would retrieve ({} bytes)", metadata.size);
+        if v2 {
+            eprintln!(
+                "  [{rel_display}] Dry run: would retrieve ({} bytes)",
+                metadata.size
+            );
         }
         return Ok((Outcome::Copied, metadata.size));
     }
@@ -79,22 +72,31 @@ fn get_file(
         metadata.hashes,
         target_path.display()
     );
-    if verbose {
+    if v2 {
         let decompress_label = match metadata.compression {
             Compression::Zstd => "retrieving + decompressing",
             Compression::None => "retrieving",
         };
         eprintln!("  [{rel_display}] {decompress_label} from backend...");
     }
-    let retrieve_start = verbose.then(std::time::Instant::now);
+    let retrieve_start = v2.then(std::time::Instant::now);
     backend
         .retrieve(&metadata.hashes, &target_path, metadata.compression)
         .with_context(|| format!("Failed to retrieve {}", rel_display))?;
     if let Some(retrieve_start) = retrieve_start {
-        eprintln!("  [{rel_display}] Retrieved from backend in {:.2?}", retrieve_start.elapsed());
+        let elapsed = retrieve_start.elapsed();
+        eprintln!("  [{rel_display}] Retrieved from backend in {elapsed:.2?}");
+        output.send_timing(TimingRecord {
+            file: relative_path.as_ref().display().to_string(),
+            step: "backend_retrieve".into(),
+            duration_ms: elapsed.as_secs_f64() * 1000.0,
+            file_size_bytes: Some(metadata.size),
+            compression: format!("{:?}", metadata.compression),
+            ..output.timing_template("get")
+        });
     }
 
-    if verbose {
+    if v2 {
         eprintln!("  [{rel_display}] Verifying retrieved file hash...");
     }
     let actual = FileMetadata::from_file(&target_path, Compression::None, None)?;
@@ -140,8 +142,9 @@ pub fn get_files(
     backend: &dyn Backend,
     output: &OutputOptions,
 ) -> Result<Vec<GetResult>> {
-    let verbose = output.verbose;
-    if verbose {
+    let v1 = output.verbosity >= 1;
+    let v2 = output.verbosity >= 2;
+    if v1 {
         eprintln!(
             "Getting {} file{}...",
             files.len(),
@@ -152,7 +155,7 @@ pub fn get_files(
     let pool = get_threadpool(matched_paths.len())?;
     let cache = try_open_cache(paths);
 
-    let total_start = verbose.then(std::time::Instant::now);
+    let total_start = v1.then(std::time::Instant::now);
     let mut results: Vec<GetResult> = pool.install(|| {
         matched_paths
             .into_par_iter()
@@ -160,7 +163,7 @@ pub fn get_files(
                 let rel_display = relative_path.display();
                 match validation {
                     GetPathStatus::NotFound => {
-                        if verbose {
+                        if v2 {
                             eprintln!("  [{rel_display}] Skipped: file not found");
                         }
                         return GetResult {
@@ -171,7 +174,7 @@ pub fn get_files(
                         };
                     }
                     GetPathStatus::NotTracked => {
-                        if verbose {
+                        if v2 {
                             eprintln!("  [{rel_display}] Skipped: not tracked by DVS");
                         }
                         return GetResult {
@@ -184,14 +187,19 @@ pub fn get_files(
                     GetPathStatus::Tracked => {}
                 }
 
-                let file_start = verbose.then(std::time::Instant::now);
+                let file_start = v1.then(std::time::Instant::now);
                 match get_file(backend, paths, &relative_path, cache.as_ref(), output) {
                     Ok((outcome, size)) => {
                         if let Some(file_start) = file_start {
-                            eprintln!(
-                                "  [{rel_display}] Completed in {:.2?}",
-                                file_start.elapsed()
-                            );
+                            let elapsed = file_start.elapsed();
+                            eprintln!("  [{rel_display}] Completed in {elapsed:.2?}",);
+                            output.send_timing(TimingRecord {
+                                file: relative_path.display().to_string(),
+                                step: "get_file_total".into(),
+                                duration_ms: elapsed.as_secs_f64() * 1000.0,
+                                file_size_bytes: Some(size),
+                                ..output.timing_template("get")
+                            });
                         }
                         log::info!(
                             "Successfully retrieved {} ({:?})",
@@ -232,6 +240,13 @@ pub fn get_files(
             .count();
         let n_err = results.len() - n_ok;
         eprintln!("Done in {total_elapsed:.2?}: {n_ok} succeeded, {n_err} failed");
+        output.send_timing(TimingRecord {
+            file: String::new(),
+            step: "get_total".into(),
+            duration_ms: total_elapsed.as_secs_f64() * 1000.0,
+            file_size_bytes: None,
+            ..output.timing_template("get")
+        });
     }
 
     Ok(results)
@@ -277,7 +292,14 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "retrieve.txt", false)
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "retrieve.txt",
+                &OutputOptions::default(),
+            )
             .unwrap();
 
         // Delete the original file
@@ -286,8 +308,14 @@ mod tests {
 
         // Retrieve it
         let cache = make_cache(&paths);
-        let (outcome, _size) =
-            get_file(backend, &paths, "retrieve.txt", Some(&cache), &OutputOptions::default()).unwrap();
+        let (outcome, _size) = get_file(
+            backend,
+            &paths,
+            "retrieve.txt",
+            Some(&cache),
+            &OutputOptions::default(),
+        )
+        .unwrap();
         assert_eq!(outcome, Outcome::Copied);
         assert!(file_path.exists());
         assert_eq!(fs::read(&file_path).unwrap(), b"stored content");
@@ -303,13 +331,26 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "present.txt", false)
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "present.txt",
+                &OutputOptions::default(),
+            )
             .unwrap();
 
         // File still exists and matches - should return Present
         let cache = make_cache(&paths);
-        let (outcome, _size) =
-            get_file(backend, &paths, "present.txt", Some(&cache), &OutputOptions::default()).unwrap();
+        let (outcome, _size) = get_file(
+            backend,
+            &paths,
+            "present.txt",
+            Some(&cache),
+            &OutputOptions::default(),
+        )
+        .unwrap();
         assert_eq!(outcome, Outcome::Present);
     }
 
@@ -321,7 +362,13 @@ mod tests {
         let paths = make_paths(&root, &config);
 
         let cache = make_cache(&paths);
-        let result = get_file(backend, &paths, "untracked.txt", Some(&cache), &OutputOptions::default());
+        let result = get_file(
+            backend,
+            &paths,
+            "untracked.txt",
+            Some(&cache),
+            &OutputOptions::default(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not tracked"));
     }
@@ -334,15 +381,15 @@ mod tests {
         let paths = make_paths(&root, &config);
 
         create_file(&root, "a.txt", b"a");
-        add_files(
-            vec!["a.txt".into()],
+        add_files(vec!["a.txt".into()], &paths, backend, &default_add_opts()).unwrap();
+
+        let results = get_files(
+            vec!["nonexistent.csv".into()],
             &paths,
             backend,
-            &default_add_opts(),
+            &OutputOptions::default(),
         )
         .unwrap();
-
-        let results = get_files(vec!["nonexistent.csv".into()], &paths, backend, &OutputOptions::default()).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not found"))
@@ -359,7 +406,13 @@ mod tests {
         // Create a file on disk but don't dvs add it
         create_file(&root, "untracked.txt", b"hello");
 
-        let results = get_files(vec!["untracked.txt".into()], &paths, backend, &OutputOptions::default()).unwrap();
+        let results = get_files(
+            vec!["untracked.txt".into()],
+            &paths,
+            backend,
+            &OutputOptions::default(),
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not tracked"))
@@ -377,13 +430,7 @@ mod tests {
         create_file(&root, "c.csv", b"c");
 
         // Add files
-        let results = add_files(
-            file_paths.clone(),
-            &paths,
-            backend,
-            &default_add_opts(),
-        )
-        .unwrap();
+        let results = add_files(file_paths.clone(), &paths, backend, &default_add_opts()).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert!(matches!(
@@ -447,7 +494,14 @@ mod tests {
         let file_path = create_file(&root, "data.txt", b"original content");
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.txt", false)
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.txt",
+                &OutputOptions::default(),
+            )
             .unwrap();
 
         // Delete the local file
@@ -475,7 +529,13 @@ mod tests {
 
         // get_file should error on decompression or hash mismatch
         let cache = make_cache(&paths);
-        let result = get_file(backend, &paths, "data.txt", Some(&cache), &OutputOptions::default());
+        let result = get_file(
+            backend,
+            &paths,
+            "data.txt",
+            Some(&cache),
+            &OutputOptions::default(),
+        );
         assert!(result.is_err());
     }
 }

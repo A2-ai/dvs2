@@ -99,8 +99,9 @@ pub fn hashes_for_file(
     full_path: &Path,
     relative_path: &str,
     cache: Option<&Mutex<HashCache>>,
-    verbose: bool,
+    output: &crate::files::types::OutputOptions,
 ) -> Result<(Hashes, u64)> {
+    let v2 = output.verbosity >= 2;
     let stat = FileStat::from_path(full_path)?;
 
     // Try cache lookup (brief lock)
@@ -108,7 +109,7 @@ pub fn hashes_for_file(
         match mtx.lock().unwrap().lookup(relative_path, &stat) {
             Ok(Some(hashes)) => {
                 log::debug!("Cache hit for {relative_path}");
-                if verbose {
+                if v2 {
                     eprintln!("  [{relative_path}] Hash cache hit");
                 }
                 return Ok((hashes, stat.size));
@@ -123,7 +124,7 @@ pub fn hashes_for_file(
     }
 
     // Cache miss or no cache — stream-hash the file
-    let hash_start = verbose.then(std::time::Instant::now);
+    let hash_start = v2.then(std::time::Instant::now);
     let (hashes, size) = Hashes::compute_from_path(full_path, &[])?;
     if let Some(hash_start) = hash_start {
         let elapsed = hash_start.elapsed();
@@ -131,6 +132,13 @@ pub fn hashes_for_file(
             "  [{relative_path}] Hashed in {elapsed:.2?} (blake3: {})",
             &hashes.blake3[..12]
         );
+        output.send_timing(crate::files::types::TimingRecord {
+            file: relative_path.to_string(),
+            step: "hash".into(),
+            duration_ms: elapsed.as_secs_f64() * 1000.0,
+            file_size_bytes: Some(size),
+            ..output.timing_template("hash")
+        });
     }
 
     // Store in cache (brief lock)

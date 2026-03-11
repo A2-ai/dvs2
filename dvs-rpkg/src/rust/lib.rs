@@ -53,7 +53,7 @@ pub fn dvs_add(
     let add_opts = AddOptions {
         message,
         compression: config.compression(),
-        output: OutputOptions { dry_run: false, verbose },
+        output: OutputOptions { dry_run: false, verbosity: verbose as u8, ..Default::default() },
     };
     Ok(DataFrame::from_iter(
         add_files(files, &paths, config.backend(), &add_opts)?
@@ -71,7 +71,7 @@ pub fn dvs_status(
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let statuses = get_status(&paths, &OutputOptions { verbose, ..Default::default() })?;
+    let statuses = get_status(&paths, &OutputOptions { verbosity: verbose as u8, ..Default::default() })?;
 
     Ok(DataFrame::from_iter(statuses.into_iter().map(|x| x.into())))
 }
@@ -86,7 +86,7 @@ pub fn dvs_get(
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let results = get_files(files, &paths, config.backend(), &OutputOptions { verbose, ..Default::default() })?;
+    let results = get_files(files, &paths, config.backend(), &OutputOptions { verbosity: verbose as u8, ..Default::default() })?;
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 

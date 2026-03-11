@@ -10,11 +10,11 @@ use crate::backends::Backend;
 use crate::cache::{HashCache, try_open_cache};
 use crate::config::Compression;
 use crate::files::metadata::FileMetadata;
-use crate::files::types::OutputOptions;
+use crate::files::types::{OutputOptions, TimingRecord};
 use crate::gitignore::add_to_gitignore;
 use crate::paths::{AddPathStatus, DvsPaths};
-use crate::utils::get_threadpool;
 use crate::utils::format_size;
+use crate::utils::get_threadpool;
 use crate::{Outcome, cache};
 
 /// Options specific to the add command.
@@ -55,16 +55,12 @@ fn add_file(
     operation_id: Uuid,
     opts: &AddOptions,
 ) -> Result<(Outcome, FileMetadata)> {
-    let verbose = opts.output.verbose;
+    let v2 = opts.output.verbosity >= 2;
     let full_path = paths.file_path(relative_path);
     let rel_str = relative_path.to_string_lossy();
-    let (hashes, size) = cache::hashes_for_file(&full_path, &rel_str, cache, verbose)?;
-    if verbose {
-        eprintln!(
-            "  [{}] File size: {}",
-            rel_str,
-            format_size(size)
-        );
+    let (hashes, size) = cache::hashes_for_file(&full_path, &rel_str, cache, &opts.output)?;
+    if v2 {
+        eprintln!("  [{}] File size: {}", rel_str, format_size(size));
     }
     let metadata = FileMetadata::from_hashes(hashes, size, opts.compression, opts.message.clone());
     if opts.output.dry_run {
@@ -82,12 +78,19 @@ fn add_file(
         } else {
             Outcome::Copied
         };
-        if verbose {
+        if v2 {
             eprintln!("  [{rel_str}] Dry run: would be {outcome:?}");
         }
         Ok((outcome, metadata))
     } else {
-        let outcome = metadata.save(operation_id, &full_path, backend, paths, relative_path, verbose)?;
+        let outcome = metadata.save(
+            operation_id,
+            &full_path,
+            backend,
+            paths,
+            relative_path,
+            &opts.output,
+        )?;
         Ok((outcome, metadata))
     }
 }
@@ -102,8 +105,9 @@ pub fn add_files(
     backend: &dyn Backend,
     opts: &AddOptions,
 ) -> Result<Vec<AddResult>> {
-    let verbose = opts.output.verbose;
-    if verbose {
+    let v1 = opts.output.verbosity >= 1;
+    let v2 = opts.output.verbosity >= 2;
+    if v1 {
         eprintln!(
             "Adding {} file{} (hash: blake3, compression: {:?})...",
             files.len(),
@@ -116,7 +120,7 @@ pub fn add_files(
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
 
-    let total_start = verbose.then(std::time::Instant::now);
+    let total_start = v1.then(std::time::Instant::now);
     let mut results: Vec<AddResult> = pool.install(|| {
         matched_paths
             .into_par_iter()
@@ -124,7 +128,7 @@ pub fn add_files(
                 let rel_display = relative_path.display();
                 match status {
                     AddPathStatus::NotFound => {
-                        if verbose {
+                        if v2 {
                             eprintln!("  [{rel_display}] Skipped: file not found");
                         }
                         return AddResult {
@@ -135,7 +139,7 @@ pub fn add_files(
                         };
                     }
                     AddPathStatus::OutsideProject => {
-                        if verbose {
+                        if v2 {
                             eprintln!("  [{rel_display}] Skipped: path is outside project");
                         }
                         return AddResult {
@@ -146,7 +150,7 @@ pub fn add_files(
                         };
                     }
                     AddPathStatus::IsDirectory => {
-                        if verbose {
+                        if v2 {
                             eprintln!("  [{rel_display}] Skipped: path is a directory");
                         }
                         return AddResult {
@@ -162,8 +166,10 @@ pub fn add_files(
                 let full_path = paths.file_path(&relative_path);
                 match full_path.canonicalize() {
                     Ok(canonical) if !canonical.starts_with(paths.repo_root()) => {
-                        if verbose {
-                            eprintln!("  [{rel_display}] Skipped: path is outside the dvs repository");
+                        if v2 {
+                            eprintln!(
+                                "  [{rel_display}] Skipped: path is outside the dvs repository"
+                            );
                         }
                         return AddResult {
                             path: relative_path,
@@ -173,7 +179,7 @@ pub fn add_files(
                         };
                     }
                     Err(e) => {
-                        if verbose {
+                        if v2 {
                             eprintln!("  [{rel_display}] Skipped: failed to resolve path: {e}");
                         }
                         return AddResult {
@@ -186,7 +192,7 @@ pub fn add_files(
                     _ => {} // ok
                 }
 
-                let file_start = verbose.then(std::time::Instant::now);
+                let file_start = v1.then(std::time::Instant::now);
                 match add_file(
                     &relative_path,
                     paths,
@@ -197,10 +203,16 @@ pub fn add_files(
                 ) {
                     Ok((outcome, metadata)) => {
                         if let Some(file_start) = file_start {
-                            eprintln!(
-                                "  [{rel_display}] Completed in {:.2?}",
-                                file_start.elapsed()
-                            );
+                            let elapsed = file_start.elapsed();
+                            eprintln!("  [{rel_display}] Completed in {elapsed:.2?}",);
+                            opts.output.send_timing(TimingRecord {
+                                file: relative_path.display().to_string(),
+                                step: "add_file_total".into(),
+                                duration_ms: elapsed.as_secs_f64() * 1000.0,
+                                file_size_bytes: Some(metadata.size),
+                                compression: format!("{:?}", opts.compression),
+                                ..opts.output.timing_template("add")
+                            });
                         }
                         log::info!(
                             "Successfully added {} ({:?})",
@@ -243,7 +255,7 @@ pub fn add_files(
         .map(|r| r.path.clone())
         .collect();
     if !opts.output.dry_run && !successful_paths.is_empty() {
-        if verbose {
+        if v2 {
             eprintln!("Updating .gitignore...");
         }
         if let Err(e) = add_to_gitignore(paths.repo_root(), &successful_paths) {
@@ -256,6 +268,14 @@ pub fn add_files(
         let n_ok = successful_paths.len();
         let n_err = results.len() - n_ok;
         eprintln!("Done in {total_elapsed:.2?}: {n_ok} succeeded, {n_err} failed");
+        opts.output.send_timing(TimingRecord {
+            file: String::new(),
+            step: "add_total".into(),
+            duration_ms: total_elapsed.as_secs_f64() * 1000.0,
+            file_size_bytes: None,
+            compression: format!("{:?}", opts.compression),
+            ..opts.output.timing_template("add")
+        });
     }
 
     Ok(results)

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use serde_json::json;
 
 use dvs::AddDetail;
@@ -16,6 +16,8 @@ use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{Compression, Status};
 use dvs::{Outcome, format_size, get_files, get_status};
+
+mod timing;
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -86,12 +88,40 @@ pub struct Cli {
     #[clap(long, global = true)]
     pub json: bool,
 
-    /// Print verbose progress messages to stderr
-    #[clap(long, short, global = true)]
-    pub verbose: bool,
+    /// Verbosity level: -v (progress), -vv (detail), -vvv (detail + CSV timing log)
+    #[clap(short, long, action = ArgAction::Count, global = true)]
+    pub verbose: u8,
 
     #[clap(subcommand)]
     pub command: Command,
+}
+
+/// Build OutputOptions from CLI flags, optionally starting a CSV timing writer.
+fn make_output(verbosity: u8, dry_run: bool) -> (OutputOptions, Option<timing::TimingHandle>) {
+    let handle = if verbosity >= 3 {
+        match timing::TimingHandle::new() {
+            Ok(h) => {
+                eprintln!("Timing log: {}", h.path().display());
+                Some(h)
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to start timing log: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let timing_tx = handle.as_ref().map(|h| h.sender());
+
+    let output = OutputOptions {
+        dry_run,
+        verbosity,
+        timing_tx,
+    };
+
+    (output, handle)
 }
 
 fn try_main() -> Result<()> {
@@ -99,6 +129,8 @@ fn try_main() -> Result<()> {
 
     let cli = Cli::parse();
     let current_dir = std::env::current_dir()?;
+    let verbosity = cli.verbose;
+    let v1 = verbosity >= 1;
 
     match cli.command {
         Command::Init {
@@ -137,30 +169,33 @@ fn try_main() -> Result<()> {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            if cli.verbose {
+            if v1 {
                 eprintln!("Resolving paths...");
             }
             let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
                 .into_iter()
                 .collect();
-            if cli.verbose {
-                eprintln!("Resolved {} path{}", all_paths.len(), if all_paths.len() == 1 { "" } else { "s" });
+            if v1 {
+                eprintln!(
+                    "Resolved {} path{}",
+                    all_paths.len(),
+                    if all_paths.len() == 1 { "" } else { "s" }
+                );
             }
             if all_paths.is_empty() {
                 return Err(anyhow!("No files to add"));
             }
 
+            let (output, timing_handle) = make_output(verbosity, dry_run);
             let add_opts = AddOptions {
                 message,
                 compression: config.compression(),
-                output: OutputOptions { dry_run, verbose: cli.verbose },
+                output,
             };
-            let results = add_files(
-                all_paths,
-                &dvs_paths,
-                config.backend(),
-                &add_opts,
-            )?;
+            let results = add_files(all_paths, &dvs_paths, config.backend(), &add_opts)?;
+            if let Some(h) = timing_handle {
+                h.finish();
+            }
             let has_errors = results
                 .iter()
                 .any(|r| matches!(r.detail, AddDetail::Error { .. }));
@@ -192,7 +227,11 @@ fn try_main() -> Result<()> {
             let paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !unsynced;
 
-            let mut statuses = get_status(&paths, &OutputOptions { verbose: cli.verbose, ..Default::default() })?;
+            let (output, timing_handle) = make_output(verbosity, false);
+            let mut statuses = get_status(&paths, &output)?;
+            if let Some(h) = timing_handle {
+                h.finish();
+            }
             if !show_all {
                 statuses.retain(|x| match &x.detail {
                     StatusDetail::Success { status } => {
@@ -241,20 +280,28 @@ fn try_main() -> Result<()> {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            if cli.verbose {
+            if v1 {
                 eprintln!("Resolving paths...");
             }
             let all_paths: Vec<_> = resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths)?
                 .into_iter()
                 .collect();
-            if cli.verbose {
-                eprintln!("Resolved {} path{}", all_paths.len(), if all_paths.len() == 1 { "" } else { "s" });
+            if v1 {
+                eprintln!(
+                    "Resolved {} path{}",
+                    all_paths.len(),
+                    if all_paths.len() == 1 { "" } else { "s" }
+                );
             }
             if all_paths.is_empty() {
                 return Err(anyhow!("No files to get"));
             }
 
-            let results = get_files(all_paths, &dvs_paths, config.backend(), &OutputOptions { dry_run, verbose: cli.verbose })?;
+            let (output, timing_handle) = make_output(verbosity, dry_run);
+            let results = get_files(all_paths, &dvs_paths, config.backend(), &output)?;
+            if let Some(h) = timing_handle {
+                h.finish();
+            }
             let has_errors = results
                 .iter()
                 .any(|r| matches!(r.detail, GetDetail::Error { .. }));

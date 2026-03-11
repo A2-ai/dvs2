@@ -16,7 +16,7 @@ pub use files::add::{AddDetail, AddOptions, AddResult, add_files};
 pub use files::get::{GetDetail, GetResult, get_files};
 pub use files::metadata::FileMetadata;
 pub use files::status::{FileStatus, StatusDetail, get_status};
-pub use files::types::{Outcome, OutputOptions, Status};
+pub use files::types::{Outcome, OutputOptions, Status, TimingRecord};
 pub use hashes::{HashAlg, Hashes};
 pub use paths::{AddPathStatus, DvsPaths, find_repo_root};
 pub use utils::format_size;

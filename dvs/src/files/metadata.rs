@@ -75,8 +75,9 @@ impl FileMetadata {
         backend: &dyn Backend,
         paths: &DvsPaths,
         relative_path: impl AsRef<Path>,
-        verbose: bool,
+        output: &crate::files::types::OutputOptions,
     ) -> Result<Outcome> {
+        let v2 = output.verbosity >= 2;
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
         let dvs_file_exists = dvs_file_path.is_file();
         let storage_exists = backend.exists(&self.hashes)?;
@@ -94,7 +95,7 @@ impl FileMetadata {
             let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)?;
             if existing == *self {
                 log::debug!("File {} is already in sync", rel_display);
-                if verbose {
+                if v2 {
                     eprintln!("  [{rel_display}] Already up to date, skipping");
                 }
                 return Ok(Outcome::Present);
@@ -109,23 +110,32 @@ impl FileMetadata {
 
         // 2. Store file to backend if it doesn't already exist
         let storage_res = if storage_exists {
-            if verbose {
+            if v2 {
                 eprintln!("  [{rel_display}] File already in storage, skipping upload");
             }
             Ok(())
         } else {
-            if verbose {
+            if v2 {
                 let compress_label = match self.compression {
                     Compression::Zstd => "compressing + storing",
                     Compression::None => "storing",
                 };
                 eprintln!("  [{rel_display}] {compress_label} to backend...");
             }
-            let store_start = verbose.then(std::time::Instant::now);
+            let store_start = v2.then(std::time::Instant::now);
             let res = backend.store(&self.hashes, source_file.as_ref(), self.compression);
             if let Some(store_start) = store_start {
                 if res.is_ok() {
-                    eprintln!("  [{rel_display}] Stored to backend in {:.2?}", store_start.elapsed());
+                    let elapsed = store_start.elapsed();
+                    eprintln!("  [{rel_display}] Stored to backend in {elapsed:.2?}");
+                    output.send_timing(crate::files::types::TimingRecord {
+                        file: relative_path.as_ref().display().to_string(),
+                        step: "backend_store".into(),
+                        duration_ms: elapsed.as_secs_f64() * 1000.0,
+                        file_size_bytes: Some(self.size),
+                        compression: format!("{:?}", self.compression),
+                        ..output.timing_template("add")
+                    });
                 }
             }
             res
@@ -133,7 +143,7 @@ impl FileMetadata {
 
         // 3. Then metadata
         let old_metadata_content = fs::read(&dvs_file_path).ok();
-        if verbose {
+        if v2 {
             eprintln!("  [{rel_display}] Writing metadata...");
         }
         log::debug!("Writing metadata to {}", dvs_file_path.display());
@@ -144,7 +154,7 @@ impl FileMetadata {
 
         match (storage_res, metadata_res) {
             (Ok(_), Ok(_)) => {
-                if verbose {
+                if v2 {
                     eprintln!("  [{rel_display}] Writing audit log...");
                 }
                 let audit_entry = AuditEntry::new_add(
@@ -208,6 +218,7 @@ impl FileMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::files::types::OutputOptions;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
 
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
@@ -254,7 +265,14 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         let outcome = metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin", false)
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                &OutputOptions::default(),
+            )
             .unwrap();
 
         assert_eq!(outcome, Outcome::Copied);
@@ -273,12 +291,26 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin", false)
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                &OutputOptions::default(),
+            )
             .unwrap();
 
         // Second save should return Present
         let outcome = metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin", false)
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                &OutputOptions::default(),
+            )
             .unwrap();
         assert_eq!(outcome, Outcome::Present);
     }

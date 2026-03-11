@@ -33,11 +33,11 @@ fn get_file_status(
     cache: Option<&Mutex<HashCache>>,
     output: &OutputOptions,
 ) -> Result<Status> {
-    let verbose = output.verbose;
+    let v2 = output.verbosity >= 2;
     let rel_display = relative_path.as_ref().display();
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
     if !dvs_file_path.is_file() {
-        if verbose {
+        if v2 {
             eprintln!("  [{rel_display}] No metadata found: Untracked");
         }
         return Ok(Status::Untracked);
@@ -46,21 +46,21 @@ fn get_file_status(
     // If we have read the metadata, but we can't find the original file
     let file_path = paths.file_path(relative_path.as_ref());
     if !file_path.is_file() {
-        if verbose {
+        if v2 {
             eprintln!("  [{rel_display}] Local file missing: Absent");
         }
         return Ok(Status::Absent);
     }
     let rel_str = relative_path.as_ref().to_string_lossy();
-    let (hashes, size) = cache::hashes_for_file(&file_path, &rel_str, cache, verbose)?;
+    let (hashes, size) = cache::hashes_for_file(&file_path, &rel_str, cache, output)?;
 
     if existing_metadata.hashes == hashes && existing_metadata.size == size {
-        if verbose {
+        if v2 {
             eprintln!("  [{rel_display}] Hash matches: Current");
         }
         Ok(Status::Current)
     } else {
-        if verbose {
+        if v2 {
             eprintln!("  [{rel_display}] Hash mismatch: Unsynced");
         }
         Ok(Status::Unsynced)
@@ -68,10 +68,11 @@ fn get_file_status(
 }
 
 pub fn get_status(paths: &DvsPaths, output: &OutputOptions) -> Result<Vec<FileStatus>> {
-    let verbose = output.verbose;
+    let v1 = output.verbosity >= 1;
+    let v2 = output.verbosity >= 2;
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
-    if verbose {
+    if v1 {
         eprintln!("Scanning metadata folder...");
     }
     let cache = try_open_cache(paths);
@@ -90,7 +91,7 @@ pub fn get_status(paths: &DvsPaths, output: &OutputOptions) -> Result<Vec<FileSt
         .map(|e| e.into_path())
         .collect();
 
-    if verbose {
+    if v1 {
         eprintln!(
             "Found {} tracked file{}, checking status...",
             entries.len(),
@@ -100,7 +101,7 @@ pub fn get_status(paths: &DvsPaths, output: &OutputOptions) -> Result<Vec<FileSt
 
     let pool = get_threadpool(entries.len())?;
 
-    let total_start = verbose.then(std::time::Instant::now);
+    let total_start = v1.then(std::time::Instant::now);
     let mut results: Vec<FileStatus> = pool.install(|| {
         entries
             .into_par_iter()
@@ -119,7 +120,7 @@ pub fn get_status(paths: &DvsPaths, output: &OutputOptions) -> Result<Vec<FileSt
                 let detail = match get_file_status(paths, &relative, cache.as_ref(), output) {
                     Ok(status) => StatusDetail::Success { status },
                     Err(e) => {
-                        if verbose {
+                        if v2 {
                             eprintln!("  [{}] Error: {e}", relative.display());
                         }
                         StatusDetail::Error {
@@ -137,7 +138,19 @@ pub fn get_status(paths: &DvsPaths, output: &OutputOptions) -> Result<Vec<FileSt
     results.sort_by(|a, b| a.path.cmp(&b.path));
 
     if let Some(total_start) = total_start {
-        eprintln!("Done in {:.2?}: {} file{} checked", total_start.elapsed(), results.len(), if results.len() == 1 { "" } else { "s" });
+        let total_elapsed = total_start.elapsed();
+        eprintln!(
+            "Done in {total_elapsed:.2?}: {} file{} checked",
+            results.len(),
+            if results.len() == 1 { "" } else { "s" }
+        );
+        output.send_timing(crate::files::types::TimingRecord {
+            file: String::new(),
+            step: "status_total".into(),
+            duration_ms: total_elapsed.as_secs_f64() * 1000.0,
+            file_size_bytes: None,
+            ..output.timing_template("status")
+        });
     }
 
     log::debug!("Found {} tracked files", results.len());
@@ -172,7 +185,8 @@ mod tests {
         create_file(&root, "new.txt", b"content");
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "new.txt", Some(&cache), &OutputOptions::default()).unwrap();
+        let status =
+            get_file_status(&paths, "new.txt", Some(&cache), &OutputOptions::default()).unwrap();
         assert_eq!(status, Status::Untracked);
     }
 
@@ -186,11 +200,24 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "synced.txt", false)
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "synced.txt",
+                &OutputOptions::default(),
+            )
             .unwrap();
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "synced.txt", Some(&cache), &OutputOptions::default()).unwrap();
+        let status = get_file_status(
+            &paths,
+            "synced.txt",
+            Some(&cache),
+            &OutputOptions::default(),
+        )
+        .unwrap();
         assert_eq!(status, Status::Current);
     }
 
@@ -204,14 +231,27 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "deleted.txt", false)
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "deleted.txt",
+                &OutputOptions::default(),
+            )
             .unwrap();
 
         // Delete the original file
         fs::remove_file(&file_path).unwrap();
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "deleted.txt", Some(&cache), &OutputOptions::default()).unwrap();
+        let status = get_file_status(
+            &paths,
+            "deleted.txt",
+            Some(&cache),
+            &OutputOptions::default(),
+        )
+        .unwrap();
         assert_eq!(status, Status::Absent);
     }
 
@@ -225,14 +265,27 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "modified.txt", false)
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "modified.txt",
+                &OutputOptions::default(),
+            )
             .unwrap();
 
         // Modify the file
         fs::write(&file_path, b"changed content").unwrap();
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "modified.txt", Some(&cache), &OutputOptions::default()).unwrap();
+        let status = get_file_status(
+            &paths,
+            "modified.txt",
+            Some(&cache),
+            &OutputOptions::default(),
+        )
+        .unwrap();
         assert_eq!(status, Status::Unsynced);
     }
 
@@ -248,7 +301,14 @@ mod tests {
             let file_path = create_file(&root, name, name.as_bytes());
             let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
             metadata
-                .save(Uuid::new_v4(), &file_path, backend, &paths, name, false)
+                .save(
+                    Uuid::new_v4(),
+                    &file_path,
+                    backend,
+                    &paths,
+                    name,
+                    &OutputOptions::default(),
+                )
                 .unwrap();
         }
 
@@ -280,7 +340,14 @@ mod tests {
         let file_a = create_file(&root, "a.txt", b"foo");
         let metadata_a = FileMetadata::from_file(&file_a, Compression::Zstd, None).unwrap();
         metadata_a
-            .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt", false)
+            .save(
+                Uuid::new_v4(),
+                &file_a,
+                backend,
+                &paths,
+                "a.txt",
+                &OutputOptions::default(),
+            )
             .unwrap();
         let hash_h1 = metadata_a.hashes.blake3.clone();
 
@@ -288,7 +355,14 @@ mod tests {
         let file_b = create_file(&root, "b.txt", b"bar");
         let metadata_b = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
         metadata_b
-            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", false)
+            .save(
+                Uuid::new_v4(),
+                &file_b,
+                backend,
+                &paths,
+                "b.txt",
+                &OutputOptions::default(),
+            )
             .unwrap();
         let hash_h2 = metadata_b.hashes.blake3.clone();
         assert_ne!(hash_h1, hash_h2);
@@ -301,7 +375,14 @@ mod tests {
         assert_eq!(metadata_b_new.hashes.blake3, hash_h1);
 
         metadata_b_new
-            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", false)
+            .save(
+                Uuid::new_v4(),
+                &file_b,
+                backend,
+                &paths,
+                "b.txt",
+                &OutputOptions::default(),
+            )
             .unwrap();
 
         // Verify metadata was updated
@@ -315,7 +396,8 @@ mod tests {
         );
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "b.txt", Some(&cache), &OutputOptions::default()).unwrap();
+        let status =
+            get_file_status(&paths, "b.txt", Some(&cache), &OutputOptions::default()).unwrap();
         assert_eq!(status, Status::Current);
     }
 }
