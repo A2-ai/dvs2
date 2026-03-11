@@ -3,11 +3,11 @@ set -euo pipefail
 
 # Benchmark: batch of files per dvs add, sizes randomized.
 
-STORAGE="${1:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR>}"
-PROJECT_DIR="${2:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR>}"
+STORAGE="${1:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR> [BATCH]}"
+PROJECT_DIR="${2:?Usage: $0 <STORAGE_DIR> <PROJECT_DIR> [BATCH]}"
 SIZES_MB=(1 2 5 10 50)
 REPS=25
-BATCH=5
+BATCH="${3:-$REPS}"
 
 mkdir -p "$STORAGE" "$PROJECT_DIR"
 STORAGE="$(cd "$STORAGE" && pwd)"

@@ -118,6 +118,7 @@ fn make_output(verbosity: u8, dry_run: bool) -> (OutputOptions, Option<timing::T
         dry_run,
         verbosity,
         timing_tx,
+        invocation_id: jiff::Timestamp::now().to_string(),
     };
 
     (output, handle)

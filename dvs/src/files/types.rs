@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 /// CSV-writing thread in the CLI.
 #[derive(Debug, Clone, Serialize)]
 pub struct TimingRecord {
+    pub invocation_id: String,
     pub timestamp: String,
     pub user: String,
     pub dvs_version: String,
@@ -29,6 +30,8 @@ pub struct OutputOptions {
     pub verbosity: u8,
     /// When set, timing records are sent to a background CSV writer.
     pub timing_tx: Option<Sender<TimingRecord>>,
+    /// Shared identifier for all timing records from one CLI invocation.
+    pub invocation_id: String,
 }
 
 impl std::fmt::Debug for OutputOptions {
@@ -53,6 +56,7 @@ impl OutputOptions {
     /// Caller fills in `file`, `step`, `duration_ms`, `file_size_bytes`, `compression`.
     pub fn timing_template(&self, command: &str) -> TimingRecord {
         TimingRecord {
+            invocation_id: self.invocation_id.clone(),
             timestamp: jiff::Timestamp::now().to_string(),
             user: whoami::username().unwrap_or_else(|_| "unknown".into()),
             dvs_version: env!("CARGO_PKG_VERSION").into(),
