@@ -65,9 +65,11 @@ This runs `cargo update` on the R package's Cargo.toml. After updating, the R pa
 
 `R/dvs-wrappers.R` is **auto-generated** from `dvs-rpkg/src/rust/lib.rs` -- do not edit it manually. Any invocation that rebuilds the R package (e.g. `devtools::load_all("dvs-rpkg")`) regenerates the wrappers.
 
-## Policy: fix issues when you see them
+## Git policy
 
-When tests fail or issues are encountered during work on a branch, fix them immediately rather than leaving them as "pre-existing". Backpropagate fixes to affected branches (cherry-pick) and propose PRs against main when the fix applies there too. Do not push directly to main — always use a PR.
+- Never push directly to main — always use a PR.
+- Never use `git push --force`. Always use `git push --force-with-lease`.
+- When tests fail or issues are encountered during work on a branch, fix them immediately rather than leaving them as "pre-existing". Backpropagate fixes to affected branches (cherry-pick) and propose PRs against main when the fix applies there too.
 
 ## Key conventions
 
