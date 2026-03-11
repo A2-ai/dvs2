@@ -30,30 +30,47 @@ fn get_file_status(
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
     cache: Option<&Mutex<HashCache>>,
+    verbose: bool,
 ) -> Result<Status> {
+    let rel_display = relative_path.as_ref().display();
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
     if !dvs_file_path.is_file() {
+        if verbose {
+            eprintln!("  [{rel_display}] No metadata found: Untracked");
+        }
         return Ok(Status::Untracked);
     }
     let existing_metadata: FileMetadata = serde_json::from_reader(fs::File::open(dvs_file_path)?)?;
     // If we have read the metadata, but we can't find the original file
     let file_path = paths.file_path(relative_path.as_ref());
     if !file_path.is_file() {
+        if verbose {
+            eprintln!("  [{rel_display}] Local file missing: Absent");
+        }
         return Ok(Status::Absent);
     }
     let rel_str = relative_path.as_ref().to_string_lossy();
-    let (hashes, size) = cache::hashes_for_file(&file_path, &rel_str, cache, false)?;
+    let (hashes, size) = cache::hashes_for_file(&file_path, &rel_str, cache, verbose)?;
 
     if existing_metadata.hashes == hashes && existing_metadata.size == size {
+        if verbose {
+            eprintln!("  [{rel_display}] Hash matches: Current");
+        }
         Ok(Status::Current)
     } else {
+        if verbose {
+            eprintln!("  [{rel_display}] Hash mismatch: Unsynced");
+        }
         Ok(Status::Unsynced)
     }
 }
 
-pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
+pub fn get_status(paths: &DvsPaths, verbose: bool) -> Result<Vec<FileStatus>> {
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
+    if verbose {
+        eprintln!("Scanning metadata folder...");
+    }
     let cache = try_open_cache(paths);
 
     // Collect entries first so we can process in parallel
@@ -70,8 +87,17 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
         .map(|e| e.into_path())
         .collect();
 
+    if verbose {
+        eprintln!(
+            "Found {} tracked file{}, checking status...",
+            entries.len(),
+            if entries.len() == 1 { "" } else { "s" }
+        );
+    }
+
     let pool = get_threadpool(entries.len())?;
 
+    let total_start = verbose.then(std::time::Instant::now);
     let mut results: Vec<FileStatus> = pool.install(|| {
         entries
             .into_par_iter()
@@ -87,11 +113,16 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
                         };
                     }
                 };
-                let detail = match get_file_status(paths, &relative, cache.as_ref()) {
+                let detail = match get_file_status(paths, &relative, cache.as_ref(), verbose) {
                     Ok(status) => StatusDetail::Success { status },
-                    Err(e) => StatusDetail::Error {
-                        error: e.to_string(),
-                    },
+                    Err(e) => {
+                        if verbose {
+                            eprintln!("  [{}] Error: {e}", relative.display());
+                        }
+                        StatusDetail::Error {
+                            error: e.to_string(),
+                        }
+                    }
                 };
                 FileStatus {
                     path: relative.to_path_buf(),
@@ -101,6 +132,10 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
             .collect()
     });
     results.sort_by(|a, b| a.path.cmp(&b.path));
+
+    if let Some(total_start) = total_start {
+        eprintln!("Done in {:.2?}: {} file{} checked", total_start.elapsed(), results.len(), if results.len() == 1 { "" } else { "s" });
+    }
 
     log::debug!("Found {} tracked files", results.len());
     Ok(results)
@@ -133,7 +168,7 @@ mod tests {
         create_file(&root, "new.txt", b"content");
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "new.txt", Some(&cache)).unwrap();
+        let status = get_file_status(&paths, "new.txt", Some(&cache), false).unwrap();
         assert_eq!(status, Status::Untracked);
     }
 
@@ -151,7 +186,7 @@ mod tests {
             .unwrap();
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "synced.txt", Some(&cache)).unwrap();
+        let status = get_file_status(&paths, "synced.txt", Some(&cache), false).unwrap();
         assert_eq!(status, Status::Current);
     }
 
@@ -172,7 +207,7 @@ mod tests {
         fs::remove_file(&file_path).unwrap();
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "deleted.txt", Some(&cache)).unwrap();
+        let status = get_file_status(&paths, "deleted.txt", Some(&cache), false).unwrap();
         assert_eq!(status, Status::Absent);
     }
 
@@ -193,7 +228,7 @@ mod tests {
         fs::write(&file_path, b"changed content").unwrap();
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "modified.txt", Some(&cache)).unwrap();
+        let status = get_file_status(&paths, "modified.txt", Some(&cache), false).unwrap();
         assert_eq!(status, Status::Unsynced);
     }
 
@@ -213,7 +248,7 @@ mod tests {
                 .unwrap();
         }
 
-        let statuses = get_status(&paths).unwrap();
+        let statuses = get_status(&paths, false).unwrap();
         assert_eq!(statuses.len(), 3);
 
         // All should be Current
@@ -276,7 +311,7 @@ mod tests {
         );
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "b.txt", Some(&cache)).unwrap();
+        let status = get_file_status(&paths, "b.txt", Some(&cache), false).unwrap();
         assert_eq!(status, Status::Current);
     }
 }
