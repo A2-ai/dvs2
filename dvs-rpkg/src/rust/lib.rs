@@ -20,11 +20,10 @@ use dvs::{add_files, get_files, get_status, AddResult, FileStatus, GetResult};
 #[miniextendr]
 pub fn dvs_init(
     #[miniextendr(default = r#"".""#)] directory: PathBuf,
-    #[miniextendr(default = "NULL")] permissions: Option<String>,
     #[miniextendr(default = "NULL")] group: Option<String>,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
 ) -> Result<List> {
-    let mut config = Config::new_local(&directory, permissions, group)?;
+    let mut config = Config::new_local(&directory, group)?;
 
     if let Some(m) = metadata_folder_name {
         config.set_metadata_folder_name(m);
@@ -57,6 +56,7 @@ pub fn dvs_add(
             config.backend(),
             message,
             config.compression(),
+            false,
         )?
         .into_iter()
         .map(|x| x.into()),
@@ -82,7 +82,7 @@ pub fn dvs_get(files: Vec<PathBuf>) -> Result<DataFrame<AsSerializeRow<GetResult
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let results = get_files(files, &paths, config.backend())?;
+    let results = get_files(files, &paths, config.backend(), false)?;
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
