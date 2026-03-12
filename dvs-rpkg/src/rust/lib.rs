@@ -65,11 +65,22 @@ pub fn dvs_add(
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let output = OutputOptions { dry_run: false, verbosity: verbose.max(0) as u8, ..Default::default() };
+    let output = OutputOptions {
+        dry_run: false,
+        verbosity: verbose.max(0) as u8,
+        ..Default::default()
+    };
     Ok(DataFrame::from_iter(
-        add_files(files, &paths, config.backend(), message, config.compression(), &output)?
-            .into_iter()
-            .map(|x| x.into()),
+        add_files(
+            files,
+            &paths,
+            config.backend(),
+            message,
+            config.compression(),
+            &output,
+        )?
+        .into_iter()
+        .map(|x| x.into()),
     ))
 }
 
@@ -88,7 +99,13 @@ pub fn dvs_status(
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let statuses = get_status(&paths, &OutputOptions { verbosity: verbose.max(0) as u8, ..Default::default() })?;
+    let statuses = get_status(
+        &paths,
+        &OutputOptions {
+            verbosity: verbose.max(0) as u8,
+            ..Default::default()
+        },
+    )?;
 
     Ok(DataFrame::from_iter(statuses.into_iter().map(|x| x.into())))
 }
@@ -110,7 +127,15 @@ pub fn dvs_get(
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let results = get_files(files, &paths, config.backend(), &OutputOptions { verbosity: verbose.max(0) as u8, ..Default::default() })?;
+    let results = get_files(
+        files,
+        &paths,
+        config.backend(),
+        &OutputOptions {
+            verbosity: verbose.max(0) as u8,
+            ..Default::default()
+        },
+    )?;
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
