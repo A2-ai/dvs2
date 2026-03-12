@@ -23,7 +23,7 @@ bench_setup() {
     HEADER_WRITTEN=0
 
     cd "$PROJECT_DIR"
-    git init -q
+    # git init -q
     dvs init $dvs_init_flags "$STORAGE" > /dev/null
 }
 
