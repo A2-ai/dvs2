@@ -50,7 +50,7 @@ for s in "${SCRIPTS[@]}"; do
   if [ -f "$SCRIPT_DIR/${s}_results.csv" ]; then
     mv "$SCRIPT_DIR/${s}_results.csv" "$DEST/"
   fi
-  rm -rf "$PROJECT_DIR"
+  rm -rf "$PROJECT_DIR" "$STORAGE"
 done
 
 echo ""
