@@ -46,7 +46,7 @@ echo ""
 
 for s in "${SCRIPTS[@]}"; do
   echo "=== $s ==="
-  SIZES_MB="$SIZES_MB" REPS="$REPS" BATCH="$BATCH" bash "$SCRIPT_DIR/${s}.sh" "$STORAGE" "$PROJECT_DIR"
+  SIZES_MB="$SIZES_MB" REPS="$REPS" BATCH="$BATCH" bash "$SCRIPT_DIR/${s}.sh" "$STORAGE" "$PROJECT_DIR" 2>&1 | tee "$DEST/${s}.log"
   if [ -f "$SCRIPT_DIR/${s}_results.csv" ]; then
     mv "$SCRIPT_DIR/${s}_results.csv" "$DEST/"
   fi
@@ -54,4 +54,4 @@ for s in "${SCRIPTS[@]}"; do
 done
 
 echo ""
-echo "Done. $(ls "$DEST"/*.csv 2>/dev/null | wc -l | tr -d ' ') CSVs in $DEST"
+echo "Done. $(ls "$DEST"/*.csv 2>/dev/null | wc -l | tr -d ' ') CSVs + $(ls "$DEST"/*.log 2>/dev/null | wc -l | tr -d ' ') logs in $DEST"
