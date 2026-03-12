@@ -28,22 +28,29 @@ pub fn format_size(bytes: u64) -> String {
 /// Respects `DVS_NUM_THREADS` env var if it's a number higher than 0.
 /// Always caps threads to 16 and the amount of available work.
 pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
+    println!("work_items: {work_items}");
+
     let available = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
+    println!("available: {available}");
+
     let env_threads = std::env::var("DVS_NUM_THREADS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok());
+    println!("env_threads: {env_threads:?}");
 
     let work_limit = work_items.clamp(1, MAX_THREADS);
+    println!("work_limit: {work_limit}");
+
     let configured = match env_threads {
         Some(n) if n > 0 => n.min(MAX_THREADS),
         _ => available.clamp(1, MAX_THREADS),
     };
+    println!("configured: {configured}");
 
     let num_threads = configured.min(work_limit);
-
-    eprintln!("Number of threads assigned to pool: {num_threads}");
+    println!("num_threads: {num_threads}");
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
