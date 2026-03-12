@@ -144,6 +144,7 @@ pub fn get_files(
 ) -> Result<Vec<GetResult>> {
     let v1 = output.verbosity >= 1;
     let v2 = output.verbosity >= 2;
+    let v3 = output.verbosity >= 3;
     if v1 {
         eprintln!(
             "Getting {} file{}...",
@@ -153,6 +154,10 @@ pub fn get_files(
     }
     let matched_paths = paths.validate_for_get(&files);
     let pool = get_threadpool(matched_paths.len())?;
+
+    if v3 {
+        eprintln!("Thread pool size: {}", pool.current_num_threads())
+    }
     let cache = try_open_cache(paths);
 
     let total_start = v1.then(std::time::Instant::now);

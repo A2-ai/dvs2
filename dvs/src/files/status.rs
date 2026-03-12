@@ -70,6 +70,7 @@ fn get_file_status(
 pub fn get_status(paths: &DvsPaths, output: &OutputOptions) -> Result<Vec<FileStatus>> {
     let v1 = output.verbosity >= 1;
     let v2 = output.verbosity >= 2;
+    let v3 = output.verbosity >= 3;
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
     if v1 {
@@ -100,6 +101,10 @@ pub fn get_status(paths: &DvsPaths, output: &OutputOptions) -> Result<Vec<FileSt
     }
 
     let pool = get_threadpool(entries.len())?;
+
+    if v3 {
+        eprintln!("Thread pool size: {}", pool.current_num_threads())
+    }
 
     let total_start = v1.then(std::time::Instant::now);
     let mut results: Vec<FileStatus> = pool.install(|| {
