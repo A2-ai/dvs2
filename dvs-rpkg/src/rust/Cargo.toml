@@ -1,7 +1,7 @@
 [package]
-name = "dvs"
-version = "0.0.0-9000"
-edition = "2024"
+name = "dvs-rpkg"
+version = "0.3.0"
+edition = "2021"
 publish = false
 
 # Make this a standalone workspace (prevents inheriting from parent)
