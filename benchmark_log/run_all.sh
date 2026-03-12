@@ -37,13 +37,16 @@ mkdir -p "$STORAGE" "$PROJECT_DIR" "$DEST"
 STORAGE="$(cd "$STORAGE" && pwd)"
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 DEST="$(cd "$DEST" && pwd)"
-echo "Commit:  $COMMIT"
-echo "Results: $DEST"
+echo "Commit:    $COMMIT"
+echo "Results:   $DEST"
+echo "SIZES_MB:  $SIZES_MB"
+echo "REPS:      $REPS"
+echo "BATCH:     $BATCH"
 echo ""
 
 for s in "${SCRIPTS[@]}"; do
   echo "=== $s ==="
-  bash "$SCRIPT_DIR/${s}.sh" "$STORAGE" "$PROJECT_DIR"
+  SIZES_MB="$SIZES_MB" REPS="$REPS" BATCH="$BATCH" bash "$SCRIPT_DIR/${s}.sh" "$STORAGE" "$PROJECT_DIR"
   if [ -f "$SCRIPT_DIR/${s}_results.csv" ]; then
     mv "$SCRIPT_DIR/${s}_results.csv" "$DEST/"
   fi
