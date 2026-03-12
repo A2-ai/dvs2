@@ -43,6 +43,8 @@ pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
 
     let num_threads = configured.min(work_limit);
 
+    eprintln!("Number of threads assigned to pool: {num_threads}");
+
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
         .build()?;

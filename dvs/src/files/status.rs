@@ -102,9 +102,10 @@ pub fn get_status(paths: &DvsPaths, output: &OutputOptions) -> Result<Vec<FileSt
 
     let pool = get_threadpool(entries.len())?;
 
-    if v3 {
-        eprintln!("Thread pool size: {}", pool.current_num_threads())
-    }
+    // TODO:
+    // if v3 {
+    //     eprintln!("Thread pool size: {}", pool.current_num_threads())
+    // }
 
     let total_start = v1.then(std::time::Instant::now);
     let mut results: Vec<FileStatus> = pool.install(|| {
