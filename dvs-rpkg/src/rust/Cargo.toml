@@ -1,20 +1,15 @@
 [package]
-name = "dvs-rpkg"
+name = "dvs"
 version = "0.0.0-9000"
-edition = "2021"
+edition = "2024"
 publish = false
 
 # Make this a standalone workspace (prevents inheriting from parent)
 [workspace]
 
-[[bin]]
-name = "document"
-path = "document.rs"
-bench = false
-
 [lib]
 path = "lib.rs"
-crate-type = ["rlib", "staticlib"]
+crate-type = ["staticlib"]
 
 [features]
 default = []
@@ -22,20 +17,28 @@ nonapi = ["miniextendr-api/nonapi"]
 connections = ["miniextendr-api/connections"]
 
 [dependencies]
-miniextendr-api = { git = "https://github.com/CGMossa/miniextendr", features = ["serde"]}
-dvs = "*"
+miniextendr-api = { version = "*", features = ["serde"] }
+dvs = { path = "../../../dvs" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-anyhow = "1.0.100"
+anyhow = "1"
 
 [build-dependencies]
-miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr" }
+miniextendr-lint = { version = "*" }
 
-# Patch crates.io dependencies to use git sources
-# This is needed because miniextendr crates depend on each other via workspace deps
-# which resolve to version = "*" and can't be found on crates.io
+# codegen-units = 1 ensures the entire user crate compiles into a single .o file
+# inside the staticlib archive. This is required for linkme's distributed_slice:
+# the linker only pulls archive members that resolve undefined symbols, so with
+# multiple .o files, distributed_slice entries in unreferenced .o files get dropped.
+# With a single .o, pulling in R_init_<pkg> brings everything along.
 [patch.crates-io]
 miniextendr-api = { git = "https://github.com/CGMossa/miniextendr" }
 miniextendr-macros = { git = "https://github.com/CGMossa/miniextendr" }
+miniextendr-macros-core = { git = "https://github.com/CGMossa/miniextendr" }
 miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr" }
-dvs = { path = "../../../dvs" }
+
+[profile.dev]
+codegen-units = 1
+
+[profile.release]
+codegen-units = 1

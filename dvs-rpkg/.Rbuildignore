@@ -1,56 +1,49 @@
 ^LICENSE\.md$
-^\.github$
-^\.vscode$
-^src/rust/target$
+^dev$
+
+# Build artifacts and generated files
 ^rust-target$
 ^ra-target$
+^src/rust/target$
+^src/rust/ra_target$
 ^src/rust/\.cargo$
-^src/vendor$
 ^\.cargo$
-^autom4te\.cache$
-^config\.log$
-^config\.status$
 ^src/.*\.o$
 ^src/.*\.so$
 ^src/.*\.dll$
-^dev$
-^src/rust/ra_target$
+^config\.log$
+^config\.status$
 ^configure~$
-^src/miniextendr_wrappers\.R$
+^autom4te\.cache$
+
+# Generated R wrapper (kept in src/, copied to R/)
+^src/.*-wrappers\.R$
+
+# Development files
 ^bootstrap\.R$
 ^\.gitignore$
-^\.Renviron$
 ^\.DS_Store$
+
+# R CMD check output
 \.Rcheck$
+
+# Vendor compression stamp file (dev-only)
 ^inst/\.vendor\.tar\.xz\.cksum$
+
+# Vendor directory (ships via inst/vendor.tar.xz, not as loose files)
+^vendor$
 
 # Vendored crate metadata (causes R CMD check NOTEs/ERRORs)
 \.cargo-checksum\.json$
 \.cargo_vcs_info\.json$
-^src/vendor/.*\.github$
-^src/vendor/.*\.editorconfig$
-^src/vendor/.*\.git-blame-ignore-revs$
-^src/vendor/.*\.release-plz\.toml$
-^src/vendor/.*\.rustfmt\.toml$
-^src/vendor/.*\.travis\.yml$
-\.vendor\.lock\.cksum$
-
-# Static libraries in vendored crates
-^src/vendor/.*\.a$
-^src/vendor/.*\.lib$
-
-# Vendored Makefiles with GNU extensions
-^src/vendor/r-efi/Makefile$
-
-^rv$
-^rproject\.toml$
-^src/.*-wrappers\.R$
-^vendor$
 ^vendor/.*\.github$
 ^vendor/.*\.editorconfig$
 ^vendor/.*\.git-blame-ignore-revs$
 ^vendor/.*\.release-plz\.toml$
 ^vendor/.*\.rustfmt\.toml$
 ^vendor/.*\.travis\.yml$
+\.vendor\.lock\.cksum$
+
+# Static libraries in vendored crates (R CMD check objects NOTE)
 ^vendor/.*\.a$
 ^vendor/.*\.lib$
