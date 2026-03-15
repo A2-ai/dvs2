@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use miniextendr_api::{
-    list, miniextendr, miniextendr_module, r_println, AsSerializeRow, DataFrame, List, Missing,
+    list, miniextendr, r_println, AsSerializeRow, DataFrame, List, Missing,
 };
 
 use anyhow::{anyhow, Result};
@@ -86,10 +86,4 @@ pub fn dvs_get(files: Vec<PathBuf>) -> Result<DataFrame<AsSerializeRow<GetResult
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
-miniextendr_module! {
-    mod dvs;
-    fn dvs_init;
-    fn dvs_add;
-    fn dvs_status;
-    fn dvs_get;
-}
+miniextendr_api::miniextendr_init!(dvs);
