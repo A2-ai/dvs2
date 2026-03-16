@@ -1,5 +1,7 @@
 # https://just.systems
 
+export NOT_CRAN := "true"
+
 rpkg_dir := "dvs-rpkg"
 rpkg_manifest := rpkg_dir / "src/rust/Cargo.toml"
 
@@ -48,7 +50,7 @@ rpkg-configure:
 
 # Re-vendor dependencies from git (miniextendr + dvs)
 rpkg-vendor:
-    cd {{quote(rpkg_dir)}} && NOT_CRAN=true FORCE_VENDOR=true ./configure
+    cd {{quote(rpkg_dir)}} && NOT_CRAN=true FORCE_VENDOR=1 ./configure
 
 rpkg-build *args:
     cargo build --manifest-path={{quote(rpkg_manifest)}} {{args}}

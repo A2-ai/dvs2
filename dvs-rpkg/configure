@@ -3749,28 +3749,12 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
 
   if test "$NOT_CRAN" = "true"; then
     if test "$FORCE_VENDOR" = "1"; then
-      echo "configure: FORCE_VENDOR — running cargo vendor"
-      mkdir -p "$VENDOR_OUT"
-      $CARGO_CMD vendor --manifest-path src/rust/Cargo.toml "$VENDOR_OUT"
+                  echo "configure: FORCE_VENDOR — running vendor-crates.R pack"
+      "$R_HOME/bin/Rscript" "$abs_rpkg_dir/tools/vendor-crates.R" \
+        pack --path "$abs_rpkg_dir" 2>&1
       if test $? -ne 0; then
-        echo "configure: error: cargo vendor failed" >&2
+        echo "configure: error: vendor-crates.R pack failed" >&2
         exit 1
-      fi
-      for _crate_dir in "$VENDOR_OUT"/*/; do
-        if test -d "$_crate_dir"; then
-          rm -rf "$_crate_dir/tests" "$_crate_dir/benches" "$_crate_dir/examples" \
-                 "$_crate_dir/.github" "$_crate_dir/docs" "$_crate_dir/ci"
-          for _dotfile in "$_crate_dir"/.*; do
-            case "$(basename "$_dotfile")" in
-              .|..|.cargo-checksum.json) ;;
-              *) rm -rf "$_dotfile" ;;
-            esac
-          done
-          echo '{"files":{}}' > "$_crate_dir/.cargo-checksum.json"
-        fi
-      done
-      if test -f "$abs_rpkg_src/rust/Cargo.lock"; then
-        $SED -i.bak '/^checksum = /d' "$abs_rpkg_src/rust/Cargo.lock" && rm -f "$abs_rpkg_src/rust/Cargo.lock.bak"
       fi
     elif test -n "$MINIEXTENDR_LOCAL" && test -d "$MINIEXTENDR_LOCAL"; then
       echo "configure: syncing vendor/ from MINIEXTENDR_LOCAL=$MINIEXTENDR_LOCAL"
@@ -3798,6 +3782,53 @@ printf "%s\n" "$as_me: executing $ac_file commands" >&6;}
       echo "configure:        Run 'just vendor' before CRAN submission." >&2
       exit 1
     fi
+
+        if test -d "$VENDOR_OUT/dvs"; then
+      "$SED" 's|dvs = { path = "../../../dvs" }|dvs = { path = "../../vendor/dvs" }|' \
+        src/rust/Cargo.toml > src/rust/Cargo.toml.tmp && mv src/rust/Cargo.toml.tmp src/rust/Cargo.toml
+      echo "configure: rewrote dvs dep to path: vendor/dvs"
+    fi
+
+                for _crate in miniextendr-api miniextendr-macros miniextendr-macros-core miniextendr-lint; do
+      _vendor_dir=""
+      if test -d "$VENDOR_OUT/$_crate"; then
+        _vendor_dir="$VENDOR_OUT/$_crate"
+      else
+        for _d in "$VENDOR_OUT/$_crate"-[0-9]*/; do
+          if test -d "$_d"; then _vendor_dir="$_d"; break; fi
+        done
+      fi
+      if test -n "$_vendor_dir"; then
+        _dirname="$(basename "$_vendor_dir")"
+        "$SED" "s|$_crate = { git = \"https://github.com/CGMossa/miniextendr\" }|$_crate = { path = \"../../vendor/$_dirname\" }|" \
+          src/rust/Cargo.toml > src/rust/Cargo.toml.tmp && mv src/rust/Cargo.toml.tmp src/rust/Cargo.toml
+        echo "configure: rewrote $_crate patch to path: vendor/$_dirname"
+      fi
+    done
+
+            for _crate in miniextendr-engine; do
+      _vendor_dir=""
+      if test -d "$VENDOR_OUT/$_crate"; then
+        _vendor_dir="$VENDOR_OUT/$_crate"
+      else
+        for _d in "$VENDOR_OUT/$_crate"-[0-9]*/; do
+          if test -d "$_d"; then _vendor_dir="$_d"; break; fi
+        done
+      fi
+      if test -n "$_vendor_dir" && ! grep -q "^$_crate " src/rust/Cargo.toml; then
+        _dirname="$(basename "$_vendor_dir")"
+        printf '%s = { path = "../../vendor/%s" }\n' "$_crate" "$_dirname" >> src/rust/Cargo.toml
+        echo "configure: added $_crate to patch.crates-io: vendor/$_dirname"
+      fi
+    done
+
+        rm -f src/rust/Cargo.lock
+    $CARGO_CMD generate-lockfile --manifest-path src/rust/Cargo.toml --offline
+    if test $? -ne 0; then
+      echo "configure: error: failed to generate lockfile from vendored sources" >&2
+      exit 1
+    fi
+
     echo "configure: CRAN build — vendor ready"
   fi
  ;;
