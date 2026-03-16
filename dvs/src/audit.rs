@@ -3,15 +3,23 @@ use std::io::BufRead;
 use std::path::PathBuf;
 
 use crate::Hashes;
+use crate::config::{Compression, Config};
 use anyhow::Result;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "lowercase")]
 pub enum Action {
-    Add,
+    Add {
+        file: AuditFile,
+        compression: Compression,
+    },
+    Init {
+        settings: Config,
+        project_path: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,12 +33,12 @@ pub struct AuditEntry {
     pub operation_id: String,
     pub timestamp: i64,
     pub user: String,
-    pub file: AuditFile,
+    #[serde(flatten)]
     pub action: Action,
 }
 
 impl AuditEntry {
-    pub fn new_add(operation_id: Uuid, file: AuditFile) -> Self {
+    pub fn new_add(operation_id: Uuid, file: AuditFile, compression: Compression) -> Self {
         let timestamp = Timestamp::now().as_second();
         let user = whoami::username().unwrap_or_else(|_| "unknown".to_string());
 
@@ -38,8 +46,23 @@ impl AuditEntry {
             operation_id: operation_id.to_string(),
             timestamp,
             user,
-            file,
-            action: Action::Add,
+            action: Action::Add { file, compression },
+        }
+    }
+
+    pub fn new_init(operation_id: Uuid, config: Config, project_path: PathBuf) -> Self {
+        let timestamp = Timestamp::now().as_second();
+        let user = whoami::username().unwrap_or_else(|_| "unknown".to_string());
+        let project_path = project_path.canonicalize().unwrap_or(project_path);
+
+        Self {
+            operation_id: operation_id.to_string(),
+            timestamp,
+            user,
+            action: Action::Init {
+                settings: config,
+                project_path,
+            },
         }
     }
 }
@@ -57,7 +80,16 @@ pub fn parse_audit_log(
         })
         .map(|line| Ok(serde_json::from_str::<AuditEntry>(&line?)?))
         .filter(|entry| match entry {
-            Ok(e) => only_files.is_empty() || only_files.contains(&e.file.path),
+            Ok(e) => {
+                if only_files.is_empty() {
+                    true
+                } else {
+                    match &e.action {
+                        Action::Add { file, .. } => only_files.contains(&file.path),
+                        Action::Init { .. } => false,
+                    }
+                }
+            }
             Err(_) => true, // propagate errors
         })
         .collect()
