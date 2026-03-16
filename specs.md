@@ -300,8 +300,9 @@ and operations proceed without it if that also fails.
 ### Parallelism
 
 `add`, `get`, and `status` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
-variable to control the thread count. Threads are capped at 16 and clamped to the number of files being
-processed.
+variable to control the thread count. If it is unset, the default is `min(available_parallelism * 4, 16)`.
+If it is set to a positive integer, the override is capped at 32. In both cases the final thread count is
+clamped to the number of files being processed.
 
 ### Gitignore
 

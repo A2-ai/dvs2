@@ -1,6 +1,8 @@
 use anyhow::Result;
 
-const MAX_THREADS: usize = 16;
+const DEFAULT_THREADS_PER_CPU: usize = 4;
+const DEFAULT_MAX_THREADS: usize = 16;
+const ENV_MAX_THREADS: usize = 32;
 
 const KB: u64 = 1_024;
 const MB: u64 = 1_024 * 1_024;
@@ -23,25 +25,32 @@ pub fn format_size(bytes: u64) -> String {
     }
 }
 
-/// Creates a rayon threadpool.
+/// Creates a rayon thread pool.
 ///
-/// Respects `DVS_NUM_THREADS` env var if it's a number higher than 0.
-/// Always caps threads to 16 and the amount of available work.
+/// If `DVS_NUM_THREADS` is set to a positive integer, uses that value
+/// capped at 32 and clamped to the amount of available work.
+/// Otherwise, defaults to up to 4 threads per available unit of
+/// parallelism, capped at 16 and clamped to the amount of available work.
 pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
     let available = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
     let env_threads = std::env::var("DVS_NUM_THREADS")
         .ok()
-        .and_then(|v| v.parse::<usize>().ok());
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0);
+    let num_threads = {
+        let available_parallelism = available.max(1);
+        let work_limit = work_items.max(1);
 
-    let work_limit = work_items.clamp(1, MAX_THREADS);
-    let configured = match env_threads {
-        Some(n) if n > 0 => n.min(MAX_THREADS),
-        _ => available.clamp(1, MAX_THREADS),
+        let configured = match env_threads {
+            Some(n) => n.min(ENV_MAX_THREADS),
+            None => available_parallelism
+                .saturating_mul(DEFAULT_THREADS_PER_CPU)
+                .min(DEFAULT_MAX_THREADS),
+        };
+        configured.min(work_limit)
     };
-
-    let num_threads = configured.min(work_limit);
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
