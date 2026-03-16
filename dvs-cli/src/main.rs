@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use anyhow::bail;
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use serde_json::json;
@@ -119,7 +120,7 @@ fn try_main() -> Result<()> {
                 .canonicalize()?
                 .starts_with(root.canonicalize()?)
             {
-                println!("Warning: The given storage path is within the repository.")
+                bail!("The given storage path is within the repository.")
             }
 
             let repo_root = init(&root, config)?;
