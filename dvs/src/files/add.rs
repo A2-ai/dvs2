@@ -274,20 +274,14 @@ mod tests {
         .unwrap();
         assert_eq!(results.len(), 4);
 
-        let valid = results
-            .iter()
-            .find(|r| r.path == PathBuf::from("a.txt"))
-            .unwrap();
+        let valid = results.iter().find(|r| *r.path == *"a.txt").unwrap();
         assert!(matches!(
             &valid.detail,
             AddDetail::Success { outcome: Outcome::Copied, hash, size }
             if !hash.is_empty() && *size > 0
         ));
 
-        let missing = results
-            .iter()
-            .find(|r| r.path == PathBuf::from("missing.csv"))
-            .unwrap();
+        let missing = results.iter().find(|r| *r.path == *"missing.csv").unwrap();
         assert!(
             matches!(&missing.detail, AddDetail::Error { error } if error.contains("not found"))
         );
@@ -297,10 +291,7 @@ mod tests {
         });
         assert!(outside.is_some());
 
-        let dir = results
-            .iter()
-            .find(|r| r.path == PathBuf::from("subdir"))
-            .unwrap();
+        let dir = results.iter().find(|r| *r.path == *"subdir").unwrap();
         assert!(matches!(&dir.detail, AddDetail::Error { error } if error.contains("directory")));
     }
 }
