@@ -48,10 +48,6 @@ install-cli *args:
 rpkg-configure:
     cd {{quote(rpkg_dir)}} && NOT_CRAN=true ./configure
 
-# Re-vendor dependencies from git (miniextendr + dvs)
-rpkg-vendor:
-    cd {{quote(rpkg_dir)}} && NOT_CRAN=true FORCE_VENDOR=1 ./configure
-
 rpkg-build *args:
     cargo build --manifest-path={{quote(rpkg_manifest)}} {{args}}
 

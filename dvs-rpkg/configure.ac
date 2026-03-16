@@ -372,26 +372,12 @@ AC_CONFIG_COMMANDS([cargo-lockfile-compat],
 ],
 [CARGO_CMD="$CARGO_CMD" CARGO_OFFLINE_FLAG="$CARGO_OFFLINE_FLAG" SED="$SED" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_dir="$abs_top_srcdir" abs_rpkg_src="$abs_rpkg_src" TAR_FORCE_LOCAL="$TAR_FORCE_LOCAL"])
 
-dnl 3) Ensure vendor/ exists for offline builds
-dnl    In dev mode: vendor/ is pre-populated by scaffolding, leave it alone.
-dnl    In CRAN mode: unpack vendor.tar.xz if vendor/ is missing.
-dnl    Vendoring is NOT done by configure — use `just vendor` for CRAN prep.
+dnl 3) Vendor handling
+dnl    Dev mode: no vendoring — cargo resolves deps via path/git directly.
+dnl    FORCE_VENDOR=1: explicit CRAN prep — run vendor-crates.R pack.
+dnl    CRAN mode: unpack vendor.tar.xz, rewrite Cargo.toml for offline builds.
 AC_CONFIG_COMMANDS([cargo-vendor],
 [
-  if test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
-    if test -f "$abs_rpkg_dir/inst/vendor.tar.xz"; then
-      echo "configure: unpacking inst/vendor.tar.xz"
-      (cd "$abs_rpkg_dir" && tar -xJf "$abs_rpkg_dir/inst/vendor.tar.xz")
-      if test $? -ne 0; then
-        echo "configure: error: failed to unpack vendor.tar.xz" >&2
-        exit 1
-      fi
-      if test -f "$abs_rpkg_src/rust/Cargo.lock"; then
-        $SED -i.bak '/^checksum = /d' "$abs_rpkg_src/rust/Cargo.lock" && rm -f "$abs_rpkg_src/rust/Cargo.lock.bak"
-      fi
-    fi
-  fi
-
   if test "$NOT_CRAN" = "true"; then
     if test "$FORCE_VENDOR" = "1"; then
       dnl Use vendor-crates.R to package local path deps (e.g. dvs) and vendor
@@ -403,32 +389,27 @@ AC_CONFIG_COMMANDS([cargo-vendor],
         echo "configure: error: vendor-crates.R pack failed" >&2
         exit 1
       fi
-    elif test -n "$MINIEXTENDR_LOCAL" && test -d "$MINIEXTENDR_LOCAL"; then
-      echo "configure: syncing vendor/ from MINIEXTENDR_LOCAL=$MINIEXTENDR_LOCAL"
-      "$R_HOME/bin/Rscript" "$abs_rpkg_dir/tools/vendor-crates.R" \
-        sync --path "$abs_rpkg_dir" --source-root "$MINIEXTENDR_LOCAL" 2>&1 || {
-        echo "configure: warning: vendor sync failed, using existing vendor/" >&2
-      }
-    elif test -f "$VENDOR_OUT/.vendor-source"; then
-      _recorded="$(cat "$VENDOR_OUT/.vendor-source")"
-      if test -d "$_recorded"; then
-        echo "configure: syncing vendor/ from recorded source: $_recorded"
-        "$R_HOME/bin/Rscript" "$abs_rpkg_dir/tools/vendor-crates.R" \
-          sync --path "$abs_rpkg_dir" --source-root "$_recorded" 2>&1 || {
-          echo "configure: warning: vendor sync failed, using existing vendor/" >&2
-        }
-      else
-        echo "configure: dev mode — using vendor/ from scaffolding (recorded source not found)"
-      fi
     else
-      echo "configure: dev mode — using vendor/ from scaffolding"
+      echo "configure: dev mode — skipping vendor (cargo resolves via path/git)"
     fi
   else
-    dnl CRAN/offline mode: vendor/ must exist
+    dnl CRAN/offline mode: unpack vendor.tar.xz if vendor/ is missing
     if test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
-      echo "configure: error: CRAN build requires vendored sources." >&2
-      echo "configure:        Run 'just vendor' before CRAN submission." >&2
-      exit 1
+      if test -f "$abs_rpkg_dir/inst/vendor.tar.xz"; then
+        echo "configure: unpacking inst/vendor.tar.xz"
+        (cd "$abs_rpkg_dir" && tar -xJf "$abs_rpkg_dir/inst/vendor.tar.xz")
+        if test $? -ne 0; then
+          echo "configure: error: failed to unpack vendor.tar.xz" >&2
+          exit 1
+        fi
+        if test -f "$abs_rpkg_src/rust/Cargo.lock"; then
+          $SED -i.bak '/^checksum = /d' "$abs_rpkg_src/rust/Cargo.lock" && rm -f "$abs_rpkg_src/rust/Cargo.lock.bak"
+        fi
+      else
+        echo "configure: error: CRAN build requires vendored sources." >&2
+        echo "configure:        Run FORCE_VENDOR=1 NOT_CRAN=true ./configure before CRAN submission." >&2
+        exit 1
+      fi
     fi
     dnl Rewrite Cargo.toml for offline builds:
     dnl - Path deps outside the package (e.g. dvs) → vendor/ path
@@ -517,19 +498,20 @@ AC_CONFIG_COMMANDS([post-vendor],
 [ABS_RPKG_SRC="$abs_rpkg_src" NOT_CRAN="$NOT_CRAN" CARGO_CMD="$CARGO_CMD"])
 
 dnl 5) Create vendor.tar.xz from vendor/ if it doesn't exist yet
-dnl    This ensures R CMD build produces a tarball with vendored sources
-dnl    without requiring a manual `just vendor` step.
+dnl    Only for CRAN/offline builds — dev mode skips this entirely.
 AC_CONFIG_COMMANDS([vendor-tarball],
 [
-  _tarball="$abs_rpkg_dir/inst/vendor.tar.xz"
-  if test ! -f "$_tarball"; then
-    if test -d "$VENDOR_OUT" && test -n "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
-      mkdir -p "$abs_rpkg_dir/inst"
-      tar $TAR_FORCE_LOCAL -cJf "$_tarball" -C "$abs_rpkg_dir" vendor
-      echo "configure: created inst/vendor.tar.xz"
+  if test "$NOT_CRAN" != "true"; then
+    _tarball="$abs_rpkg_dir/inst/vendor.tar.xz"
+    if test ! -f "$_tarball"; then
+      if test -d "$VENDOR_OUT" && test -n "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
+        mkdir -p "$abs_rpkg_dir/inst"
+        tar $TAR_FORCE_LOCAL -cJf "$_tarball" -C "$abs_rpkg_dir" vendor
+        echo "configure: created inst/vendor.tar.xz"
+      fi
     fi
   fi
 ],
-[abs_rpkg_dir="$abs_top_srcdir" VENDOR_OUT="$VENDOR_OUT" TAR_FORCE_LOCAL="$TAR_FORCE_LOCAL"])
+[abs_rpkg_dir="$abs_top_srcdir" VENDOR_OUT="$VENDOR_OUT" TAR_FORCE_LOCAL="$TAR_FORCE_LOCAL" NOT_CRAN="$NOT_CRAN"])
 
 AC_OUTPUT
