@@ -5,17 +5,15 @@
 
 use std::path::PathBuf;
 
-use miniextendr_api::{
-    list, miniextendr, r_println, AsSerializeRow, DataFrame, List, Missing,
-};
+use miniextendr_api::{AsSerializeRow, DataFrame, List, Missing, list, miniextendr, r_println};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 // Re-export dvs types for internal use
 use dvs::config::Config;
 use dvs::init::init;
 use dvs::paths::DvsPaths;
-use dvs::{add_files, get_files, get_status, AddResult, FileStatus, GetResult};
+use dvs::{AddResult, FileStatus, GetResult, add_files, get_files, get_status};
 
 #[miniextendr]
 pub fn dvs_init(
