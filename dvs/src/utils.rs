@@ -1,7 +1,9 @@
 use anyhow::Result;
 
 const DEFAULT_THREADS_PER_CPU: usize = 4;
+/// Maximum thread count threshold when `DVS_NUM_THREADS` is unset
 const DEFAULT_MAX_THREADS: usize = 16;
+/// Maximum thread count threshold if `DVS_NUM_THREADS` is set
 const ENV_MAX_THREADS: usize = 32;
 
 const KB: u64 = 1_024;
@@ -32,20 +34,25 @@ pub fn format_size(bytes: u64) -> String {
 /// Otherwise, defaults to up to 4 threads per available unit of
 /// parallelism, capped at 16 and clamped to the amount of available work.
 pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
+    // a proxy for available logical cpu cores
     let available = std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(1);
+        .unwrap_or(1)
+        .max(1);
     let env_threads = std::env::var("DVS_NUM_THREADS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0);
+    // when `DVS_NUM_THREADS` is unset:
+    // num_threads = min(workitems, cpus * 4, 16)
+    // else
+    // num_threads = min(workitems, DVS_NUM_THREADS, 32)
     let num_threads = {
-        let available_parallelism = available.max(1);
         let work_limit = work_items.max(1);
 
         let configured = match env_threads {
             Some(n) => n.min(ENV_MAX_THREADS),
-            None => available_parallelism
+            None => available
                 .saturating_mul(DEFAULT_THREADS_PER_CPU)
                 .min(DEFAULT_MAX_THREADS),
         };
