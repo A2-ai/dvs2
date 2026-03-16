@@ -22,14 +22,18 @@ use dvs::{
 #[miniextendr]
 pub fn dvs_init(
     storage_path: PathBuf,
-    #[miniextendr(default = "getwd()")] root_dir: PathBuf,
+    #[miniextendr(default = "NULL")] root_dir: Option<PathBuf>,
     #[miniextendr(default = "NULL")] group: Option<String>,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
-    #[miniextendr(default = "FALSE")] no_compression: bool,
+    #[miniextendr(default = "NULL")] no_compression: Option<bool>,
 ) -> Result<List> {
+    let root_dir = match root_dir {
+        Some(d) => d,
+        None => std::env::current_dir()?,
+    };
     let mut config = Config::new_local(&storage_path, group)?;
 
-    if no_compression {
+    if no_compression == Some(true) {
         config.set_compression(Compression::None);
     }
     if let Some(m) = metadata_folder_name {
@@ -44,16 +48,10 @@ pub fn dvs_init(
 #[miniextendr]
 pub fn dvs_add(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
-    message: Missing<Option<String>>,
+    #[miniextendr(default = "NULL")] message: Option<String>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
-    #[miniextendr(default = "FALSE")] dry_run: bool,
+    #[miniextendr(default = "NULL")] dry_run: Option<bool>,
 ) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
-    let message = if message.is_missing() {
-        None
-    } else {
-        message.unwrap()
-    };
-
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
@@ -72,7 +70,7 @@ pub fn dvs_add(
             config.backend(),
             message,
             config.compression(),
-            dry_run,
+            dry_run.unwrap_or(false),
         )?
         .into_iter()
         .map(|x| x.into()),
@@ -81,16 +79,20 @@ pub fn dvs_add(
 
 #[miniextendr]
 pub fn dvs_status(
-    #[miniextendr(default = "FALSE")] current: bool,
-    #[miniextendr(default = "FALSE")] absent: bool,
-    #[miniextendr(default = "FALSE")] unsynced: bool,
+    #[miniextendr(default = "NULL")] current: Option<bool>,
+    #[miniextendr(default = "NULL")] absent: Option<bool>,
+    #[miniextendr(default = "NULL")] unsynced: Option<bool>,
 ) -> Result<DataFrame<AsSerializeRow<FileStatus>>> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
+    let current = current.unwrap_or(false);
+    let absent = absent.unwrap_or(false);
+    let unsynced = unsynced.unwrap_or(false);
     let show_all = !current && !absent && !unsynced;
+
     let mut statuses = get_status(&paths)?;
     if !show_all {
         statuses.retain(|x| match &x.detail {
@@ -110,7 +112,7 @@ pub fn dvs_status(
 pub fn dvs_get(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
-    #[miniextendr(default = "FALSE")] dry_run: bool,
+    #[miniextendr(default = "NULL")] dry_run: Option<bool>,
 ) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
     let current_dir = std::env::current_dir()?;
 
@@ -124,7 +126,7 @@ pub fn dvs_get(
         return Err(anyhow!("No files to get"));
     }
 
-    let results = get_files(all_paths, &dvs_paths, config.backend(), dry_run)?;
+    let results = get_files(all_paths, &dvs_paths, config.backend(), dry_run.unwrap_or(false))?;
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
