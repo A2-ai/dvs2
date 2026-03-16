@@ -66,7 +66,8 @@ impl FileMetadata {
         })
     }
 
-    /// Returns whether the file already existed in the dvs folder and therefore is an update.
+    /// Returns whether the file already existed in the dvs folder and therefore is an update
+    /// and the compressed size if applicable.
     /// Copies the source file to storage and saves metadata atomically (both succeed or neither).
     pub fn save(
         &self,

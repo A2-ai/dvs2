@@ -30,9 +30,9 @@ impl Compression {
 
                 let mut encoder = zstd::stream::read::Encoder::new(input, 0)?;
                 let mut writer = io::BufWriter::new(output);
-                io::copy(&mut encoder, &mut writer)?;
+                let bytes = io::copy(&mut encoder, &mut writer)?;
                 writer.flush()?;
-                Ok(fs::metadata(dest)?.len())
+                Ok(bytes)
             }
         }
     }
