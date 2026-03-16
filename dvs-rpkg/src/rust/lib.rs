@@ -22,7 +22,7 @@ use dvs::{
 #[miniextendr]
 pub fn dvs_init(
     storage_path: PathBuf,
-    #[miniextendr(default = r#"".""#)] root_dir: PathBuf,
+    #[miniextendr(default = "getwd()")] root_dir: PathBuf,
     #[miniextendr(default = "NULL")] group: Option<String>,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
     #[miniextendr(default = "FALSE")] no_compression: bool,
