@@ -157,9 +157,13 @@ fn try_main() -> Result<()> {
                         AddDetail::Error { error: err } => {
                             eprintln!("Error adding {}: {err}", result.path.display());
                         }
-                        AddDetail::Success { .. } => {
-                            println!("Added: {}", result.path.display());
-                        }
+                        AddDetail::Success { outcome, .. } => match outcome {
+                            Outcome::Copied => {
+                                let msg = if dry_run { "To add" } else { "Added" };
+                                println!("{msg}: {}", result.path.display());
+                            }
+                            Outcome::Present => {}
+                        },
                     }
                 }
             }
