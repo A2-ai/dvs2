@@ -40,6 +40,12 @@ case "$NOT_CRAN" in
 esac
 export NOT_CRAN
 
+dnl FORCE_VENDOR handling: normalize to "1" or "" for consistent checks
+case "$FORCE_VENDOR" in
+  1|true|TRUE|yes) FORCE_VENDOR=1 ;;
+  *)               FORCE_VENDOR="" ;;
+esac
+
 dnl Set cargo offline/locked flags based on NOT_CRAN
 dnl - NOT_CRAN=true (dev): no --offline, no --locked (cargo updates lockfile for patches)
 dnl - NOT_CRAN=false (CRAN): use --offline, omit --locked (checksums cleared)
@@ -62,17 +68,7 @@ AC_ARG_VAR([DVS_FEATURES], [Comma-separated cargo features to enable (e.g., "non
 
 dnl Default: no extra features enabled
 dnl Users can set DVS_FEATURES to enable specific features
-if test -z "$+x}"; then
-  dnl DVS_FEATURES not set - auto-detect via R script if available
-  if test -f "${srcdir}/tools/detect-features.R"; then
-    DVS_FEATURES=$("${R_HOME}/bin/Rscript" "${srcdir}/tools/detect-features.R" 2>/dev/null || echo "")
-    if test -n "$DVS_FEATURES"; then
-      AC_MSG_NOTICE([Auto-detected features: $DVS_FEATURES])
-    fi
-  else
-    DVS_FEATURES=""
-  fi
-fi
+: ${DVS_FEATURES:=""}
 
 if test -n "$DVS_FEATURES"; then
   CARGO_FEATURES_FLAG="--features=$DVS_FEATURES"
@@ -81,22 +77,11 @@ else
 fi
 AC_SUBST([CARGO_FEATURES_FLAG])
 
-dnl rust-analyzer configuration: For IDE support, configure rust-analyzer to use
-dnl the standalone workspace, not the vendored rpkg workspace:
-dnl   "rust-analyzer.linkedProjects": ["/path/to/miniextendr/Cargo.toml"]
-dnl This allows rust-analyzer to see the full workspace during development.
-
-
 dnl ---- canonical paths ----
 abs_top_srcdir="$(cd "$srcdir" && pwd)"
 AC_SUBST([ABS_TOP_SRCDIR], ["$abs_top_srcdir"])
 abs_rpkg_src="$abs_top_srcdir/src"
 AC_SUBST([ABS_RPKG_SRCDIR], ["$abs_rpkg_src"])
-RUST_SRC_DIR="$abs_rpkg_src/rust"
-
-dnl Canonical path two levels above src (rpkg/src → miniextendr)
-root_miniextendr_repo="$(cd "$abs_rpkg_src/../.." && pwd)"
-AC_SUBST([ROOT_MINIEXTENDR_REPO], ["$root_miniextendr_repo"])
 
 dnl ---- tool discovery ----
 AC_PATH_TOOL([CARGO],[cargo],[no])
@@ -188,9 +173,6 @@ else
   CARGO_PROFILE_DIR="$CARGO_PROFILE"
 fi
 
-dnl CARGO_STATICLIB_NAME is set after pkg_rs is computed (see below)
-dnl It equals the Rust crate name (hyphens/dots → underscores)
-
 AC_ARG_VAR([ENV_RUSTFLAGS], [Rust compiler flags passed as RUSTFLAGS])
 : ${ENV_RUSTFLAGS="$RUSTFLAGS"}
 AC_SUBST([ENV_RUSTFLAGS])
@@ -231,20 +213,12 @@ AS_IF([test -n "$RUST_TOOLCHAIN"],
       [AC_MSG_NOTICE([RUST_TOOLCHAIN        = $RUST_TOOLCHAIN])])
 AS_IF([test -n "$CARGO_BUILD_TARGET"],
       [AC_MSG_NOTICE([CARGO_BUILD_TARGET    = $CARGO_BUILD_TARGET])])
-AC_MSG_NOTICE([ROOT_MINIEXTENDR_REPO = $ROOT_MINIEXTENDR_REPO])
 AS_IF([test -n "$DVS_FEATURES"],
       [AC_MSG_NOTICE([DVS_FEATURES  = $DVS_FEATURES])])
 
-dnl ---- package name → Rust-safe variants ----
-dnl Use PACKAGE_NAME (case-preserving) not PACKAGE_TARNAME (lowercased)
-dnl so the entrypoint's R_init_*_miniextendr symbol matches the Rust module exactly.
-pkg_rs="$(echo "$PACKAGE_NAME" | $SED 's/-/_/g; s/\./_/g')"
-AC_SUBST([PACKAGE_TARNAME_RS], [$pkg_rs])
-pkg_rs_upper=`printf '%s' "$pkg_rs" | tr 'a-z' 'A-Z'`
-AC_SUBST([PACKAGE_TARNAME_RS_UPPERCASE], [$pkg_rs_upper])
-
-dnl Staticlib name matches the Rust crate name (= pkg_rs)
-CARGO_STATICLIB_NAME="$pkg_rs"
+dnl ---- package name → Rust-safe staticlib name ----
+dnl Derive Rust crate name from PACKAGE_NAME (hyphens/dots → underscores)
+CARGO_STATICLIB_NAME="$(echo "$PACKAGE_NAME" | $SED 's/-/_/g; s/\./_/g')"
 AC_SUBST([CARGO_STATICLIB_NAME])
 AC_MSG_NOTICE([CARGO_STATICLIB_NAME  = $CARGO_STATICLIB_NAME])
 
@@ -266,9 +240,6 @@ AC_SUBST([CDYLIB_EXT])
 
 AC_CONFIG_SRCDIR([src/rust/lib.rs])  dnl safety check
 
-dnl Note: R CMD build already tracks .rs files for rebuild detection via pkgbuild,
-dnl so we don't need to enumerate RUST_SOURCES for Make dependencies.
-
 dnl ---- vendoring (at package root, outside src/) ----
 dnl IMPORTANT: vendor directory MUST be outside src/ to avoid pkgbuild scanning
 dnl thousands of .rs files in vendor/ during needs_compile() checks (same reasoning
@@ -286,10 +257,6 @@ case "$host_os" in
 esac
 VENDOR_OUT_CARGO="$abs_top_srcdir_cargo/vendor"
 AC_SUBST([VENDOR_OUT_CARGO])
-
-dnl Note: Cargo.toml uses path dependencies to vendor/ (unlike rpkg which uses git deps).
-dnl The cargo config template (cargo-config.toml.in) handles CRAN source replacement.
-dnl In dev mode, we remove the cargo config so cargo uses normal resolution.
 
 dnl ---- output files ----
 dnl Create .cargo directory (it's a hidden dir not included in tarball)
@@ -472,7 +439,7 @@ AC_CONFIG_COMMANDS([cargo-vendor],
     echo "configure: CRAN build — vendor ready"
   fi
 ],
-[NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" SED="$SED" FORCE_VENDOR="$FORCE_VENDOR" CARGO_CMD="$CARGO_CMD" MINIEXTENDR_LOCAL="$MINIEXTENDR_LOCAL" R_HOME="$R_HOME" TAR_FORCE_LOCAL="$TAR_FORCE_LOCAL"])
+[NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" SED="$SED" FORCE_VENDOR="$FORCE_VENDOR" CARGO_CMD="$CARGO_CMD" R_HOME="$R_HOME" TAR_FORCE_LOCAL="$TAR_FORCE_LOCAL"])
 
 dnl 4) Post-vendor tasks: ensure Cargo.lock exists, touch Cargo.toml to force rebuild
 AC_CONFIG_COMMANDS([post-vendor],

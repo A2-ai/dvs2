@@ -46,7 +46,7 @@ install-cli *args:
 # ============================================================================
 
 rpkg-configure:
-    cd {{quote(rpkg_dir)}} && NOT_CRAN=true ./configure
+    cd {{quote(rpkg_dir)}} && ./configure
 
 rpkg-build *args:
     cargo build --manifest-path={{quote(rpkg_manifest)}} {{args}}
@@ -73,7 +73,7 @@ rpkg-document:
     Rscript -e 'devtools::document("{{rpkg_dir}}")'
 
 rpkg-install:
-    NOT_CRAN=true Rscript -e 'install.packages("{{rpkg_dir}}", repos = NULL, type = "source")'
+    Rscript -e 'install.packages("{{rpkg_dir}}", repos = NULL, type = "source")'
 alias install-rpkg := rpkg-install
 
 # ============================================================================

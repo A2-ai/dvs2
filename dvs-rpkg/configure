@@ -614,8 +614,6 @@ CDYLIB_EXT
 CDYLIB_PREFIX
 TAR_FORCE_LOCAL
 CARGO_STATICLIB_NAME
-PACKAGE_TARNAME_RS_UPPERCASE
-PACKAGE_TARNAME_RS
 CARGO_LIBDIR
 CARGO_BUILD_TARGET
 ENV_RUSTFLAGS
@@ -629,7 +627,6 @@ CYGPATH
 SED
 RUSTC
 CARGO
-ROOT_MINIEXTENDR_REPO
 ABS_RPKG_SRCDIR
 ABS_TOP_SRCDIR
 CARGO_FEATURES_FLAG
@@ -1979,6 +1976,11 @@ case "$NOT_CRAN" in
 esac
 export NOT_CRAN
 
+case "$FORCE_VENDOR" in
+  1|true|TRUE|yes) FORCE_VENDOR=1 ;;
+  *)               FORCE_VENDOR="" ;;
+esac
+
 if test "$NOT_CRAN" = "true"; then
   CARGO_OFFLINE_FLAG=""
 else
@@ -1989,17 +1991,7 @@ fi
 
 
 
-if test -z "$+x}"; then
-    if test -f "${srcdir}/tools/detect-features.R"; then
-    DVS_FEATURES=$("${R_HOME}/bin/Rscript" "${srcdir}/tools/detect-features.R" 2>/dev/null || echo "")
-    if test -n "$DVS_FEATURES"; then
-      { printf "%s\n" "$as_me:${as_lineno-$LINENO}: Auto-detected features: $DVS_FEATURES" >&5
-printf "%s\n" "$as_me: Auto-detected features: $DVS_FEATURES" >&6;}
-    fi
-  else
-    DVS_FEATURES=""
-  fi
-fi
+: ${DVS_FEATURES:=""}
 
 if test -n "$DVS_FEATURES"; then
   CARGO_FEATURES_FLAG="--features=$DVS_FEATURES"
@@ -2008,18 +2000,11 @@ else
 fi
 
 
-
-
 abs_top_srcdir="$(cd "$srcdir" && pwd)"
 ABS_TOP_SRCDIR="$abs_top_srcdir"
 
 abs_rpkg_src="$abs_top_srcdir/src"
 ABS_RPKG_SRCDIR="$abs_rpkg_src"
-
-RUST_SRC_DIR="$abs_rpkg_src/rust"
-
-root_miniextendr_repo="$(cd "$abs_rpkg_src/../.." && pwd)"
-ROOT_MINIEXTENDR_REPO="$root_miniextendr_repo"
 
 
 if test -n "$ac_tool_prefix"; then
@@ -2415,7 +2400,6 @@ else
 fi
 
 
-
 : ${ENV_RUSTFLAGS="$RUSTFLAGS"}
 
 
@@ -2466,22 +2450,13 @@ then :
   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: CARGO_BUILD_TARGET    = $CARGO_BUILD_TARGET" >&5
 printf "%s\n" "$as_me: CARGO_BUILD_TARGET    = $CARGO_BUILD_TARGET" >&6;}
 fi
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: ROOT_MINIEXTENDR_REPO = $ROOT_MINIEXTENDR_REPO" >&5
-printf "%s\n" "$as_me: ROOT_MINIEXTENDR_REPO = $ROOT_MINIEXTENDR_REPO" >&6;}
 if test -n "$DVS_FEATURES"
 then :
   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: DVS_FEATURES  = $DVS_FEATURES" >&5
 printf "%s\n" "$as_me: DVS_FEATURES  = $DVS_FEATURES" >&6;}
 fi
 
-pkg_rs="$(echo "$PACKAGE_NAME" | $SED 's/-/_/g; s/\./_/g')"
-PACKAGE_TARNAME_RS=$pkg_rs
-
-pkg_rs_upper=`printf '%s' "$pkg_rs" | tr 'a-z' 'A-Z'`
-PACKAGE_TARNAME_RS_UPPERCASE=$pkg_rs_upper
-
-
-CARGO_STATICLIB_NAME="$pkg_rs"
+CARGO_STATICLIB_NAME="$(echo "$PACKAGE_NAME" | $SED 's/-/_/g; s/\./_/g')"
 
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: CARGO_STATICLIB_NAME  = $CARGO_STATICLIB_NAME" >&5
 printf "%s\n" "$as_me: CARGO_STATICLIB_NAME  = $CARGO_STATICLIB_NAME" >&6;}
@@ -2501,7 +2476,6 @@ esac
 
 
 
-
 VENDOR_OUT="$abs_top_srcdir/vendor"
 
 abs_top_srcdir_cargo="$abs_top_srcdir"
@@ -2513,7 +2487,6 @@ case "$host_os" in
     ;;
 esac
 VENDOR_OUT_CARGO="$abs_top_srcdir_cargo/vendor"
-
 
 
 as_dir=src/rust/.cargo; as_fn_mkdir_p
@@ -3239,7 +3212,7 @@ cat >>$CONFIG_STATUS <<_ACEOF || ac_write_fail=1
 #
 NOT_CRAN="$NOT_CRAN"
 CARGO_CMD="$CARGO_CMD" CARGO_OFFLINE_FLAG="$CARGO_OFFLINE_FLAG" SED="$SED" NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_dir="$abs_top_srcdir" abs_rpkg_src="$abs_rpkg_src" TAR_FORCE_LOCAL="$TAR_FORCE_LOCAL"
-NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" SED="$SED" FORCE_VENDOR="$FORCE_VENDOR" CARGO_CMD="$CARGO_CMD" MINIEXTENDR_LOCAL="$MINIEXTENDR_LOCAL" R_HOME="$R_HOME" TAR_FORCE_LOCAL="$TAR_FORCE_LOCAL"
+NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" SED="$SED" FORCE_VENDOR="$FORCE_VENDOR" CARGO_CMD="$CARGO_CMD" R_HOME="$R_HOME" TAR_FORCE_LOCAL="$TAR_FORCE_LOCAL"
 ABS_RPKG_SRC="$abs_rpkg_src" NOT_CRAN="$NOT_CRAN" CARGO_CMD="$CARGO_CMD"
 abs_rpkg_dir="$abs_top_srcdir" VENDOR_OUT="$VENDOR_OUT" TAR_FORCE_LOCAL="$TAR_FORCE_LOCAL" NOT_CRAN="$NOT_CRAN"
 
