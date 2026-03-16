@@ -18,11 +18,11 @@ pub enum Compression {
 }
 
 impl Compression {
-    pub fn compress(&self, source: &Path, dest: &Path) -> Result<()> {
+    pub fn compress(&self, source: &Path, dest: &Path) -> Result<u64> {
         match self {
             Compression::None => {
-                fs::copy(source, dest)?;
-                Ok(())
+                let bytes = fs::copy(source, dest)?;
+                Ok(bytes)
             }
             Compression::Zstd => {
                 let input = fs::File::open(source)?;
@@ -32,7 +32,7 @@ impl Compression {
                 let mut writer = io::BufWriter::new(output);
                 io::copy(&mut encoder, &mut writer)?;
                 writer.flush()?;
-                Ok(())
+                Ok(fs::metadata(dest)?.len())
             }
         }
     }

@@ -75,7 +75,7 @@ impl FileMetadata {
         backend: &dyn Backend,
         paths: &DvsPaths,
         relative_path: impl AsRef<Path>,
-    ) -> Result<Outcome> {
+    ) -> Result<(Outcome, Option<u64>)> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
         let dvs_file_exists = dvs_file_path.is_file();
         let storage_exists = backend.exists(&self.hashes)?;
@@ -95,7 +95,7 @@ impl FileMetadata {
                     "File {} is already in sync",
                     relative_path.as_ref().display()
                 );
-                return Ok(Outcome::Present);
+                return Ok((Outcome::Present, None));
             }
         }
 
@@ -106,10 +106,13 @@ impl FileMetadata {
         }
 
         // 2. Store file to backend if it doesn't already exist
-        let storage_res = if storage_exists {
-            Ok(())
+        let (storage_res, stored_size) = if storage_exists {
+            (Ok(()), None)
         } else {
-            backend.store(&self.hashes, source_file.as_ref(), self.compression)
+            match backend.store(&self.hashes, source_file.as_ref(), self.compression) {
+                Ok(size) => (Ok(()), Some(size)),
+                Err(e) => (Err(e), None),
+            }
         };
 
         // 3. Then metadata
@@ -132,7 +135,7 @@ impl FileMetadata {
                 if let Err(e) = backend.log_audit(&audit_entry) {
                     log::error!("Failed to write audit log {audit_entry:?}: {e}");
                 }
-                Ok(Outcome::Copied)
+                Ok((Outcome::Copied, stored_size))
             }
             (Err(e), Ok(_)) => {
                 log::warn!(
@@ -228,11 +231,12 @@ mod tests {
         let file_path = create_file(&root, "data.bin", b"binary data");
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-        let outcome = metadata
+        let (outcome, stored_size) = metadata
             .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
             .unwrap();
 
         assert_eq!(outcome, Outcome::Copied);
+        assert!(stored_size.is_some());
         // Metadata file should exist
         assert!(dvs_dir.join("data.bin.dvs").is_file());
         assert!(backend.exists(&metadata.hashes).unwrap());
@@ -252,9 +256,10 @@ mod tests {
             .unwrap();
 
         // Second save should return Present
-        let outcome = metadata
+        let (outcome, stored_size) = metadata
             .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
             .unwrap();
         assert_eq!(outcome, Outcome::Present);
+        assert!(stored_size.is_none());
     }
 }

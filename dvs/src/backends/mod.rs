@@ -12,7 +12,8 @@ pub trait Backend: Send + Sync {
     fn init(&self) -> Result<()>;
 
     /// Store file to backend by hash, optionally compressing.
-    fn store(&self, hash: &Hashes, source: &Path, compression: Compression) -> Result<()>;
+    /// Returns the stored (compressed) size in bytes.
+    fn store(&self, hash: &Hashes, source: &Path, compression: Compression) -> Result<u64>;
 
     /// Retrieve content by hash to target path, optionally decompressing.
     /// Returns true if the file was copied to the target path.

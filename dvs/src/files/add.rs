@@ -30,6 +30,7 @@ pub enum AddDetail {
         outcome: Outcome,
         hash: String,
         size: u64,
+        stored_size: Option<u64>,
     },
     Error {
         error: String,
@@ -45,7 +46,7 @@ fn add_file(
     message: Option<String>,
     compression: Compression,
     dry_run: bool,
-) -> Result<(Outcome, FileMetadata)> {
+) -> Result<(Outcome, FileMetadata, Option<u64>)> {
     let full_path = paths.file_path(relative_path);
     let rel_str = relative_path.to_string_lossy();
     let (hashes, size) = cache::hashes_for_file(&full_path, &rel_str, cache)?;
@@ -65,10 +66,11 @@ fn add_file(
         } else {
             Outcome::Copied
         };
-        Ok((outcome, metadata))
+        Ok((outcome, metadata, None))
     } else {
-        let outcome = metadata.save(operation_id, &full_path, backend, paths, relative_path)?;
-        Ok((outcome, metadata))
+        let (outcome, stored_size) =
+            metadata.save(operation_id, &full_path, backend, paths, relative_path)?;
+        Ok((outcome, metadata, stored_size))
     }
 }
 
@@ -152,7 +154,7 @@ pub fn add_files(
                     compression,
                     dry_run,
                 ) {
-                    Ok((outcome, metadata)) => {
+                    Ok((outcome, metadata, stored_size)) => {
                         log::info!(
                             "Successfully added {} ({:?})",
                             relative_path.display(),
@@ -164,6 +166,7 @@ pub fn add_files(
                                 outcome,
                                 hash: metadata.hashes.blake3,
                                 size: metadata.size,
+                                stored_size,
                             },
                         }
                     }
@@ -280,7 +283,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             &valid.detail,
-            AddDetail::Success { outcome: Outcome::Copied, hash, size }
+            AddDetail::Success { outcome: Outcome::Copied, hash, size, .. }
             if !hash.is_empty() && *size > 0
         ));
 
