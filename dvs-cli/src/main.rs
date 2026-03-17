@@ -96,13 +96,13 @@ fn try_main() -> Result<()> {
 
     match cli.command {
         Command::Init {
-            path,
+            path: storage_path,
             root_dir,
             metadata_folder_name,
             group,
             no_compression,
         } => {
-            let mut config = Config::new_local(path, group)?;
+            let mut config = Config::new_local(storage_path, group)?;
             if no_compression {
                 config.set_compression(Compression::None);
             }
