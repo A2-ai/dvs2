@@ -38,6 +38,28 @@ fn make_readonly(path: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
+const SHARED_DIRECTORY_MODE: u32 = 0o2770;
+const SHARED_BLOB_MODE: u32 = 0o0440;
+const SHARED_AUDIT_LOG_MODE: u32 = 0o0660;
+
+#[cfg(unix)]
+fn ensure_mode(path: impl AsRef<Path>, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = path.as_ref();
+    let mut perms = fs::metadata(path)?.permissions();
+    if perms.mode() & 0o7777 != mode {
+        perms.set_mode(mode);
+        fs::set_permissions(path, perms)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_mode(_path: impl AsRef<Path>, _mode: u32) -> Result<()> {
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct LocalBackend {
     pub path: PathBuf,
@@ -60,16 +82,19 @@ impl LocalBackend {
     /// No-op on non-Unix or if no group is set.
     #[cfg(unix)]
     fn apply_group(&self, path: impl AsRef<Path>) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+
         use nix::unistd::chown;
 
         if let Some(group_name) = &self.group {
-            log::debug!(
-                "Setting group {} on {}",
-                group_name,
-                path.as_ref().display()
-            );
+            let path = path.as_ref();
             let gid = resolve_group(group_name)?;
-            chown(path.as_ref(), None, Some(gid))?;
+            if fs::metadata(path)?.gid() == gid.as_raw() {
+                return Ok(());
+            }
+
+            log::debug!("Setting group {} on {}", group_name, path.display());
+            chown(path, None, Some(gid))?;
         }
 
         Ok(())
@@ -78,6 +103,28 @@ impl LocalBackend {
     #[cfg(not(unix))]
     fn apply_group(&self, _path: impl AsRef<Path>) -> Result<()> {
         Ok(())
+    }
+
+    fn ensure_group_and_mode(&self, path: impl AsRef<Path>, mode: u32) -> Result<()> {
+        if self.group.is_some() {
+            let path = path.as_ref();
+            self.apply_group(path)?;
+            ensure_mode(path, mode)?;
+        }
+        Ok(())
+    }
+
+    // On non-Unix, a configured group is intentionally a no-op. We still need
+    // blobs to become read-only eg on Windows, so this cannot be just `self.group.is_some()`.
+    fn use_shared_blob_mode(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.group.is_some()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
     }
 
     fn hash_to_path(&self, hashes: &Hashes) -> Result<PathBuf> {
@@ -98,7 +145,7 @@ impl Backend for LocalBackend {
     fn init(&self) -> Result<()> {
         log::debug!("Creating storage directory: {}", self.path.display());
         fs::create_dir_all(&self.path)?;
-        self.apply_group(&self.path)?;
+        self.ensure_group_and_mode(&self.path, SHARED_DIRECTORY_MODE)?;
         log::info!("Initialized local storage at {}", self.path.display());
         Ok(())
     }
@@ -107,13 +154,17 @@ impl Backend for LocalBackend {
         let path = self.hash_to_path(hash)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
-            self.apply_group(parent)?;
+            self.ensure_group_and_mode(&self.path, SHARED_DIRECTORY_MODE)?;
+            self.ensure_group_and_mode(parent, SHARED_DIRECTORY_MODE)?;
         }
         let tmp_path = path.with_extension("tmp");
         let stored_size = compression.compress(source, &tmp_path)?;
         fs::rename(&tmp_path, &path)?;
-        make_readonly(&path)?;
-        self.apply_group(&path)?;
+        if self.use_shared_blob_mode() {
+            self.ensure_group_and_mode(&path, SHARED_BLOB_MODE)?;
+        } else {
+            make_readonly(&path)?;
+        }
         Ok(stored_size)
     }
 
@@ -148,6 +199,9 @@ impl Backend for LocalBackend {
             .lock()
             .expect("audit log lock should not be poisoned");
         log::debug!("Appending {entry:?} to audit log");
+
+        fs::create_dir_all(&self.path)?;
+        self.ensure_group_and_mode(&self.path, SHARED_DIRECTORY_MODE)?;
         let audit_path = self.path.join(AUDIT_LOG_FILENAME);
         let mut file = OpenOptions::new()
             .create(true)
@@ -155,7 +209,7 @@ impl Backend for LocalBackend {
             .open(&audit_path)?;
         let json = serde_json::to_string(entry)?;
         writeln!(file, "{}", json)?;
-        self.apply_group(&audit_path)?;
+        self.ensure_group_and_mode(&audit_path, SHARED_AUDIT_LOG_MODE)?;
         Ok(())
     }
 
@@ -418,5 +472,103 @@ mod tests {
         let content = fs::read(&audit_path).unwrap();
         let entries = parse_audit_log(Cursor::new(content), &HashSet::new()).unwrap();
         assert_eq!(entries.len(), workers * entries_per_worker);
+    }
+
+    #[cfg(unix)]
+    fn chmod(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_mode(mode);
+        fs::set_permissions(path, perms).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn test_audit_entry() -> AuditEntry {
+        AuditEntry {
+            operation_id: "op-1".to_string(),
+            timestamp: 1000000000,
+            user: "alice".to_string(),
+            file: AuditFile {
+                path: PathBuf::from("file1.txt"),
+                hashes: test_hash("abc123def456789012345678901234ab"),
+            },
+            action: Action::Add,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permissions_without_group_stay_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("storage");
+        let backend = LocalBackend::new(&storage, None).unwrap();
+        fs::create_dir(&storage).unwrap();
+        chmod(&storage, 0o700);
+
+        let hash = test_hash("abc123def456789012345678901234ab");
+        let prefix_dir = storage.join("ab");
+        fs::create_dir(&prefix_dir).unwrap();
+        chmod(&prefix_dir, 0o700);
+
+        let source = tmp.path().join("source.txt");
+        fs::write(&source, b"content").unwrap();
+        chmod(&source, 0o600);
+        backend.store(&hash, &source, Compression::None).unwrap();
+
+        let prefix_mode = fs::metadata(&prefix_dir).unwrap().permissions().mode();
+        assert_eq!(prefix_mode & 0o7777, 0o700);
+
+        let stored = prefix_dir.join("c123def456789012345678901234ab");
+        let file_mode = fs::metadata(&stored).unwrap().permissions().mode();
+        assert_eq!(file_mode & 0o040, 0);
+
+        let audit_path = storage.join("audit.log.jsonl");
+        fs::write(&audit_path, b"").unwrap();
+        chmod(&audit_path, 0o600);
+        backend.log_audit(&test_audit_entry()).unwrap();
+
+        let storage_mode = fs::metadata(&storage).unwrap().permissions().mode();
+        assert_eq!(storage_mode & 0o7777, 0o700);
+
+        let mode = fs::metadata(&audit_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permissions_with_group_use_shared_modes() {
+        use nix::unistd::{Group, getegid};
+        use std::os::unix::fs::PermissionsExt;
+
+        let current_group_name = Group::from_gid(getegid()).unwrap().unwrap().name;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("storage");
+        let backend = LocalBackend::new(&storage, Some(current_group_name)).unwrap();
+
+        backend.init().unwrap();
+        let storage_mode = fs::metadata(&storage).unwrap().permissions().mode();
+        assert_eq!(storage_mode & 0o7777, SHARED_DIRECTORY_MODE);
+
+        let hash = test_hash("abc123def456789012345678901234ab");
+        let source = tmp.path().join("source.txt");
+        fs::write(&source, b"content").unwrap();
+        backend.store(&hash, &source, Compression::None).unwrap();
+
+        let prefix_dir = storage.join("ab");
+        let prefix_mode = fs::metadata(&prefix_dir).unwrap().permissions().mode();
+        assert_eq!(prefix_mode & 0o7777, SHARED_DIRECTORY_MODE);
+
+        let stored = prefix_dir.join("c123def456789012345678901234ab");
+        let file_mode = fs::metadata(&stored).unwrap().permissions().mode();
+        assert_eq!(file_mode & 0o777, SHARED_BLOB_MODE);
+
+        backend.log_audit(&test_audit_entry()).unwrap();
+        let audit_path = storage.join("audit.log.jsonl");
+        let audit_mode = fs::metadata(&audit_path).unwrap().permissions().mode();
+        assert_eq!(audit_mode & 0o777, SHARED_AUDIT_LOG_MODE);
     }
 }
