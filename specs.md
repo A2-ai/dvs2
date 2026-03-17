@@ -88,7 +88,17 @@ Library takes a project directory and the config to save.
 
 #### R package
 
-TODO
+```r
+dvs_init(storage_path, root_dir = ".", group = NULL, metadata_folder_name = NULL, no_compression = FALSE)
+```
+
+- `storage_path`: where the data will be stored (required, same as CLI's `<PATH>`)
+- `root_dir`: project root where `dvs.toml` is created (defaults to working directory)
+- `group`: Unix group to set on storage directory and files
+- `metadata_folder_name`: custom name for the metadata folder (default `.dvs`)
+- `no_compression`: disable zstd compression of stored files
+
+Returns a list with `status = "initialized"`.
 
 ### add
 
@@ -142,8 +152,17 @@ It otherwise returns a list of results sorted alphabetically by path, letting us
 
 #### R Package
 
-TODO
+```r
+dvs_add(files = character(0), message, glob = NULL, dry_run = FALSE)
+```
 
+- `files`: character vector of file paths to add (can be empty if `glob` is provided)
+- `message`: optional message recorded in the metadata file. Omit or pass `NULL` to skip
+- `glob`: pattern to match files (same resolution rules as CLI `--glob`)
+- `dry_run`: if `TRUE`, returns what would be added without making changes
+
+Returns a data frame with one row per file. Errors if no files match.
+Glob resolution uses the same rules as the CLI — see the Globbing section.
 
 ### get
 
@@ -188,7 +207,15 @@ It otherwise returns a list of results sorted alphabetically by path, letting us
 
 #### R package
 
-TODO
+```r
+dvs_get(files = character(0), glob = NULL, dry_run = FALSE)
+```
+
+- `files`: character vector of file paths to retrieve (can be empty if `glob` is provided)
+- `glob`: pattern to match files in the metadata folder (same resolution rules as CLI `--glob`)
+- `dry_run`: if `TRUE`, returns what would be retrieved without making changes
+
+Returns a data frame with one row per file. Errors if no files match.
 
 ### status
 
@@ -222,7 +249,13 @@ as per-file errors in the result list.
 
 #### R package
 
-TODO
+```r
+dvs_status(current = FALSE, absent = FALSE, unsynced = FALSE)
+```
+
+- `current`, `absent`, `unsynced`: filter flags. When all are `FALSE` (default), all tracked files are returned. When one or more are `TRUE`, only files matching those states are returned. Errors are always included.
+
+Returns a data frame with one row per tracked file.
 
 ## Internals
 

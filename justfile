@@ -46,7 +46,9 @@ install-cli *args:
 # ============================================================================
 
 rpkg-configure:
-    cd {{quote(rpkg_dir)}} && ./configure
+    cd {{quote(rpkg_dir)}} && \
+    if command -v autoconf >/dev/null 2>&1; then autoconf; else echo "autoconf not found; using existing configure"; fi && \
+    bash ./configure
 
 rpkg-build *args:
     cargo build --manifest-path={{quote(rpkg_manifest)}} {{args}}
