@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use miniextendr_api::{AsSerializeRow, DataFrame, List, Missing, list, miniextendr, r_println};
+use miniextendr_api::{AsSerializeRow, DataFrame, List, list, miniextendr, r_println};
 
 use anyhow::{Result, anyhow};
 
@@ -126,7 +126,12 @@ pub fn dvs_get(
         return Err(anyhow!("No files to get"));
     }
 
-    let results = get_files(all_paths, &dvs_paths, config.backend(), dry_run.unwrap_or(false))?;
+    let results = get_files(
+        all_paths,
+        &dvs_paths,
+        config.backend(),
+        dry_run.unwrap_or(false),
+    )?;
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
