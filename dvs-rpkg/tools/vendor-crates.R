@@ -117,7 +117,6 @@ parse_tree_packages <- function(lines) {
     path <- NA_character_
     if (grepl(" \\([^()]*[/\\\\][^()]*\\)$", line)) {
       path <- sub("^.* \\(([^()]*[/\\\\][^()]*)\\)$", "\\1", line)
-      # Filter out git URLs — only local filesystem paths are "local"
       if (grepl("^https?://", path) || grepl("^git[+@]", path)) {
         path <- NA_character_
       }
