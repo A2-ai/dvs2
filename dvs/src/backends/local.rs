@@ -159,12 +159,13 @@ impl Backend for LocalBackend {
         }
         let tmp_path = path.with_extension("tmp");
         let stored_size = compression.compress(source, &tmp_path)?;
-        fs::rename(&tmp_path, &path)?;
+
         if self.use_shared_blob_mode() {
-            self.ensure_group_and_mode(&path, SHARED_BLOB_MODE)?;
+            self.ensure_group_and_mode(&tmp_path, SHARED_BLOB_MODE)?;
         } else {
-            make_readonly(&path)?;
+            make_readonly(&tmp_path)?;
         }
+        fs::rename(&tmp_path, &path)?;
         Ok(stored_size)
     }
 
@@ -207,9 +208,9 @@ impl Backend for LocalBackend {
             .create(true)
             .append(true)
             .open(&audit_path)?;
+        self.ensure_group_and_mode(&audit_path, SHARED_AUDIT_LOG_MODE)?;
         let json = serde_json::to_string(entry)?;
         writeln!(file, "{}", json)?;
-        self.ensure_group_and_mode(&audit_path, SHARED_AUDIT_LOG_MODE)?;
         Ok(())
     }
 
