@@ -334,22 +334,26 @@ mod tests {
             operation_id: "op-1".to_string(),
             timestamp: 1000000000,
             user: "alice".to_string(),
-            file: AuditFile {
-                path: PathBuf::from("file1.txt"),
-                hashes: hash.clone(),
+            action: Action::Add {
+                file: AuditFile {
+                    path: PathBuf::from("file1.txt"),
+                    hashes: hash.clone(),
+                },
+                compression: Compression::Zstd,
             },
-            action: Action::Add,
         };
 
         let entry2 = AuditEntry {
             operation_id: "op-2".to_string(),
             timestamp: 2000000000,
             user: "bob".to_string(),
-            file: AuditFile {
-                path: PathBuf::from("file2.txt"),
-                hashes: hash.clone(),
+            action: Action::Add {
+                file: AuditFile {
+                    path: PathBuf::from("file2.txt"),
+                    hashes: hash.clone(),
+                },
+                compression: Compression::Zstd,
             },
-            action: Action::Add,
         };
 
         backend.log_audit(&entry1).unwrap();
@@ -392,11 +396,13 @@ mod tests {
                             operation_id: format!("op-{worker}-{idx}"),
                             timestamp: (worker * entries_per_worker + idx) as i64,
                             user: format!("user-{worker}"),
-                            file: AuditFile {
-                                path: PathBuf::from(format!("file-{worker}-{idx}.txt")),
-                                hashes: hash.clone(),
+                            action: Action::Add {
+                                file: AuditFile {
+                                    path: PathBuf::from(format!("file-{worker}-{idx}.txt")),
+                                    hashes: hash.clone(),
+                                },
+                                compression: Compression::Zstd,
                             },
-                            action: Action::Add,
                         };
                         backend.log_audit(&entry).unwrap();
                     }

@@ -132,6 +132,7 @@ impl FileMetadata {
                         path: relative_path.as_ref().to_path_buf(),
                         hashes: self.hashes.clone(),
                     },
+                    self.compression,
                 );
                 if let Err(e) = backend.log_audit(&audit_entry) {
                     log::error!("Failed to write audit log {audit_entry:?}: {e}");
