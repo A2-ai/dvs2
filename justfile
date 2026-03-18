@@ -58,6 +58,7 @@ rpkg-build-release *args:
 
 rpkg-test *args:
     cargo test --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    bash {{quote(rpkg_dir / "tests/rv")}}
 
 rpkg-clippy *args:
     cargo clippy --manifest-path={{quote(rpkg_manifest)}} {{args}}

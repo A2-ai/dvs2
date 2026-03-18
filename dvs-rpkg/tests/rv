@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RPKG_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+echo "=== rv init ==="
+cd "$TMPDIR"
+rv init
+
+echo "=== rv add dvs (local path) ==="
+rv add dvs --path "$RPKG_DIR"
+
+echo "=== rv sync ==="
+rv sync
+
+echo "=== verify dvs is loadable ==="
+Rscript -e 'library(dvs); cat("dvs loaded successfully\n")'
+
+echo "PASS"
