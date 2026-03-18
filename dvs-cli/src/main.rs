@@ -4,6 +4,7 @@ use anyhow::bail;
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use serde_json::json;
+use tabled::Tabled;
 
 use dvs::AddDetail;
 use dvs::GetDetail;
@@ -63,6 +64,9 @@ pub enum Command {
         /// Include the files that are unsynced
         #[clap(long)]
         unsynced: bool,
+        /// Show all metadata columns in the table output
+        #[clap(long)]
+        with_metadata: bool,
     },
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
@@ -87,6 +91,39 @@ pub struct Cli {
 
     #[clap(subcommand)]
     pub command: Command,
+}
+
+#[derive(Tabled)]
+struct StatusRow {
+    path: String,
+    status: String,
+    size: String,
+}
+
+#[derive(Default, Tabled)]
+struct StatusRowFull<'a> {
+    path: String,
+    status: String,
+    size: String,
+    hash: &'a str,
+    created_by: &'a str,
+    add_time: &'a str,
+    compression: String,
+    message: &'a str,
+}
+
+impl<'a> From<&'a dvs::FileMetadata> for StatusRowFull<'a> {
+    fn from(m: &'a dvs::FileMetadata) -> Self {
+        Self {
+            size: m.size.to_string(),
+            hash: m.hashes.blake3.as_str(),
+            created_by: m.created_by.as_str(),
+            add_time: m.add_time.as_str(),
+            compression: m.compression.to_string(),
+            message: m.message.as_deref().unwrap_or(""),
+            ..Default::default()
+        }
+    }
 }
 
 fn try_main() -> Result<()> {
@@ -116,10 +153,7 @@ fn try_main() -> Result<()> {
                 current_dir
             };
 
-            if storage_path
-                .canonicalize()?
-                .starts_with(root.canonicalize()?)
-            {
+            if std::path::absolute(&storage_path)?.starts_with(std::path::absolute(&root)?) {
                 bail!("The given storage path is within the repository.")
             }
 
@@ -198,6 +232,7 @@ fn try_main() -> Result<()> {
             current,
             absent,
             unsynced,
+            with_metadata,
         } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -207,7 +242,7 @@ fn try_main() -> Result<()> {
             let mut statuses = get_status(&paths)?;
             if !show_all {
                 statuses.retain(|x| match &x.detail {
-                    StatusDetail::Success { status } => {
+                    StatusDetail::Success { status, .. } => {
                         (current && *status == Status::Current)
                             || (absent && *status == Status::Absent)
                             || (unsynced && *status == Status::Unsynced)
@@ -228,17 +263,52 @@ fn try_main() -> Result<()> {
                 }
             } else {
                 for file_status in &statuses {
-                    match &file_status.detail {
-                        StatusDetail::Success { status } => {
-                            println!("{}: {:?}", file_status.path.display(), status);
-                        }
-                        StatusDetail::Error { error } => {
-                            eprintln!(
-                                "Error getting status for {}: {error}",
-                                file_status.path.display()
-                            );
-                        }
+                    if let StatusDetail::Error { error } = &file_status.detail {
+                        eprintln!(
+                            "Error getting status for {}: {error}",
+                            file_status.path.display()
+                        );
                     }
+                }
+
+                if with_metadata {
+                    let rows: Vec<StatusRowFull> = statuses
+                        .iter()
+                        .filter_map(|fs| match &fs.detail {
+                            StatusDetail::Success { status, metadata } => {
+                                let mut row = metadata
+                                    .as_ref()
+                                    .map(StatusRowFull::from)
+                                    .unwrap_or_default();
+                                row.path = fs.path.display().to_string();
+                                row.status = status.to_string();
+                                Some(row)
+                            }
+                            StatusDetail::Error { .. } => None,
+                        })
+                        .collect();
+                    let table = tabled::Table::new(rows).to_string();
+                    println!("{table}");
+                } else {
+                    let rows: Vec<StatusRow> = statuses
+                        .iter()
+                        .filter_map(|fs| match &fs.detail {
+                            StatusDetail::Success { status, metadata } => {
+                                let size = match metadata {
+                                    Some(m) => m.size.to_string(),
+                                    None => String::new(),
+                                };
+                                Some(StatusRow {
+                                    path: fs.path.display().to_string(),
+                                    status: status.to_string(),
+                                    size,
+                                })
+                            }
+                            StatusDetail::Error { .. } => None,
+                        })
+                        .collect();
+                    let table = tabled::Table::new(rows).to_string();
+                    println!("{table}");
                 }
             }
             if has_errors {

@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 /// Outcome of an add or get operation.
@@ -21,4 +23,15 @@ pub enum Status {
     Absent,
     /// Local file exists but differs from stored version.
     Unsynced,
+}
+
+impl fmt::Display for Status {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Status::Current => write!(f, "current"),
+            Status::Absent => write!(f, "absent"),
+            Status::Unsynced => write!(f, "unsynced"),
+            Status::Untracked => write!(f, "untracked"),
+        }
+    }
 }

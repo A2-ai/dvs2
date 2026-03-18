@@ -22,32 +22,38 @@ pub struct FileStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum StatusDetail {
-    Success { status: Status },
-    Error { error: String },
+    Success {
+        status: Status,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metadata: Option<FileMetadata>,
+    },
+    Error {
+        error: String,
+    },
 }
 
 fn get_file_status(
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
     cache: Option<&Mutex<HashCache>>,
-) -> Result<Status> {
+) -> Result<(Status, Option<FileMetadata>)> {
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
     if !dvs_file_path.is_file() {
-        return Ok(Status::Untracked);
+        return Ok((Status::Untracked, None));
     }
     let existing_metadata: FileMetadata = serde_json::from_reader(fs::File::open(dvs_file_path)?)?;
     // If we have read the metadata, but we can't find the original file
     let file_path = paths.file_path(relative_path.as_ref());
     if !file_path.is_file() {
-        return Ok(Status::Absent);
+        return Ok((Status::Absent, Some(existing_metadata)));
     }
     let rel_str = relative_path.as_ref().to_string_lossy();
     let (hashes, size) = cache::hashes_for_file(&file_path, &rel_str, cache)?;
 
     if existing_metadata.hashes == hashes && existing_metadata.size == size {
-        Ok(Status::Current)
+        Ok((Status::Current, Some(existing_metadata)))
     } else {
-        Ok(Status::Unsynced)
+        Ok((Status::Unsynced, Some(existing_metadata)))
     }
 }
 
@@ -88,7 +94,10 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
                     }
                 };
                 let detail = match get_file_status(paths, &relative, cache.as_ref()) {
-                    Ok(status) => StatusDetail::Success { status },
+                    Ok((status, file_metadata)) => StatusDetail::Success {
+                        status,
+                        metadata: file_metadata,
+                    },
                     Err(e) => StatusDetail::Error {
                         error: e.to_string(),
                     },
@@ -134,8 +143,9 @@ mod tests {
         create_file(&root, "new.txt", b"content");
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "new.txt", Some(&cache)).unwrap();
+        let (status, metadata) = get_file_status(&paths, "new.txt", Some(&cache)).unwrap();
         assert_eq!(status, Status::Untracked);
+        assert!(metadata.is_none());
     }
 
     #[test]
@@ -152,8 +162,9 @@ mod tests {
             .unwrap();
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "synced.txt", Some(&cache)).unwrap();
+        let (status, metadata) = get_file_status(&paths, "synced.txt", Some(&cache)).unwrap();
         assert_eq!(status, Status::Current);
+        assert!(metadata.is_some());
     }
 
     #[test]
@@ -173,8 +184,9 @@ mod tests {
         fs::remove_file(&file_path).unwrap();
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "deleted.txt", Some(&cache)).unwrap();
+        let (status, metadata) = get_file_status(&paths, "deleted.txt", Some(&cache)).unwrap();
         assert_eq!(status, Status::Absent);
+        assert!(metadata.is_some());
     }
 
     #[test]
@@ -194,8 +206,9 @@ mod tests {
         fs::write(&file_path, b"changed content").unwrap();
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "modified.txt", Some(&cache)).unwrap();
+        let (status, metadata) = get_file_status(&paths, "modified.txt", Some(&cache)).unwrap();
         assert_eq!(status, Status::Unsynced);
+        assert!(metadata.is_some());
     }
 
     #[test]
@@ -220,7 +233,10 @@ mod tests {
         // All should be Current
         for status in &statuses {
             match &status.detail {
-                StatusDetail::Success { status } => assert_eq!(*status, Status::Current),
+                StatusDetail::Success { status, metadata } => {
+                    assert_eq!(*status, Status::Current);
+                    assert!(metadata.is_some());
+                }
                 StatusDetail::Error { error } => panic!("unexpected error: {error}"),
             }
         }
@@ -277,7 +293,7 @@ mod tests {
         );
 
         let cache = make_cache(&paths);
-        let status = get_file_status(&paths, "b.txt", Some(&cache)).unwrap();
+        let (status, _metadata) = get_file_status(&paths, "b.txt", Some(&cache)).unwrap();
         assert_eq!(status, Status::Current);
     }
 }
