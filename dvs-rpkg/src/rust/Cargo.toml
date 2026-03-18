@@ -9,6 +9,7 @@ publish = false
 [workspace]
 
 [lib]
+name = "dvs"
 path = "lib.rs"
 crate-type = ["staticlib"]
 
