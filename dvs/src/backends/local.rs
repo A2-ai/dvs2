@@ -99,18 +99,18 @@ impl Backend for LocalBackend {
         Ok(())
     }
 
-    fn store(&self, hash: &Hashes, source: &Path, compression: Compression) -> Result<()> {
+    fn store(&self, hash: &Hashes, source: &Path, compression: Compression) -> Result<u64> {
         let path = self.hash_to_path(hash)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
             self.apply_group(parent)?;
         }
         let tmp_path = path.with_extension("tmp");
-        compression.compress(source, &tmp_path)?;
+        let stored_size = compression.compress(source, &tmp_path)?;
         fs::rename(&tmp_path, &path)?;
         make_readonly(&path)?;
         self.apply_group(&path)?;
-        Ok(())
+        Ok(stored_size)
     }
 
     fn retrieve(&self, hash: &Hashes, target: &Path, compression: Compression) -> Result<bool> {
