@@ -45,13 +45,16 @@ mkfiles() {
   local size="${2:?size is required}"
   local dir="${3:?dir is required}"
   local bytes
+  local width=${#n}
   local i
+  local padded
 
   bytes="$(size_to_bytes "$size")"
   mkdir -p "$dir"
 
   for i in $(seq 1 "$n"); do
-    head -c "$bytes" /dev/urandom > "$dir/file_${i}.bin"
+    padded="$(printf '%0*d' "$width" "$i")"
+    head -c "$bytes" /dev/urandom > "$dir/file_${padded}.bin"
   done
 }
 
@@ -108,7 +111,11 @@ mkdatasetfiles() {
   size_label="${size//[^[:alnum:]_.-]/_}"
   mkdir -p "$dir"
 
+  local width=${#n}
+  local padded
+
   for i in $(seq 1 "$n"); do
+    padded="$(printf '%0*d' "$width" "$i")"
     awk -v target_bytes="$bytes" \
         -v extra_cols="$extra_cols" \
         -v max_int="$max_int" '
@@ -169,6 +176,6 @@ mkdatasetfiles() {
 
         close(rng)
       }
-    ' "$dataset" > "$dir/file_${dataset_label}_${size_label}_${i}.csv"
+    ' "$dataset" > "$dir/file_${dataset_label}_${size_label}_${padded}.csv"
   done
 }
