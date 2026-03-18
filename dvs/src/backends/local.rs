@@ -91,6 +91,10 @@ impl LocalBackend {
 }
 
 impl Backend for LocalBackend {
+    fn is_initialized(&self) -> Result<bool> {
+        Ok(self.path.join(AUDIT_LOG_FILENAME).exists())
+    }
+
     fn init(&self) -> Result<()> {
         log::debug!("Creating storage directory: {}", self.path.display());
         fs::create_dir_all(&self.path)?;
