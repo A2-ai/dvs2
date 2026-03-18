@@ -1,6 +1,5 @@
 [workspace]
 members = ["dvs", "dvs-cli"]
-exclude = ["dvsR"]
 resolver = "2"
 
 [profile.release]
