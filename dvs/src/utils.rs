@@ -34,6 +34,10 @@ pub fn format_size(bytes: u64) -> String {
 /// Otherwise, defaults to up to 4 threads per available unit of
 /// parallelism, capped at 16 and clamped to the amount of available work.
 pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
+    debug_assert_eq!(
+        work_items, 0,
+        "the thread pool should not be instantiated when there are no work items to process"
+    );
     // a proxy for available logical cpu cores
     let available = std::thread::available_parallelism()
         .map(|n| n.get())
