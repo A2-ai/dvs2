@@ -8,6 +8,13 @@ rpkg_manifest := rpkg_dir / "src/rust/Cargo.toml"
 default:
     @just --list
 
+datasets:
+    curl -fL \
+    -o theoph.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Theoph.csv \
+    -o indometh.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Indometh.csv \
+    -o chickweight.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/ChickWeight.csv \
+    -o orange.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Orange.csv
+
 # ============================================================================
 # dvs crate
 # ============================================================================
