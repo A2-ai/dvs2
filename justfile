@@ -39,7 +39,7 @@ check-std-fs:
 
 # Install the dvs CLI binary
 install-cli *args:
-    cargo install --force --locked --path=dvs-cli {{args}}
+    cargo install --profile dev-cli --force --locked --path=dvs-cli {{args}}
 
 # ============================================================================
 # R package (dvsR)

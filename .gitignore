@@ -44,3 +44,5 @@ dvs.toml
 # markdown rendering artefacts 
 ui/*_files
 /README.md
+dvs_repo_*
+dvs_storage_*
