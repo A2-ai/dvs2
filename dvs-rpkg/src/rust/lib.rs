@@ -19,6 +19,15 @@ use dvs::{
     get_status,
 };
 
+/// Initialize a DVS repository in the given directory.
+///
+/// Creates the `.dvs` metadata folder and configures storage for versioned files.
+///
+/// @param storage_path Path to the storage directory where file contents are kept.
+/// @param root_dir Repository root directory. Defaults to the current working directory.
+/// @param group Unix group name to set on stored files for shared access.
+/// @param metadata_folder_name Name of the metadata folder. Defaults to `.dvs`.
+/// @param no_compression If `TRUE`, disable compression for stored files.
 #[miniextendr]
 pub fn dvs_init(
     storage_path: PathBuf,
@@ -45,6 +54,15 @@ pub fn dvs_init(
     Ok(list!("status" = "initialized"))
 }
 
+/// Add files to DVS-managed storage.
+///
+/// Hashes and copies the specified files into the content-addressable store,
+/// replacing each original with a `.dvs` metadata file.
+///
+/// @param files Character vector of file paths to add.
+/// @param message Optional commit message describing why the files were added.
+/// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
+/// @param dry_run If `TRUE`, report what would be added without modifying anything.
 #[miniextendr]
 pub fn dvs_add(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
@@ -77,6 +95,15 @@ pub fn dvs_add(
     ))
 }
 
+/// Report the sync status of DVS-managed files.
+///
+/// Compares `.dvs` metadata files against their stored contents and local
+/// working copies. By default all files are shown; pass filter flags to
+/// restrict output.
+///
+/// @param current If `TRUE`, include files whose local copy matches storage.
+/// @param absent If `TRUE`, include files that exist in metadata but not locally.
+/// @param unsynced If `TRUE`, include files whose local copy differs from storage.
 #[miniextendr]
 pub fn dvs_status(
     #[miniextendr(default = "NULL")] current: Option<bool>,
@@ -108,6 +135,14 @@ pub fn dvs_status(
     Ok(DataFrame::from_iter(statuses.into_iter().map(|x| x.into())))
 }
 
+/// Retrieve files from DVS storage into the working directory.
+///
+/// Reads `.dvs` metadata files, fetches the corresponding contents from
+/// the content-addressable store, and writes them to their original paths.
+///
+/// @param files Character vector of `.dvs` metadata file paths to retrieve.
+/// @param glob Optional glob pattern to select `.dvs` files (e.g. `"data/*.dvs"`).
+/// @param dry_run If `TRUE`, report what would be retrieved without writing files.
 #[miniextendr]
 pub fn dvs_get(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
