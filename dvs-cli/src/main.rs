@@ -157,9 +157,28 @@ fn try_main() -> Result<()> {
                         AddDetail::Error { error: err } => {
                             eprintln!("Error adding {}: {err}", result.path.display());
                         }
-                        AddDetail::Success { .. } => {
-                            println!("Added: {}", result.path.display());
-                        }
+                        AddDetail::Success {
+                            outcome,
+                            hash,
+                            size,
+                            stored_size,
+                        } => match outcome {
+                            Outcome::Copied => {
+                                let msg = if dry_run { "To add" } else { "Added" };
+                                let stored_info = match stored_size {
+                                    Some(ss) => {
+                                        format!(" --> saved [{}]", format_size(*ss))
+                                    }
+                                    None => String::new(),
+                                };
+                                println!(
+                                    "{msg}: {} [{}]{stored_info} as {hash}",
+                                    result.path.display(),
+                                    format_size(*size),
+                                );
+                            }
+                            Outcome::Present => {}
+                        },
                     }
                 }
             }
