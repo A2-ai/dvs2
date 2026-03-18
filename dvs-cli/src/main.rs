@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use anyhow::bail;
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use serde_json::json;
@@ -102,7 +103,7 @@ fn try_main() -> Result<()> {
             group,
             no_compression,
         } => {
-            let mut config = Config::new_local(storage_path, group)?;
+            let mut config = Config::new_local(&storage_path, group)?;
             if no_compression {
                 config.set_compression(Compression::None);
             }
@@ -114,6 +115,13 @@ fn try_main() -> Result<()> {
             } else {
                 current_dir
             };
+
+            if storage_path
+                .canonicalize()?
+                .starts_with(root.canonicalize()?)
+            {
+                bail!("The given storage path is within the repository.")
+            }
 
             let repo_root = init(&root, config)?;
             if cli.json {
