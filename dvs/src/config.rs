@@ -17,6 +17,15 @@ pub enum Compression {
     Zstd,
 }
 
+impl std::fmt::Display for Compression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Compression::None => write!(f, "none"),
+            Compression::Zstd => write!(f, "zstd"),
+        }
+    }
+}
+
 impl Compression {
     pub fn compress(&self, source: &Path, dest: &Path) -> Result<u64> {
         match self {
