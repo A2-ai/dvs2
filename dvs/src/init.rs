@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use fs_err as fs;
+use uuid::Uuid;
 
+use crate::audit::AuditEntry;
 use crate::config::Config;
 use crate::paths;
 
@@ -35,6 +37,11 @@ pub fn init(root_dir: impl AsRef<Path>, config: Config) -> Result<PathBuf> {
         return Err(e);
     }
 
+    let audit_entry = AuditEntry::new_init(Uuid::new_v4(), config.clone(), root_dir.to_path_buf());
+    if let Err(e) = config.backend().log_audit(&audit_entry) {
+        log::error!("Failed to write init audit log {audit_entry:?}: {e}");
+    }
+
     log::info!("DVS repository initialized successfully");
     Ok(root_dir.to_path_buf())
 }
@@ -58,6 +65,22 @@ mod tests {
         assert!(root.join(".dvs").is_dir());
         // Storage folder should exist
         assert!(storage.is_dir());
+    }
+
+    #[test]
+    fn init_logs_audit_entry() {
+        let (_tmp, root) = create_temp_git_repo();
+        let storage = root.join(".storage");
+
+        let config = Config::new_local(&storage, None).unwrap();
+        init(&root, config.clone()).unwrap();
+
+        let entries = config.backend().read_audit_file(&[]).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(
+            entries[0].action,
+            crate::audit::Action::Init { .. }
+        ));
     }
 
     #[test]
