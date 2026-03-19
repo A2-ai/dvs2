@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+print_eval_rscript() {
+  tee /dev/stderr | Rscript -
+}
+
 install_dvs() {
   just install-cli || exit 1
   just install-rpkg || exit 1
@@ -41,6 +45,7 @@ size_to_bytes() {
 }
 
 mkfiles() {
+  { set +x; } 2>/dev/null
   local n="${1:?file count is required}"
   local size="${2:?size is required}"
   local dir="${3:?dir is required}"
@@ -56,6 +61,7 @@ mkfiles() {
     padded="$(printf '%0*d' "$width" "$i")"
     head -c "$bytes" /dev/urandom > "$dir/file_${padded}.bin"
   done
+  set -x
 }
 
 resolve_dataset_archetype() {
@@ -91,6 +97,7 @@ resolve_dataset_archetype() {
 }
 
 mkdatasetfiles() {
+  { set +x; } 2>/dev/null
   local n="${1:?file count is required}"
   local size="${2:?size is required}"
   local dir="${3:?dir is required}"
@@ -162,4 +169,5 @@ mkdatasetfiles() {
       }
     ' "$dataset" > "$dir/file_${dataset_label}_${size_label}_${padded}.csv" || return 1
   done
+  set -x
 }

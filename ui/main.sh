@@ -60,6 +60,24 @@ dvs_add("$DVS_REPO_RPKG/data/derived", glob = "*") # WORKS
 # dvs_add(data_derived_files) # WORKS
 EOF
 
+# region: STATUS
+
+cd "$DVS_REPO_CLI"
+
+dvs status
+
+# NOT IMPLEMENTED:
+# dvs status data/derived/file_chickweight_*
+
+cd "$DVS_REPO_RPKG"
+
+print_eval_rscript <<EOF
+library(dvs)
+
+dvs_status()
+
+EOF
+
 # TODO:
 #   [ ] make tibble a Suggests, and _impl post-fix the dvs_* from Rust stuff
 #   [ ] truncate the hash
