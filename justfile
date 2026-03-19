@@ -9,11 +9,12 @@ default:
     @just --list
 
 datasets:
+    mkdir -p datasets
     curl -fL \
-    -o theoph.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Theoph.csv \
-    -o indometh.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Indometh.csv \
-    -o chickweight.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/ChickWeight.csv \
-    -o orange.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Orange.csv
+    -o datasets/theoph.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Theoph.csv \
+    -o datasets/indometh.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Indometh.csv \
+    -o datasets/chickweight.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/ChickWeight.csv \
+    -o datasets/orange.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Orange.csv
 
 # ============================================================================
 # dvs crate
