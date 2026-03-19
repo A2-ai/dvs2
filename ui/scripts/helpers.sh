@@ -97,44 +97,34 @@ mkdatasetfiles() {
   local archetype="${4:-chickweight}"
   local extra_cols="${5:-10}"
   local max_int="${6:-1000}"
-  local bytes
-  local dataset
-  local dataset_label
-  local size_label
-  local i
 
-  bytes="$(size_to_bytes "$size")"
+  local bytes dataset dataset_label size_label width padded i
+
+  bytes="$(size_to_bytes "$size")" || return 1
   dataset="$(resolve_dataset_archetype "$archetype")" || return 1
+
   dataset_label="$(basename "$dataset")"
   dataset_label="${dataset_label%.csv}"
   dataset_label="${dataset_label//[^[:alnum:]_-]/_}"
   size_label="${size//[^[:alnum:]_.-]/_}"
-  mkdir -p "$dir"
 
-  local width=${#n}
-  local padded
+  mkdir -p "$dir" || return 1
 
-  for i in $(seq 1 "$n"); do
+  width=${#n}
+
+  for ((i = 1; i <= n; i++)); do
     padded="$(printf '%0*d' "$width" "$i")"
+
     awk -v target_bytes="$bytes" \
         -v extra_cols="$extra_cols" \
-        -v max_int="$max_int" '
+        -v max_int="$max_int" \
+        -v seed="$i" '
       BEGIN {
-        rng = "od -An -v -tu2 /dev/urandom"
+        srand(seed)
       }
 
-      function next_rand(   line) {
-        while (rand_index >= rand_count) {
-          if ((rng | getline line) <= 0) {
-            exit 1
-          }
-
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-          rand_count = split(line, rand_buffer, /[[:space:]]+/)
-          rand_index = 0
-        }
-
-        return rand_buffer[++rand_index] % max_int
+      function next_rand() {
+        return int(rand() * max_int)
       }
 
       NR == 1 {
@@ -150,16 +140,12 @@ mkdatasetfiles() {
       }
 
       END {
-        if (header == "") {
-          exit 1
-        }
+        if (header == "") exit 1
 
         print header
         written = length(header) + 1
 
-        if (row_count == 0) {
-          exit 0
-        }
+        if (row_count == 0) exit 0
 
         row_index = 0
         while (written < target_bytes) {
@@ -173,9 +159,7 @@ mkdatasetfiles() {
           print line
           written += length(line) + 1
         }
-
-        close(rng)
       }
-    ' "$dataset" > "$dir/file_${dataset_label}_${size_label}_${padded}.csv"
+    ' "$dataset" > "$dir/file_${dataset_label}_${size_label}_${padded}.csv" || return 1
   done
 }
