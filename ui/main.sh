@@ -15,11 +15,11 @@ cd "$DVS_REPO_CLI"
 
 dvs init "$DVS_STORAGE_CLI"
 
-mkfiles 1 10M data/derived
+mkfiles 5 10M data/derived
 
 dvs add data/derived/file_*.bin
 
-mkdatasetfiles 1 10M data/derived chickweight
+mkdatasetfiles 5 10M data/derived chickweight
 
 dvs add data/derived/file_chickweight_*.csv
 
@@ -50,7 +50,14 @@ EOF
 # EOF
 
 
-diff -r "${DVS_REPO_CLI}"/.dvs "${DVS_REPO_RPKG}"/.dvs
+# Compare dvs.toml (created by init)
+diff "${DVS_REPO_CLI}"/dvs.toml "${DVS_REPO_RPKG}"/dvs.toml
+
+# Compare .dvs metadata directories
+diff -rN "${DVS_REPO_CLI}"/.dvs "${DVS_REPO_RPKG}"/.dvs
+
+# Compare storage directories
+diff -rN "${DVS_STORAGE_CLI}" "${DVS_STORAGE_RPKG}"
 
 
 # This will delete everything.
