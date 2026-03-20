@@ -13,7 +13,10 @@ use crate::paths;
 pub fn init(root_dir: impl AsRef<Path>, config: Config) -> Result<PathBuf> {
     let root_dir = root_dir.as_ref();
     if root_dir.join(paths::CONFIG_FILE_NAME).exists() {
-        bail!("Configuration already exists in {}", root_dir.display());
+        bail!("dvs is already initialized (dvs.toml exists)");
+    }
+    if config.backend().is_initialized()? {
+        bail!("dvs is already initialized (backend storage exists)");
     }
     config.save(root_dir)?;
 
@@ -91,10 +94,30 @@ mod tests {
         let config = Config::new_local(&storage, None).unwrap();
         init(&root, config.clone()).unwrap();
 
-        // Second init should fail
+        // Second init should fail because dvs.toml exists
+        let result = init(&root, config.clone());
+        assert!(result.is_err(), "second init should fail");
+    }
+
+    #[test]
+    fn init_fails_if_backend_already_initialized() {
+        let (_tmp, root) = create_temp_git_repo();
+        let storage = root.join(".storage");
+
+        let config = Config::new_local(&storage, None).unwrap();
+        assert!(!config.backend().is_initialized().unwrap());
+        init(&root, config.clone()).unwrap();
+        assert!(config.backend().is_initialized().unwrap());
+
+        // Remove dvs.toml and .dvs but leave backend storage intact
+        fs::remove_file(root.join("dvs.toml")).unwrap();
+        fs::remove_dir_all(root.join(".dvs")).unwrap();
+
         let result = init(&root, config);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("already exists"));
+        assert!(
+            result.is_err(),
+            "should detect backend is already initialized"
+        );
     }
 
     #[test]
