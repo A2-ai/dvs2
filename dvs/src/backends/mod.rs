@@ -8,6 +8,9 @@ use anyhow::Result;
 pub mod local;
 
 pub trait Backend: Send + Sync {
+    /// Check whether the backend has already been initialized.
+    fn is_initialized(&self) -> Result<bool>;
+
     /// Initialize the backend storage (create directories, set permissions, etc.)
     fn init(&self) -> Result<()>;
 
