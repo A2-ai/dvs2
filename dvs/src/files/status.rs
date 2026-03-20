@@ -38,18 +38,20 @@ pub struct StatusFilter {
 
 /// We need to handle `.`, `./` etc but we can't canonicalize because
 /// the path might not exist and we want the path relative to the directory so no symlink resolution
-fn normalize_path(p: PathBuf) -> PathBuf {
+fn normalize_path(p: PathBuf) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
             Component::CurDir => {}
             Component::ParentDir => {
-                out.pop();
+                if !out.pop() {
+                    return None;
+                }
             }
             _ => out.push(c),
         }
     }
-    out
+    Some(out)
 }
 
 impl StatusFilter {
@@ -64,14 +66,12 @@ impl StatusFilter {
         let repo_root = dvs_paths.repo_root();
         let paths = user_paths
             .into_iter()
-            .map(|p| {
+            .filter_map(|p| {
                 if p.is_absolute() {
-                    // Absolute path: strip repo root to get repo-relative path.
-                    // If outside the repo, strip_prefix fails and we pass through
-                    // unchanged (will match nothing).
                     p.strip_prefix(repo_root)
+                        .ok()
                         .map(|r| r.to_path_buf())
-                        .unwrap_or(p)
+                        .and_then(normalize_path)
                 } else {
                     let joined = if let Some(prefix) = cwd_prefix {
                         prefix.join(&p)
@@ -381,7 +381,7 @@ mod tests {
             let filter = StatusFilter {
                 paths: filter_paths
                     .iter()
-                    .map(|p| normalize_path(PathBuf::from(p)))
+                    .filter_map(|p| normalize_path(PathBuf::from(p)))
                     .collect(),
                 recursive,
             };
@@ -409,6 +409,12 @@ mod tests {
             (&["."], "a.txt", true),
             // "." does NOT match nested files
             (&["."], "dir1/b.txt", false),
+            // "../foo" escapes root → dropped, matches nothing
+            (&["../foo"], "foo", false),
+            // "dir1/../dir2" normalizes to "dir2", matches direct child
+            (&["dir1/../dir2"], "dir2/d.txt", true),
+            // "dir1/.." normalizes to root, matches root-level files
+            (&["dir1/.."], "a.txt", true),
         ];
         run_filter_cases(cases, false);
     }
@@ -427,6 +433,12 @@ mod tests {
             (&["."], "a.txt", true),
             (&["."], "dir1/b.txt", true),
             (&["."], "dir1/sub/c.txt", true),
+            // "../foo" escapes root → dropped
+            (&["../foo"], "foo", false),
+            // "a/../../x" escapes root → dropped
+            (&["a/../../x"], "x", false),
+            // "dir1/../dir2" normalizes to "dir2", matches descendants
+            (&["dir1/../dir2"], "dir2/d.txt", true),
         ];
         run_filter_cases(cases, true);
     }
@@ -450,5 +462,53 @@ mod tests {
         let statuses = get_status(&paths, Some(&filter)).unwrap();
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
+    }
+
+    #[test]
+    fn from_user_paths_with_subdirectory_cwd() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (_config, _dvs_dir) = init_dvs_repo(&root);
+
+        // Create subdirectories so canonicalize works in DvsPaths::new
+        fs::create_dir_all(root.join("subdir/deep")).unwrap();
+        fs::create_dir_all(root.join("dir2")).unwrap();
+
+        // From subdir/: ../foo → resolves to "foo" (valid)
+        let paths = DvsPaths::new(
+            fs::canonicalize(root.join("subdir")).unwrap(),
+            root.to_path_buf(),
+            ".dvs",
+        )
+        .unwrap();
+        let filter = StatusFilter::from_user_paths(vec![PathBuf::from("../foo")], false, &paths);
+        assert_eq!(filter.paths, vec![PathBuf::from("foo")]);
+
+        // From subdir/: ../../foo → escapes root → dropped (empty)
+        let filter = StatusFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths);
+        assert!(
+            filter.paths.is_empty(),
+            "../../foo should escape root and be dropped"
+        );
+
+        // From subdir/deep/: ../../foo → resolves to "foo" (valid, 2 levels up = root)
+        let paths_deep = DvsPaths::new(
+            fs::canonicalize(root.join("subdir/deep")).unwrap(),
+            root.to_path_buf(),
+            ".dvs",
+        )
+        .unwrap();
+        let filter =
+            StatusFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths_deep);
+        assert_eq!(filter.paths, vec![PathBuf::from("foo")]);
+
+        // From subdir/: ../dir2/file.txt → resolves to "dir2/file.txt"
+        let filter =
+            StatusFilter::from_user_paths(vec![PathBuf::from("../dir2/file.txt")], false, &paths);
+        assert_eq!(filter.paths, vec![PathBuf::from("dir2/file.txt")]);
+
+        // From subdir/: absolute path with .. like <root>/subdir/../a.txt → normalizes to "a.txt"
+        let abs_with_dotdot = root.join("subdir/../a.txt");
+        let filter = StatusFilter::from_user_paths(vec![abs_with_dotdot], false, &paths);
+        assert_eq!(filter.paths, vec![PathBuf::from("a.txt")]);
     }
 }
