@@ -27,19 +27,37 @@ dvs_add <- function(
   glob = NULL,
   dry_run = NULL
 ) {
-  dvs_add_impl(files = files, message = message, glob = glob, dry_run = dry_run)
+  get_data_frame <- dvs_add_impl(files = files, message = message, glob = glob, dry_run = dry_run)
+    if (requireNamespace("tibble")) {
+    tibble::as_tibble(get_data_frame)
+  } else {
+    get_data_frame
+  }
 }
 
 #' @inherit dvs_status_impl title description params
 #' @rdname dvs_status
+#' 
+#' 
 #' @export
 dvs_status <- function(current = NULL, absent = NULL, unsynced = NULL) {
-  dvs_status_impl(current = current, absent = absent, unsynced = unsynced)
+  status_data_frame <-
+    dvs_status_impl(current = current, absent = absent, unsynced = unsynced)
+  if (requireNamespace("tibble")) {
+    tibble::as_tibble(status_data_frame)
+  } else {
+    status_data_frame
+  }
 }
 
 #' @inherit dvs_get_impl title description params
 #' @rdname dvs_get
 #' @export
 dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
-  dvs_get_impl(files = files, glob = glob, dry_run = dry_run)
+  get_data_frame <- dvs_get_impl(files = files, glob = glob, dry_run = dry_run)
+    if (requireNamespace("tibble")) {
+    tibble::as_tibble(get_data_frame)
+  } else {
+    get_data_frame
+  }
 }
