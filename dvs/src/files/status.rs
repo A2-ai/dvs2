@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::Result;
@@ -9,21 +9,92 @@ use walkdir::WalkDir;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
+use crate::paths::DvsPaths;
 use crate::utils::get_threadpool;
-use crate::{DvsPaths, Status, cache};
+use crate::{Status, cache};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileStatus {
     pub path: PathBuf,
     #[serde(flatten)]
     pub detail: StatusDetail,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum StatusDetail {
     Success { status: Status },
     Error { error: String },
+}
+
+/// Which paths to get status for
+/// eg you can pass dir1/ dir2/ and it will expand to dir1/* dir2/*
+/// If `recursive` is `true`, then it will expand to dir1/**/* dir2/**/*
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StatusFilter {
+    paths: Vec<PathBuf>,
+    recursive: bool,
+}
+
+/// We need to handle `.`, `./` etc but we can't canonicalize because
+/// the path might not exist and we want the path relative to the directory so no symlink resolution
+fn normalize_path(p: PathBuf) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    Some(out)
+}
+
+impl StatusFilter {
+    /// Create a filter from user-provided paths (relative to cwd) and a recursive flag.
+    /// Translates cwd-relative paths to repo-root-relative using `dvs_paths.cwd_relative_to_root()`.
+    pub fn from_user_paths(
+        user_paths: Vec<PathBuf>,
+        recursive: bool,
+        dvs_paths: &DvsPaths,
+    ) -> Self {
+        let cwd_prefix = dvs_paths.cwd_relative_to_root();
+        let repo_root = dvs_paths.repo_root();
+        let paths = user_paths
+            .into_iter()
+            .filter_map(|p| {
+                if p.is_absolute() {
+                    p.strip_prefix(repo_root)
+                        .ok()
+                        .map(|r| r.to_path_buf())
+                        .and_then(normalize_path)
+                } else {
+                    let joined = if let Some(prefix) = cwd_prefix {
+                        prefix.join(&p)
+                    } else {
+                        p
+                    };
+                    normalize_path(joined)
+                }
+            })
+            .collect();
+        StatusFilter { paths, recursive }
+    }
+
+    fn matches(&self, tracked_path: &Path) -> bool {
+        self.paths.iter().any(|filter_path| {
+            // Exact match (user passed a file path)
+            tracked_path == filter_path
+                // Recursive: any descendant
+                || (self.recursive && tracked_path.starts_with(filter_path))
+                // Non-recursive: direct child
+                || (!self.recursive && tracked_path.parent() == Some(filter_path.as_path()))
+        })
+    }
 }
 
 fn get_file_status(
@@ -51,7 +122,7 @@ fn get_file_status(
     }
 }
 
-pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
+pub fn get_status(paths: &DvsPaths, filter: Option<&StatusFilter>) -> Result<Vec<FileStatus>> {
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
     let cache = try_open_cache(paths);
@@ -75,28 +146,33 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
     let mut results: Vec<FileStatus> = pool.install(|| {
         entries
             .into_par_iter()
-            .map(|dvs_path| {
+            .filter_map(|dvs_path| {
                 let relative = match dvs_path.strip_prefix(&dvs_directory) {
                     Ok(r) => r.with_extension(""),
                     Err(e) => {
-                        return FileStatus {
+                        return Some(FileStatus {
                             path: dvs_path,
                             detail: StatusDetail::Error {
                                 error: format!("failed to determine relative path: {e}"),
                             },
-                        };
+                        });
                     }
                 };
+                if let Some(f) = filter {
+                    if !f.matches(&relative) {
+                        return None;
+                    }
+                }
                 let detail = match get_file_status(paths, &relative, cache.as_ref()) {
                     Ok(status) => StatusDetail::Success { status },
                     Err(e) => StatusDetail::Error {
                         error: e.to_string(),
                     },
                 };
-                FileStatus {
+                Some(FileStatus {
                     path: relative.to_path_buf(),
                     detail,
-                }
+                })
             })
             .collect()
     });
@@ -214,7 +290,7 @@ mod tests {
                 .unwrap();
         }
 
-        let statuses = get_status(&paths).unwrap();
+        let statuses = get_status(&paths, None).unwrap();
         assert_eq!(statuses.len(), 3);
 
         // All should be Current
@@ -279,5 +355,160 @@ mod tests {
         let cache = make_cache(&paths);
         let status = get_file_status(&paths, "b.txt", Some(&cache)).unwrap();
         assert_eq!(status, Status::Current);
+    }
+
+    /// Helper to set up a repo with files at various directory depths.
+    /// Returns (TempDir, DvsPaths) with tracked files:
+    ///   "a.txt", "dir1/b.txt", "dir1/sub/c.txt", "dir2/d.txt"
+    fn setup_filtered_repo() -> (tempfile::TempDir, DvsPaths) {
+        let (tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+
+        for name in ["a.txt", "dir1/b.txt", "dir1/sub/c.txt", "dir2/d.txt"] {
+            let file_path = create_file(&root, name, name.as_bytes());
+            let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+            metadata
+                .save(Uuid::new_v4(), &file_path, backend, &paths, name)
+                .unwrap();
+        }
+        (tmp, paths)
+    }
+
+    fn run_filter_cases(cases: Vec<(&[&str], &str, bool)>, recursive: bool) {
+        for (filter_paths, test_path, expected) in cases {
+            let filter = StatusFilter {
+                paths: filter_paths
+                    .iter()
+                    .filter_map(|p| normalize_path(PathBuf::from(p)))
+                    .collect(),
+                recursive,
+            };
+            assert_eq!(
+                filter.matches(Path::new(test_path)),
+                expected,
+                "filter={filter_paths:?} recursive={recursive} path={test_path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn status_filter_matches_non_recursive() {
+        // (filter_paths, test_path, expected)
+        let cases: Vec<(&[&str], &str, bool)> = vec![
+            // direct child matches
+            (&["dir1"], "dir1/b.txt", true),
+            // nested child does NOT match
+            (&["dir1"], "dir1/sub/c.txt", false),
+            // exact file match
+            (&["dir2/d.txt"], "dir2/d.txt", true),
+            // exact file: different file does NOT match
+            (&["dir2/d.txt"], "dir2/e.txt", false),
+            // "." matches root-level files
+            (&["."], "a.txt", true),
+            // "." does NOT match nested files
+            (&["."], "dir1/b.txt", false),
+            // "../foo" escapes root → dropped, matches nothing
+            (&["../foo"], "foo", false),
+            // "dir1/../dir2" normalizes to "dir2", matches direct child
+            (&["dir1/../dir2"], "dir2/d.txt", true),
+            // "dir1/.." normalizes to root, matches root-level files
+            (&["dir1/.."], "a.txt", true),
+        ];
+        run_filter_cases(cases, false);
+    }
+
+    #[test]
+    fn status_filter_matches_recursive() {
+        // (filter_paths, test_path, expected)
+        let cases: Vec<(&[&str], &str, bool)> = vec![
+            // direct child matches
+            (&["dir1"], "dir1/b.txt", true),
+            // nested child matches
+            (&["dir1"], "dir1/sub/c.txt", true),
+            // unrelated dir does NOT match
+            (&["dir1"], "dir2/d.txt", false),
+            // "." matches everything recursively
+            (&["."], "a.txt", true),
+            (&["."], "dir1/b.txt", true),
+            (&["."], "dir1/sub/c.txt", true),
+            // "../foo" escapes root → dropped
+            (&["../foo"], "foo", false),
+            // "a/../../x" escapes root → dropped
+            (&["a/../../x"], "x", false),
+            // "dir1/../dir2" normalizes to "dir2", matches descendants
+            (&["dir1/../dir2"], "dir2/d.txt", true),
+        ];
+        run_filter_cases(cases, true);
+    }
+
+    #[test]
+    fn get_status_with_filter() {
+        let (_tmp, paths) = setup_filtered_repo();
+
+        // Relative path filter
+        let filter = StatusFilter {
+            paths: vec![PathBuf::from("dir1")],
+            recursive: false,
+        };
+        let statuses = get_status(&paths, Some(&filter)).unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
+
+        // Absolute path filter via from_user_paths
+        let abs_path = paths.repo_root().join("dir1/b.txt");
+        let filter = StatusFilter::from_user_paths(vec![abs_path], false, &paths);
+        let statuses = get_status(&paths, Some(&filter)).unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
+    }
+
+    #[test]
+    fn from_user_paths_with_subdirectory_cwd() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (_config, _dvs_dir) = init_dvs_repo(&root);
+
+        // Create subdirectories so canonicalize works in DvsPaths::new
+        fs::create_dir_all(root.join("subdir/deep")).unwrap();
+        fs::create_dir_all(root.join("dir2")).unwrap();
+
+        // From subdir/: ../foo → resolves to "foo" (valid)
+        let paths = DvsPaths::new(
+            fs::canonicalize(root.join("subdir")).unwrap(),
+            root.to_path_buf(),
+            ".dvs",
+        )
+        .unwrap();
+        let filter = StatusFilter::from_user_paths(vec![PathBuf::from("../foo")], false, &paths);
+        assert_eq!(filter.paths, vec![PathBuf::from("foo")]);
+
+        // From subdir/: ../../foo → escapes root → dropped (empty)
+        let filter = StatusFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths);
+        assert!(
+            filter.paths.is_empty(),
+            "../../foo should escape root and be dropped"
+        );
+
+        // From subdir/deep/: ../../foo → resolves to "foo" (valid, 2 levels up = root)
+        let paths_deep = DvsPaths::new(
+            fs::canonicalize(root.join("subdir/deep")).unwrap(),
+            root.to_path_buf(),
+            ".dvs",
+        )
+        .unwrap();
+        let filter =
+            StatusFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths_deep);
+        assert_eq!(filter.paths, vec![PathBuf::from("foo")]);
+
+        // From subdir/: ../dir2/file.txt → resolves to "dir2/file.txt"
+        let filter =
+            StatusFilter::from_user_paths(vec![PathBuf::from("../dir2/file.txt")], false, &paths);
+        assert_eq!(filter.paths, vec![PathBuf::from("dir2/file.txt")]);
+
+        // From subdir/: absolute path with .. like <root>/subdir/../a.txt → normalizes to "a.txt"
+        let abs_with_dotdot = root.join("subdir/../a.txt");
+        let filter = StatusFilter::from_user_paths(vec![abs_with_dotdot], false, &paths);
+        assert_eq!(filter.paths, vec![PathBuf::from("a.txt")]);
     }
 }

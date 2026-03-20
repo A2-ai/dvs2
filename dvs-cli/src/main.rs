@@ -8,6 +8,7 @@ use serde_json::json;
 use dvs::AddDetail;
 use dvs::GetDetail;
 use dvs::StatusDetail;
+use dvs::StatusFilter;
 use dvs::add_files;
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
@@ -54,6 +55,11 @@ pub enum Command {
     },
     /// Gets the status of each files in the current repository
     Status {
+        /// Paths (files or directories) to check status for
+        paths: Vec<PathBuf>,
+        /// Recursively include files in subdirectories for given directories
+        #[clap(long, short)]
+        recursive: bool,
         /// Include the files that are current
         #[clap(long)]
         current: bool,
@@ -195,16 +201,25 @@ fn try_main() -> Result<()> {
             }
         }
         Command::Status {
+            paths: user_paths,
+            recursive,
             current,
             absent,
             unsynced,
         } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-            let paths = DvsPaths::from_cwd(&config)?;
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !unsynced;
 
-            let mut statuses = get_status(&paths)?;
+            let filter = if user_paths.is_empty() {
+                None
+            } else {
+                Some(StatusFilter::from_user_paths(
+                    user_paths, recursive, &dvs_paths,
+                ))
+            };
+            let mut statuses = get_status(&dvs_paths, filter.as_ref())?;
             if !show_all {
                 statuses.retain(|x| match &x.detail {
                     StatusDetail::Success { status } => {
