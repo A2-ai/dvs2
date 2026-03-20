@@ -28,8 +28,8 @@ use dvs::{
 /// @param group Unix group name to set on stored files for shared access.
 /// @param metadata_folder_name Name of the metadata folder. Defaults to `.dvs`.
 /// @param no_compression If `TRUE`, disable compression for stored files.
-#[miniextendr]
-pub fn dvs_init(
+#[miniextendr(r_name = "dvs_init_impl")]
+pub(crate) fn dvs_init(
     storage_path: PathBuf,
     #[miniextendr(default = "NULL")] root_dir: Option<PathBuf>,
     #[miniextendr(default = "NULL")] group: Option<String>,
@@ -63,8 +63,8 @@ pub fn dvs_init(
 /// @param message Optional commit message describing why the files were added.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 /// @param dry_run If `TRUE`, report what would be added without modifying anything.
-#[miniextendr]
-pub fn dvs_add(
+#[miniextendr(r_name = "dvs_add_impl")]
+pub(crate) fn dvs_add(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] message: Option<String>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
@@ -104,8 +104,8 @@ pub fn dvs_add(
 /// @param current If `TRUE`, include files whose local copy matches storage.
 /// @param absent If `TRUE`, include files that exist in metadata but not locally.
 /// @param unsynced If `TRUE`, include files whose local copy differs from storage.
-#[miniextendr]
-pub fn dvs_status(
+#[miniextendr(r_name = "dvs_status_impl")]
+pub(crate) fn dvs_status(
     #[miniextendr(default = "NULL")] current: Option<bool>,
     #[miniextendr(default = "NULL")] absent: Option<bool>,
     #[miniextendr(default = "NULL")] unsynced: Option<bool>,
@@ -143,8 +143,8 @@ pub fn dvs_status(
 /// @param files Character vector of `.dvs` metadata file paths to retrieve.
 /// @param glob Optional glob pattern to select `.dvs` files (e.g. `"data/*.dvs"`).
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
-#[miniextendr]
-pub fn dvs_get(
+#[miniextendr(r_name = "dvs_get_impl")]
+pub(crate) fn dvs_get(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
