@@ -4,16 +4,14 @@
 \alias{dvs_status}
 \title{Report the sync status of DVS-managed files}
 \usage{
-dvs_status(...)
+dvs_status(current = NULL, absent = NULL, unsynced = NULL)
 }
 \arguments{
-\item{...}{
-  Arguments passed on to \code{\link[=dvs_status_impl]{dvs_status_impl}}
-  \describe{
-    \item{\code{current}}{If \code{TRUE}, include files whose local copy matches storage.}
-    \item{\code{absent}}{If \code{TRUE}, include files that exist in metadata but not locally.}
-    \item{\code{unsynced}}{If \code{TRUE}, include files whose local copy differs from storage.}
-  }}
+\item{current}{If \code{TRUE}, include files whose local copy matches storage.}
+
+\item{absent}{If \code{TRUE}, include files that exist in metadata but not locally.}
+
+\item{unsynced}{If \code{TRUE}, include files whose local copy differs from storage.}
 }
 \description{
 Report the sync status of DVS-managed files

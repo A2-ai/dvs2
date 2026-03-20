@@ -4,16 +4,14 @@
 \alias{dvs_get}
 \title{Retrieve files from DVS storage into the working directory}
 \usage{
-dvs_get(...)
+dvs_get(files = character(0), glob = NULL, dry_run = NULL)
 }
 \arguments{
-\item{...}{
-  Arguments passed on to \code{\link[=dvs_get_impl]{dvs_get_impl}}
-  \describe{
-    \item{\code{files}}{Character vector of \code{.dvs} metadata file paths to retrieve.}
-    \item{\code{glob}}{Optional glob pattern to select \code{.dvs} files (e.g. \code{"data/*.dvs"}).}
-    \item{\code{dry_run}}{If \code{TRUE}, report what would be retrieved without writing files.}
-  }}
+\item{files}{Character vector of \code{.dvs} metadata file paths to retrieve.}
+
+\item{glob}{Optional glob pattern to select \code{.dvs} files (e.g. \code{"data/*.dvs"}).}
+
+\item{dry_run}{If \code{TRUE}, report what would be retrieved without writing files.}
 }
 \description{
 Retrieve files from DVS storage into the working directory

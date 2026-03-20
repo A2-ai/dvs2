@@ -4,18 +4,24 @@
 \alias{dvs_init}
 \title{Initialize a DVS repository in the given directory}
 \usage{
-dvs_init(...)
+dvs_init(
+  storage_path,
+  root_dir = NULL,
+  group = NULL,
+  metadata_folder_name = NULL,
+  no_compression = NULL
+)
 }
 \arguments{
-\item{...}{
-  Arguments passed on to \code{\link[=dvs_init_impl]{dvs_init_impl}}
-  \describe{
-    \item{\code{storage_path}}{Path to the storage directory where file contents are kept.}
-    \item{\code{root_dir}}{Repository root directory. Defaults to the current working directory.}
-    \item{\code{group}}{Unix group name to set on stored files for shared access.}
-    \item{\code{metadata_folder_name}}{Name of the metadata folder. Defaults to \code{.dvs}.}
-    \item{\code{no_compression}}{If \code{TRUE}, disable compression for stored files.}
-  }}
+\item{storage_path}{Path to the storage directory where file contents are kept.}
+
+\item{root_dir}{Repository root directory. Defaults to the current working directory.}
+
+\item{group}{Unix group name to set on stored files for shared access.}
+
+\item{metadata_folder_name}{Name of the metadata folder. Defaults to \code{.dvs}.}
+
+\item{no_compression}{If \code{TRUE}, disable compression for stored files.}
 }
 \description{
 Initialize a DVS repository in the given directory

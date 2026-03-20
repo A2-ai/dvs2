@@ -4,17 +4,16 @@
 \alias{dvs_add}
 \title{Add files to DVS-managed storage}
 \usage{
-dvs_add(...)
+dvs_add(files = character(0), message = NULL, glob = NULL, dry_run = NULL)
 }
 \arguments{
-\item{...}{
-  Arguments passed on to \code{\link[=dvs_add_impl]{dvs_add_impl}}
-  \describe{
-    \item{\code{files}}{Character vector of file paths to add.}
-    \item{\code{message}}{Optional commit message describing why the files were added.}
-    \item{\code{glob}}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).}
-    \item{\code{dry_run}}{If \code{TRUE}, report what would be added without modifying anything.}
-  }}
+\item{files}{Character vector of file paths to add.}
+
+\item{message}{Optional commit message describing why the files were added.}
+
+\item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).}
+
+\item{dry_run}{If \code{TRUE}, report what would be added without modifying anything.}
 }
 \description{
 Add files to DVS-managed storage
