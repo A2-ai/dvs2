@@ -17,5 +17,5 @@ dvs_status(current = NULL, absent = NULL, unsynced = NULL)
 \item{unsynced}{If \code{TRUE}, include files whose local copy differs from storage.}
 }
 \description{
-Report the sync status of DVS-managed files
+Compares \code{.dvs} metadata files against their stored contents and local working copies. By default all files are shown; pass filter flags to restrict output.
 }

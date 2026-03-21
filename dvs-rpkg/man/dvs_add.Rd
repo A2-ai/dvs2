@@ -19,5 +19,5 @@ dvs_add(files = character(0), message = NULL, glob = NULL, dry_run = NULL)
 \item{dry_run}{If \code{TRUE}, report what would be added without modifying anything.}
 }
 \description{
-Add files to DVS-managed storage
+Hashes and copies the specified files into the content-addressable store, replacing each original with a \code{.dvs} metadata file.
 }

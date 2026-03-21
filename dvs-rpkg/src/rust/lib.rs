@@ -172,4 +172,14 @@ pub fn dvs_get(
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
+#[miniextendr]
+/// Detect cores for parallelism
+///
+/// Returns the number of logical cores currently available in the system.
+///
+/// @note Unlike `parallel::detectCores()`, `num_cpus()` respects cgroups.
+pub fn num_cpus() -> usize {
+    num_cpus::get()
+}
+
 miniextendr_api::miniextendr_init!(dvs);
