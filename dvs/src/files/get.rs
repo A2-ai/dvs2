@@ -109,9 +109,10 @@ pub fn get_files(
     paths: &DvsPaths,
     backend: &dyn Backend,
     dry_run: bool,
+    threads: Option<usize>,
 ) -> Result<Vec<GetResult>> {
     let matched_paths = paths.validate_for_get(&files);
-    let pool = get_threadpool(matched_paths.len())?;
+    let pool = get_threadpool(matched_paths.len(), threads)?;
     let cache = try_open_cache(paths);
 
     let mut results: Vec<GetResult> = pool.install(|| {

@@ -51,7 +51,7 @@ fn get_file_status(
     }
 }
 
-pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
+pub fn get_status(paths: &DvsPaths, threads: Option<usize>) -> Result<Vec<FileStatus>> {
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
     let cache = try_open_cache(paths);
@@ -70,7 +70,7 @@ pub fn get_status(paths: &DvsPaths) -> Result<Vec<FileStatus>> {
         .map(|e| e.into_path())
         .collect();
 
-    let pool = get_threadpool(entries.len())?;
+    let pool = get_threadpool(entries.len(), threads)?;
 
     let mut results: Vec<FileStatus> = pool.install(|| {
         entries

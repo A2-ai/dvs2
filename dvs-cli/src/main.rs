@@ -153,6 +153,7 @@ fn try_main() -> Result<()> {
                 message,
                 config.compression(),
                 dry_run,
+                None,
             )?;
             let has_errors = results
                 .iter()
@@ -204,7 +205,7 @@ fn try_main() -> Result<()> {
             let paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !unsynced;
 
-            let mut statuses = get_status(&paths)?;
+            let mut statuses = get_status(&paths, None)?;
             if !show_all {
                 statuses.retain(|x| match &x.detail {
                     StatusDetail::Success { status } => {
@@ -260,7 +261,7 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("No files to get"));
             }
 
-            let results = get_files(all_paths, &dvs_paths, config.backend(), dry_run)?;
+            let results = get_files(all_paths, &dvs_paths, config.backend(), dry_run, None)?;
             let has_errors = results
                 .iter()
                 .any(|r| matches!(r.detail, GetDetail::Error { .. }));

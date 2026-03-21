@@ -85,9 +85,10 @@ pub fn add_files(
     message: Option<String>,
     compression: Compression,
     dry_run: bool,
+    threads: Option<usize>,
 ) -> Result<Vec<AddResult>> {
     let matched_paths = paths.validate_for_add(&files);
-    let pool = get_threadpool(matched_paths.len())?;
+    let pool = get_threadpool(matched_paths.len(), threads)?;
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
 

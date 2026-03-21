@@ -89,6 +89,7 @@ pub fn dvs_add(
             message,
             config.compression(),
             dry_run.unwrap_or(false),
+            None,
         )?
         .into_iter()
         .map(|x| x.into()),
@@ -120,7 +121,7 @@ pub fn dvs_status(
     let unsynced = unsynced.unwrap_or(false);
     let show_all = !current && !absent && !unsynced;
 
-    let mut statuses = get_status(&paths)?;
+    let mut statuses = get_status(&paths, None)?;
     if !show_all {
         statuses.retain(|x| match &x.detail {
             StatusDetail::Success { status } => {
@@ -166,6 +167,7 @@ pub fn dvs_get(
         &dvs_paths,
         config.backend(),
         dry_run.unwrap_or(false),
+        None,
     )?;
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
