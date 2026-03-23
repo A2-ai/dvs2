@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum Action {
     Add {
         file: AuditFile,
@@ -33,7 +33,6 @@ pub struct AuditEntry {
     pub operation_id: String,
     pub timestamp: i64,
     pub user: String,
-    #[serde(flatten)]
     pub action: Action,
 }
 
