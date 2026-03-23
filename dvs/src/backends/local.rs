@@ -490,11 +490,13 @@ mod tests {
             operation_id: "op-1".to_string(),
             timestamp: 1000000000,
             user: "alice".to_string(),
-            file: AuditFile {
-                path: PathBuf::from("file1.txt"),
-                hashes: test_hash("abc123def456789012345678901234ab"),
+            action: Action::Add {
+                file: AuditFile {
+                    path: PathBuf::from("file1.txt"),
+                    hashes: test_hash("abc123def456789012345678901234ab"),
+                },
+                compression: Compression::Zstd,
             },
-            action: Action::Add,
         }
     }
 
