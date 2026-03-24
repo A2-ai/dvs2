@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Result, anyhow, bail};
 use fs_err as fs;
@@ -31,6 +31,16 @@ fn resolve_group(_: &str) -> Result<()> {
     Ok(())
 }
 
+/// Detect the current user's primary group name.
+#[cfg(unix)]
+fn detect_primary_group() -> Result<String> {
+    use nix::unistd::Group;
+    let gid = nix::unistd::getgid();
+    let group = Group::from_gid(gid)?
+        .ok_or_else(|| anyhow!("Could not resolve primary group for GID {}", gid))?;
+    Ok(group.name)
+}
+
 fn make_readonly(path: impl AsRef<Path>) -> Result<()> {
     let mut perms = fs::metadata(path.as_ref())?.permissions();
     perms.set_readonly(true);
@@ -38,22 +48,90 @@ fn make_readonly(path: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LocalBackend {
     pub path: PathBuf,
     group: Option<String>,
+    #[serde(default)]
+    open: bool,
+    /// Cached GID resolved from `group`. Lazily populated on first use.
+    #[serde(skip)]
+    #[cfg(unix)]
+    gid: OnceLock<nix::unistd::Gid>,
+}
+
+impl Clone for LocalBackend {
+    fn clone(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            group: self.group.clone(),
+            open: self.open,
+            #[cfg(unix)]
+            gid: self.gid.get().copied().map_or_else(OnceLock::new, |g| {
+                let lock = OnceLock::new();
+                let _ = lock.set(g);
+                lock
+            }),
+        }
+    }
+}
+
+impl PartialEq for LocalBackend {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.group == other.group && self.open == other.open
+    }
 }
 
 impl LocalBackend {
     pub fn new(path: impl AsRef<Path>, group: Option<String>) -> Result<Self> {
-        if let Some(ref grp) = group {
-            resolve_group(grp)?;
-        }
+        let group = match group {
+            Some(g) => {
+                // Validate the group exists eagerly so we fail fast
+                resolve_group(&g)?;
+                Some(g)
+            }
+            None => {
+                #[cfg(unix)]
+                {
+                    match detect_primary_group() {
+                        Ok(g) => {
+                            log::debug!("Auto-detected primary group: {}", g);
+                            Some(g)
+                        }
+                        Err(e) => {
+                            log::warn!("Could not detect primary group: {e}");
+                            None
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    None
+                }
+            }
+        };
 
         Ok(Self {
             path: path.as_ref().to_path_buf(),
             group,
+            open: false,
+            #[cfg(unix)]
+            gid: OnceLock::new(),
         })
+    }
+
+    #[cfg(unix)]
+    fn resolve_gid(&self) -> Result<nix::unistd::Gid> {
+        if let Some(gid) = self.gid.get() {
+            return Ok(*gid);
+        }
+        let group_name = self
+            .group
+            .as_deref()
+            .ok_or_else(|| anyhow!("No group set"))?;
+        let gid = resolve_group(group_name)?;
+        let _ = self.gid.set(gid);
+        Ok(gid)
     }
 
     /// Apply configured group ownership to a path.
@@ -62,13 +140,13 @@ impl LocalBackend {
     fn apply_group(&self, path: impl AsRef<Path>) -> Result<()> {
         use nix::unistd::chown;
 
-        if let Some(group_name) = &self.group {
+        if self.group.is_some() {
+            let gid = self.resolve_gid()?;
             log::debug!(
                 "Setting group {} on {}",
-                group_name,
+                self.group.as_deref().unwrap(),
                 path.as_ref().display()
             );
-            let gid = resolve_group(group_name)?;
             chown(path.as_ref(), None, Some(gid))?;
         }
 
@@ -77,6 +155,54 @@ impl LocalBackend {
 
     #[cfg(not(unix))]
     fn apply_group(&self, _path: impl AsRef<Path>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Set permissions on a directory.
+    /// With a group: 2775 (setgid + rwxrwxr-x). With open: 2777 (setgid + rwxrwxrwx).
+    /// No-op if no group is set and open is false, or on non-Unix.
+    #[cfg(unix)]
+    fn apply_dir_permissions(&self, path: impl AsRef<Path>) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if self.open {
+            0o2777
+        } else if self.group.is_some() {
+            0o2775
+        } else {
+            return Ok(());
+        };
+        log::debug!("Setting mode {:o} on {}", mode, path.as_ref().display());
+        let perms = std::fs::Permissions::from_mode(mode);
+        fs::set_permissions(path.as_ref(), perms)?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn apply_dir_permissions(&self, _path: impl AsRef<Path>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Set permissions on the audit log.
+    /// With a group: 664 (rw-rw-r--). With open: 666 (rw-rw-rw-).
+    /// No-op if no group is set and open is false, or on non-Unix.
+    #[cfg(unix)]
+    fn apply_audit_permissions(&self, path: impl AsRef<Path>) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if self.open {
+            0o666
+        } else if self.group.is_some() {
+            0o664
+        } else {
+            return Ok(());
+        };
+        log::debug!("Setting mode {:o} on {}", mode, path.as_ref().display());
+        let perms = std::fs::Permissions::from_mode(mode);
+        fs::set_permissions(path.as_ref(), perms)?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn apply_audit_permissions(&self, _path: impl AsRef<Path>) -> Result<()> {
         Ok(())
     }
 
@@ -99,6 +225,7 @@ impl Backend for LocalBackend {
         log::debug!("Creating storage directory: {}", self.path.display());
         fs::create_dir_all(&self.path)?;
         self.apply_group(&self.path)?;
+        self.apply_dir_permissions(&self.path)?;
         log::info!("Initialized local storage at {}", self.path.display());
         Ok(())
     }
@@ -108,6 +235,7 @@ impl Backend for LocalBackend {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
             self.apply_group(parent)?;
+            self.apply_dir_permissions(parent)?;
         }
         let tmp_path = path.with_extension("tmp");
         let stored_size = compression.compress(source, &tmp_path)?;
@@ -156,6 +284,7 @@ impl Backend for LocalBackend {
         let json = serde_json::to_string(entry)?;
         writeln!(file, "{}", json)?;
         self.apply_group(&audit_path)?;
+        self.apply_audit_permissions(&audit_path)?;
         Ok(())
     }
 
