@@ -35,7 +35,7 @@ fn resolve_group(_: &str) -> Result<()> {
 #[cfg(unix)]
 fn detect_primary_group() -> Result<String> {
     use nix::unistd::Group;
-    let gid = nix::unistd::getgid();
+    let gid = nix::unistd::getegid();
     let group = Group::from_gid(gid)?
         .ok_or_else(|| anyhow!("Could not resolve primary group for GID {}", gid))?;
     Ok(group.name)
