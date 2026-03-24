@@ -31,6 +31,16 @@ fn resolve_group(_: &str) -> Result<()> {
     Ok(())
 }
 
+/// Detect the current user's primary group name.
+#[cfg(unix)]
+fn detect_primary_group() -> Result<String> {
+    use nix::unistd::Group;
+    let gid = nix::unistd::getgid();
+    let group = Group::from_gid(gid)?
+        .ok_or_else(|| anyhow!("Could not resolve primary group for GID {}", gid))?;
+    Ok(group.name)
+}
+
 fn make_readonly(path: impl AsRef<Path>) -> Result<()> {
     let mut perms = fs::metadata(path.as_ref())?.permissions();
     perms.set_readonly(true);
@@ -41,6 +51,9 @@ fn make_readonly(path: impl AsRef<Path>) -> Result<()> {
 const SHARED_DIRECTORY_MODE: u32 = 0o2770;
 const SHARED_BLOB_MODE: u32 = 0o0440;
 const SHARED_AUDIT_LOG_MODE: u32 = 0o0660;
+
+const OPEN_DIRECTORY_MODE: u32 = 0o2777;
+const OPEN_AUDIT_LOG_MODE: u32 = 0o0666;
 
 #[cfg(unix)]
 fn ensure_mode(path: impl AsRef<Path>, mode: u32) -> Result<()> {
@@ -64,17 +77,42 @@ fn ensure_mode(_path: impl AsRef<Path>, _mode: u32) -> Result<()> {
 pub struct LocalBackend {
     pub path: PathBuf,
     group: Option<String>,
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    open: bool,
 }
 
 impl LocalBackend {
     pub fn new(path: impl AsRef<Path>, group: Option<String>) -> Result<Self> {
-        if let Some(ref grp) = group {
-            resolve_group(grp)?;
-        }
+        let group = match group {
+            Some(g) => {
+                resolve_group(&g)?;
+                Some(g)
+            }
+            None => {
+                #[cfg(unix)]
+                {
+                    match detect_primary_group() {
+                        Ok(g) => {
+                            log::debug!("Auto-detected primary group: {}", g);
+                            Some(g)
+                        }
+                        Err(e) => {
+                            log::warn!("Could not detect primary group: {e}");
+                            None
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    None
+                }
+            }
+        };
 
         Ok(Self {
             path: path.as_ref().to_path_buf(),
             group,
+            open: false,
         })
     }
 
@@ -106,12 +144,28 @@ impl LocalBackend {
     }
 
     fn ensure_group_and_mode(&self, path: impl AsRef<Path>, mode: u32) -> Result<()> {
-        if self.group.is_some() {
+        if self.group.is_some() || self.open {
             let path = path.as_ref();
             self.apply_group(path)?;
             ensure_mode(path, mode)?;
         }
         Ok(())
+    }
+
+    fn dir_mode(&self) -> u32 {
+        if self.open {
+            OPEN_DIRECTORY_MODE
+        } else {
+            SHARED_DIRECTORY_MODE
+        }
+    }
+
+    fn audit_mode(&self) -> u32 {
+        if self.open {
+            OPEN_AUDIT_LOG_MODE
+        } else {
+            SHARED_AUDIT_LOG_MODE
+        }
     }
 
     // On non-Unix, a configured group is intentionally a no-op. We still need
@@ -145,7 +199,7 @@ impl Backend for LocalBackend {
     fn init(&self) -> Result<()> {
         log::debug!("Creating storage directory: {}", self.path.display());
         fs::create_dir_all(&self.path)?;
-        self.ensure_group_and_mode(&self.path, SHARED_DIRECTORY_MODE)?;
+        self.ensure_group_and_mode(&self.path, self.dir_mode())?;
         log::info!("Initialized local storage at {}", self.path.display());
         Ok(())
     }
@@ -154,8 +208,8 @@ impl Backend for LocalBackend {
         let path = self.hash_to_path(hash)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
-            self.ensure_group_and_mode(&self.path, SHARED_DIRECTORY_MODE)?;
-            self.ensure_group_and_mode(parent, SHARED_DIRECTORY_MODE)?;
+            self.ensure_group_and_mode(&self.path, self.dir_mode())?;
+            self.ensure_group_and_mode(parent, self.dir_mode())?;
         }
         let tmp_path = path.with_extension("tmp");
         let stored_size = compression.compress(source, &tmp_path)?;
@@ -202,13 +256,13 @@ impl Backend for LocalBackend {
         log::debug!("Appending {entry:?} to audit log");
 
         fs::create_dir_all(&self.path)?;
-        self.ensure_group_and_mode(&self.path, SHARED_DIRECTORY_MODE)?;
+        self.ensure_group_and_mode(&self.path, self.dir_mode())?;
         let audit_path = self.path.join(AUDIT_LOG_FILENAME);
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&audit_path)?;
-        self.ensure_group_and_mode(&audit_path, SHARED_AUDIT_LOG_MODE)?;
+        self.ensure_group_and_mode(&audit_path, self.audit_mode())?;
         let json = serde_json::to_string(entry)?;
         writeln!(file, "{}", json)?;
         Ok(())
@@ -476,15 +530,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn chmod(path: &Path, mode: u32) {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut perms = fs::metadata(path).unwrap().permissions();
-        perms.set_mode(mode);
-        fs::set_permissions(path, perms).unwrap();
-    }
-
-    #[cfg(unix)]
     fn test_audit_entry() -> AuditEntry {
         AuditEntry {
             operation_id: "op-1".to_string(),
@@ -498,46 +543,6 @@ mod tests {
                 compression: Compression::Zstd,
             },
         }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn permissions_without_group_stay_private() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let tmp = tempfile::tempdir().unwrap();
-        let storage = tmp.path().join("storage");
-        let backend = LocalBackend::new(&storage, None).unwrap();
-        fs::create_dir(&storage).unwrap();
-        chmod(&storage, 0o700);
-
-        let hash = test_hash("abc123def456789012345678901234ab");
-        let prefix_dir = storage.join("ab");
-        fs::create_dir(&prefix_dir).unwrap();
-        chmod(&prefix_dir, 0o700);
-
-        let source = tmp.path().join("source.txt");
-        fs::write(&source, b"content").unwrap();
-        chmod(&source, 0o600);
-        backend.store(&hash, &source, Compression::None).unwrap();
-
-        let prefix_mode = fs::metadata(&prefix_dir).unwrap().permissions().mode();
-        assert_eq!(prefix_mode & 0o7777, 0o700);
-
-        let stored = prefix_dir.join("c123def456789012345678901234ab");
-        let file_mode = fs::metadata(&stored).unwrap().permissions().mode();
-        assert_eq!(file_mode & 0o040, 0);
-
-        let audit_path = storage.join("audit.log.jsonl");
-        fs::write(&audit_path, b"").unwrap();
-        chmod(&audit_path, 0o600);
-        backend.log_audit(&test_audit_entry()).unwrap();
-
-        let storage_mode = fs::metadata(&storage).unwrap().permissions().mode();
-        assert_eq!(storage_mode & 0o7777, 0o700);
-
-        let mode = fs::metadata(&audit_path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[cfg(unix)]
