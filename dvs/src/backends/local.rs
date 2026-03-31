@@ -31,6 +31,16 @@ fn resolve_group(_: &str) -> Result<()> {
     Ok(())
 }
 
+/// Detect the current user's primary group name.
+#[cfg(unix)]
+fn detect_primary_group() -> Result<String> {
+    use nix::unistd::Group;
+    let gid = nix::unistd::getegid();
+    let group = Group::from_gid(gid)?
+        .ok_or_else(|| anyhow!("Could not resolve primary group for GID {}", gid))?;
+    Ok(group.name)
+}
+
 fn make_readonly(path: impl AsRef<Path>) -> Result<()> {
     let mut perms = fs::metadata(path.as_ref())?.permissions();
     perms.set_readonly(true);
@@ -38,21 +48,71 @@ fn make_readonly(path: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
+const SHARED_DIRECTORY_MODE: u32 = 0o2770;
+const SHARED_BLOB_MODE: u32 = 0o0440;
+const SHARED_AUDIT_LOG_MODE: u32 = 0o0660;
+
+const OPEN_DIRECTORY_MODE: u32 = 0o2777;
+const OPEN_AUDIT_LOG_MODE: u32 = 0o0666;
+
+#[cfg(unix)]
+fn ensure_mode(path: impl AsRef<Path>, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = path.as_ref();
+    let mut perms = fs::metadata(path)?.permissions();
+    if perms.mode() & 0o7777 != mode {
+        perms.set_mode(mode);
+        fs::set_permissions(path, perms)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_mode(_path: impl AsRef<Path>, _mode: u32) -> Result<()> {
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct LocalBackend {
     pub path: PathBuf,
     group: Option<String>,
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    open: bool,
 }
 
 impl LocalBackend {
     pub fn new(path: impl AsRef<Path>, group: Option<String>) -> Result<Self> {
-        if let Some(ref grp) = group {
-            resolve_group(grp)?;
-        }
+        let group = match group {
+            Some(g) => {
+                resolve_group(&g)?;
+                Some(g)
+            }
+            None => {
+                #[cfg(unix)]
+                {
+                    match detect_primary_group() {
+                        Ok(g) => {
+                            log::debug!("Auto-detected primary group: {}", g);
+                            Some(g)
+                        }
+                        Err(e) => {
+                            log::warn!("Could not detect primary group: {e}");
+                            None
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    None
+                }
+            }
+        };
 
         Ok(Self {
             path: path.as_ref().to_path_buf(),
             group,
+            open: false,
         })
     }
 
@@ -60,16 +120,19 @@ impl LocalBackend {
     /// No-op on non-Unix or if no group is set.
     #[cfg(unix)]
     fn apply_group(&self, path: impl AsRef<Path>) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+
         use nix::unistd::chown;
 
         if let Some(group_name) = &self.group {
-            log::debug!(
-                "Setting group {} on {}",
-                group_name,
-                path.as_ref().display()
-            );
+            let path = path.as_ref();
             let gid = resolve_group(group_name)?;
-            chown(path.as_ref(), None, Some(gid))?;
+            if fs::metadata(path)?.gid() == gid.as_raw() {
+                return Ok(());
+            }
+
+            log::debug!("Setting group {} on {}", group_name, path.display());
+            chown(path, None, Some(gid))?;
         }
 
         Ok(())
@@ -78,6 +141,44 @@ impl LocalBackend {
     #[cfg(not(unix))]
     fn apply_group(&self, _path: impl AsRef<Path>) -> Result<()> {
         Ok(())
+    }
+
+    fn ensure_group_and_mode(&self, path: impl AsRef<Path>, mode: u32) -> Result<()> {
+        if self.group.is_some() || self.open {
+            let path = path.as_ref();
+            self.apply_group(path)?;
+            ensure_mode(path, mode)?;
+        }
+        Ok(())
+    }
+
+    fn dir_mode(&self) -> u32 {
+        if self.open {
+            OPEN_DIRECTORY_MODE
+        } else {
+            SHARED_DIRECTORY_MODE
+        }
+    }
+
+    fn audit_mode(&self) -> u32 {
+        if self.open {
+            OPEN_AUDIT_LOG_MODE
+        } else {
+            SHARED_AUDIT_LOG_MODE
+        }
+    }
+
+    // On non-Unix, a configured group is intentionally a no-op. We still need
+    // blobs to become read-only eg on Windows, so this cannot be just `self.group.is_some()`.
+    fn use_shared_blob_mode(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.group.is_some()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
     }
 
     fn hash_to_path(&self, hashes: &Hashes) -> Result<PathBuf> {
@@ -98,7 +199,7 @@ impl Backend for LocalBackend {
     fn init(&self) -> Result<()> {
         log::debug!("Creating storage directory: {}", self.path.display());
         fs::create_dir_all(&self.path)?;
-        self.apply_group(&self.path)?;
+        self.ensure_group_and_mode(&self.path, self.dir_mode())?;
         log::info!("Initialized local storage at {}", self.path.display());
         Ok(())
     }
@@ -107,13 +208,18 @@ impl Backend for LocalBackend {
         let path = self.hash_to_path(hash)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
-            self.apply_group(parent)?;
+            self.ensure_group_and_mode(&self.path, self.dir_mode())?;
+            self.ensure_group_and_mode(parent, self.dir_mode())?;
         }
         let tmp_path = path.with_extension("tmp");
         let stored_size = compression.compress(source, &tmp_path)?;
+
+        if self.use_shared_blob_mode() {
+            self.ensure_group_and_mode(&tmp_path, SHARED_BLOB_MODE)?;
+        } else {
+            make_readonly(&tmp_path)?;
+        }
         fs::rename(&tmp_path, &path)?;
-        make_readonly(&path)?;
-        self.apply_group(&path)?;
         Ok(stored_size)
     }
 
@@ -148,14 +254,17 @@ impl Backend for LocalBackend {
             .lock()
             .expect("audit log lock should not be poisoned");
         log::debug!("Appending {entry:?} to audit log");
+
+        fs::create_dir_all(&self.path)?;
+        self.ensure_group_and_mode(&self.path, self.dir_mode())?;
         let audit_path = self.path.join(AUDIT_LOG_FILENAME);
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&audit_path)?;
+        self.ensure_group_and_mode(&audit_path, self.audit_mode())?;
         let json = serde_json::to_string(entry)?;
         writeln!(file, "{}", json)?;
-        self.apply_group(&audit_path)?;
         Ok(())
     }
 
@@ -418,5 +527,56 @@ mod tests {
         let content = fs::read(&audit_path).unwrap();
         let entries = parse_audit_log(Cursor::new(content), &HashSet::new()).unwrap();
         assert_eq!(entries.len(), workers * entries_per_worker);
+    }
+
+    #[cfg(unix)]
+    fn test_audit_entry() -> AuditEntry {
+        AuditEntry {
+            operation_id: "op-1".to_string(),
+            timestamp: 1000000000,
+            user: "alice".to_string(),
+            action: Action::Add {
+                file: AuditFile {
+                    path: PathBuf::from("file1.txt"),
+                    hashes: test_hash("abc123def456789012345678901234ab"),
+                },
+                compression: Compression::Zstd,
+            },
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permissions_with_group_use_shared_modes() {
+        use nix::unistd::{Group, getegid};
+        use std::os::unix::fs::PermissionsExt;
+
+        let current_group_name = Group::from_gid(getegid()).unwrap().unwrap().name;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("storage");
+        let backend = LocalBackend::new(&storage, Some(current_group_name)).unwrap();
+
+        backend.init().unwrap();
+        let storage_mode = fs::metadata(&storage).unwrap().permissions().mode();
+        assert_eq!(storage_mode & 0o7777, SHARED_DIRECTORY_MODE);
+
+        let hash = test_hash("abc123def456789012345678901234ab");
+        let source = tmp.path().join("source.txt");
+        fs::write(&source, b"content").unwrap();
+        backend.store(&hash, &source, Compression::None).unwrap();
+
+        let prefix_dir = storage.join("ab");
+        let prefix_mode = fs::metadata(&prefix_dir).unwrap().permissions().mode();
+        assert_eq!(prefix_mode & 0o7777, SHARED_DIRECTORY_MODE);
+
+        let stored = prefix_dir.join("c123def456789012345678901234ab");
+        let file_mode = fs::metadata(&stored).unwrap().permissions().mode();
+        assert_eq!(file_mode & 0o777, SHARED_BLOB_MODE);
+
+        backend.log_audit(&test_audit_entry()).unwrap();
+        let audit_path = storage.join("audit.log.jsonl");
+        let audit_mode = fs::metadata(&audit_path).unwrap().permissions().mode();
+        assert_eq!(audit_mode & 0o777, SHARED_AUDIT_LOG_MODE);
     }
 }
