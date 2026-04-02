@@ -27,7 +27,7 @@ dvs_add <- function(
   glob = NULL,
   dry_run = NULL
 ) {
-  .sync_threads_env()
+  num_threads <- getOption("dvs.num_threads")
   progress_callback <- NULL
   if (!isTRUE(dry_run)) {
     progress_callback <- ProgressBarCallback$new()
@@ -38,7 +38,8 @@ dvs_add <- function(
     message = message,
     glob = glob,
     dry_run = dry_run,
-    progress_callback = progress_callback
+    progress_callback = progress_callback,
+    num_threads = num_threads
   )
 
   if (requireNamespace("tibble", quietly = TRUE)) {
@@ -54,9 +55,9 @@ dvs_add <- function(
 #'
 #' @export
 dvs_status <- function(current = NULL, absent = NULL, unsynced = NULL) {
-  .sync_threads_env()
+  num_threads <- getOption("dvs.num_threads")
   status_data_frame <-
-    dvs_status_impl(current = current, absent = absent, unsynced = unsynced)
+    dvs_status_impl(current = current, absent = absent, unsynced = unsynced, num_threads = num_threads)
   if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(status_data_frame)
   } else {
@@ -68,7 +69,7 @@ dvs_status <- function(current = NULL, absent = NULL, unsynced = NULL) {
 #' @rdname dvs_get
 #' @export
 dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
-  .sync_threads_env()
+  num_threads <- getOption("dvs.num_threads")
   progress_callback <- NULL
   if (!isTRUE(dry_run)) {
     progress_callback <- ProgressBarCallback$new()
@@ -78,7 +79,8 @@ dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
     files = files,
     glob = glob,
     dry_run = dry_run,
-    progress_callback = progress_callback
+    progress_callback = progress_callback,
+    num_threads = num_threads
   )
   if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(get_data_frame)

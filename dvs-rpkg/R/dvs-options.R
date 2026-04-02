@@ -1,8 +1,8 @@
 #' Set the number of threads used by DVS operations
 #'
 #' Controls the thread pool size for parallel file operations (add, get, status).
-#' The value is stored as the `dvs.num_threads` option and propagated to the
-#' `DVS_NUM_THREADS` environment variable so the Rust backend respects it.
+#' The value is stored as the `dvs.num_threads` option and passed directly to
+#' the Rust backend on each operation.
 #'
 #' Can also be set via `.Rprofile` or temporarily with [withr::with_options()].
 #'
@@ -32,16 +32,5 @@ set_dvs_threads <- function(threads) {
   }
   old <- getOption("dvs.num_threads")
   options(dvs.num_threads = threads)
-  .sync_threads_env()
   invisible(old)
-}
-
-# Sync dvs.num_threads option to DVS_NUM_THREADS env var for the Rust backend.
-.sync_threads_env <- function() {
-  threads <- getOption("dvs.num_threads")
-  if (!is.null(threads)) {
-    Sys.setenv(DVS_NUM_THREADS = as.character(threads))
-  } else {
-    Sys.unsetenv("DVS_NUM_THREADS")
-  }
 }

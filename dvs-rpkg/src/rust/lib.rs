@@ -176,6 +176,7 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
+    #[miniextendr(default = "NULL")] num_threads: Option<usize>,
 ) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -200,7 +201,7 @@ pub(crate) fn dvs_add(
                 config.compression(),
                 dry_run,
                 Some(&on_file_start),
-                None,
+                num_threads,
             )
         })?
     } else {
@@ -212,7 +213,7 @@ pub(crate) fn dvs_add(
             config.compression(),
             dry_run,
             None,
-            None,
+            num_threads,
         )?
     };
 
@@ -233,6 +234,7 @@ pub(crate) fn dvs_status(
     #[miniextendr(default = "NULL")] current: Option<bool>,
     #[miniextendr(default = "NULL")] absent: Option<bool>,
     #[miniextendr(default = "NULL")] unsynced: Option<bool>,
+    #[miniextendr(default = "NULL")] num_threads: Option<usize>,
 ) -> Result<ColumnarDataFrame> {
     let current_dir = std::env::current_dir()?;
 
@@ -244,7 +246,7 @@ pub(crate) fn dvs_status(
     let unsynced = unsynced.unwrap_or(false);
     let show_all = !current && !absent && !unsynced;
 
-    let mut statuses = get_status(&paths, None, None)?;
+    let mut statuses = get_status(&paths, None, num_threads)?;
     if !show_all {
         statuses.retain(|x| match &x.detail {
             StatusDetail::Success { status, .. } => {
@@ -278,6 +280,7 @@ pub(crate) fn dvs_get(
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
+    #[miniextendr(default = "NULL")] num_threads: Option<usize>,
 ) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
     let current_dir = std::env::current_dir()?;
 
@@ -301,11 +304,11 @@ pub(crate) fn dvs_get(
                 config.backend(),
                 dry_run,
                 Some(&on_file_start),
-                None,
+                num_threads,
             )
         })?
     } else {
-        get_files(all_paths, &dvs_paths, config.backend(), dry_run, None, None)?
+        get_files(all_paths, &dvs_paths, config.backend(), dry_run, None, num_threads)?
     };
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
