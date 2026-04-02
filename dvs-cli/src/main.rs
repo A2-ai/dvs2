@@ -252,6 +252,7 @@ fn try_main() -> Result<()> {
                 } else {
                     None
                 },
+                None,
             )?;
             let has_errors = results
                 .iter()
@@ -313,7 +314,7 @@ fn try_main() -> Result<()> {
                     user_paths, recursive, &dvs_paths,
                 ))
             };
-            let mut statuses = get_status(&dvs_paths, filter.as_ref())?;
+            let mut statuses = get_status(&dvs_paths, filter.as_ref(), None)?;
             if !show_all {
                 statuses.retain(|x| match &x.detail {
                     StatusDetail::Success { status, .. } => {
@@ -417,6 +418,7 @@ fn try_main() -> Result<()> {
                 } else {
                     None
                 },
+                None,
             )?;
             let has_errors = results
                 .iter()

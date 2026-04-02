@@ -200,6 +200,7 @@ pub(crate) fn dvs_add(
                 config.compression(),
                 dry_run,
                 Some(&on_file_start),
+                None,
             )
         })?
     } else {
@@ -210,6 +211,7 @@ pub(crate) fn dvs_add(
             message,
             config.compression(),
             dry_run,
+            None,
             None,
         )?
     };
@@ -242,7 +244,7 @@ pub(crate) fn dvs_status(
     let unsynced = unsynced.unwrap_or(false);
     let show_all = !current && !absent && !unsynced;
 
-    let mut statuses = get_status(&paths, None)?;
+    let mut statuses = get_status(&paths, None, None)?;
     if !show_all {
         statuses.retain(|x| match &x.detail {
             StatusDetail::Success { status, .. } => {
@@ -299,10 +301,11 @@ pub(crate) fn dvs_get(
                 config.backend(),
                 dry_run,
                 Some(&on_file_start),
+                None,
             )
         })?
     } else {
-        get_files(all_paths, &dvs_paths, config.backend(), dry_run, None)?
+        get_files(all_paths, &dvs_paths, config.backend(), dry_run, None, None)?
     };
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }

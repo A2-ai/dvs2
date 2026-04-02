@@ -68,7 +68,10 @@ pub fn parse_size(size: &str) -> Result<u64> {
 /// capped at 32 and clamped to the amount of available work.
 /// Otherwise, defaults to up to 4 threads per available unit of
 /// parallelism, capped at 16 and clamped to the amount of available work.
-pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
+pub fn get_threadpool(
+    work_items: usize,
+    user_num_threads: Option<usize>,
+) -> Result<rayon::ThreadPool> {
     debug_assert_ne!(
         work_items, 0,
         "the thread pool should not be instantiated when there are no work items to process"
@@ -82,14 +85,17 @@ pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0);
-    // when `DVS_NUM_THREADS` is unset:
-    // num_threads = min(workitems, cpus * 4, 16)
-    // else
+    // Priority: user_num_threads > DVS_NUM_THREADS env var > default
+    // when user_num_threads is set:
+    // num_threads = min(workitems, user_num_threads, 32)
+    // when `DVS_NUM_THREADS` is set:
     // num_threads = min(workitems, DVS_NUM_THREADS, 32)
+    // else:
+    // num_threads = min(workitems, cpus * 4, 16)
     let num_threads = {
         let work_limit = work_items.max(1);
 
-        let configured = match env_threads {
+        let configured = match user_num_threads.filter(|&n| n > 0).or(env_threads) {
             Some(n) => n.min(ENV_MAX_THREADS),
             None => available
                 .saturating_mul(DEFAULT_THREADS_PER_CPU)

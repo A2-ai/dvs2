@@ -23,6 +23,9 @@ LinkingTo:
 Suggests:
     tibble,
     testthat (>= 3.0.0)
+Collate:
+    'dvs-options.R'
+    'dvs-onload.R'
 Config/testthat/edition: 3
 Config/build/bootstrap: TRUE
 Config/build/extra-sources: src/rust/Cargo.lock

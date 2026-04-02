@@ -118,9 +118,10 @@ pub fn get_files(
     backend: &dyn Backend,
     dry_run: bool,
     on_file_start: Option<&OnFileStart>,
+    threads: Option<usize>,
 ) -> Result<Vec<GetResult>> {
     let matched_paths = paths.validate_for_get(&files);
-    let pool = get_threadpool(matched_paths.len())?;
+    let pool = get_threadpool(matched_paths.len(), threads)?;
     let cache = try_open_cache(paths);
 
     let mut results: Vec<GetResult> = pool.install(|| {
@@ -367,7 +368,7 @@ mod tests {
         }
 
         // Verify correct files are tracked
-        let statuses = get_status(&paths, None).unwrap();
+        let statuses = get_status(&paths, None, None).unwrap();
         assert_eq!(statuses.len(), expected_files.len());
         let tracked_names: Vec<_> = statuses.iter().map(|s| s.path.to_str().unwrap()).collect();
         for expected in expected_files {

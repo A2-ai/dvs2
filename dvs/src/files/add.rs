@@ -87,6 +87,7 @@ fn add_file(
 ///
 /// The pattern is matched against files relative to cwd.
 /// Files are stored with paths relative to repo_root.
+#[allow(clippy::too_many_arguments)]
 pub fn add_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
@@ -95,9 +96,10 @@ pub fn add_files(
     compression: Compression,
     dry_run: bool,
     on_file_start: Option<&OnFileStart>,
+    threads: Option<usize>,
 ) -> Result<Vec<AddResult>> {
     let matched_paths = paths.validate_for_add(&files);
-    let pool = get_threadpool(matched_paths.len())?;
+    let pool = get_threadpool(matched_paths.len(), threads)?;
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
 
