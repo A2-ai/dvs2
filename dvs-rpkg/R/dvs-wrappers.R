@@ -8,6 +8,7 @@
 
 # Generated from Rust fn `dvs_add` (lib.rs:67:15)
 #' @title Add files to DVS-managed storage
+#' @description Hashes and copies the specified files into the content-addressable store, replacing each original with a `.dvs` metadata file.
 #' @param files Character vector of file paths to add.
 #' @param message Optional commit message describing why the files were added.
 #' @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
@@ -34,6 +35,7 @@ dvs_add_impl <- function(files = character(0), message = NULL, glob = NULL, dry_
 
 # Generated from Rust fn `dvs_get` (lib.rs:147:15)
 #' @title Retrieve files from DVS storage into the working directory
+#' @description Reads `.dvs` metadata files, fetches the corresponding contents from the content-addressable store, and writes them to their original paths.
 #' @param files Character vector of `.dvs` metadata file paths to retrieve.
 #' @param glob Optional glob pattern to select `.dvs` files (e.g. `"data/*.dvs"`).
 #' @param dry_run If `TRUE`, report what would be retrieved without writing files.
@@ -57,6 +59,7 @@ dvs_get_impl <- function(files = character(0), glob = NULL, dry_run = NULL) {
 
 # Generated from Rust fn `dvs_init` (lib.rs:32:15)
 #' @title Initialize a DVS repository in the given directory
+#' @description Creates the `.dvs` metadata folder and configures storage for versioned files.
 #' @param storage_path Path to the storage directory where file contents are kept.
 #' @param root_dir Repository root directory. Defaults to the current working directory.
 #' @param group Unix group name to set on stored files for shared access.
@@ -88,6 +91,7 @@ dvs_init_impl <- function(storage_path, root_dir = NULL, group = NULL, metadata_
 
 # Generated from Rust fn `dvs_status` (lib.rs:108:15)
 #' @title Report the sync status of DVS-managed files
+#' @description Compares `.dvs` metadata files against their stored contents and local working copies. By default all files are shown; pass filter flags to restrict output.
 #' @param current If `TRUE`, include files whose local copy matches storage.
 #' @param absent If `TRUE`, include files that exist in metadata but not locally.
 #' @param unsynced If `TRUE`, include files whose local copy differs from storage.
