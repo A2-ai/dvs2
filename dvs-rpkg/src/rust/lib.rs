@@ -120,10 +120,10 @@ pub(crate) fn dvs_status(
     let unsynced = unsynced.unwrap_or(false);
     let show_all = !current && !absent && !unsynced;
 
-    let mut statuses = get_status(&paths)?;
+    let mut statuses = get_status(&paths, None)?;
     if !show_all {
         statuses.retain(|x| match &x.detail {
-            StatusDetail::Success { status } => {
+            StatusDetail::Success { status, .. } => {
                 (current && *status == Status::Current)
                     || (absent && *status == Status::Absent)
                     || (unsynced && *status == Status::Unsynced)
