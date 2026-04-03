@@ -2,12 +2,27 @@ use std::io;
 use std::io::Write;
 use std::path::Path;
 
+use anyhow::{Context, Result};
+use fs_err as fs;
+use serde::{Deserialize, Deserializer, Serialize};
+
 use crate::backends::Backend as BackendTrait;
 use crate::backends::local::LocalBackend;
 use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, find_repo_root};
-use anyhow::{Context, Result};
-use fs_err as fs;
-use serde::{Deserialize, Serialize};
+use crate::progress::ProgressReader;
+use crate::utils::parse_size;
+
+const DEFAULT_PROGRESS_BYTE_SIZE_THRESHOLD: u64 = 524_288_000;
+
+fn deserialize_size_option<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u64>, D::Error> {
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    match s {
+        None => Ok(None),
+        Some(s) => parse_size(&s).map(Some).map_err(serde::de::Error::custom),
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -27,29 +42,67 @@ impl std::fmt::Display for Compression {
 }
 
 impl Compression {
-    pub fn compress(&self, source: &Path, dest: &Path) -> Result<u64> {
+    pub fn compress(
+        &self,
+        source: &Path,
+        dest: &Path,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<u64> {
         match self {
             Compression::None => {
-                let bytes = fs::copy(source, dest)?;
-                Ok(bytes)
+                if let Some(cb) = on_bytes {
+                    let input = fs::File::open(source)?;
+                    let output = fs::File::create(dest)?;
+                    let mut reader = ProgressReader::new(input, cb);
+                    let mut writer = io::BufWriter::new(output);
+                    let bytes = io::copy(&mut reader, &mut writer)?;
+                    writer.flush()?;
+                    Ok(bytes)
+                } else {
+                    let bytes = fs::copy(source, dest)?;
+                    Ok(bytes)
+                }
             }
             Compression::Zstd => {
                 let input = fs::File::open(source)?;
                 let output = fs::File::create(dest)?;
 
-                let mut encoder = zstd::stream::read::Encoder::new(input, 0)?;
-                let mut writer = io::BufWriter::new(output);
-                let bytes = io::copy(&mut encoder, &mut writer)?;
-                writer.flush()?;
-                Ok(bytes)
+                if let Some(cb) = on_bytes {
+                    let tracked = ProgressReader::new(input, cb);
+                    let mut encoder = zstd::stream::read::Encoder::new(tracked, 0)?;
+                    let mut writer = io::BufWriter::new(output);
+                    let bytes = io::copy(&mut encoder, &mut writer)?;
+                    writer.flush()?;
+                    Ok(bytes)
+                } else {
+                    let mut encoder = zstd::stream::read::Encoder::new(input, 0)?;
+                    let mut writer = io::BufWriter::new(output);
+                    let bytes = io::copy(&mut encoder, &mut writer)?;
+                    writer.flush()?;
+                    Ok(bytes)
+                }
             }
         }
     }
 
-    pub fn decompress(&self, source: &Path, dest: &Path) -> Result<()> {
+    pub fn decompress(
+        &self,
+        source: &Path,
+        dest: &Path,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<()> {
         match self {
             Compression::None => {
-                fs::copy(source, dest)?;
+                if let Some(cb) = on_bytes {
+                    let input = fs::File::open(source)?;
+                    let output = fs::File::create(dest)?;
+                    let mut reader = ProgressReader::new(input, cb);
+                    let mut writer = io::BufWriter::new(output);
+                    io::copy(&mut reader, &mut writer)?;
+                    writer.flush()?;
+                } else {
+                    fs::copy(source, dest)?;
+                }
                 Ok(())
             }
             Compression::Zstd => {
@@ -58,7 +111,12 @@ impl Compression {
 
                 let mut decoder = zstd::stream::read::Decoder::new(input)?;
                 let mut writer = io::BufWriter::new(output);
-                io::copy(&mut decoder, &mut writer)?;
+                if let Some(cb) = on_bytes {
+                    let mut reader = ProgressReader::new(&mut decoder, cb);
+                    io::copy(&mut reader, &mut writer)?;
+                } else {
+                    io::copy(&mut decoder, &mut writer)?;
+                }
                 writer.flush()?;
                 Ok(())
             }
@@ -73,6 +131,17 @@ pub enum Backend {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CliConfig {
+    /// Defaults to 500MB if not set in the config file
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_size_option"
+    )]
+    progress_threshold: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Config {
     /// Compression algorithm to use for files in the storage directory
     compression: Compression,
@@ -81,6 +150,8 @@ pub struct Config {
     /// If this option is set, dvs will use that folder name instead of `.dvs`
     metadata_folder_name: Option<String>,
     backend: Backend,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cli: Option<CliConfig>,
 }
 
 impl Config {
@@ -90,6 +161,7 @@ impl Config {
             compression: Compression::Zstd,
             metadata_folder_name: None,
             backend: Backend::Local(backend),
+            cli: None,
         })
     }
 
@@ -144,6 +216,13 @@ impl Config {
         match &self.backend {
             Backend::Local(b) => b,
         }
+    }
+
+    pub fn progress_bytes_threshold(&self) -> u64 {
+        self.cli
+            .as_ref()
+            .and_then(|x| x.progress_threshold)
+            .unwrap_or(DEFAULT_PROGRESS_BYTE_SIZE_THRESHOLD)
     }
 }
 

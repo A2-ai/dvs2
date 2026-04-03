@@ -1,22 +1,21 @@
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use anyhow::bail;
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde_json::json;
 use tabled::Tabled;
 
-use dvs::AddDetail;
-use dvs::GetDetail;
-use dvs::StatusDetail;
-use dvs::StatusFilter;
-use dvs::add_files;
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
-use dvs::{Compression, Status};
-use dvs::{Outcome, format_size, get_files, get_status};
+use dvs::{
+    AddDetail, Compression, FileMetadata, FileProgress, GetDetail, Outcome, Status, StatusDetail,
+    StatusFilter, add_files, format_size, get_files, get_status,
+};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -118,8 +117,8 @@ struct StatusRowFull<'a> {
     message: &'a str,
 }
 
-impl<'a> From<&'a dvs::FileMetadata> for StatusRowFull<'a> {
-    fn from(m: &'a dvs::FileMetadata) -> Self {
+impl<'a> From<&'a FileMetadata> for StatusRowFull<'a> {
+    fn from(m: &'a FileMetadata) -> Self {
         Self {
             size: m.size.to_string(),
             hash: m.hashes.blake3.as_str(),
@@ -128,6 +127,50 @@ impl<'a> From<&'a dvs::FileMetadata> for StatusRowFull<'a> {
             compression: m.compression.to_string(),
             message: m.message.as_deref().unwrap_or(""),
             ..Default::default()
+        }
+    }
+}
+
+fn progress_style() -> ProgressStyle {
+    ProgressStyle::with_template("{bar:40} {pos_fmt}/{len_fmt} ({percent}%) | {msg}")
+        .unwrap()
+        .with_key(
+            "pos_fmt",
+            |state: &indicatif::ProgressState, w: &mut dyn std::fmt::Write| {
+                write!(w, "{}", format_size(state.pos())).unwrap()
+            },
+        )
+        .with_key(
+            "len_fmt",
+            |state: &indicatif::ProgressState, w: &mut dyn std::fmt::Write| {
+                write!(w, "{}", format_size(state.len().unwrap_or(0))).unwrap()
+            },
+        )
+}
+
+fn make_progress_callback(threshold: u64) -> impl Fn(&std::path::Path, u64) -> FileProgress {
+    let mp = MultiProgress::new();
+    let style = progress_style();
+    move |path: &std::path::Path, size: u64| {
+        if size <= threshold {
+            return FileProgress {
+                on_bytes: Box::new(|_| {}),
+                on_done: Box::new(|_| {}),
+            };
+        }
+        let pb = mp.add(ProgressBar::new(size));
+        pb.set_style(style.clone());
+        pb.set_message(path.display().to_string());
+        let pb2 = pb.clone();
+        FileProgress {
+            on_bytes: Box::new(move |n| pb.inc(n)),
+            on_done: Box::new(move |ok| {
+                if ok {
+                    pb2.finish_and_clear()
+                } else {
+                    pb2.abandon()
+                }
+            }),
         }
     }
 }
@@ -194,6 +237,9 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("No files to add"));
             }
 
+            let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
+
+            let on_file_start = make_progress_callback(config.progress_bytes_threshold());
             let results = add_files(
                 all_paths,
                 &dvs_paths,
@@ -201,6 +247,11 @@ fn try_main() -> Result<()> {
                 message,
                 config.compression(),
                 dry_run,
+                if show_progress {
+                    Some(&on_file_start)
+                } else {
+                    None
+                },
             )?;
             let has_errors = results
                 .iter()
@@ -353,7 +404,20 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("No files to get"));
             }
 
-            let results = get_files(all_paths, &dvs_paths, config.backend(), dry_run)?;
+            let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
+
+            let on_file_start = make_progress_callback(config.progress_bytes_threshold());
+            let results = get_files(
+                all_paths,
+                &dvs_paths,
+                config.backend(),
+                dry_run,
+                if show_progress {
+                    Some(&on_file_start)
+                } else {
+                    None
+                },
+            )?;
             let has_errors = results
                 .iter()
                 .any(|r| matches!(r.detail, GetDetail::Error { .. }));

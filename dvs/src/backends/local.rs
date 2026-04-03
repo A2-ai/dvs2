@@ -204,7 +204,13 @@ impl Backend for LocalBackend {
         Ok(())
     }
 
-    fn store(&self, hash: &Hashes, source: &Path, compression: Compression) -> Result<u64> {
+    fn store(
+        &self,
+        hash: &Hashes,
+        source: &Path,
+        compression: Compression,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<u64> {
         let path = self.hash_to_path(hash)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -212,7 +218,7 @@ impl Backend for LocalBackend {
             self.ensure_group_and_mode(parent, self.dir_mode())?;
         }
         let tmp_path = path.with_extension("tmp");
-        let stored_size = compression.compress(source, &tmp_path)?;
+        let stored_size = compression.compress(source, &tmp_path, on_bytes)?;
 
         if self.use_shared_blob_mode() {
             self.ensure_group_and_mode(&tmp_path, SHARED_BLOB_MODE)?;
@@ -223,13 +229,19 @@ impl Backend for LocalBackend {
         Ok(stored_size)
     }
 
-    fn retrieve(&self, hash: &Hashes, target: &Path, compression: Compression) -> Result<bool> {
+    fn retrieve(
+        &self,
+        hash: &Hashes,
+        target: &Path,
+        compression: Compression,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<bool> {
         let path = self.hash_to_path(hash)?;
         if path.is_file() {
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)?;
             }
-            compression.decompress(&path, target)?;
+            compression.decompress(&path, target, on_bytes)?;
             Ok(true)
         } else {
             Ok(false)
@@ -334,7 +346,9 @@ mod tests {
         fs::write(&source, b"test content").unwrap();
 
         let hash = test_hash("d41d8cd98f00b204e9800998ecf8427e");
-        backend.store(&hash, &source, Compression::None).unwrap();
+        backend
+            .store(&hash, &source, Compression::None, None)
+            .unwrap();
 
         let stored = storage.join("d4").join("1d8cd98f00b204e9800998ecf8427e");
         assert!(stored.is_file());
@@ -352,11 +366,15 @@ mod tests {
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"stored content").unwrap();
-        backend.store(&hash, &source, Compression::None).unwrap();
+        backend
+            .store(&hash, &source, Compression::None, None)
+            .unwrap();
 
         // Retrieve to new location
         let target = tmp.path().join("retrieved.txt");
-        let result = backend.retrieve(&hash, &target, Compression::None).unwrap();
+        let result = backend
+            .retrieve(&hash, &target, Compression::None, None)
+            .unwrap();
 
         // file was copied if result == true
         assert!(result);
@@ -376,6 +394,7 @@ mod tests {
                 &test_hash("1234567890123456789012"),
                 &target,
                 Compression::None,
+                None,
             )
             .unwrap();
 
@@ -394,7 +413,9 @@ mod tests {
         assert!(!backend.exists(&hash).unwrap());
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
-        backend.store(&hash, &source, Compression::None).unwrap();
+        backend
+            .store(&hash, &source, Compression::None, None)
+            .unwrap();
         assert!(backend.exists(&hash).unwrap());
     }
 
@@ -408,7 +429,9 @@ mod tests {
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
-        backend.store(&hash, &source, Compression::None).unwrap();
+        backend
+            .store(&hash, &source, Compression::None, None)
+            .unwrap();
         assert!(backend.exists(&hash).unwrap());
 
         backend.remove(&hash).unwrap();
@@ -427,7 +450,9 @@ mod tests {
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
-        backend.store(&hash, &source, Compression::None).unwrap();
+        backend
+            .store(&hash, &source, Compression::None, None)
+            .unwrap();
 
         let stored = storage.join("ab").join("c123def456789012345678901234ab");
         let perms = fs::metadata(&stored).unwrap().permissions();
@@ -564,7 +589,9 @@ mod tests {
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
-        backend.store(&hash, &source, Compression::None).unwrap();
+        backend
+            .store(&hash, &source, Compression::None, None)
+            .unwrap();
 
         let prefix_dir = storage.join("ab");
         let prefix_mode = fs::metadata(&prefix_dir).unwrap().permissions().mode();

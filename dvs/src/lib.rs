@@ -8,6 +8,7 @@ pub mod globbing;
 mod hashes;
 pub mod init;
 pub mod paths;
+pub mod progress;
 pub(crate) mod utils;
 
 pub use backends::Backend;
@@ -19,6 +20,7 @@ pub use files::status::{FileStatus, StatusDetail, StatusFilter, get_status};
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use paths::{AddPathStatus, DvsPaths, find_repo_root};
+pub use progress::FileProgress;
 pub use utils::format_size;
 
 #[cfg(test)]
