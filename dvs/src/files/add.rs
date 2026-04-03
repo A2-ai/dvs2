@@ -12,6 +12,7 @@ use crate::config::Compression;
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
 use crate::paths::{AddPathStatus, DvsPaths};
+use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
 use crate::{Outcome, cache};
 
@@ -37,6 +38,7 @@ pub enum AddDetail {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_file(
     relative_path: &Path,
     paths: &DvsPaths,
@@ -46,6 +48,7 @@ fn add_file(
     message: Option<String>,
     compression: Compression,
     dry_run: bool,
+    on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
 ) -> Result<(Outcome, FileMetadata, Option<u64>)> {
     let full_path = paths.file_path(relative_path);
     let rel_str = relative_path.to_string_lossy();
@@ -68,8 +71,14 @@ fn add_file(
         };
         Ok((outcome, metadata, None))
     } else {
-        let (outcome, stored_size) =
-            metadata.save(operation_id, &full_path, backend, paths, relative_path)?;
+        let (outcome, stored_size) = metadata.save(
+            operation_id,
+            &full_path,
+            backend,
+            paths,
+            relative_path,
+            on_bytes,
+        )?;
         Ok((outcome, metadata, stored_size))
     }
 }
@@ -85,6 +94,7 @@ pub fn add_files(
     message: Option<String>,
     compression: Compression,
     dry_run: bool,
+    on_file_start: Option<&OnFileStart>,
 ) -> Result<Vec<AddResult>> {
     let matched_paths = paths.validate_for_add(&files);
     let pool = get_threadpool(matched_paths.len())?;
@@ -143,7 +153,9 @@ pub fn add_files(
                     }
                     _ => {} // ok
                 }
-
+                let file_size = std::fs::metadata(&full_path).map(|m| m.len()).unwrap_or(0);
+                let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
+                let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
                 match add_file(
                     &relative_path,
                     paths,
@@ -153,6 +165,7 @@ pub fn add_files(
                     message.clone(),
                     compression,
                     dry_run,
+                    on_bytes,
                 ) {
                     Ok((outcome, metadata, stored_size)) => {
                         log::info!(
@@ -231,6 +244,7 @@ mod tests {
             None,
             Compression::Zstd,
             false,
+            None,
         )
         .unwrap();
         assert_eq!(results.len(), 1);
@@ -254,12 +268,12 @@ mod tests {
         let outside_file = fs::canonicalize(outside_tmp.path())
             .unwrap()
             .join("outside.txt");
-        std::fs::write(&outside_file, b"outside").unwrap();
+        fs::write(&outside_file, b"outside").unwrap();
         let outside_relative =
             PathBuf::from("..").join(outside_file.strip_prefix(root.parent().unwrap()).unwrap());
 
         // Directory inside the repo
-        std::fs::create_dir(root.join("subdir")).unwrap();
+        fs::create_dir(root.join("subdir")).unwrap();
 
         let results = add_files(
             vec![
@@ -273,6 +287,7 @@ mod tests {
             None,
             Compression::Zstd,
             false,
+            None,
         )
         .unwrap();
         assert_eq!(results.len(), 4);
