@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use anyhow::{Result, bail};
 
 const DEFAULT_THREADS_PER_CPU: usize = 4;
@@ -5,6 +7,23 @@ const DEFAULT_THREADS_PER_CPU: usize = 4;
 const DEFAULT_MAX_THREADS: usize = 16;
 /// Maximum thread count threshold if `DVS_NUM_THREADS` is set
 const ENV_MAX_THREADS: usize = 32;
+
+/// Global thread count override. 0 = unset (use env var or default).
+static NUM_THREADS: AtomicUsize = AtomicUsize::new(0);
+
+/// Set the number of threads for DVS parallel operations.
+/// Pass 0 to clear (revert to env var / automatic detection).
+pub fn set_num_threads(n: usize) {
+    NUM_THREADS.store(n, Ordering::Relaxed);
+}
+
+/// Returns the configured thread count, or `None` if unset.
+pub(crate) fn get_num_threads() -> Option<usize> {
+    match NUM_THREADS.load(Ordering::Relaxed) {
+        0 => None,
+        n => Some(n),
+    }
+}
 
 const KB: u64 = 1_024;
 const MB: u64 = 1_024 * 1_024;
@@ -64,14 +83,13 @@ pub fn parse_size(size: &str) -> Result<u64> {
 
 /// Creates a rayon thread pool.
 ///
-/// If `DVS_NUM_THREADS` is set to a positive integer, uses that value
-/// capped at 32 and clamped to the amount of available work.
-/// Otherwise, defaults to up to 4 threads per available unit of
-/// parallelism, capped at 16 and clamped to the amount of available work.
-pub fn get_threadpool(
-    work_items: usize,
-    user_num_threads: Option<usize>,
-) -> Result<rayon::ThreadPool> {
+/// Thread count priority (highest to lowest):
+/// 1. Global override via [`set_num_threads`] (capped at 32)
+/// 2. `DVS_NUM_THREADS` environment variable (capped at 32)
+/// 3. Default: `available_cpus * 4` (capped at 16)
+///
+/// The result is always clamped to the number of work items.
+pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
     debug_assert_ne!(
         work_items, 0,
         "the thread pool should not be instantiated when there are no work items to process"
@@ -85,17 +103,11 @@ pub fn get_threadpool(
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0);
-    // Priority: user_num_threads > DVS_NUM_THREADS env var > default
-    // when user_num_threads is set:
-    // num_threads = min(workitems, user_num_threads, 32)
-    // when `DVS_NUM_THREADS` is set:
-    // num_threads = min(workitems, DVS_NUM_THREADS, 32)
-    // else:
-    // num_threads = min(workitems, cpus * 4, 16)
+    // Priority: set_num_threads() > DVS_NUM_THREADS env var > default
     let num_threads = {
         let work_limit = work_items.max(1);
 
-        let configured = match user_num_threads.filter(|&n| n > 0).or(env_threads) {
+        let configured = match get_num_threads().or(env_threads) {
             Some(n) => n.min(ENV_MAX_THREADS),
             None => available
                 .saturating_mul(DEFAULT_THREADS_PER_CPU)

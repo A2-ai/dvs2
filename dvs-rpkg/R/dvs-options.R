@@ -1,8 +1,8 @@
 #' Set the number of threads used by DVS operations
 #'
 #' Controls the thread pool size for parallel file operations (add, get, status).
-#' The value is stored as the `dvs.num_threads` option and passed directly to
-#' the Rust backend on each operation.
+#' The value is stored as the `dvs.num_threads` option and synced to the
+#' Rust backend before each operation.
 #'
 #' Can also be set via `.Rprofile` or temporarily with [withr::with_options()].
 #'

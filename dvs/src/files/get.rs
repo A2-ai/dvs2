@@ -118,10 +118,9 @@ pub fn get_files(
     backend: &dyn Backend,
     dry_run: bool,
     on_file_start: Option<&OnFileStart>,
-    threads: Option<usize>,
 ) -> Result<Vec<GetResult>> {
     let matched_paths = paths.validate_for_get(&files);
-    let pool = get_threadpool(matched_paths.len(), threads)?;
+    let pool = get_threadpool(matched_paths.len())?;
     let cache = try_open_cache(paths);
 
     let mut results: Vec<GetResult> = pool.install(|| {
@@ -305,12 +304,11 @@ mod tests {
             None,
             Compression::Zstd,
             false,
-            None,
         )
         .unwrap();
 
         let results =
-            get_files(vec!["nonexistent.csv".into()], &paths, backend, false, None).unwrap();
+            get_files(vec!["nonexistent.csv".into()], &paths, backend, false).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not found"))
@@ -328,7 +326,7 @@ mod tests {
         create_file(&root, "untracked.txt", b"hello");
 
         let results =
-            get_files(vec!["untracked.txt".into()], &paths, backend, false, None).unwrap();
+            get_files(vec!["untracked.txt".into()], &paths, backend, false).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not tracked"))
@@ -353,7 +351,6 @@ mod tests {
             None,
             Compression::Zstd,
             false,
-            None,
         )
         .unwrap();
         assert_eq!(results.len(), expected_files.len());
@@ -368,7 +365,7 @@ mod tests {
         }
 
         // Verify correct files are tracked
-        let statuses = get_status(&paths, None, None).unwrap();
+        let statuses = get_status(&paths, None).unwrap();
         assert_eq!(statuses.len(), expected_files.len());
         let tracked_names: Vec<_> = statuses.iter().map(|s| s.path.to_str().unwrap()).collect();
         for expected in expected_files {
@@ -384,7 +381,7 @@ mod tests {
         }
 
         // Get files back
-        let results = get_files(file_paths, &paths, backend, false, None).unwrap();
+        let results = get_files(file_paths, &paths, backend, false).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert!(matches!(

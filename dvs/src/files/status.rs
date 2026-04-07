@@ -131,7 +131,6 @@ fn get_file_status(
 pub fn get_status(
     paths: &DvsPaths,
     filter: Option<&StatusFilter>,
-    threads: Option<usize>,
 ) -> Result<Vec<FileStatus>> {
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
@@ -151,7 +150,7 @@ pub fn get_status(
         .map(|e| e.into_path())
         .collect();
 
-    let pool = get_threadpool(entries.len(), threads)?;
+    let pool = get_threadpool(entries.len())?;
 
     let mut results: Vec<FileStatus> = pool.install(|| {
         entries
@@ -328,7 +327,7 @@ mod tests {
                 .unwrap();
         }
 
-        let statuses = get_status(&paths, None, None).unwrap();
+        let statuses = get_status(&paths, None).unwrap();
         assert_eq!(statuses.len(), 3);
 
         // All should be Current
@@ -493,14 +492,14 @@ mod tests {
             paths: vec![PathBuf::from("dir1")],
             recursive: false,
         };
-        let statuses = get_status(&paths, Some(&filter), None).unwrap();
+        let statuses = get_status(&paths, Some(&filter)).unwrap();
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
 
         // Absolute path filter via from_user_paths
         let abs_path = paths.repo_root().join("dir1/b.txt");
         let filter = StatusFilter::from_user_paths(vec![abs_path], false, &paths);
-        let statuses = get_status(&paths, Some(&filter), None).unwrap();
+        let statuses = get_status(&paths, Some(&filter)).unwrap();
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
     }
