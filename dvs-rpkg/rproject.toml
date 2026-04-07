@@ -1,0 +1,14 @@
+use_lockfile = false
+
+[project]
+name = "dvs-rpkg"
+r_version = "4.5"
+
+repositories = [
+{ alias = "PPM", url = "https://packagemanager.posit.co/cran/latest" },
+]
+
+dependencies = [
+  {name = "minirextendr", git = "https://github.com/CGMossa/miniextendr", branch = "main", directory = "minirextendr"},
+    "progress",
+]
