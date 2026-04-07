@@ -33,7 +33,7 @@ dvs_add_impl <- function(files = character(0), message = NULL, glob = NULL, dry_
   .val
 }
 
-# Generated from Rust fn `dvs_get` (lib.rs:147:15)
+# Generated from Rust fn `dvs_get` (lib.rs:151:15)
 #' @title Retrieve files from DVS storage into the working directory
 #' @description Reads `.dvs` metadata files, fetches the corresponding contents from the content-addressable store, and writes them to their original paths.
 #' @param files Character vector of `.dvs` metadata file paths to retrieve.

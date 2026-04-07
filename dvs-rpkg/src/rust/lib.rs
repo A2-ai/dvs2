@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use miniextendr_api::serde::ColumnarDataFrame;
 use miniextendr_api::{AsSerializeRow, DataFrame, List, list, miniextendr, r_println};
 
 use anyhow::{Result, anyhow};
@@ -15,8 +16,7 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddResult, Compression, FileStatus, GetResult, Status, StatusDetail, add_files, get_files,
-    get_status,
+    AddResult, Compression, GetResult, Status, StatusDetail, add_files, get_files, get_status,
 };
 
 /// Initialize a DVS repository in the given directory.
@@ -109,7 +109,7 @@ pub(crate) fn dvs_status(
     #[miniextendr(default = "NULL")] current: Option<bool>,
     #[miniextendr(default = "NULL")] absent: Option<bool>,
     #[miniextendr(default = "NULL")] unsynced: Option<bool>,
-) -> Result<DataFrame<AsSerializeRow<FileStatus>>> {
+) -> Result<ColumnarDataFrame> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -132,7 +132,11 @@ pub(crate) fn dvs_status(
         });
     }
 
-    Ok(DataFrame::from_iter(statuses.into_iter().map(|x| x.into())))
+    Ok(miniextendr_api::serde::vec_to_dataframe(&statuses)?
+        .drop("metadata_hashes_md5")
+        .strip_prefix("metadata_hashes_")
+        .strip_prefix("metadata_")
+        .rename("blake3", "hash"))
 }
 
 /// Retrieve files from DVS storage into the working directory.
