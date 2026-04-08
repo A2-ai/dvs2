@@ -91,6 +91,7 @@ fn progress_on_file_start(
                     }
                 }
             }),
+            on_done: Box::new(|_| {}),
         }
     }
 }
