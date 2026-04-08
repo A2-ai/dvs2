@@ -13,6 +13,8 @@ type CliProgressBarFn = unsafe extern "C" fn(*mut *mut i32, f64, SEXP) -> SEXP;
 type CliProgressAddFn = unsafe extern "C" fn(SEXP, f64);
 type CliProgressDoneFn = unsafe extern "C" fn(SEXP);
 type CliProgressSetClearFn = unsafe extern "C" fn(SEXP, i32);
+type CliProgressSetTypeFn = unsafe extern "C" fn(SEXP, *const std::ffi::c_char);
+type CliProgressUpdateFn = unsafe extern "C" fn(SEXP, f64, f64, i32);
 
 // Resolved function pointers (initialized once).
 static INIT: Once = Once::new();
@@ -20,6 +22,8 @@ static mut FN_BAR: Option<CliProgressBarFn> = None;
 static mut FN_ADD: Option<CliProgressAddFn> = None;
 static mut FN_DONE: Option<CliProgressDoneFn> = None;
 static mut FN_SET_CLEAR: Option<CliProgressSetClearFn> = None;
+static mut FN_SET_TYPE: Option<CliProgressSetTypeFn> = None;
+static mut FN_UPDATE: Option<CliProgressUpdateFn> = None;
 
 fn ensure_init() {
     INIT.call_once(|| unsafe {
@@ -45,6 +49,14 @@ fn ensure_init() {
             c"cli".as_ptr(),
             c"cli_progress_set_clear".as_ptr(),
         )));
+        FN_SET_TYPE = Some(std::mem::transmute(R_GetCCallable(
+            c"cli".as_ptr(),
+            c"cli_progress_set_type".as_ptr(),
+        )));
+        FN_UPDATE = Some(std::mem::transmute(R_GetCCallable(
+            c"cli".as_ptr(),
+            c"cli_progress_update".as_ptr(),
+        )));
     });
 }
 
@@ -67,6 +79,10 @@ impl CliProgressBar {
 
             let set_clear = FN_SET_CLEAR.unwrap_unchecked();
             set_clear(bar, 0);
+
+            // "download" type formats units as bytes (KB/MB/GB).
+            let set_type = FN_SET_TYPE.unwrap_unchecked();
+            set_type(bar, c"download".as_ptr());
 
             Self { bar }
         }
