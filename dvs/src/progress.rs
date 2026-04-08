@@ -29,6 +29,4 @@ pub type OnFileStart = dyn Fn(&Path, u64) -> FileProgress + Send + Sync;
 pub struct FileProgress {
     /// Called as bytes are transferred for this specific file.
     pub on_bytes: Box<dyn Fn(u64) + Send + Sync>,
-    /// Called when this file finishes processing (success or error).
-    pub on_done: Box<dyn Fn(bool) + Send + Sync>,
 }

@@ -127,6 +127,25 @@ pub fn get_files(
         matched_paths
             .into_par_iter()
             .map(|(relative_path, validation)| {
+                match validation {
+                    GetPathStatus::NotFound => {
+                        return GetResult {
+                            path: relative_path,
+                            detail: GetDetail::Error {
+                                error: "file not found".to_string(),
+                            },
+                        };
+                    }
+                    GetPathStatus::NotTracked => {
+                        return GetResult {
+                            path: relative_path,
+                            detail: GetDetail::Error {
+                                error: "not tracked by DVS".to_string(),
+                            },
+                        };
+                    }
+                    GetPathStatus::Tracked => {}
+                }
                 let file_size = {
                     let meta_path = paths.metadata_path(&relative_path);
                     std::fs::File::open(&meta_path)
@@ -137,34 +156,6 @@ pub fn get_files(
                 };
                 let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
                 let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
-                let on_done = file_progress.as_ref().map(|fp| &*fp.on_done);
-                let finish = |ok| {
-                    if let Some(done) = on_done {
-                        done(ok);
-                    }
-                };
-
-                match validation {
-                    GetPathStatus::NotFound => {
-                        finish(false);
-                        return GetResult {
-                            path: relative_path,
-                            detail: GetDetail::Error {
-                                error: "file not found".to_string(),
-                            },
-                        };
-                    }
-                    GetPathStatus::NotTracked => {
-                        finish(false);
-                        return GetResult {
-                            path: relative_path,
-                            detail: GetDetail::Error {
-                                error: "not tracked by DVS".to_string(),
-                            },
-                        };
-                    }
-                    GetPathStatus::Tracked => {}
-                }
 
                 match get_file(
                     backend,
@@ -175,7 +166,6 @@ pub fn get_files(
                     on_bytes,
                 ) {
                     Ok((outcome, size)) => {
-                        finish(true);
                         log::info!(
                             "Successfully retrieved {} ({:?})",
                             relative_path.display(),
@@ -187,7 +177,6 @@ pub fn get_files(
                         }
                     }
                     Err(e) => {
-                        finish(false);
                         log::warn!("Failed to get {}: {e}", relative_path.display());
                         GetResult {
                             path: relative_path,
@@ -208,12 +197,10 @@ pub fn get_files(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FileProgress;
     use crate::add_files;
     use crate::files::add::AddDetail;
     use crate::files::status::get_status;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
-    use std::sync::{Arc, Mutex};
     use uuid::Uuid;
 
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
@@ -458,64 +445,5 @@ mod tests {
         let cache = make_cache(&paths);
         let result = get_file(backend, &paths, "data.txt", Some(&cache), false, None);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn get_files_calls_on_done_for_each_attempt() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-
-        create_file(&root, "a.txt", b"a");
-        add_files(
-            vec!["a.txt".into()],
-            &paths,
-            backend,
-            None,
-            Compression::Zstd,
-            false,
-            None,
-        )
-        .unwrap();
-
-        let done_events = Arc::new(Mutex::new(Vec::new()));
-        let on_file_start = {
-            let done_events = Arc::clone(&done_events);
-            move |path: &Path, _size: u64| {
-                let path = path.to_path_buf();
-                let done_events = Arc::clone(&done_events);
-                FileProgress {
-                    on_bytes: Box::new(|_| {}),
-                    on_done: Box::new(move |ok| {
-                        done_events
-                            .lock()
-                            .unwrap()
-                            .push((path.to_string_lossy().into_owned(), ok));
-                    }),
-                }
-            }
-        };
-
-        let results = get_files(
-            vec!["a.txt".into(), "missing.csv".into()],
-            &paths,
-            backend,
-            false,
-            Some(&on_file_start),
-        )
-        .unwrap();
-
-        assert_eq!(results.len(), 2);
-
-        let mut events = done_events.lock().unwrap().clone();
-        events.sort();
-        assert_eq!(
-            events,
-            vec![
-                ("a.txt".to_string(), true),
-                ("missing.csv".to_string(), false),
-            ]
-        );
     }
 }

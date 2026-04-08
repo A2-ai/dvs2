@@ -155,22 +155,13 @@ fn make_progress_callback(threshold: u64) -> impl Fn(&std::path::Path, u64) -> F
         if size <= threshold {
             return FileProgress {
                 on_bytes: Box::new(|_| {}),
-                on_done: Box::new(|_| {}),
             };
         }
         let pb = mp.add(ProgressBar::new(size));
         pb.set_style(style.clone());
         pb.set_message(path.display().to_string());
-        let pb2 = pb.clone();
         FileProgress {
             on_bytes: Box::new(move |n| pb.inc(n)),
-            on_done: Box::new(move |ok| {
-                if ok {
-                    pb2.finish_and_clear()
-                } else {
-                    pb2.abandon()
-                }
-            }),
         }
     }
 }

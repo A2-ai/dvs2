@@ -79,9 +79,7 @@ fn progress_on_file_start(
 
         let pending = Arc::new(AtomicI64::new(0));
         let tx_bytes = tx.clone();
-        let tx_done = tx.clone();
         let pending_bytes = Arc::clone(&pending);
-        let pending_done = Arc::clone(&pending);
 
         FileProgress {
             on_bytes: Box::new(move |n| {
@@ -91,12 +89,6 @@ fn progress_on_file_start(
                     if flushed > 0 {
                         let _ = tx_bytes.send(flushed);
                     }
-                }
-            }),
-            on_done: Box::new(move |_| {
-                let remaining = pending_done.swap(0, Ordering::Relaxed);
-                if remaining > 0 {
-                    let _ = tx_done.send(remaining);
                 }
             }),
         }
