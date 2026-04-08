@@ -127,9 +127,14 @@ pub fn get_files(
         matched_paths
             .into_par_iter()
             .map(|(relative_path, validation)| {
-                let file_size = FileMetadata::read_dvs_file(paths.metadata_path(&relative_path))
-                    .map(|m| m.size)
-                    .unwrap_or(0);
+                let file_size = {
+                    let meta_path = paths.metadata_path(&relative_path);
+                    std::fs::File::open(&meta_path)
+                        .ok()
+                        .and_then(|f| serde_json::from_reader::<_, FileMetadata>(f).ok())
+                        .map(|m| m.size)
+                        .unwrap_or(0)
+                };
                 let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
                 let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
                 let on_done = file_progress.as_ref().map(|fp| &*fp.on_done);
