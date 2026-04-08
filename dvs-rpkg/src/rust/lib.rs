@@ -4,7 +4,9 @@
 //! Results are returned as JSON strings for efficient parsing in R.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::mpsc::{self, SyncSender};
 use std::thread;
 
 use miniextendr_api::externalptr::ExternalPtr;
@@ -28,6 +30,10 @@ use dvs::{
 /// Negative = file started (absolute value is file size, grows the total).
 /// Positive = bytes transferred (advances the bar).
 type ProgressBytes = i64;
+
+/// Minimum bytes to accumulate before sending a channel message.
+/// Reduces FFI round-trips from ~130K to ~4K per GB.
+const BATCH_THRESHOLD: i64 = 256 * 1024; // 256 KB
 
 #[derive(miniextendr_api::ExternalPtr)]
 pub struct ProgressBarCallback {
@@ -72,18 +78,18 @@ impl ProgressBarCallback {
 /// Run `task` on a worker thread, forwarding progress messages to the R
 /// main thread via `progress_callback`.
 ///
-/// Messages are `i64`: negative = new file started (|value| = file size),
-/// positive = bytes transferred.
+/// Uses a bounded `sync_channel` for backpressure — the worker blocks if
+/// the R main thread falls behind processing callbacks.
 fn run_with_progress<T, F>(
     progress_callback: ExternalPtr<ProgressBarCallback>,
     task: F,
 ) -> Result<T>
 where
     T: Send,
-    F: FnOnce(Sender<ProgressBytes>) -> Result<T> + Send,
+    F: FnOnce(SyncSender<ProgressBytes>) -> Result<T> + Send,
 {
     thread::scope(|scope| {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(64);
         let worker = scope.spawn(move || {
             let result = task(tx.clone());
             drop(tx);
@@ -113,20 +119,38 @@ where
 
 /// Build the `on_file_start` closure that feeds byte-level progress.
 ///
-/// Sends negative file size first (to grow total), then positive byte
-/// increments as data is transferred.
+/// Sends negative file size immediately (to grow total). Byte increments
+/// are batched — accumulated in an atomic counter and only flushed to the
+/// channel when the batch threshold is exceeded or the file finishes.
 fn progress_on_file_start(
-    tx: Sender<ProgressBytes>,
-) -> impl Fn(&std::path::Path, u64) -> FileProgress {
+    tx: SyncSender<ProgressBytes>,
+) -> impl Fn(&std::path::Path, u64) -> FileProgress + Send + Sync {
     move |_path: &std::path::Path, size: u64| {
-        // Negative = file start, grows the total
+        // Negative = file start, grows the total. Always sent immediately.
         let _ = tx.send(-(size as i64));
-        let tx = tx.clone();
+
+        let pending = Arc::new(AtomicI64::new(0));
+        let tx_bytes = tx.clone();
+        let tx_done = tx.clone();
+        let pending_bytes = Arc::clone(&pending);
+        let pending_done = Arc::clone(&pending);
+
         FileProgress {
             on_bytes: Box::new(move |n| {
-                let _ = tx.send(n as i64);
+                let acc = pending_bytes.fetch_add(n as i64, Ordering::Relaxed) + n as i64;
+                if acc >= BATCH_THRESHOLD {
+                    let flushed = pending_bytes.swap(0, Ordering::Relaxed);
+                    if flushed > 0 {
+                        let _ = tx_bytes.send(flushed);
+                    }
+                }
             }),
-            on_done: Box::new(|_| {}),
+            on_done: Box::new(move |_| {
+                let remaining = pending_done.swap(0, Ordering::Relaxed);
+                if remaining > 0 {
+                    let _ = tx_done.send(remaining);
+                }
+            }),
         }
     }
 }
