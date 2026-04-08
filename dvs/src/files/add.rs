@@ -105,8 +105,20 @@ pub fn add_files(
         matched_paths
             .into_par_iter()
             .map(|(relative_path, status)| {
+                let full_path = paths.file_path(&relative_path);
+                let file_size = std::fs::metadata(&full_path).map(|m| m.len()).unwrap_or(0);
+                let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
+                let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
+                let on_done = file_progress.as_ref().map(|fp| &*fp.on_done);
+                let finish = |ok| {
+                    if let Some(done) = on_done {
+                        done(ok);
+                    }
+                };
+
                 match status {
                     AddPathStatus::NotFound => {
+                        finish(false);
                         return AddResult {
                             path: relative_path,
                             detail: AddDetail::Error {
@@ -115,6 +127,7 @@ pub fn add_files(
                         };
                     }
                     AddPathStatus::OutsideProject => {
+                        finish(false);
                         return AddResult {
                             path: relative_path,
                             detail: AddDetail::Error {
@@ -123,6 +136,7 @@ pub fn add_files(
                         };
                     }
                     AddPathStatus::IsDirectory => {
+                        finish(false);
                         return AddResult {
                             path: relative_path,
                             detail: AddDetail::Error {
@@ -133,9 +147,9 @@ pub fn add_files(
                     AddPathStatus::Valid => {}
                 }
 
-                let full_path = paths.file_path(&relative_path);
                 match full_path.canonicalize() {
                     Ok(canonical) if !canonical.starts_with(paths.repo_root()) => {
+                        finish(false);
                         return AddResult {
                             path: relative_path,
                             detail: AddDetail::Error {
@@ -144,6 +158,7 @@ pub fn add_files(
                         };
                     }
                     Err(e) => {
+                        finish(false);
                         return AddResult {
                             path: relative_path,
                             detail: AddDetail::Error {
@@ -153,9 +168,6 @@ pub fn add_files(
                     }
                     _ => {} // ok
                 }
-                let file_size = std::fs::metadata(&full_path).map(|m| m.len()).unwrap_or(0);
-                let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
-                let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
                 match add_file(
                     &relative_path,
                     paths,
@@ -168,6 +180,7 @@ pub fn add_files(
                     on_bytes,
                 ) {
                     Ok((outcome, metadata, stored_size)) => {
+                        finish(true);
                         log::info!(
                             "Successfully added {} ({:?})",
                             relative_path.display(),
@@ -184,6 +197,7 @@ pub fn add_files(
                         }
                     }
                     Err(e) => {
+                        finish(false);
                         log::warn!("Failed to add {}: {e}", relative_path.display());
                         AddResult {
                             path: relative_path,
@@ -215,9 +229,11 @@ pub fn add_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FileProgress;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
     use std::fs;
     use std::path::Path;
+    use std::sync::{Arc, Mutex};
 
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
         DvsPaths::new(
@@ -311,5 +327,56 @@ mod tests {
 
         let dir = results.iter().find(|r| *r.path == *"subdir").unwrap();
         assert!(matches!(&dir.detail, AddDetail::Error { error } if error.contains("directory")));
+    }
+
+    #[test]
+    fn add_files_calls_on_done_for_each_attempt() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+
+        create_file(&root, "a.txt", b"a");
+
+        let done_events = Arc::new(Mutex::new(Vec::new()));
+        let on_file_start = {
+            let done_events = Arc::clone(&done_events);
+            move |path: &Path, _size: u64| {
+                let path = path.to_path_buf();
+                let done_events = Arc::clone(&done_events);
+                FileProgress {
+                    on_bytes: Box::new(|_| {}),
+                    on_done: Box::new(move |ok| {
+                        done_events
+                            .lock()
+                            .unwrap()
+                            .push((path.to_string_lossy().into_owned(), ok));
+                    }),
+                }
+            }
+        };
+
+        let results = add_files(
+            vec!["a.txt".into(), "missing.csv".into()],
+            &paths,
+            backend,
+            None,
+            Compression::Zstd,
+            false,
+            Some(&on_file_start),
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 2);
+
+        let mut events = done_events.lock().unwrap().clone();
+        events.sort();
+        assert_eq!(
+            events,
+            vec![
+                ("a.txt".to_string(), true),
+                ("missing.csv".to_string(), false),
+            ]
+        );
     }
 }

@@ -27,11 +27,35 @@ dvs_add <- function(
   glob = NULL,
   dry_run = NULL
 ) {
-  get_data_frame <- dvs_add_impl(files = files, message = message, glob = glob, dry_run = dry_run)
-    if (requireNamespace("tibble")) {
-    tibble::as_tibble(get_data_frame)
+  if (!is.null(glob)) {
+    files <- unique(c(files, Sys.glob(glob)))
+    glob <- NULL
+  }
+
+  use_progress <- length(files) > 1 && !isTRUE(dry_run) && interactive()
+  progress_callback <- NULL
+
+  if (use_progress) {
+    pb <- progress::progress_bar$new(
+      format = "  [:bar] :current/:total (:percent) eta: :eta",
+      total = length(files),
+      clear = FALSE
+    )
+    progress_callback <- function() pb$tick()
+  }
+
+  result <- dvs_add_impl(
+    files = files,
+    message = message,
+    glob = glob,
+    dry_run = dry_run,
+    progress_callback = progress_callback
+  )
+
+  if (requireNamespace("tibble")) {
+    tibble::as_tibble(result)
   } else {
-    get_data_frame
+    result
   }
 }
 
@@ -54,8 +78,26 @@ dvs_status <- function(current = NULL, absent = NULL, unsynced = NULL) {
 #' @rdname dvs_get
 #' @export
 dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
-  get_data_frame <- dvs_get_impl(files = files, glob = glob, dry_run = dry_run)
-    if (requireNamespace("tibble")) {
+  use_progress <-
+    length(files) > 1 && is.null(glob) && !isTRUE(dry_run) && interactive()
+  progress_callback <- NULL
+
+  if (use_progress) {
+    pb <- progress::progress_bar$new(
+      format = "  [:bar] :current/:total (:percent) eta: :eta",
+      total = length(files),
+      clear = FALSE
+    )
+    progress_callback <- function() pb$tick()
+  }
+
+  get_data_frame <- dvs_get_impl(
+    files = files,
+    glob = glob,
+    dry_run = dry_run,
+    progress_callback = progress_callback
+  )
+  if (requireNamespace("tibble")) {
     tibble::as_tibble(get_data_frame)
   } else {
     get_data_frame
