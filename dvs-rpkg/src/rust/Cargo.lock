@@ -177,6 +177,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "dvs",
+ "fs-err",
  "miniextendr-api",
  "miniextendr-lint",
  "serde",
