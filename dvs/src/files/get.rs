@@ -208,11 +208,11 @@ pub fn get_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FileProgress;
     use crate::add_files;
     use crate::files::add::AddDetail;
     use crate::files::status::get_status;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
-    use crate::FileProgress;
     use std::sync::{Arc, Mutex};
     use uuid::Uuid;
 

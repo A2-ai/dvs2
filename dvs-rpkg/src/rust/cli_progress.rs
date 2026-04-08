@@ -8,7 +8,7 @@ use std::sync::Once;
 
 use miniextendr_api::ffi::{
     R_GetCCallable, R_NilValue, R_PreserveObject, R_ReleaseObject, Rf_ScalarReal, Rf_protect,
-    Rf_unprotect, SEXPTYPE, SEXP,
+    Rf_unprotect, SEXP, SEXPTYPE,
 };
 
 type FnBar = unsafe extern "C" fn(*mut *mut i32, f64, SEXP) -> SEXP;
@@ -31,11 +31,26 @@ fn ensure_init() {
             .eval_global()
             .expect("failed to load cli namespace");
 
-        FN_BAR = Some(std::mem::transmute(R_GetCCallable(c"cli".as_ptr(), c"cli_progress_bar".as_ptr())));
-        FN_ADD = Some(std::mem::transmute(R_GetCCallable(c"cli".as_ptr(), c"cli_progress_add".as_ptr())));
-        FN_SET = Some(std::mem::transmute(R_GetCCallable(c"cli".as_ptr(), c"cli_progress_set".as_ptr())));
-        FN_DONE = Some(std::mem::transmute(R_GetCCallable(c"cli".as_ptr(), c"cli_progress_done".as_ptr())));
-        FN_SET_CLEAR = Some(std::mem::transmute(R_GetCCallable(c"cli".as_ptr(), c"cli_progress_set_clear".as_ptr())));
+        FN_BAR = Some(std::mem::transmute(R_GetCCallable(
+            c"cli".as_ptr(),
+            c"cli_progress_bar".as_ptr(),
+        )));
+        FN_ADD = Some(std::mem::transmute(R_GetCCallable(
+            c"cli".as_ptr(),
+            c"cli_progress_add".as_ptr(),
+        )));
+        FN_SET = Some(std::mem::transmute(R_GetCCallable(
+            c"cli".as_ptr(),
+            c"cli_progress_set".as_ptr(),
+        )));
+        FN_DONE = Some(std::mem::transmute(R_GetCCallable(
+            c"cli".as_ptr(),
+            c"cli_progress_done".as_ptr(),
+        )));
+        FN_SET_CLEAR = Some(std::mem::transmute(R_GetCCallable(
+            c"cli".as_ptr(),
+            c"cli_progress_set_clear".as_ptr(),
+        )));
     });
 }
 

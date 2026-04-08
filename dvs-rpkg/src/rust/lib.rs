@@ -214,9 +214,7 @@ pub(crate) fn dvs_add(
         )?
     };
 
-    Ok(DataFrame::from_iter(
-        results.into_iter().map(|x| x.into()),
-    ))
+    Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
 /// Report the sync status of DVS-managed files.
