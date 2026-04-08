@@ -43,6 +43,12 @@ impl FileMetadata {
         }
     }
 
+    /// Read a `.dvs` metadata JSON file from disk.
+    pub fn read_dvs_file(path: impl AsRef<Path>) -> Result<Self> {
+        let file = fs::File::open(path.as_ref())?;
+        Ok(serde_json::from_reader(file)?)
+    }
+
     pub fn from_file(
         path: impl AsRef<Path>,
         compression: Compression,

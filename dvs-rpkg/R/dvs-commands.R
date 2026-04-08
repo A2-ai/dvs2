@@ -18,6 +18,37 @@ dvs_init <- function(
   )
 }
 
+#' Create a byte-level progress callback for dvs operations.
+#'
+#' The callback receives signed values from Rust:
+#'   negative = file started (|value| = size, grows total)
+#'   positive = bytes transferred (advances progress)
+#' @keywords internal
+.dvs_progress_callback <- function() {
+  total <- 0
+  current <- 0
+  pb <- NULL
+  ProgressBarCallback$new(function(n) {
+    if (n < 0) {
+      total <<- total + abs(n)
+    } else {
+      current <<- current + n
+    }
+    if (total > 0) {
+      ratio <- min(current / total, 1)
+      if (is.null(pb)) {
+        pb <<- progress::progress_bar$new(
+          format = "  [:bar] :percent eta: :eta",
+          total = 1e6,
+          clear = FALSE
+        )
+      }
+      # update uses ratio 0..1, internally maps to 0..total
+      pb$update(ratio)
+    }
+  })
+}
+
 #' @inherit dvs_add_impl title description params
 #' @rdname dvs_add
 #' @export
@@ -32,16 +63,9 @@ dvs_add <- function(
     glob <- NULL
   }
 
-  use_progress <- length(files) > 1 && !isTRUE(dry_run) && interactive()
   progress_callback <- NULL
-
-  if (use_progress) {
-    pb <- progress::progress_bar$new(
-      format = "  [:bar] :current/:total (:percent) eta: :eta",
-      total = length(files),
-      clear = FALSE
-    )
-    progress_callback <- ProgressBarCallback$new(function() pb$tick())
+  if (!isTRUE(dry_run) && interactive() && length(files) >= 1) {
+    progress_callback <- .dvs_progress_callback()
   }
 
   result <- dvs_add_impl(
@@ -52,7 +76,7 @@ dvs_add <- function(
     progress_callback = progress_callback
   )
 
-  if (requireNamespace("tibble")) {
+  if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(result)
   } else {
     result
@@ -61,13 +85,13 @@ dvs_add <- function(
 
 #' @inherit dvs_status_impl title description params
 #' @rdname dvs_status
-#' 
-#' 
+#'
+#'
 #' @export
 dvs_status <- function(current = NULL, absent = NULL, unsynced = NULL) {
   status_data_frame <-
     dvs_status_impl(current = current, absent = absent, unsynced = unsynced)
-  if (requireNamespace("tibble")) {
+  if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(status_data_frame)
   } else {
     status_data_frame
@@ -78,17 +102,10 @@ dvs_status <- function(current = NULL, absent = NULL, unsynced = NULL) {
 #' @rdname dvs_get
 #' @export
 dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
-  use_progress <-
-    length(files) > 1 && is.null(glob) && !isTRUE(dry_run) && interactive()
   progress_callback <- NULL
-
-  if (use_progress) {
-    pb <- progress::progress_bar$new(
-      format = "  [:bar] :current/:total (:percent) eta: :eta",
-      total = length(files),
-      clear = FALSE
-    )
-    progress_callback <- ProgressBarCallback$new(function() pb$tick())
+  if (!isTRUE(dry_run) && interactive() &&
+      (length(files) >= 1 || !is.null(glob))) {
+    progress_callback <- .dvs_progress_callback()
   }
 
   get_data_frame <- dvs_get_impl(
@@ -97,7 +114,7 @@ dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
     dry_run = dry_run,
     progress_callback = progress_callback
   )
-  if (requireNamespace("tibble")) {
+  if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(get_data_frame)
   } else {
     get_data_frame
