@@ -52,10 +52,12 @@ where
             result
         });
 
-        let bar = CliProgressBar::new(f64::NAN);
+        let mut bar = CliProgressBar::new();
 
         while let Ok(bytes) = rx.recv() {
-            if bytes > 0 {
+            if bytes < 0 {
+                bar.grow_total((-bytes) as f64);
+            } else {
                 bar.add(bytes as f64);
             }
         }
