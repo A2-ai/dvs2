@@ -39,36 +39,28 @@ fn ensure_init() {
     });
 }
 
-/// Build the config list: list(show_after = 0)
-fn make_config() -> SEXP {
+/// Create a cli progress bar with the given total and show_after=0.
+fn create_bar(total: f64) -> SEXP {
     unsafe {
+        // Build config: list(show_after = 0)
         let val = Rf_protect(Rf_ScalarReal(0.0));
         let names = Rf_protect(miniextendr_api::ffi::Rf_mkString(c"show_after".as_ptr()));
         let config = Rf_protect(miniextendr_api::ffi::Rf_allocVector(SEXPTYPE::VECSXP, 1));
         miniextendr_api::ffi::SET_VECTOR_ELT(config, 0, val);
-        miniextendr_api::ffi::Rf_setAttrib(
-            config,
-            miniextendr_api::ffi::R_NamesSymbol,
-            names,
-        );
-        Rf_unprotect(3);
-        config
-    }
-}
+        miniextendr_api::ffi::Rf_setAttrib(config, miniextendr_api::ffi::R_NamesSymbol, names);
 
-fn create_bar(total: f64) -> SEXP {
-    unsafe {
-        let config = Rf_protect(make_config());
         let mut dummy: *mut i32 = std::ptr::null_mut();
         let bar = FN_BAR.unwrap_unchecked()(&mut dummy, total, config);
         R_PreserveObject(bar);
         FN_SET_CLEAR.unwrap_unchecked()(bar, 0);
-        Rf_unprotect(1);
+
+        Rf_unprotect(3); // val, names, config — bar is preserved
         bar
     }
 }
 
-fn release_bar(bar: SEXP) {
+/// Finish and release a bar SEXP.
+fn finish_bar(bar: SEXP) {
     unsafe {
         if bar != R_NilValue {
             FN_DONE.unwrap_unchecked()(bar);
@@ -97,11 +89,7 @@ impl CliProgressBar {
     /// Grow total by `size` bytes. Recreates the bar with the new total.
     pub fn grow_total(&mut self, size: f64) {
         self.total += size;
-        unsafe {
-            if self.bar != R_NilValue {
-                release_bar(self.bar);
-            }
-        }
+        finish_bar(self.bar);
         self.bar = create_bar(self.total);
         if self.current > 0.0 {
             unsafe { FN_SET.unwrap_unchecked()(self.bar, self.current) }
@@ -120,22 +108,15 @@ impl CliProgressBar {
 
     /// Terminate the progress bar.
     pub fn done(&mut self) {
-        unsafe {
-            if self.bar != R_NilValue {
-                FN_DONE.unwrap_unchecked()(self.bar);
-                R_ReleaseObject(self.bar);
-                self.bar = R_NilValue;
-            }
-        }
+        finish_bar(self.bar);
+        self.bar = unsafe { R_NilValue };
     }
 }
 
 impl Drop for CliProgressBar {
     fn drop(&mut self) {
-        unsafe {
-            if self.bar != R_NilValue {
-                R_ReleaseObject(self.bar);
-            }
+        if self.bar != unsafe { R_NilValue } {
+            finish_bar(self.bar);
         }
     }
 }
