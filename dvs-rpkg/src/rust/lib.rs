@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 
-use miniextendr_api::ffi::SEXP;
+use miniextendr_api::externalptr::ExternalPtr;
+use miniextendr_api::ffi::{R_NilValue, R_PreserveObject, R_ReleaseObject, SEXP};
 use miniextendr_api::serde::ColumnarDataFrame;
 use miniextendr_api::{AsSerializeRow, DataFrame, List, RCall, list, miniextendr, r_println};
 
@@ -28,13 +29,45 @@ enum ProgressEvent<T> {
     Done(std::result::Result<T, String>),
 }
 
-fn call_progress_callback(progress_callback: SEXP) -> Result<()> {
-    unsafe { RCall::from_sexp(progress_callback).eval_global() }
-        .map(|_| ())
-        .map_err(|err| anyhow!("Progress callback failed: {err}"))
+#[derive(miniextendr_api::ExternalPtr)]
+pub struct ProgressBarCallback {
+    callback: SEXP,
 }
 
-fn run_with_progress<T, F>(progress_callback: SEXP, task: F) -> Result<T>
+impl ProgressBarCallback {
+    fn call(&self) -> Result<()> {
+        unsafe { RCall::from_sexp(self.callback).eval_global() }
+            .map(|_| ())
+            .map_err(|err| anyhow!("Progress callback failed: {err}"))
+    }
+}
+
+impl Drop for ProgressBarCallback {
+    fn drop(&mut self) {
+        unsafe {
+            if self.callback != R_NilValue {
+                R_ReleaseObject(self.callback);
+                self.callback = R_NilValue;
+            }
+        }
+    }
+}
+
+#[miniextendr(internal)]
+impl ProgressBarCallback {
+    /// Create an internal progress-bar callback wrapper.
+    pub fn new(callback: SEXP) -> Self {
+        unsafe { R_PreserveObject(callback) };
+        Self { callback }
+    }
+
+    /// Tick the wrapped R callback.
+    pub fn tick(&self) -> Result<()> {
+        self.call()
+    }
+}
+
+fn run_with_progress<T, F>(progress_callback: ExternalPtr<ProgressBarCallback>, task: F) -> Result<T>
 where
     T: Send,
     F: FnOnce(Sender<ProgressEvent<T>>) -> Result<T> + Send,
@@ -53,7 +86,7 @@ where
             match rx.recv() {
                 Ok(ProgressEvent::Tick) => {
                     if callback_error.is_none() {
-                        if let Err(err) = call_progress_callback(progress_callback) {
+                        if let Err(err) = progress_callback.tick() {
                             callback_error = Some(err);
                         }
                     }
@@ -133,7 +166,7 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL")] message: Option<String>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
-    #[miniextendr(default = "NULL")] progress_callback: Option<SEXP>,
+    #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -242,7 +275,7 @@ pub(crate) fn dvs_get(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
-    #[miniextendr(default = "NULL")] progress_callback: Option<SEXP>,
+    #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
     let current_dir = std::env::current_dir()?;
 
