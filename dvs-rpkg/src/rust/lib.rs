@@ -3,6 +3,8 @@
 //! This crate provides R bindings for the DVS (Data Version Control System).
 //! Results are returned as JSON strings for efficient parsing in R.
 
+mod cli_progress;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -10,9 +12,8 @@ use std::sync::mpsc::{self, SyncSender};
 use std::thread;
 
 use miniextendr_api::externalptr::ExternalPtr;
-use miniextendr_api::ffi::{R_NilValue, R_PreserveObject, R_ReleaseObject, Rf_ScalarReal, SEXP};
 use miniextendr_api::serde::ColumnarDataFrame;
-use miniextendr_api::{AsSerializeRow, DataFrame, List, RCall, list, miniextendr, r_println};
+use miniextendr_api::{AsSerializeRow, DataFrame, List, list, miniextendr, r_println};
 
 use anyhow::{Result, anyhow};
 
@@ -25,65 +26,20 @@ use dvs::{
     get_status,
 };
 
-/// Message sent from worker thread to R main thread for progress reporting.
-///
-/// Negative = file started (absolute value is file size, grows the total).
-/// Positive = bytes transferred (advances the bar).
+use cli_progress::CliProgressBar;
+
+// ---------------------------------------------------------------------------
+// Progress channel protocol
+// ---------------------------------------------------------------------------
+
+/// Negative = file started (|value| = file size), positive = bytes transferred.
 type ProgressBytes = i64;
 
 /// Minimum bytes to accumulate before sending a channel message.
-/// Reduces FFI round-trips from ~130K to ~4K per GB.
-const BATCH_THRESHOLD: i64 = 256 * 1024; // 256 KB
+const BATCH_THRESHOLD: i64 = 256 * 1024;
 
-#[derive(miniextendr_api::ExternalPtr)]
-pub struct ProgressBarCallback {
-    callback: SEXP,
-}
-
-impl ProgressBarCallback {
-    fn call(&self, n: f64) -> Result<()> {
-        let n_sexp = unsafe { Rf_ScalarReal(n) };
-        unsafe { RCall::from_sexp(self.callback).arg(n_sexp).eval_global() }
-            .map(|_| ())
-            .map_err(|err| anyhow!("Progress callback failed: {err}"))
-    }
-}
-
-impl Drop for ProgressBarCallback {
-    fn drop(&mut self) {
-        unsafe {
-            if self.callback != R_NilValue {
-                R_ReleaseObject(self.callback);
-                self.callback = R_NilValue;
-            }
-        }
-    }
-}
-
-#[miniextendr(internal)]
-impl ProgressBarCallback {
-    /// Create an internal progress-bar callback wrapper.
-    pub fn new(callback: SEXP) -> Self {
-        unsafe { R_PreserveObject(callback) };
-        Self { callback }
-    }
-
-    /// Send a progress update. Negative = file size (grow total),
-    /// positive = bytes transferred (advance bar).
-    pub fn tick(&self, n: f64) -> Result<()> {
-        self.call(n)
-    }
-}
-
-/// Run `task` on a worker thread, forwarding progress messages to the R
-/// main thread via `progress_callback`.
-///
-/// Uses a bounded `sync_channel` for backpressure — the worker blocks if
-/// the R main thread falls behind processing callbacks.
-fn run_with_progress<T, F>(
-    progress_callback: ExternalPtr<ProgressBarCallback>,
-    task: F,
-) -> Result<T>
+/// Run `task` on a worker thread with a cli progress bar on the R main thread.
+fn run_with_progress<T, F>(task: F) -> Result<T>
 where
     T: Send,
     F: FnOnce(SyncSender<ProgressBytes>) -> Result<T> + Send,
@@ -96,37 +52,27 @@ where
             result
         });
 
-        let mut callback_error = None;
+        let bar = CliProgressBar::new(f64::NAN);
+
         while let Ok(bytes) = rx.recv() {
-            if callback_error.is_none() {
-                if let Err(err) = progress_callback.tick(bytes as f64) {
-                    callback_error = Some(err);
-                }
+            if bytes > 0 {
+                bar.add(bytes as f64);
             }
         }
 
-        let result = worker
+        bar.done();
+
+        worker
             .join()
-            .map_err(|_| anyhow!("Progress worker thread panicked"))??;
-
-        if let Some(err) = callback_error {
-            r_println!("Warning: progress callback failed: {err}");
-        }
-
-        Ok(result)
+            .map_err(|_| anyhow!("Progress worker thread panicked"))?
     })
 }
 
 /// Build the `on_file_start` closure that feeds byte-level progress.
-///
-/// Sends negative file size immediately (to grow total). Byte increments
-/// are batched — accumulated in an atomic counter and only flushed to the
-/// channel when the batch threshold is exceeded or the file finishes.
 fn progress_on_file_start(
     tx: SyncSender<ProgressBytes>,
 ) -> impl Fn(&std::path::Path, u64) -> FileProgress + Send + Sync {
     move |_path: &std::path::Path, size: u64| {
-        // Negative = file start, grows the total. Always sent immediately.
         let _ = tx.send(-(size as i64));
 
         let pending = Arc::new(AtomicI64::new(0));
@@ -154,6 +100,27 @@ fn progress_on_file_start(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// ProgressBarCallback — R-side marker to enable progress
+// ---------------------------------------------------------------------------
+
+#[derive(miniextendr_api::ExternalPtr)]
+pub struct ProgressBarCallback {
+    _marker: u8,
+}
+
+#[miniextendr(internal)]
+impl ProgressBarCallback {
+    /// Create a progress callback handle (signals that progress should be shown).
+    pub fn new() -> Self {
+        Self { _marker: 0 }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DVS operations
+// ---------------------------------------------------------------------------
 
 /// Initialize a DVS repository in the given directory.
 ///
@@ -199,7 +166,7 @@ pub(crate) fn dvs_init(
 /// @param message Optional commit message describing why the files were added.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 /// @param dry_run If `TRUE`, report what would be added without modifying anything.
-/// @param progress_callback Optional `ProgressBarCallback` for byte-level progress updates.
+/// @param progress_callback Optional handle to enable progress bar display.
 #[miniextendr(r_name = "dvs_add_impl")]
 pub(crate) fn dvs_add(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
@@ -220,8 +187,8 @@ pub(crate) fn dvs_add(
     }
 
     let dry_run = dry_run.unwrap_or(false);
-    let results = if let Some(progress_callback) = progress_callback {
-        run_with_progress(progress_callback, |tx| {
+    let results = if progress_callback.is_some() {
+        run_with_progress(|tx| {
             let on_file_start = progress_on_file_start(tx);
             add_files(
                 all_paths.clone(),
@@ -302,7 +269,7 @@ pub(crate) fn dvs_status(
 /// @param files Character vector of `.dvs` metadata file paths to retrieve.
 /// @param glob Optional glob pattern to select `.dvs` files (e.g. `"data/*.dvs"`).
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
-/// @param progress_callback Optional `ProgressBarCallback` for byte-level progress updates.
+/// @param progress_callback Optional handle to enable progress bar display.
 #[miniextendr(r_name = "dvs_get_impl")]
 pub(crate) fn dvs_get(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
@@ -323,8 +290,8 @@ pub(crate) fn dvs_get(
     }
 
     let dry_run = dry_run.unwrap_or(false);
-    let results = if let Some(progress_callback) = progress_callback {
-        run_with_progress(progress_callback, |tx| {
+    let results = if progress_callback.is_some() {
+        run_with_progress(|tx| {
             let on_file_start = progress_on_file_start(tx);
             get_files(
                 all_paths.clone(),

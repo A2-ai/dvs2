@@ -18,7 +18,9 @@ RoxygenNote: 7.3.2
 SystemRequirements: Cargo (Rust package manager), rustc >= 1.85.0
 Imports:
     jsonlite,
-    progress
+    cli
+LinkingTo:
+    cli
 Suggests:
     tibble,
     testthat (>= 3.0.0)

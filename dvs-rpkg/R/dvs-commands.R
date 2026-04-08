@@ -18,30 +18,6 @@ dvs_init <- function(
   )
 }
 
-#' Create a byte-level progress callback for dvs operations.
-#'
-#' The callback receives signed values from Rust:
-#'   negative = file started (|value| = size, grows total)
-#'   positive = bytes transferred (advances progress)
-#' @keywords internal
-.dvs_progress_callback <- function() {
-  pb <- NULL
-  ProgressBarCallback$new(function(n) {
-    if (n < 0) {
-      if (is.null(pb)) {
-        pb <<- progress::progress_bar$new(
-          format = "  [:bar] :percent eta: :eta",
-          total = abs(n),
-          clear = FALSE,
-          show_after = 0
-        )
-      }
-    } else if (!is.null(pb)) {
-      tryCatch(pb$tick(n), error = function(e) NULL)
-    }
-  })
-}
-
 #' @inherit dvs_add_impl title description params
 #' @rdname dvs_add
 #' @export
@@ -58,7 +34,7 @@ dvs_add <- function(
 
   progress_callback <- NULL
   if (!isTRUE(dry_run) && interactive() && length(files) >= 1) {
-    progress_callback <- .dvs_progress_callback()
+    progress_callback <- ProgressBarCallback$new()
   }
 
   result <- dvs_add_impl(
@@ -98,7 +74,7 @@ dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
   progress_callback <- NULL
   if (!isTRUE(dry_run) && interactive() &&
       (length(files) >= 1 || !is.null(glob))) {
-    progress_callback <- .dvs_progress_callback()
+    progress_callback <- ProgressBarCallback$new()
   }
 
   get_data_frame <- dvs_get_impl(
