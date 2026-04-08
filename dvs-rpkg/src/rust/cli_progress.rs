@@ -7,7 +7,8 @@
 use std::sync::Once;
 
 use miniextendr_api::ffi::{
-    R_GetCCallable, R_NilValue, R_PreserveObject, R_ReleaseObject, SEXP,
+    R_GetCCallable, R_NilValue, R_PreserveObject, R_ReleaseObject, Rf_ScalarReal, Rf_protect,
+    Rf_unprotect, SEXPTYPE, SEXP,
 };
 
 type FnBar = unsafe extern "C" fn(*mut *mut i32, f64, SEXP) -> SEXP;
@@ -38,12 +39,31 @@ fn ensure_init() {
     });
 }
 
+/// Build the config list: list(show_after = 0)
+fn make_config() -> SEXP {
+    unsafe {
+        let val = Rf_protect(Rf_ScalarReal(0.0));
+        let names = Rf_protect(miniextendr_api::ffi::Rf_mkString(c"show_after".as_ptr()));
+        let config = Rf_protect(miniextendr_api::ffi::Rf_allocVector(SEXPTYPE::VECSXP, 1));
+        miniextendr_api::ffi::SET_VECTOR_ELT(config, 0, val);
+        miniextendr_api::ffi::Rf_setAttrib(
+            config,
+            miniextendr_api::ffi::R_NamesSymbol,
+            names,
+        );
+        Rf_unprotect(3);
+        config
+    }
+}
+
 fn create_bar(total: f64) -> SEXP {
     unsafe {
+        let config = Rf_protect(make_config());
         let mut dummy: *mut i32 = std::ptr::null_mut();
-        let bar = FN_BAR.unwrap_unchecked()(&mut dummy, total, R_NilValue);
+        let bar = FN_BAR.unwrap_unchecked()(&mut dummy, total, config);
         R_PreserveObject(bar);
         FN_SET_CLEAR.unwrap_unchecked()(bar, 0);
+        Rf_unprotect(1);
         bar
     }
 }
