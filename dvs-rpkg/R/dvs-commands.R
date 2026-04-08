@@ -41,7 +41,7 @@ dvs_add <- function(
       total = length(files),
       clear = FALSE
     )
-    progress_callback <- function() pb$tick()
+    progress_callback <- ProgressBarCallback$new(function() pb$tick())
   }
 
   result <- dvs_add_impl(
@@ -88,7 +88,7 @@ dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
       total = length(files),
       clear = FALSE
     )
-    progress_callback <- function() pb$tick()
+    progress_callback <- ProgressBarCallback$new(function() pb$tick())
   }
 
   get_data_frame <- dvs_get_impl(
