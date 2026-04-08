@@ -25,26 +25,19 @@ dvs_init <- function(
 #'   positive = bytes transferred (advances progress)
 #' @keywords internal
 .dvs_progress_callback <- function() {
-  total <- 0
-  current <- 0
   pb <- NULL
   ProgressBarCallback$new(function(n) {
     if (n < 0) {
-      total <<- total + abs(n)
-    } else {
-      current <<- current + n
-    }
-    if (total > 0) {
-      ratio <- min(current / total, 1)
       if (is.null(pb)) {
         pb <<- progress::progress_bar$new(
           format = "  [:bar] :percent eta: :eta",
-          total = 1e6,
-          clear = FALSE
+          total = abs(n),
+          clear = FALSE,
+          show_after = 0
         )
       }
-      # update uses ratio 0..1, internally maps to 0..total
-      pb$update(ratio)
+    } else if (!is.null(pb)) {
+      tryCatch(pb$tick(n), error = function(e) NULL)
     }
   })
 }
