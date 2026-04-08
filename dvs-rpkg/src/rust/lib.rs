@@ -4,9 +4,12 @@
 //! Results are returned as JSON strings for efficient parsing in R.
 
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Sender};
+use std::thread;
 
+use miniextendr_api::ffi::SEXP;
 use miniextendr_api::serde::ColumnarDataFrame;
-use miniextendr_api::{AsSerializeRow, DataFrame, List, list, miniextendr, r_println};
+use miniextendr_api::{AsSerializeRow, DataFrame, List, RCall, list, miniextendr, r_println};
 
 use anyhow::{Result, anyhow};
 
@@ -16,8 +19,69 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddResult, Compression, GetResult, Status, StatusDetail, add_files, get_files, get_status,
+    AddResult, Compression, FileProgress, GetResult, Status, StatusDetail, add_files, get_files,
+    get_status,
 };
+
+enum ProgressEvent<T> {
+    Tick,
+    Done(std::result::Result<T, String>),
+}
+
+fn call_progress_callback(progress_callback: SEXP) -> Result<()> {
+    unsafe { RCall::from_sexp(progress_callback).eval_global() }
+        .map(|_| ())
+        .map_err(|err| anyhow!("Progress callback failed: {err}"))
+}
+
+fn run_with_progress<T, F>(progress_callback: SEXP, task: F) -> Result<T>
+where
+    T: Send,
+    F: FnOnce(Sender<ProgressEvent<T>>) -> Result<T> + Send,
+{
+    thread::scope(|scope| {
+        let (tx, rx) = mpsc::channel();
+        let worker = scope.spawn(move || {
+            let result = task(tx.clone()).map_err(|err| err.to_string());
+            let _ = tx.send(ProgressEvent::Done(result));
+        });
+
+        let mut callback_error = None;
+        let mut task_result = None;
+
+        while task_result.is_none() {
+            match rx.recv() {
+                Ok(ProgressEvent::Tick) => {
+                    if callback_error.is_none() {
+                        if let Err(err) = call_progress_callback(progress_callback) {
+                            callback_error = Some(err);
+                        }
+                    }
+                }
+                Ok(ProgressEvent::Done(result)) => {
+                    task_result = Some(result.map_err(|err| anyhow!(err)));
+                }
+                Err(_) => {
+                    task_result = Some(Err(anyhow!(
+                        "Progress worker channel closed unexpectedly"
+                    )));
+                }
+            }
+        }
+
+        match worker.join() {
+            Ok(()) => {}
+            Err(_) => return Err(anyhow!("Progress worker thread panicked")),
+        }
+
+        let result =
+            task_result.expect("task result should be set when progress loop exits")?;
+        if let Some(err) = callback_error {
+            return Err(err);
+        }
+        Ok(result)
+    })
+}
 
 /// Initialize a DVS repository in the given directory.
 ///
@@ -69,6 +133,7 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL")] message: Option<String>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
+    #[miniextendr(default = "NULL")] progress_callback: Option<SEXP>,
 ) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -81,17 +146,42 @@ pub(crate) fn dvs_add(
         return Err(anyhow!("No files to add"));
     }
 
-    Ok(DataFrame::from_iter(
+    let dry_run = dry_run.unwrap_or(false);
+    let results = if let Some(progress_callback) = progress_callback {
+        run_with_progress(progress_callback, |progress_tx| {
+            let on_file_start = move |_: &std::path::Path, _size: u64| {
+                let progress_tx = progress_tx.clone();
+                FileProgress {
+                    on_bytes: Box::new(|_| {}),
+                    on_done: Box::new(move |_| {
+                        let _ = progress_tx.send(ProgressEvent::Tick);
+                    }),
+                }
+            };
+            add_files(
+                all_paths.clone(),
+                &paths,
+                config.backend(),
+                message.clone(),
+                config.compression(),
+                dry_run,
+                Some(&on_file_start),
+            )
+        })?
+    } else {
         add_files(
             all_paths,
             &paths,
             config.backend(),
             message,
             config.compression(),
-            dry_run.unwrap_or(false),
+            dry_run,
+            None,
         )?
-        .into_iter()
-        .map(|x| x.into()),
+    };
+
+    Ok(DataFrame::from_iter(
+        results.into_iter().map(|x| x.into()),
     ))
 }
 
@@ -152,6 +242,7 @@ pub(crate) fn dvs_get(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
+    #[miniextendr(default = "NULL")] progress_callback: Option<SEXP>,
 ) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
     let current_dir = std::env::current_dir()?;
 
@@ -165,12 +256,29 @@ pub(crate) fn dvs_get(
         return Err(anyhow!("No files to get"));
     }
 
-    let results = get_files(
-        all_paths,
-        &dvs_paths,
-        config.backend(),
-        dry_run.unwrap_or(false),
-    )?;
+    let dry_run = dry_run.unwrap_or(false);
+    let results = if let Some(progress_callback) = progress_callback {
+        run_with_progress(progress_callback, |progress_tx| {
+            let on_file_start = move |_: &std::path::Path, _size: u64| {
+                let progress_tx = progress_tx.clone();
+                FileProgress {
+                    on_bytes: Box::new(|_| {}),
+                    on_done: Box::new(move |_| {
+                        let _ = progress_tx.send(ProgressEvent::Tick);
+                    }),
+                }
+            };
+            get_files(
+                all_paths.clone(),
+                &dvs_paths,
+                config.backend(),
+                dry_run,
+                Some(&on_file_start),
+            )
+        })?
+    } else {
+        get_files(all_paths, &dvs_paths, config.backend(), dry_run, None)?
+    };
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
