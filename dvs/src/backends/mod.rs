@@ -16,11 +16,23 @@ pub trait Backend: Send + Sync {
 
     /// Store file to backend by hash, optionally compressing.
     /// Returns the stored (compressed) size in bytes.
-    fn store(&self, hash: &Hashes, source: &Path, compression: Compression) -> Result<u64>;
+    fn store(
+        &self,
+        hash: &Hashes,
+        source: &Path,
+        compression: Compression,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<u64>;
 
     /// Retrieve content by hash to target path, optionally decompressing.
     /// Returns true if the file was copied to the target path.
-    fn retrieve(&self, hash: &Hashes, target: &Path, compression: Compression) -> Result<bool>;
+    fn retrieve(
+        &self,
+        hash: &Hashes,
+        target: &Path,
+        compression: Compression,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<bool>;
 
     /// Check if the file exists in the backend
     fn exists(&self, hash: &Hashes) -> Result<bool>;
