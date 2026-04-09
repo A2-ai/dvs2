@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
 use crate::paths::GetPathStatus;
+use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
 use crate::{Backend, Compression, DvsPaths, Outcome, cache};
 use anyhow::{Context, Result, bail};
@@ -17,6 +18,7 @@ fn get_file(
     relative_path: impl AsRef<Path>,
     cache: Option<&Mutex<HashCache>>,
     dry_run: bool,
+    on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
 ) -> Result<(Outcome, u64)> {
     log::debug!("Retrieving file: {}", relative_path.as_ref().display());
     let dvs_file_path = paths.metadata_path(relative_path.as_ref());
@@ -64,8 +66,14 @@ fn get_file(
         metadata.hashes,
         target_path.display()
     );
+
     backend
-        .retrieve(&metadata.hashes, &target_path, metadata.compression)
+        .retrieve(
+            &metadata.hashes,
+            &target_path,
+            metadata.compression,
+            on_bytes,
+        )
         .with_context(|| format!("Failed to retrieve {}", relative_path.as_ref().display()))?;
     let actual = FileMetadata::from_file(&target_path, Compression::None, None)?;
     if actual.hashes != metadata.hashes {
@@ -109,6 +117,7 @@ pub fn get_files(
     paths: &DvsPaths,
     backend: &dyn Backend,
     dry_run: bool,
+    on_file_start: Option<&OnFileStart>,
 ) -> Result<Vec<GetResult>> {
     let matched_paths = paths.validate_for_get(&files);
     let pool = get_threadpool(matched_paths.len())?;
@@ -137,8 +146,25 @@ pub fn get_files(
                     }
                     GetPathStatus::Tracked => {}
                 }
+                let file_size = {
+                    let meta_path = paths.metadata_path(&relative_path);
+                    std::fs::File::open(&meta_path)
+                        .ok()
+                        .and_then(|f| serde_json::from_reader::<_, FileMetadata>(f).ok())
+                        .map(|m| m.size)
+                        .unwrap_or(0)
+                };
+                let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
+                let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
 
-                match get_file(backend, paths, &relative_path, cache.as_ref(), dry_run) {
+                match get_file(
+                    backend,
+                    paths,
+                    &relative_path,
+                    cache.as_ref(),
+                    dry_run,
+                    on_bytes,
+                ) {
                     Ok((outcome, size)) => {
                         log::info!(
                             "Successfully retrieved {} ({:?})",
@@ -200,7 +226,14 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "retrieve.txt")
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "retrieve.txt",
+                None,
+            )
             .unwrap();
 
         // Delete the original file
@@ -210,7 +243,7 @@ mod tests {
         // Retrieve it
         let cache = make_cache(&paths);
         let (outcome, _size) =
-            get_file(backend, &paths, "retrieve.txt", Some(&cache), false).unwrap();
+            get_file(backend, &paths, "retrieve.txt", Some(&cache), false, None).unwrap();
         assert_eq!(outcome, Outcome::Copied);
         assert!(file_path.exists());
         assert_eq!(fs::read(&file_path).unwrap(), b"stored content");
@@ -226,13 +259,20 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "present.txt")
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "present.txt",
+                None,
+            )
             .unwrap();
 
         // File still exists and matches - should return Present
         let cache = make_cache(&paths);
         let (outcome, _size) =
-            get_file(backend, &paths, "present.txt", Some(&cache), false).unwrap();
+            get_file(backend, &paths, "present.txt", Some(&cache), false, None).unwrap();
         assert_eq!(outcome, Outcome::Present);
     }
 
@@ -244,7 +284,7 @@ mod tests {
         let paths = make_paths(&root, &config);
 
         let cache = make_cache(&paths);
-        let result = get_file(backend, &paths, "untracked.txt", Some(&cache), false);
+        let result = get_file(backend, &paths, "untracked.txt", Some(&cache), false, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not tracked"));
     }
@@ -264,10 +304,12 @@ mod tests {
             None,
             Compression::Zstd,
             false,
+            None,
         )
         .unwrap();
 
-        let results = get_files(vec!["nonexistent.csv".into()], &paths, backend, false).unwrap();
+        let results =
+            get_files(vec!["nonexistent.csv".into()], &paths, backend, false, None).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not found"))
@@ -284,7 +326,8 @@ mod tests {
         // Create a file on disk but don't dvs add it
         create_file(&root, "untracked.txt", b"hello");
 
-        let results = get_files(vec!["untracked.txt".into()], &paths, backend, false).unwrap();
+        let results =
+            get_files(vec!["untracked.txt".into()], &paths, backend, false, None).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not tracked"))
@@ -309,6 +352,7 @@ mod tests {
             None,
             Compression::Zstd,
             false,
+            None,
         )
         .unwrap();
         assert_eq!(results.len(), expected_files.len());
@@ -339,7 +383,7 @@ mod tests {
         }
 
         // Get files back
-        let results = get_files(file_paths, &paths, backend, false).unwrap();
+        let results = get_files(file_paths, &paths, backend, false, None).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert!(matches!(
@@ -374,7 +418,14 @@ mod tests {
         let file_path = create_file(&root, "data.txt", b"original content");
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.txt")
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.txt",
+                None,
+            )
             .unwrap();
 
         // Delete the local file
@@ -392,7 +443,7 @@ mod tests {
 
         // get_file should error on decompression or hash mismatch
         let cache = make_cache(&paths);
-        let result = get_file(backend, &paths, "data.txt", Some(&cache), false);
+        let result = get_file(backend, &paths, "data.txt", Some(&cache), false, None);
         assert!(result.is_err());
     }
 }

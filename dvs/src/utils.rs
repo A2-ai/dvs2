@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 const DEFAULT_THREADS_PER_CPU: usize = 4;
 /// Maximum thread count threshold when `DVS_NUM_THREADS` is unset
@@ -25,6 +25,41 @@ pub fn format_size(bytes: u64) -> String {
     } else {
         format!("{bytes} B")
     }
+}
+
+/// Takes a human formatted byte size and convert it to the number of bytes
+pub fn parse_size(size: &str) -> Result<u64> {
+    let s = size.trim();
+
+    if s == "0" {
+        return Ok(0);
+    }
+
+    let num_end = s
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(s.len());
+    let (num_str, unit_str) = s.split_at(num_end);
+    let num_str = num_str.trim();
+    let unit_str = unit_str.trim().to_ascii_uppercase();
+
+    if num_str.is_empty() {
+        bail!("Invalid size string: {s:?} (no number found)");
+    }
+
+    let num: f64 = num_str
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid number in size string: {num_str:?}"))?;
+
+    let multiplier = match unit_str.as_str() {
+        "" | "B" => 1u64,
+        "K" | "KB" | "KIB" => KB,
+        "M" | "MB" | "MIB" => MB,
+        "G" | "GB" | "GIB" => GB,
+        "T" | "TB" | "TIB" => TB,
+        _ => bail!("Unknown size unit: {unit_str:?}"),
+    };
+
+    Ok((num * multiplier as f64) as u64)
 }
 
 /// Creates a rayon thread pool.
@@ -67,4 +102,24 @@ pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
         .num_threads(num_threads)
         .build()?;
     Ok(pool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn parse_size_basic() {
+        assert_eq!(parse_size("0").unwrap(), 0);
+        assert_eq!(parse_size("500MB").unwrap(), 500 * MB);
+        assert_eq!(parse_size("500 MB").unwrap(), 500 * MB);
+        assert_eq!(parse_size("1GB").unwrap(), GB);
+        assert_eq!(parse_size("1 gb").unwrap(), GB);
+        assert_eq!(parse_size("2TB").unwrap(), 2 * TB);
+        assert_eq!(parse_size("100KB").unwrap(), 100 * KB);
+        assert_eq!(parse_size("1024B").unwrap(), 1024);
+        assert_eq!(parse_size("1.5GB").unwrap(), (1.5 * GB as f64) as u64);
+        assert!(parse_size("").is_err());
+        assert!(parse_size("MB").is_err());
+        assert!(parse_size("500XB").is_err());
+    }
 }

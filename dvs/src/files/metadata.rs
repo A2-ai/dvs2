@@ -76,6 +76,7 @@ impl FileMetadata {
         backend: &dyn Backend,
         paths: &DvsPaths,
         relative_path: impl AsRef<Path>,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
     ) -> Result<(Outcome, Option<u64>)> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
         let dvs_file_exists = dvs_file_path.is_file();
@@ -110,7 +111,12 @@ impl FileMetadata {
         let (storage_res, stored_size) = if storage_exists {
             (Ok(()), None)
         } else {
-            match backend.store(&self.hashes, source_file.as_ref(), self.compression) {
+            match backend.store(
+                &self.hashes,
+                source_file.as_ref(),
+                self.compression,
+                on_bytes,
+            ) {
                 Ok(size) => (Ok(()), Some(size)),
                 Err(e) => (Err(e), None),
             }
@@ -234,7 +240,14 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         let (outcome, stored_size) = metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                None,
+            )
             .unwrap();
 
         assert_eq!(outcome, Outcome::Copied);
@@ -254,12 +267,26 @@ mod tests {
 
         let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                None,
+            )
             .unwrap();
 
         // Second save should return Present
         let (outcome, stored_size) = metadata
-            .save(Uuid::new_v4(), &file_path, backend, &paths, "data.bin")
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                None,
+            )
             .unwrap();
         assert_eq!(outcome, Outcome::Present);
         assert!(stored_size.is_none());
