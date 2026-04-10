@@ -103,7 +103,7 @@ rpkg-bindgen-cli:
     set -euo pipefail
     R_INCLUDE="$(Rscript -e 'cat(R.home("include"))')"
     CLI_INCLUDE="$(Rscript -e 'cat(system.file("include", package = "cli"))')"
-    WRAPPER="$(mktemp /tmp/cli_bindgen_XXXX.h)"
+    WRAPPER="$(mktemp /tmp/cli_bindgen_XXXXXX).h"
     printf '#include <Rinternals.h>\n#include <cli/progress.h>\n' > "$WRAPPER"
     bindgen \
       --merge-extern-blocks \
