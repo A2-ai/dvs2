@@ -4,7 +4,7 @@
 //! Since the C API doesn't support changing total after creation, the bar
 //! is recreated when the total grows (once per file start, not per chunk).
 
-use std::sync::Once;
+use std::sync::OnceLock;
 
 use miniextendr_api::ffi::{
     R_GetCCallable, R_NilValue, R_PreserveObject, R_ReleaseObject, Rf_ScalarReal, Rf_protect,
@@ -17,47 +17,53 @@ type FnSet = unsafe extern "C" fn(SEXP, f64);
 type FnDone = unsafe extern "C" fn(SEXP);
 type FnSetClear = unsafe extern "C" fn(SEXP, i32);
 
-static INIT: Once = Once::new();
-static mut FN_BAR: Option<FnBar> = None;
-static mut FN_ADD: Option<FnAdd> = None;
-static mut FN_SET: Option<FnSet> = None;
-static mut FN_DONE: Option<FnDone> = None;
-static mut FN_SET_CLEAR: Option<FnSetClear> = None;
+struct CliFns {
+    bar: FnBar,
+    add: FnAdd,
+    set: FnSet,
+    done: FnDone,
+    set_clear: FnSetClear,
+}
+
+static CLI_FNS: OnceLock<CliFns> = OnceLock::new();
 
 #[allow(clippy::missing_transmute_annotations)]
-fn ensure_init() {
-    INIT.call_once(|| unsafe {
+fn fns() -> &'static CliFns {
+    CLI_FNS.get_or_init(|| unsafe {
         miniextendr_api::RCall::from_cstr(c"loadNamespace")
             .arg(miniextendr_api::ffi::Rf_mkString(c"cli".as_ptr()))
             .eval_global()
             .expect("failed to load cli namespace");
 
-        FN_BAR = Some(std::mem::transmute(R_GetCCallable(
-            c"cli".as_ptr(),
-            c"cli_progress_bar".as_ptr(),
-        )));
-        FN_ADD = Some(std::mem::transmute(R_GetCCallable(
-            c"cli".as_ptr(),
-            c"cli_progress_add".as_ptr(),
-        )));
-        FN_SET = Some(std::mem::transmute(R_GetCCallable(
-            c"cli".as_ptr(),
-            c"cli_progress_set".as_ptr(),
-        )));
-        FN_DONE = Some(std::mem::transmute(R_GetCCallable(
-            c"cli".as_ptr(),
-            c"cli_progress_done".as_ptr(),
-        )));
-        FN_SET_CLEAR = Some(std::mem::transmute(R_GetCCallable(
-            c"cli".as_ptr(),
-            c"cli_progress_set_clear".as_ptr(),
-        )));
-    });
+        CliFns {
+            bar: std::mem::transmute(R_GetCCallable(
+                c"cli".as_ptr(),
+                c"cli_progress_bar".as_ptr(),
+            )),
+            add: std::mem::transmute(R_GetCCallable(
+                c"cli".as_ptr(),
+                c"cli_progress_add".as_ptr(),
+            )),
+            set: std::mem::transmute(R_GetCCallable(
+                c"cli".as_ptr(),
+                c"cli_progress_set".as_ptr(),
+            )),
+            done: std::mem::transmute(R_GetCCallable(
+                c"cli".as_ptr(),
+                c"cli_progress_done".as_ptr(),
+            )),
+            set_clear: std::mem::transmute(R_GetCCallable(
+                c"cli".as_ptr(),
+                c"cli_progress_set_clear".as_ptr(),
+            )),
+        }
+    })
 }
 
 /// Create a cli progress bar with the given total and show_after=0.
 fn create_bar(total: f64) -> SEXP {
     unsafe {
+        let f = fns();
         // Build config: list(show_after = 0)
         let val = Rf_protect(Rf_ScalarReal(0.0));
         let names = Rf_protect(miniextendr_api::ffi::Rf_mkString(c"show_after".as_ptr()));
@@ -66,9 +72,9 @@ fn create_bar(total: f64) -> SEXP {
         miniextendr_api::ffi::Rf_setAttrib(config, miniextendr_api::ffi::R_NamesSymbol, names);
 
         let mut dummy: *mut i32 = std::ptr::null_mut();
-        let bar = FN_BAR.unwrap_unchecked()(&mut dummy, total, config);
+        let bar = (f.bar)(&mut dummy, total, config);
         R_PreserveObject(bar);
-        FN_SET_CLEAR.unwrap_unchecked()(bar, 0);
+        (f.set_clear)(bar, 0);
 
         Rf_unprotect(3); // val, names, config — bar is preserved
         bar
@@ -79,7 +85,7 @@ fn create_bar(total: f64) -> SEXP {
 fn finish_bar(bar: SEXP) {
     unsafe {
         if bar != R_NilValue {
-            FN_DONE.unwrap_unchecked()(bar);
+            (fns().done)(bar);
             R_ReleaseObject(bar);
         }
     }
@@ -94,7 +100,8 @@ pub struct CliProgressBar {
 
 impl CliProgressBar {
     pub fn new() -> Self {
-        ensure_init();
+        // Eagerly resolve cli C functions so create_bar doesn't fail later.
+        let _ = fns();
         Self {
             bar: unsafe { R_NilValue },
             total: 0.0,
@@ -106,9 +113,10 @@ impl CliProgressBar {
     pub fn grow_total(&mut self, size: f64) {
         self.total += size;
         finish_bar(self.bar);
+        self.bar = unsafe { R_NilValue }; // don't hold stale SEXP if create_bar panics
         self.bar = create_bar(self.total);
         if self.current > 0.0 {
-            unsafe { FN_SET.unwrap_unchecked()(self.bar, self.current) }
+            unsafe { (fns().set)(self.bar, self.current) }
         }
     }
 
@@ -117,7 +125,7 @@ impl CliProgressBar {
         self.current += inc;
         unsafe {
             if self.bar != R_NilValue {
-                FN_ADD.unwrap_unchecked()(self.bar, inc);
+                (fns().add)(self.bar, inc);
             }
         }
     }

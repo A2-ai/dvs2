@@ -1,5 +1,8 @@
 configure~
 autom4te.cache
+config.status
+.Rprofile
+rproject.toml
 .cargo/config.toml
 src/Makevars
 # Note: Makevars.win is a static file (uses `include Makevars`), tracked in git

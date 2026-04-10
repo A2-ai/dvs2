@@ -75,7 +75,8 @@ fn progress_on_file_start(
     tx: SyncSender<ProgressBytes>,
 ) -> impl Fn(&std::path::Path, u64) -> FileProgress + Send + Sync {
     move |_path: &std::path::Path, size: u64| {
-        let _ = tx.send(-(size as i64));
+        let size_i64 = i64::try_from(size).expect("file size exceeds i64::MAX");
+        let _ = tx.send(-size_i64);
 
         let pending = Arc::new(AtomicI64::new(0));
         let tx_bytes = tx.clone();
@@ -87,6 +88,9 @@ fn progress_on_file_start(
             on_bytes: Box::new(move |n| {
                 let acc = pending_bytes.fetch_add(n as i64, Ordering::Relaxed) + n as i64;
                 if acc >= BATCH_THRESHOLD {
+                    // Benign race: concurrent callers may both exceed the threshold and
+                    // swap; one gets all accumulated bytes, the other gets 0 and no-ops.
+                    // No bytes are lost — just batched unevenly. Fine for UI.
                     let flushed = pending_bytes.swap(0, Ordering::Relaxed);
                     if flushed > 0 {
                         let _ = tx_bytes.send(flushed);

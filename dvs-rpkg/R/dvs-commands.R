@@ -71,9 +71,13 @@ dvs_status <- function(current = NULL, absent = NULL, unsynced = NULL) {
 #' @rdname dvs_get
 #' @export
 dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
+  if (!is.null(glob)) {
+    files <- unique(c(files, Sys.glob(glob)))
+    glob <- NULL
+  }
+
   progress_callback <- NULL
-  if (!isTRUE(dry_run) && interactive() &&
-      (length(files) >= 1 || !is.null(glob))) {
+  if (!isTRUE(dry_run) && interactive() && length(files) >= 1) {
     progress_callback <- ProgressBarCallback$new()
   }
 
