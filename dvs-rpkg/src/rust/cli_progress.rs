@@ -24,6 +24,7 @@ static mut FN_SET: Option<FnSet> = None;
 static mut FN_DONE: Option<FnDone> = None;
 static mut FN_SET_CLEAR: Option<FnSetClear> = None;
 
+#[allow(clippy::missing_transmute_annotations)]
 fn ensure_init() {
     INIT.call_once(|| unsafe {
         miniextendr_api::RCall::from_cstr(c"loadNamespace")

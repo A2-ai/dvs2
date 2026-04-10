@@ -107,7 +107,7 @@ fn progress_on_file_start(
 // ProgressBarCallback — R-side marker to enable progress
 // ---------------------------------------------------------------------------
 
-#[derive(miniextendr_api::ExternalPtr)]
+#[derive(Default, miniextendr_api::ExternalPtr)]
 pub struct ProgressBarCallback {
     _marker: u8,
 }
