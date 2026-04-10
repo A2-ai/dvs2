@@ -1,0 +1,12 @@
+# Windows-specific Makevars - includes base Makevars and overrides PKG_LIBS
+include Makevars
+
+# Windows-specific: Rust std lib and crates require these Windows system libraries
+# - ws2_32: Windows Sockets (network)
+# - ntdll: NT kernel functions (pipes, file I/O)
+# - userenv: User profile functions
+# - bcrypt: Cryptography
+# - advapi32: Security functions
+# - secur32: Security Support Provider Interface (GetUserNameExW for whoami crate)
+# Use full path to staticlib to avoid MinGW linker picking up cdylib's .dll.a import lib
+PKG_LIBS = $(CARGO_LIBDIR)/lib$(CARGO_STATICLIB_NAME).a -lws2_32 -lntdll -luserenv -lbcrypt -ladvapi32 -lsecur32
