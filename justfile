@@ -111,9 +111,7 @@ rpkg-bindgen-cli:
       --no-doc-comments \
       --wrap-static-fns \
       --wrap-static-fns-path /tmp/cli_static_wrappers.c \
-      --allowlist-function 'cli_progress_.*' \
-      --allowlist-type 'vint' \
-      --allowlist-var 'cli__.*' \
+      --allowlist-file '.*/cli/progress\.h' \
       --blocklist-type 'SEXPREC' \
       --blocklist-type 'SEXP' \
       --raw-line 'use miniextendr_api::ffi::SEXP;' \
