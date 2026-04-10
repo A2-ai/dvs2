@@ -110,15 +110,13 @@ fn progress_on_file_start(
 // region: ProgressBarCallback
 
 #[derive(Default, miniextendr_api::ExternalPtr)]
-pub struct ProgressBarCallback {
-    _marker: u8,
-}
+pub struct ProgressBarCallback;
 
 #[miniextendr(internal)]
 impl ProgressBarCallback {
     /// Create a progress callback handle (signals that progress should be shown).
     pub fn new() -> Self {
-        Self { _marker: 0 }
+        Self
     }
 }
 
