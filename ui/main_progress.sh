@@ -43,9 +43,8 @@ cp -r "$FIXTURES_1/data" "$DVS_REPO_R_1/data"
 Rscript --vanilla -e '
 library(dvs)
 dvs_init("'"$DVS_STORAGE_R_1"'")
-cb <- dvs:::ProgressBarCallback$new()
-cat(sprintf("\n>>> dvs_add (100 x 1MB):\n"))
-system.time(dvs:::dvs_add_impl(glob = "data/derived/*.bin", progress_callback = cb))
+cat("\n>>> dvs_add (100 x 1MB):\n")
+system.time(dvs_add(glob = "data/derived/*.bin"))
 '
 
 printf '\n--- RPKG GET: 100 x 1MB ---\n'
@@ -53,9 +52,8 @@ cd "$DVS_REPO_R_1"
 
 Rscript --vanilla -e '
 library(dvs)
-cb <- dvs:::ProgressBarCallback$new()
-cat(sprintf("\n>>> dvs_get (100 x 1MB):\n"))
-system.time(dvs:::dvs_get_impl(glob = "data/derived/*.bin", progress_callback = cb))
+cat("\n>>> dvs_get (100 x 1MB):\n")
+system.time(dvs_get(glob = "data/derived/*.bin"))
 '
 
 # ── Scenario 2: 1 x 500MB file ─────────────────────────────────────
@@ -88,9 +86,8 @@ cp -r "$FIXTURES_2/data" "$DVS_REPO_R_2/data"
 Rscript --vanilla -e '
 library(dvs)
 dvs_init("'"$DVS_STORAGE_R_2"'")
-cb <- dvs:::ProgressBarCallback$new()
 cat("\n>>> dvs_add (1 x 500MB):\n")
-system.time(dvs:::dvs_add_impl(files = "data/derived/file_1.bin", progress_callback = cb))
+system.time(dvs_add(files = "data/derived/file_1.bin"))
 '
 
 printf '\n--- RPKG GET: 1 x 500MB ---\n'
@@ -98,9 +95,8 @@ cd "$DVS_REPO_R_2"
 
 Rscript --vanilla -e '
 library(dvs)
-cb <- dvs:::ProgressBarCallback$new()
 cat("\n>>> dvs_get (1 x 500MB):\n")
-system.time(dvs:::dvs_get_impl(files = "data/derived/file_1.bin", progress_callback = cb))
+system.time(dvs_get(files = "data/derived/file_1.bin"))
 '
 
 printf '\n\n========================================\n  DONE\n========================================\n'

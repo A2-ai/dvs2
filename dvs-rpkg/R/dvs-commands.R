@@ -32,7 +32,7 @@ dvs_add <- function(
   }
 
   progress_callback <- NULL
-  if (!isTRUE(dry_run) && interactive() && length(files) >= 1) {
+  if (!isTRUE(dry_run)) {
     progress_callback <- ProgressBarCallback$new()
   }
 
@@ -75,7 +75,7 @@ dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
   }
 
   progress_callback <- NULL
-  if (!isTRUE(dry_run) && interactive() && length(files) >= 1) {
+  if (!isTRUE(dry_run)) {
     progress_callback <- ProgressBarCallback$new()
   }
 

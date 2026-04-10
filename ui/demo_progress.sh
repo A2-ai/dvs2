@@ -44,9 +44,7 @@ echo "=== RPKG ADD ==="
 Rscript --vanilla -e '
 library(dvs)
 invisible(dvs_init("'"$R_STORAGE"'"))
-cb <- dvs:::ProgressBarCallback$new()
-files <- list.files("data", full.names = TRUE)
-invisible(dvs:::dvs_add_impl(files = files, progress_callback = cb))
+invisible(dvs_add(glob = "data/*.bin"))
 '
 
 rm -f data/*.bin
@@ -55,10 +53,7 @@ echo ""
 echo "=== RPKG GET ==="
 Rscript --vanilla -e '
 library(dvs)
-cb <- dvs:::ProgressBarCallback$new()
-meta <- list.files(".dvs/data", full.names = FALSE)
-files <- file.path("data", sub("[.]dvs$", "", meta))
-invisible(dvs:::dvs_get_impl(files = files, progress_callback = cb))
+invisible(dvs_get(glob = "data/*.bin"))
 '
 
 echo ""
