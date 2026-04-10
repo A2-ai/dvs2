@@ -14,27 +14,6 @@ unsafe extern "C" {
     fn cli_progress_set_clear_shim(bar: SEXP, clear: i32);
 }
 
-/// Create a cli progress bar with the given total and show_after=0.
-fn create_bar(total: f64) -> SEXP {
-    unsafe {
-        let config = miniextendr_api::list!("show_after" = 0.0);
-        let bar = cli_progress_bar_shim(total, config.as_sexp());
-        R_PreserveObject(bar);
-        cli_progress_set_clear_shim(bar, 0);
-        bar
-    }
-}
-
-/// Finish and release a bar SEXP.
-fn finish_bar(bar: SEXP) {
-    unsafe {
-        if bar != SEXP::nil() {
-            cli_progress_done_shim(bar);
-            R_ReleaseObject(bar);
-        }
-    }
-}
-
 /// Progress bar that supports growing total via bar recreation.
 pub struct CliProgressBar {
     bar: SEXP,
@@ -54,11 +33,15 @@ impl CliProgressBar {
     /// Grow total by `size` bytes. Recreates the bar with the new total.
     pub fn grow_total(&mut self, size: f64) {
         self.total += size;
-        finish_bar(self.bar);
-        self.bar = SEXP::nil(); // don't hold stale SEXP if create_bar panics
-        self.bar = create_bar(self.total);
-        if self.current > 0.0 {
-            unsafe { cli_progress_set_shim(self.bar, self.current) }
+        self.done();
+        unsafe {
+            let config = miniextendr_api::list!("show_after" = 0.0);
+            self.bar = cli_progress_bar_shim(self.total, config.as_sexp());
+            R_PreserveObject(self.bar);
+            cli_progress_set_clear_shim(self.bar, 0);
+            if self.current > 0.0 {
+                cli_progress_set_shim(self.bar, self.current);
+            }
         }
     }
 
@@ -72,15 +55,18 @@ impl CliProgressBar {
 
     /// Terminate the progress bar.
     pub fn done(&mut self) {
-        finish_bar(self.bar);
-        self.bar = SEXP::nil();
+        if self.bar != SEXP::nil() {
+            unsafe {
+                cli_progress_done_shim(self.bar);
+                R_ReleaseObject(self.bar);
+            }
+            self.bar = SEXP::nil();
+        }
     }
 }
 
 impl Drop for CliProgressBar {
     fn drop(&mut self) {
-        if self.bar != SEXP::nil() {
-            finish_bar(self.bar);
-        }
+        self.done();
     }
 }
