@@ -27,10 +27,6 @@ dvs_add <- function(
   glob = NULL,
   dry_run = NULL
 ) {
-  if (!is.null(glob)) {
-    files <- unique(c(files, Sys.glob(glob)))
-  }
-
   progress_callback <- NULL
   if (!isTRUE(dry_run)) {
     progress_callback <- ProgressBarCallback$new()
@@ -70,10 +66,6 @@ dvs_status <- function(current = NULL, absent = NULL, unsynced = NULL) {
 #' @rdname dvs_get
 #' @export
 dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
-  if (!is.null(glob)) {
-    files <- unique(c(files, Sys.glob(glob)))
-  }
-
   progress_callback <- NULL
   if (!isTRUE(dry_run)) {
     progress_callback <- ProgressBarCallback$new()
