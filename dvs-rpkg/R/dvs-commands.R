@@ -29,7 +29,6 @@ dvs_add <- function(
 ) {
   if (!is.null(glob)) {
     files <- unique(c(files, Sys.glob(glob)))
-    glob <- NULL
   }
 
   progress_callback <- NULL
@@ -73,7 +72,6 @@ dvs_status <- function(current = NULL, absent = NULL, unsynced = NULL) {
 dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
   if (!is.null(glob)) {
     files <- unique(c(files, Sys.glob(glob)))
-    glob <- NULL
   }
 
   progress_callback <- NULL

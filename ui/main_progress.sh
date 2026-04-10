@@ -13,25 +13,6 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 source "${SCRIPT_DIR}/helpers.sh"
 
-# Helper: forced R progress callback (negative=file size, positive=bytes)
-R_PROGRESS_CB='
-.total <- 0; .current <- 0; .pb <- NULL
-cb <- dvs:::ProgressBarCallback$new(function(n) {
-  if (n < 0) { .total <<- .total + abs(n) }
-  else { .current <<- .current + n }
-  if (.total > 0) {
-    ratio <- min(.current / .total, 1)
-    if (is.null(.pb)) {
-      .pb <<- progress::progress_bar$new(
-        format = "  [:bar] :percent eta: :eta",
-        total = 1e6, clear = FALSE, force = TRUE
-      )
-    }
-    .pb$update(ratio)
-  }
-})
-'
-
 # ── Scenario 1: 100 x 1MB files ────────────────────────────────────
 
 printf '\n\n========================================\n'
@@ -59,26 +40,23 @@ DVS_STORAGE_R_1="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
 cd "$DVS_REPO_R_1" && git init .
 cp -r "$FIXTURES_1/data" "$DVS_REPO_R_1/data"
 
-tee /dev/stderr <<EOF | Rscript -
+Rscript --vanilla -e '
 library(dvs)
-dvs_init("$DVS_STORAGE_R_1")
-${R_PROGRESS_CB}
-files <- list.files("data/derived", pattern = "\\\\.bin$", full.names = TRUE)
-cat(sprintf("\n>>> dvs_add (%d x 1MB):\n", length(files)))
-system.time(dvs:::dvs_add_impl(files = files, progress_callback = cb))
-EOF
+dvs_init("'"$DVS_STORAGE_R_1"'")
+cb <- dvs:::ProgressBarCallback$new()
+cat(sprintf("\n>>> dvs_add (100 x 1MB):\n"))
+system.time(dvs:::dvs_add_impl(glob = "data/derived/*.bin", progress_callback = cb))
+'
 
 printf '\n--- RPKG GET: 100 x 1MB ---\n'
 cd "$DVS_REPO_R_1"
 
-tee /dev/stderr <<EOF | Rscript -
+Rscript --vanilla -e '
 library(dvs)
-${R_PROGRESS_CB}
-meta_files <- list.files(".dvs/data/derived", pattern = "\\\\.bin\\\\.dvs$", full.names = FALSE)
-files <- file.path("data/derived", sub("\\\\.dvs$", "", meta_files))
-cat(sprintf("\n>>> dvs_get (%d x 1MB):\n", length(files)))
-system.time(dvs:::dvs_get_impl(files = files, progress_callback = cb))
-EOF
+cb <- dvs:::ProgressBarCallback$new()
+cat(sprintf("\n>>> dvs_get (100 x 1MB):\n"))
+system.time(dvs:::dvs_get_impl(glob = "data/derived/*.bin", progress_callback = cb))
+'
 
 # ── Scenario 2: 1 x 500MB file ─────────────────────────────────────
 
@@ -107,23 +85,23 @@ DVS_STORAGE_R_2="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
 cd "$DVS_REPO_R_2" && git init .
 cp -r "$FIXTURES_2/data" "$DVS_REPO_R_2/data"
 
-tee /dev/stderr <<EOF | Rscript -
+Rscript --vanilla -e '
 library(dvs)
-dvs_init("$DVS_STORAGE_R_2")
-${R_PROGRESS_CB}
+dvs_init("'"$DVS_STORAGE_R_2"'")
+cb <- dvs:::ProgressBarCallback$new()
 cat("\n>>> dvs_add (1 x 500MB):\n")
 system.time(dvs:::dvs_add_impl(files = "data/derived/file_1.bin", progress_callback = cb))
-EOF
+'
 
 printf '\n--- RPKG GET: 1 x 500MB ---\n'
 cd "$DVS_REPO_R_2"
 
-tee /dev/stderr <<EOF | Rscript -
+Rscript --vanilla -e '
 library(dvs)
-${R_PROGRESS_CB}
+cb <- dvs:::ProgressBarCallback$new()
 cat("\n>>> dvs_get (1 x 500MB):\n")
 system.time(dvs:::dvs_get_impl(files = "data/derived/file_1.bin", progress_callback = cb))
-EOF
+'
 
 printf '\n\n========================================\n  DONE\n========================================\n'
 printf 'Cleanup: bash %s/cleanup.sh\n' "$SCRIPT_DIR"
