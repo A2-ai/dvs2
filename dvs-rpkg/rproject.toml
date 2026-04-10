@@ -10,5 +10,5 @@ repositories = [
 
 dependencies = [
   {name = "minirextendr", git = "https://github.com/CGMossa/miniextendr", branch = "main", directory = "minirextendr"},
-    "progress",
+    "cli",
 ]
