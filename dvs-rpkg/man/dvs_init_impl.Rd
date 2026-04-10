@@ -27,5 +27,5 @@ dvs_init_impl(
 \item{no_compression}{If \code{TRUE}, disable compression for stored files.}
 }
 \description{
-Initialize a DVS repository in the given directory
+Creates the \code{.dvs} metadata folder and configures storage for versioned files.
 }
