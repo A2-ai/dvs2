@@ -4,22 +4,7 @@
 //! static inline functions. The shim is compiled by R's build system
 //! and linked into the final shared object.
 
-use std::sync::Once;
-
-use miniextendr_api::ffi::{R_PreserveObject, R_ReleaseObject, Rf_mkString, SEXP};
-
-static ENSURE_CLI: Once = Once::new();
-
-/// Ensure the cli namespace is loaded so R_GetCCallable can resolve the progress
-/// functions (called lazily by the C shim's inline wrappers on first use).
-fn ensure_cli_loaded() {
-    ENSURE_CLI.call_once(|| unsafe {
-        miniextendr_api::RCall::from_cstr(c"loadNamespace")
-            .arg(Rf_mkString(c"cli".as_ptr()))
-            .eval_base()
-            .expect("failed to load cli namespace");
-    });
-}
+use miniextendr_api::ffi::{R_PreserveObject, R_ReleaseObject, SEXP};
 
 unsafe extern "C" {
     fn cli_progress_bar_shim(total: f64, config: SEXP) -> SEXP;
@@ -59,7 +44,6 @@ pub struct CliProgressBar {
 
 impl CliProgressBar {
     pub fn new() -> Self {
-        ensure_cli_loaded();
         Self {
             bar: SEXP::nil(),
             total: 0.0,
