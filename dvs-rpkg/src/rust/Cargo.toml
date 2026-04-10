@@ -34,10 +34,10 @@ miniextendr-lint = { version = "*" }
 # multiple .o files, distributed_slice entries in unreferenced .o files get dropped.
 # With a single .o, pulling in R_init_<pkg> brings everything along.
 [patch.crates-io]
-miniextendr-api = { git = "https://github.com/CGMossa/miniextendr", rev = "3a9b1e2f" }
-miniextendr-macros = { git = "https://github.com/CGMossa/miniextendr", rev = "3a9b1e2f" }
-miniextendr-macros-core = { git = "https://github.com/CGMossa/miniextendr", rev = "3a9b1e2f" }
-miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr", rev = "3a9b1e2f" }
+miniextendr-api = { git = "https://github.com/CGMossa/miniextendr" }
+miniextendr-macros = { git = "https://github.com/CGMossa/miniextendr" }
+miniextendr-macros-core = { git = "https://github.com/CGMossa/miniextendr" }
+miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr" }
 
 [profile.dev]
 codegen-units = 1

@@ -1,82 +1,26 @@
 //! Rust bindings for cli's C progress bar API.
 //!
-//! Resolves cli's C-callable functions via `R_GetCCallable` at first use.
-//! Since the C API doesn't support changing total after creation, the bar
-//! is recreated when the total grows (once per file start, not per chunk).
+//! Calls through thin C shims (cli_progress_shim.c) that wrap cli's
+//! static inline functions. The shim is compiled by R's build system
+//! and linked into the final shared object.
 
-use std::sync::OnceLock;
+use miniextendr_api::ffi::{R_PreserveObject, R_ReleaseObject, SEXP};
 
-use miniextendr_api::ffi::{
-    R_GetCCallable, R_NilValue, R_PreserveObject, R_ReleaseObject, Rf_ScalarReal, Rf_protect,
-    Rf_unprotect, SEXP, SEXPTYPE,
-};
-
-type FnBar = unsafe extern "C" fn(*mut *mut i32, f64, SEXP) -> SEXP;
-type FnAdd = unsafe extern "C" fn(SEXP, f64);
-type FnSet = unsafe extern "C" fn(SEXP, f64);
-type FnDone = unsafe extern "C" fn(SEXP);
-type FnSetClear = unsafe extern "C" fn(SEXP, i32);
-
-struct CliFns {
-    bar: FnBar,
-    add: FnAdd,
-    set: FnSet,
-    done: FnDone,
-    set_clear: FnSetClear,
-}
-
-static CLI_FNS: OnceLock<CliFns> = OnceLock::new();
-
-#[allow(clippy::missing_transmute_annotations)]
-fn fns() -> &'static CliFns {
-    CLI_FNS.get_or_init(|| unsafe {
-        miniextendr_api::RCall::from_cstr(c"loadNamespace")
-            .arg(miniextendr_api::ffi::Rf_mkString(c"cli".as_ptr()))
-            .eval_global()
-            .expect("failed to load cli namespace");
-
-        CliFns {
-            bar: std::mem::transmute(R_GetCCallable(
-                c"cli".as_ptr(),
-                c"cli_progress_bar".as_ptr(),
-            )),
-            add: std::mem::transmute(R_GetCCallable(
-                c"cli".as_ptr(),
-                c"cli_progress_add".as_ptr(),
-            )),
-            set: std::mem::transmute(R_GetCCallable(
-                c"cli".as_ptr(),
-                c"cli_progress_set".as_ptr(),
-            )),
-            done: std::mem::transmute(R_GetCCallable(
-                c"cli".as_ptr(),
-                c"cli_progress_done".as_ptr(),
-            )),
-            set_clear: std::mem::transmute(R_GetCCallable(
-                c"cli".as_ptr(),
-                c"cli_progress_set_clear".as_ptr(),
-            )),
-        }
-    })
+unsafe extern "C" {
+    fn cli_progress_bar_shim(total: f64, config: SEXP) -> SEXP;
+    fn cli_progress_add_shim(bar: SEXP, inc: f64);
+    fn cli_progress_set_shim(bar: SEXP, set: f64);
+    fn cli_progress_done_shim(bar: SEXP);
+    fn cli_progress_set_clear_shim(bar: SEXP, clear: i32);
 }
 
 /// Create a cli progress bar with the given total and show_after=0.
 fn create_bar(total: f64) -> SEXP {
     unsafe {
-        let f = fns();
-        // Build config: list(show_after = 0)
-        let val = Rf_protect(Rf_ScalarReal(0.0));
-        let names = Rf_protect(miniextendr_api::ffi::Rf_mkString(c"show_after".as_ptr()));
-        let config = Rf_protect(miniextendr_api::ffi::Rf_allocVector(SEXPTYPE::VECSXP, 1));
-        miniextendr_api::ffi::SET_VECTOR_ELT(config, 0, val);
-        miniextendr_api::ffi::Rf_setAttrib(config, miniextendr_api::ffi::R_NamesSymbol, names);
-
-        let mut dummy: *mut i32 = std::ptr::null_mut();
-        let bar = (f.bar)(&mut dummy, total, config);
+        let config = miniextendr_api::list!("show_after" = 0.0);
+        let bar = cli_progress_bar_shim(total, config.as_sexp());
         R_PreserveObject(bar);
-        (f.set_clear)(bar, 0);
-
-        Rf_unprotect(3); // val, names, config — bar is preserved
+        cli_progress_set_clear_shim(bar, 0);
         bar
     }
 }
@@ -84,8 +28,8 @@ fn create_bar(total: f64) -> SEXP {
 /// Finish and release a bar SEXP.
 fn finish_bar(bar: SEXP) {
     unsafe {
-        if bar != R_NilValue {
-            (fns().done)(bar);
+        if bar != SEXP::nil() {
+            cli_progress_done_shim(bar);
             R_ReleaseObject(bar);
         }
     }
@@ -100,10 +44,8 @@ pub struct CliProgressBar {
 
 impl CliProgressBar {
     pub fn new() -> Self {
-        // Eagerly resolve cli C functions so create_bar doesn't fail later.
-        let _ = fns();
         Self {
-            bar: unsafe { R_NilValue },
+            bar: SEXP::nil(),
             total: 0.0,
             current: 0.0,
         }
@@ -113,33 +55,31 @@ impl CliProgressBar {
     pub fn grow_total(&mut self, size: f64) {
         self.total += size;
         finish_bar(self.bar);
-        self.bar = unsafe { R_NilValue }; // don't hold stale SEXP if create_bar panics
+        self.bar = SEXP::nil(); // don't hold stale SEXP if create_bar panics
         self.bar = create_bar(self.total);
         if self.current > 0.0 {
-            unsafe { (fns().set)(self.bar, self.current) }
+            unsafe { cli_progress_set_shim(self.bar, self.current) }
         }
     }
 
     /// Add `inc` bytes of progress.
     pub fn add(&mut self, inc: f64) {
         self.current += inc;
-        unsafe {
-            if self.bar != R_NilValue {
-                (fns().add)(self.bar, inc);
-            }
+        if self.bar != SEXP::nil() {
+            unsafe { cli_progress_add_shim(self.bar, inc) }
         }
     }
 
     /// Terminate the progress bar.
     pub fn done(&mut self) {
         finish_bar(self.bar);
-        self.bar = unsafe { R_NilValue };
+        self.bar = SEXP::nil();
     }
 }
 
 impl Drop for CliProgressBar {
     fn drop(&mut self) {
-        if self.bar != unsafe { R_NilValue } {
+        if self.bar != SEXP::nil() {
             finish_bar(self.bar);
         }
     }
