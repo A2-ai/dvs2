@@ -31,7 +31,7 @@ dvs_add <- function(
   if (!isTRUE(dry_run)) {
     progress_callback <- ProgressBarCallback$new()
   }
-  stopifnot(is.null(progress_callback) || inherits(progress_callback, "ProgressBarCallback"))
+
 
   result <- dvs_add_impl(
     files = files,
@@ -71,7 +71,7 @@ dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
   if (!isTRUE(dry_run)) {
     progress_callback <- ProgressBarCallback$new()
   }
-  stopifnot(is.null(progress_callback) || inherits(progress_callback, "ProgressBarCallback"))
+
 
   get_data_frame <- dvs_get_impl(
     files = files,
