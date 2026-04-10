@@ -121,8 +121,8 @@ rpkg-bindgen-cli:
       -- \
       -I"$R_INCLUDE" \
       -I"$CLI_INCLUDE"
-    rm -f "$WRAPPER"
     echo ""
+    echo "# Wrapper header: $WRAPPER"
     echo "# C shims written to /tmp/cli_static_wrappers.c"
 
 ci: fmt-check clippy check-std-fs test
