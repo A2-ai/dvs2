@@ -28,9 +28,7 @@ use dvs::{
 
 use cli_progress::CliProgressBar;
 
-// ---------------------------------------------------------------------------
-// Progress channel protocol
-// ---------------------------------------------------------------------------
+// region: Progress channel protocol
 
 /// Negative = file started (|value| = file size), positive = bytes transferred.
 type ProgressBytes = i64;
@@ -107,9 +105,9 @@ fn progress_on_file_start(
     }
 }
 
-// ---------------------------------------------------------------------------
-// ProgressBarCallback — R-side marker to enable progress
-// ---------------------------------------------------------------------------
+// endregion: Progress channel protocol
+
+// region: ProgressBarCallback
 
 #[derive(Default, miniextendr_api::ExternalPtr)]
 pub struct ProgressBarCallback {
@@ -124,9 +122,9 @@ impl ProgressBarCallback {
     }
 }
 
-// ---------------------------------------------------------------------------
-// DVS operations
-// ---------------------------------------------------------------------------
+// endregion: ProgressBarCallback
+
+// region: DVS operations
 
 /// Initialize a DVS repository in the given directory.
 ///
