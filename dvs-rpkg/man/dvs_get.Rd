@@ -14,5 +14,5 @@ dvs_get(files = character(0), glob = NULL, dry_run = NULL)
 \item{dry_run}{If \code{TRUE}, report what would be retrieved without writing files.}
 }
 \description{
-Retrieve files from DVS storage into the working directory
+Reads \code{.dvs} metadata files, fetches the corresponding contents from the content-addressable store, and writes them to their original paths.
 }

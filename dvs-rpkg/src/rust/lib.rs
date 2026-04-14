@@ -3,21 +3,126 @@
 //! This crate provides R bindings for the DVS (Data Version Control System).
 //! Results are returned as JSON strings for efficient parsing in R.
 
-use std::path::PathBuf;
+mod cli_progress;
 
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::mpsc::{self, SyncSender};
+use std::thread;
+
+use miniextendr_api::externalptr::ExternalPtr;
 use miniextendr_api::serde::ColumnarDataFrame;
 use miniextendr_api::{AsSerializeRow, DataFrame, List, list, miniextendr, r_println};
 
 use anyhow::{Result, anyhow};
 
-// Re-export dvs types for internal use
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddResult, Compression, GetResult, Status, StatusDetail, add_files, get_files, get_status,
+    AddResult, Compression, FileProgress, GetResult, Status, StatusDetail, add_files, get_files,
+    get_status,
 };
+
+use cli_progress::CliProgressBar;
+
+// region: Progress channel protocol
+
+/// Negative = file started (|value| = file size), positive = bytes transferred.
+type ProgressBytes = i64;
+
+/// Minimum bytes to accumulate before sending a channel message.
+const BATCH_THRESHOLD: i64 = 256 * 1024;
+
+/// Run `task` on a worker thread with a cli progress bar on the R main thread.
+fn run_with_progress<T, F>(task: F) -> Result<T>
+where
+    T: Send,
+    F: FnOnce(SyncSender<ProgressBytes>) -> Result<T> + Send,
+{
+    thread::scope(|scope| {
+        let (tx, rx) = mpsc::sync_channel(64);
+        let worker = scope.spawn(move || {
+            let result = task(tx.clone());
+            drop(tx);
+            result
+        });
+
+        let mut bar = CliProgressBar::new();
+
+        while let Ok(bytes) = rx.recv() {
+            if bytes < 0 {
+                bar.grow_total((-bytes) as f64);
+            } else {
+                bar.add(bytes as f64);
+            }
+        }
+
+        bar.done();
+
+        worker
+            .join()
+            .map_err(|_| anyhow!("Progress worker thread panicked"))?
+    })
+}
+
+/// Build the `on_file_start` closure that feeds byte-level progress.
+fn progress_on_file_start(
+    tx: SyncSender<ProgressBytes>,
+) -> impl Fn(&std::path::Path, u64) -> FileProgress + Send + Sync {
+    move |_path: &std::path::Path, size: u64| {
+        let size_i64 = i64::try_from(size).expect("file size exceeds i64::MAX");
+        let _ = tx.send(-size_i64);
+
+        let pending = Arc::new(AtomicI64::new(0));
+        let tx_bytes = tx.clone();
+        let tx_done = tx.clone();
+        let pending_bytes = Arc::clone(&pending);
+        let pending_done = Arc::clone(&pending);
+
+        FileProgress {
+            on_bytes: Box::new(move |n| {
+                let acc = pending_bytes.fetch_add(n as i64, Ordering::Relaxed) + n as i64;
+                if acc >= BATCH_THRESHOLD {
+                    // Benign race: concurrent callers may both exceed the threshold and
+                    // swap; one gets all accumulated bytes, the other gets 0 and no-ops.
+                    // No bytes are lost — just batched unevenly. Fine for UI.
+                    let flushed = pending_bytes.swap(0, Ordering::Relaxed);
+                    if flushed > 0 {
+                        let _ = tx_bytes.send(flushed);
+                    }
+                }
+            }),
+            on_done: Box::new(move |_| {
+                let remaining = pending_done.swap(0, Ordering::Relaxed);
+                if remaining > 0 {
+                    let _ = tx_done.send(remaining);
+                }
+            }),
+        }
+    }
+}
+
+// endregion: Progress channel protocol
+
+// region: ProgressBarCallback
+
+#[derive(Default, miniextendr_api::ExternalPtr)]
+pub struct ProgressBarCallback;
+
+#[miniextendr(internal)]
+impl ProgressBarCallback {
+    /// Create a progress callback handle (signals that progress should be shown).
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+// endregion: ProgressBarCallback
+
+// region: DVS operations
 
 /// Initialize a DVS repository in the given directory.
 ///
@@ -63,12 +168,14 @@ pub(crate) fn dvs_init(
 /// @param message Optional commit message describing why the files were added.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 /// @param dry_run If `TRUE`, report what would be added without modifying anything.
+/// @param progress_callback Optional handle to enable progress bar display.
 #[miniextendr(r_name = "dvs_add_impl")]
 pub(crate) fn dvs_add(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] message: Option<String>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
+    #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -81,18 +188,33 @@ pub(crate) fn dvs_add(
         return Err(anyhow!("No files to add"));
     }
 
-    Ok(DataFrame::from_iter(
+    let dry_run = dry_run.unwrap_or(false);
+    let results = if progress_callback.is_some() {
+        run_with_progress(|tx| {
+            let on_file_start = progress_on_file_start(tx);
+            add_files(
+                all_paths.clone(),
+                &paths,
+                config.backend(),
+                message.clone(),
+                config.compression(),
+                dry_run,
+                Some(&on_file_start),
+            )
+        })?
+    } else {
         add_files(
             all_paths,
             &paths,
             config.backend(),
             message,
             config.compression(),
-            dry_run.unwrap_or(false),
+            dry_run,
+            None,
         )?
-        .into_iter()
-        .map(|x| x.into()),
-    ))
+    };
+
+    Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
 /// Report the sync status of DVS-managed files.
@@ -147,11 +269,13 @@ pub(crate) fn dvs_status(
 /// @param files Character vector of `.dvs` metadata file paths to retrieve.
 /// @param glob Optional glob pattern to select `.dvs` files (e.g. `"data/*.dvs"`).
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
+/// @param progress_callback Optional handle to enable progress bar display.
 #[miniextendr(r_name = "dvs_get_impl")]
 pub(crate) fn dvs_get(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
+    #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
     let current_dir = std::env::current_dir()?;
 
@@ -165,12 +289,21 @@ pub(crate) fn dvs_get(
         return Err(anyhow!("No files to get"));
     }
 
-    let results = get_files(
-        all_paths,
-        &dvs_paths,
-        config.backend(),
-        dry_run.unwrap_or(false),
-    )?;
+    let dry_run = dry_run.unwrap_or(false);
+    let results = if progress_callback.is_some() {
+        run_with_progress(|tx| {
+            let on_file_start = progress_on_file_start(tx);
+            get_files(
+                all_paths.clone(),
+                &dvs_paths,
+                config.backend(),
+                dry_run,
+                Some(&on_file_start),
+            )
+        })?
+    } else {
+        get_files(all_paths, &dvs_paths, config.backend(), dry_run, None)?
+    };
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
