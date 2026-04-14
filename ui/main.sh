@@ -17,7 +17,6 @@ DVS_STORAGE_CLI="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_cli_XXX)"
 # region: INIT
 
 cd "$DVS_REPO_CLI"
-git init .
 
 dvs init "$DVS_STORAGE_CLI"
 
@@ -27,7 +26,6 @@ DVS_REPO_RPKG="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
 DVS_STORAGE_RPKG="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
 
 cd "$DVS_REPO_RPKG"
-git init .
 
 # this `tee` prints the R-script being executed
 tee /dev/stderr <<EOF | Rscript -

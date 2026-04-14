@@ -33,7 +33,6 @@ printf '\n=== Parallel test: %d files × %s, threads=%s ===\n\n' \
 
 FIXTURES="$(mktemp -d "$SCRIPT_DIR"/dvs_fixture_XXX)"
 cd "$FIXTURES"
-git init .
 mkfiles "$N_FILES" "$FILE_SIZE" data/derived
 
 # ── CLI: DVS_NUM_THREADS env var ────────────────────────────────────
@@ -41,7 +40,6 @@ mkfiles "$N_FILES" "$FILE_SIZE" data/derived
 DVS_REPO_CLI="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
 DVS_STORAGE_CLI="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_cli_XXX)"
 cd "$DVS_REPO_CLI"
-git init .
 dvs init "$DVS_STORAGE_CLI"
 cp -r "$FIXTURES/data" "$DVS_REPO_CLI/data"
 
@@ -61,7 +59,7 @@ DVS_REPO_R3="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
 DVS_STORAGE_R3="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
 
 for d in "$DVS_REPO_R0" "$DVS_REPO_R1" "$DVS_REPO_R2" "$DVS_REPO_R3"; do
-  cd "$d" && git init . && cp -r "$FIXTURES/data" "$d/data"
+  cd "$d" && cp -r "$FIXTURES/data" "$d/data"
 done
 
 printf '\n>>> R (single process, 3 methods)\n'
