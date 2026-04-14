@@ -74,6 +74,7 @@ timings_file <- "$R_TIMINGS"
 setwd("$DVS_REPO_R0")
 dvs_init("$DVS_STORAGE_R0")
 invisible(dvs_add(glob = "data/derived/*"))
+Sys.sleep(0.5)  # let OS flush dirty pages from warmup
 
 # ── Method 1: set_dvs_threads() ──
 
@@ -156,3 +157,21 @@ LOGEOF
 printf '\n'
 cat "$LOGFILE"
 printf '\nLog written to %s\n' "$LOGFILE"
+
+# ── Anomaly detection ──────────────────────────────────────────────
+
+_min="$(printf '%s\n' "$R_SET" "$R_WITHR" "$R_ENV" | sort -n | head -1)"
+_anomalies=0
+for _pair in "set_dvs_threads:$R_SET" "withr:$R_WITHR" "DVS_NUM_THREADS:$R_ENV"; do
+  _label="${_pair%%:*}"
+  _val="${_pair#*:}"
+  _ratio="$(printf 'scale=2; %s / %s\n' "$_val" "$_min" | bc)"
+  if [ "$(printf '%s > 2.0\n' "$_ratio" | bc)" = "1" ]; then
+    printf 'WARNING: R (%s) is %.1fx slower than fastest R method (%.3fs vs %.3fs)\n' \
+      "$_label" "$_ratio" "$_val" "$_min" >&2
+    _anomalies=$((_anomalies + 1))
+  fi
+done
+if [ "$_anomalies" -gt 0 ]; then
+  printf 'NOTE: %d anomaly detected — likely OS cache pressure, not a real regression\n' "$_anomalies" >&2
+fi

@@ -8,6 +8,15 @@ rpkg_manifest := rpkg_dir / "src/rust/Cargo.toml"
 default:
     @just --list
 
+# Download sample datasets for UI tests
+datasets:
+    mkdir -p datasets
+    curl -fL \
+    -o datasets/theoph.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Theoph.csv \
+    -o datasets/indometh.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Indometh.csv \
+    -o datasets/chickweight.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/ChickWeight.csv \
+    -o datasets/orange.csv https://vincentarelbundock.github.io/Rdatasets/csv/datasets/Orange.csv
+
 # ============================================================================
 # dvs crate
 # ============================================================================
