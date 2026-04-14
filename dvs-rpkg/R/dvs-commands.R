@@ -27,23 +27,36 @@ dvs_add <- function(
   glob = NULL,
   dry_run = NULL
 ) {
-  get_data_frame <- dvs_add_impl(files = files, message = message, glob = glob, dry_run = dry_run)
-    if (requireNamespace("tibble")) {
-    tibble::as_tibble(get_data_frame)
+  progress_callback <- NULL
+  if (!isTRUE(dry_run)) {
+    progress_callback <- ProgressBarCallback$new()
+  }
+
+
+  result <- dvs_add_impl(
+    files = files,
+    message = message,
+    glob = glob,
+    dry_run = dry_run,
+    progress_callback = progress_callback
+  )
+
+  if (requireNamespace("tibble", quietly = TRUE)) {
+    tibble::as_tibble(result)
   } else {
-    get_data_frame
+    result
   }
 }
 
 #' @inherit dvs_status_impl title description params
 #' @rdname dvs_status
-#' 
-#' 
+#'
+#'
 #' @export
 dvs_status <- function(current = NULL, absent = NULL, unsynced = NULL) {
   status_data_frame <-
     dvs_status_impl(current = current, absent = absent, unsynced = unsynced)
-  if (requireNamespace("tibble")) {
+  if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(status_data_frame)
   } else {
     status_data_frame
@@ -54,8 +67,19 @@ dvs_status <- function(current = NULL, absent = NULL, unsynced = NULL) {
 #' @rdname dvs_get
 #' @export
 dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
-  get_data_frame <- dvs_get_impl(files = files, glob = glob, dry_run = dry_run)
-    if (requireNamespace("tibble")) {
+  progress_callback <- NULL
+  if (!isTRUE(dry_run)) {
+    progress_callback <- ProgressBarCallback$new()
+  }
+
+
+  get_data_frame <- dvs_get_impl(
+    files = files,
+    glob = glob,
+    dry_run = dry_run,
+    progress_callback = progress_callback
+  )
+  if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(get_data_frame)
   } else {
     get_data_frame

@@ -71,7 +71,7 @@ $(SHLIB): $(OBJECTS) $(CARGO_AR)
 # to avoid NOTEs about hidden files and long paths. We unpack it here.
 VENDOR_TARBALL = $(ABS_TOP_SRCDIR)/inst/vendor.tar.xz
 
-$(CARGO_AR): FORCE_CARGO $(WRAPPERS_R)
+$(CARGO_AR): FORCE_CARGO $(WRAPPERS_R) $(OBJECTS)
 	@# Unpack vendor.tar.xz if vendor/ is missing (CRAN tarball case only)
 	@if [ "$(NOT_CRAN_FLAG)" != "true" ] && [ ! -d "$(VENDOR_OUT)" ] && [ -f "$(VENDOR_TARBALL)" ]; then \
 	  echo "Unpacking vendor.tar.xz from inst/..."; \
@@ -79,8 +79,10 @@ $(CARGO_AR): FORCE_CARGO $(WRAPPERS_R)
 	fi
 	@set -e; \
 	TARGET_OPT=""; \
+	LINK_ARGS=""; \
+	for obj in $(OBJECTS); do LINK_ARGS="$$LINK_ARGS -C link-arg=$(ABS_RPKG_SRCDIR)/$$obj"; done; \
 	if [ -n "$(CARGO_BUILD_TARGET)" ]; then TARGET_OPT="--target $(CARGO_BUILD_TARGET)"; fi; \
-	RUSTFLAGS="$(ENV_RUSTFLAGS)" \
+	RUSTFLAGS="$(ENV_RUSTFLAGS) $$LINK_ARGS" \
 	$(CARGO) $(RUST_TOOLCHAIN) build $(CARGO_OFFLINE_FLAG) $(CARGO_FEATURES_FLAG) $$TARGET_OPT \
 	  --lib --profile $(CARGO_PROFILE) \
 	  --manifest-path $(CARGO_TOML) \
@@ -107,7 +109,7 @@ $(WRAPPERS_R): $(CARGO_CDYLIB)
 	@rm -f '$(CARGO_CDYLIB)'
 
 # Build cdylib for wrapper generation (shares incremental compilation with staticlib)
-$(CARGO_CDYLIB): FORCE_CARGO
+$(CARGO_CDYLIB): FORCE_CARGO $(OBJECTS)
 	@# Unpack vendor.tar.xz if vendor/ is missing (CRAN tarball case only)
 	@if [ "$(NOT_CRAN_FLAG)" != "true" ] && [ ! -d "$(VENDOR_OUT)" ] && [ -f "$(VENDOR_TARBALL)" ]; then \
 	  echo "Unpacking vendor.tar.xz from inst/..."; \
@@ -116,9 +118,10 @@ $(CARGO_CDYLIB): FORCE_CARGO
 	@set -e; \
 	TARGET_OPT=""; \
 	CDYLIB_LINK_ARGS=""; \
+	for obj in $(OBJECTS); do CDYLIB_LINK_ARGS="$$CDYLIB_LINK_ARGS -C link-arg=$(ABS_RPKG_SRCDIR)/$$obj"; done; \
 	if [ -n "$(CARGO_BUILD_TARGET)" ]; then TARGET_OPT="--target $(CARGO_BUILD_TARGET)"; fi; \
 	if [ "$(CDYLIB_EXT)" = "dll" ]; then \
-	  CDYLIB_LINK_ARGS="-C link-arg=-static-libgcc -C link-arg=$(ABS_RPKG_SRC_CARGO)/cdylib-exports.def -C link-arg=-Wl,--no-gc-sections"; \
+	  CDYLIB_LINK_ARGS="$$CDYLIB_LINK_ARGS -C link-arg=-static-libgcc -C link-arg=$(ABS_RPKG_SRC_CARGO)/cdylib-exports.def -C link-arg=-Wl,--no-gc-sections"; \
 	fi; \
 	RUSTFLAGS="$(ENV_RUSTFLAGS)" \
 	$(CARGO) $(RUST_TOOLCHAIN) rustc $(CARGO_OFFLINE_FLAG) $(CARGO_FEATURES_FLAG) $$TARGET_OPT \

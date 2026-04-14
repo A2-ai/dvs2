@@ -97,5 +97,31 @@ fmt-check:
     cargo fmt -- --check
     cargo fmt --manifest-path={{quote(rpkg_manifest)}} -- --check
 
+# Generate Rust bindings for cli's C progress API (reference only, not compiled)
+rpkg-bindgen-cli:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    R_INCLUDE="$(Rscript -e 'cat(R.home("include"))')"
+    CLI_INCLUDE="$(Rscript -e 'cat(system.file("include", package = "cli"))')"
+    WRAPPER="$(mktemp /tmp/cli_bindgen_XXXXXX).h"
+    printf '#include <Rinternals.h>\n#include <cli/progress.h>\n' > "$WRAPPER"
+    bindgen \
+      --merge-extern-blocks \
+      --no-layout-tests \
+      --no-doc-comments \
+      --wrap-static-fns \
+      --wrap-static-fns-path /tmp/cli_static_wrappers.c \
+      --allowlist-file '.*/cli/progress\.h' \
+      --blocklist-type 'SEXPREC' \
+      --blocklist-type 'SEXP' \
+      --raw-line 'use miniextendr_api::ffi::SEXP;' \
+      "$WRAPPER" \
+      -- \
+      -I"$R_INCLUDE" \
+      -I"$CLI_INCLUDE"
+    echo ""
+    echo "# Wrapper header: $WRAPPER"
+    echo "# C shims written to /tmp/cli_static_wrappers.c"
+
 ci: fmt-check clippy check-std-fs test
     @echo "All CI checks passed!"
