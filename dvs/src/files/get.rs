@@ -304,12 +304,11 @@ mod tests {
             None,
             Compression::Zstd,
             false,
-            None,
         )
         .unwrap();
 
         let results =
-            get_files(vec!["nonexistent.csv".into()], &paths, backend, false, None).unwrap();
+            get_files(vec!["nonexistent.csv".into()], &paths, backend, false).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not found"))
@@ -327,7 +326,7 @@ mod tests {
         create_file(&root, "untracked.txt", b"hello");
 
         let results =
-            get_files(vec!["untracked.txt".into()], &paths, backend, false, None).unwrap();
+            get_files(vec!["untracked.txt".into()], &paths, backend, false).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not tracked"))
@@ -352,7 +351,6 @@ mod tests {
             None,
             Compression::Zstd,
             false,
-            None,
         )
         .unwrap();
         assert_eq!(results.len(), expected_files.len());
@@ -383,7 +381,7 @@ mod tests {
         }
 
         // Get files back
-        let results = get_files(file_paths, &paths, backend, false, None).unwrap();
+        let results = get_files(file_paths, &paths, backend, false).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert!(matches!(

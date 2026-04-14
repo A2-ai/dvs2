@@ -244,7 +244,6 @@ mod tests {
             None,
             Compression::Zstd,
             false,
-            None,
         )
         .unwrap();
         assert_eq!(results.len(), 1);
@@ -287,7 +286,6 @@ mod tests {
             None,
             Compression::Zstd,
             false,
-            None,
         )
         .unwrap();
         assert_eq!(results.len(), 4);
