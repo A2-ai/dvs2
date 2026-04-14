@@ -53,10 +53,22 @@ dvs_add <- function(
 #'
 #'
 #' @export
-dvs_status <- function(current = NULL, absent = NULL, unsynced = NULL) {
+dvs_status <- function(
+  files = character(0),
+  recursive = NULL,
+  current = NULL,
+  absent = NULL,
+  unsynced = NULL
+) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   status_data_frame <-
-    dvs_status_impl(current = current, absent = absent, unsynced = unsynced)
+    dvs_status_impl(
+      files = files,
+      recursive = recursive,
+      current = current,
+      absent = absent,
+      unsynced = unsynced
+    )
   if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(status_data_frame)
   } else {
