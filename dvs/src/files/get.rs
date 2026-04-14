@@ -307,8 +307,7 @@ mod tests {
         )
         .unwrap();
 
-        let results =
-            get_files(vec!["nonexistent.csv".into()], &paths, backend, false).unwrap();
+        let results = get_files(vec!["nonexistent.csv".into()], &paths, backend, false).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not found"))
@@ -325,8 +324,7 @@ mod tests {
         // Create a file on disk but don't dvs add it
         create_file(&root, "untracked.txt", b"hello");
 
-        let results =
-            get_files(vec!["untracked.txt".into()], &paths, backend, false).unwrap();
+        let results = get_files(vec!["untracked.txt".into()], &paths, backend, false).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not tracked"))

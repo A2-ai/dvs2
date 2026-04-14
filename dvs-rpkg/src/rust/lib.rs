@@ -314,9 +314,7 @@ pub(crate) fn dvs_get(
 ///
 /// @param threads Integer number of threads, or `NULL` to reset.
 #[miniextendr(r_name = "dvs_set_threads_impl")]
-pub(crate) fn dvs_set_threads(
-    #[miniextendr(default = "NULL")] threads: Option<usize>,
-) {
+pub(crate) fn dvs_set_threads(#[miniextendr(default = "NULL")] threads: Option<usize>) {
     set_num_threads(threads.unwrap_or(0));
 }
 
