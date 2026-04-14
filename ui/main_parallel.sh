@@ -16,8 +16,8 @@ trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# shellcheck source=ui/scripts/helpers.sh
-source "${SCRIPT_DIR}/scripts/helpers.sh"
+# shellcheck source=ui/helpers.sh
+source "${SCRIPT_DIR}/helpers.sh"
 
 N_FILES="${1:-20}"
 FILE_SIZE="${2:-50M}"
