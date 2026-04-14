@@ -79,6 +79,30 @@ rpkg-install:
     Rscript -e 'install.packages("{{rpkg_dir}}", repos = NULL, type = "source")'
 alias install-rpkg := rpkg-install
 
+# Install cargo-revendor (required for vendoring)
+install-revendor:
+    cargo install --git https://github.com/CGMossa/miniextendr cargo-revendor
+
+# Vendor all dependencies for offline/CRAN builds
+# Vendors deps, strips fat, freezes manifest, compresses into inst/vendor.tar.xz
+vendor:
+    cargo revendor \
+      --manifest-path {{rpkg_dir}}/src/rust/Cargo.toml \
+      --output {{rpkg_dir}}/vendor \
+      --strip-all \
+      --freeze \
+      --compress {{rpkg_dir}}/inst/vendor.tar.xz \
+      --blank-md \
+      --source-marker \
+      -v
+
+# Vendor monorepo library crates for CRAN (use_vendor_lib)
+# Call this for each monorepo crate that your R package depends on.
+# Example: just vendor-lib dvs ../../../dvs
+vendor-lib crate dev_path:
+    Rscript -e 'args <- commandArgs(trailingOnly = TRUE); minirextendr::use_vendor_lib(args[[1]], dev_path = args[[2]], path = args[[3]])' "{{crate}}" "{{dev_path}}" "{{rpkg_dir}}"
+    cd {{rpkg_dir}} && autoconf -vif
+
 # ============================================================================
 # Combined
 # ============================================================================
