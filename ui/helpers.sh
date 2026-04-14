@@ -72,7 +72,7 @@ resolve_dataset_archetype() {
   local datasets_dir
 
   helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  repo_root="$(cd "${helper_dir}/../.." && pwd)"
+  repo_root="$(cd "${helper_dir}/.." && pwd)"
   datasets_dir="${repo_root}/datasets"
 
   if [[ -f "$archetype" ]]; then
