@@ -21,7 +21,7 @@ pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use paths::{AddPathStatus, DvsPaths, find_repo_root};
 pub use progress::FileProgress;
-pub use utils::format_size;
+pub use utils::{format_size, set_num_threads};
 
 #[cfg(test)]
 pub mod testutil {

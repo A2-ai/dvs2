@@ -23,7 +23,7 @@ use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
     AddResult, Compression, FileProgress, GetResult, Status, StatusDetail, add_files, get_files,
-    get_status,
+    get_status, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -305,6 +305,19 @@ pub(crate) fn dvs_get(
         get_files(all_paths, &dvs_paths, config.backend(), dry_run, None)?
     };
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
+}
+
+/// Set the number of threads used by DVS parallel operations.
+///
+/// Controls the thread pool size for add, get, and status operations.
+/// Pass `NULL` to revert to automatic detection.
+///
+/// @param threads Integer number of threads, or `NULL` to reset.
+#[miniextendr(r_name = "dvs_set_threads_impl")]
+pub(crate) fn dvs_set_threads(
+    #[miniextendr(default = "NULL")] threads: Option<usize>,
+) {
+    set_num_threads(threads.unwrap_or(0));
 }
 
 miniextendr_api::miniextendr_init!(dvs);
