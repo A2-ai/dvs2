@@ -128,10 +128,7 @@ fn get_file_status(
     }
 }
 
-pub fn get_status(
-    paths: &DvsPaths,
-    filter: Option<&StatusFilter>,
-) -> Result<Vec<FileStatus>> {
+pub fn get_status(paths: &DvsPaths, filter: Option<&StatusFilter>) -> Result<Vec<FileStatus>> {
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
     let cache = try_open_cache(paths);

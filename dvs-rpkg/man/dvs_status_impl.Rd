@@ -19,3 +19,4 @@ dvs_status_impl(current = NULL, absent = NULL, unsynced = NULL)
 \description{
 Compares \code{.dvs} metadata files against their stored contents and local working copies. By default all files are shown; pass filter flags to restrict output.
 }
+\keyword{internal}

@@ -29,3 +29,4 @@ dvs_add_impl(
 \description{
 Hashes and copies the specified files into the content-addressable store, replacing each original with a \code{.dvs} metadata file.
 }
+\keyword{internal}

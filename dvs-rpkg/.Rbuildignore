@@ -30,6 +30,9 @@
 # Vendor compression stamp file (dev-only)
 ^inst/\.vendor\.tar\.xz\.cksum$
 
+# Vendor tarball staging directory
+^\.vendor-tarball-staging$
+
 # Vendor directory (ships via inst/vendor.tar.xz, not as loose files)
 ^vendor$
 
