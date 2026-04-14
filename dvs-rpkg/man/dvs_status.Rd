@@ -4,9 +4,19 @@
 \alias{dvs_status}
 \title{Report the sync status of DVS-managed files}
 \usage{
-dvs_status(current = NULL, absent = NULL, unsynced = NULL)
+dvs_status(
+  files = character(0),
+  recursive = NULL,
+  current = NULL,
+  absent = NULL,
+  unsynced = NULL
+)
 }
 \arguments{
+\item{files}{Character vector of file or directory paths to check status for.}
+
+\item{recursive}{If \code{TRUE}, recursively include files in subdirectories.}
+
 \item{current}{If \code{TRUE}, include files whose local copy matches storage.}
 
 \item{absent}{If \code{TRUE}, include files that exist in metadata but not locally.}

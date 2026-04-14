@@ -22,8 +22,8 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddResult, Compression, FileProgress, GetResult, Status, StatusDetail, add_files, get_files,
-    get_status, set_num_threads,
+    AddResult, Compression, FileProgress, GetResult, Status, StatusDetail, StatusFilter, add_files,
+    get_files, get_status, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -225,12 +225,16 @@ pub(crate) fn dvs_add(
 /// working copies. By default all files are shown; pass filter flags to
 /// restrict output.
 ///
+/// @param files Character vector of file or directory paths to check status for.
+/// @param recursive If `TRUE`, recursively include files in subdirectories.
 /// @param current If `TRUE`, include files whose local copy matches storage.
 /// @param absent If `TRUE`, include files that exist in metadata but not locally.
 /// @param unsynced If `TRUE`, include files whose local copy differs from storage.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_status_impl")]
 pub(crate) fn dvs_status(
+    #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
+    #[miniextendr(default = "NULL")] recursive: Option<bool>,
     #[miniextendr(default = "NULL")] current: Option<bool>,
     #[miniextendr(default = "NULL")] absent: Option<bool>,
     #[miniextendr(default = "NULL")] unsynced: Option<bool>,
@@ -245,7 +249,16 @@ pub(crate) fn dvs_status(
     let unsynced = unsynced.unwrap_or(false);
     let show_all = !current && !absent && !unsynced;
 
-    let mut statuses = get_status(&paths, None)?;
+    let filter = if files.is_empty() {
+        None
+    } else {
+        Some(StatusFilter::from_user_paths(
+            files,
+            recursive.unwrap_or(false),
+            &paths,
+        ))
+    };
+    let mut statuses = get_status(&paths, filter.as_ref())?;
     if !show_all {
         statuses.retain(|x| match &x.detail {
             StatusDetail::Success { status, .. } => {
