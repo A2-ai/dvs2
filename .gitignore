@@ -47,3 +47,6 @@ ui/*_files
 dvs_repo_*
 dvs_storage_*
 testfile.bin
+
+# Downloaded sample datasets (just datasets)
+datasets/
