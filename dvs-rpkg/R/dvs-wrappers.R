@@ -6,7 +6,7 @@
 # nolint start
 # nocov start
 
-# Generated from Rust impl `ProgressBarCallback` (lib.rs:120:6)
+# Generated from Rust impl `ProgressBarCallback` (lib.rs:118:6)
 #' @title ProgressBarCallback  Class
 #' @name ProgressBarCallback
 #' @rdname ProgressBarCallback
@@ -78,7 +78,7 @@ ProgressBarCallback$new <- function() {
 #' @rdname ProgressBarCallback
 `[[.ProgressBarCallback` <- `$.ProgressBarCallback`
 
-# Generated from Rust fn `dvs_add` (lib.rs:177:15)
+# Generated from Rust fn `dvs_add` (lib.rs:175:15)
 #' @title Add files to DVS-managed storage
 #' @description Hashes and copies the specified files into the content-addressable store, replacing each original with a `.dvs` metadata file.
 #' @param files Character vector of file paths to add.
@@ -106,7 +106,7 @@ dvs_add_impl <- function(files = character(0), message = NULL, glob = NULL, dry_
   .val
 }
 
-# Generated from Rust fn `dvs_get` (lib.rs:278:15)
+# Generated from Rust fn `dvs_get` (lib.rs:276:15)
 #' @title Retrieve files from DVS storage into the working directory
 #' @description Reads `.dvs` metadata files, fetches the corresponding contents from the content-addressable store, and writes them to their original paths.
 #' @param files Character vector of `.dvs` metadata file paths to retrieve.
@@ -131,7 +131,7 @@ dvs_get_impl <- function(files = character(0), glob = NULL, dry_run = NULL, prog
   .val
 }
 
-# Generated from Rust fn `dvs_init` (lib.rs:141:15)
+# Generated from Rust fn `dvs_init` (lib.rs:139:15)
 #' @title Initialize a DVS repository in the given directory
 #' @description Creates the `.dvs` metadata folder and configures storage for versioned files.
 #' @param storage_path Path to the storage directory where file contents are kept.
@@ -163,7 +163,7 @@ dvs_init_impl <- function(storage_path, root_dir = NULL, group = NULL, metadata_
   .val
 }
 
-# Generated from Rust fn `dvs_status` (lib.rs:234:15)
+# Generated from Rust fn `dvs_status` (lib.rs:232:15)
 #' @title Report the sync status of DVS-managed files
 #' @description Compares `.dvs` metadata files against their stored contents and local working copies. By default all files are shown; pass filter flags to restrict output.
 #' @param current If `TRUE`, include files whose local copy matches storage.
