@@ -15,3 +15,4 @@ dvs_set_threads_impl(threads = NULL)
 \description{
 Controls the thread pool size for add, get, and status operations. Pass \code{NULL} to revert to automatic detection.
 }
+\keyword{internal}

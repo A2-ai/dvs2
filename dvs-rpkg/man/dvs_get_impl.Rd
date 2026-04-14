@@ -26,3 +26,4 @@ dvs_get_impl(
 \description{
 Reads \code{.dvs} metadata files, fetches the corresponding contents from the content-addressable store, and writes them to their original paths.
 }
+\keyword{internal}
