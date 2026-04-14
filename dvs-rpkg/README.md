@@ -1,6 +1,6 @@
 # dvs
 
-R interface to dvs2.
+R interface to dvs.
 
 ## Install
 
