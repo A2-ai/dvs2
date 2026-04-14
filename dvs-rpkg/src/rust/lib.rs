@@ -133,6 +133,7 @@ impl ProgressBarCallback {
 /// @param group Unix group name to set on stored files for shared access.
 /// @param metadata_folder_name Name of the metadata folder. Defaults to `.dvs`.
 /// @param no_compression If `TRUE`, disable compression for stored files.
+/// @keywords internal
 #[miniextendr(r_name = "dvs_init_impl")]
 pub(crate) fn dvs_init(
     storage_path: PathBuf,
@@ -169,6 +170,7 @@ pub(crate) fn dvs_init(
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 /// @param dry_run If `TRUE`, report what would be added without modifying anything.
 /// @param progress_callback Optional handle to enable progress bar display.
+/// @keywords internal
 #[miniextendr(r_name = "dvs_add_impl")]
 pub(crate) fn dvs_add(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
@@ -226,6 +228,7 @@ pub(crate) fn dvs_add(
 /// @param current If `TRUE`, include files whose local copy matches storage.
 /// @param absent If `TRUE`, include files that exist in metadata but not locally.
 /// @param unsynced If `TRUE`, include files whose local copy differs from storage.
+/// @keywords internal
 #[miniextendr(r_name = "dvs_status_impl")]
 pub(crate) fn dvs_status(
     #[miniextendr(default = "NULL")] current: Option<bool>,
@@ -270,6 +273,7 @@ pub(crate) fn dvs_status(
 /// @param glob Optional glob pattern to select `.dvs` files (e.g. `"data/*.dvs"`).
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
 /// @param progress_callback Optional handle to enable progress bar display.
+/// @keywords internal
 #[miniextendr(r_name = "dvs_get_impl")]
 pub(crate) fn dvs_get(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
@@ -313,10 +317,9 @@ pub(crate) fn dvs_get(
 /// Pass `NULL` to revert to automatic detection.
 ///
 /// @param threads Integer number of threads, or `NULL` to reset.
+/// @keywords internal
 #[miniextendr(r_name = "dvs_set_threads_impl")]
-pub(crate) fn dvs_set_threads(
-    #[miniextendr(default = "NULL")] threads: Option<usize>,
-) {
+pub(crate) fn dvs_set_threads(#[miniextendr(default = "NULL")] threads: Option<usize>) {
     set_num_threads(threads.unwrap_or(0));
 }
 

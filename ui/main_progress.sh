@@ -20,13 +20,13 @@ printf '  SCENARIO 1: 100 x 1MB files\n'
 printf '========================================\n\n'
 
 FIXTURES_1="$(mktemp -d "$SCRIPT_DIR"/dvs_fixture_XXX)"
-cd "$FIXTURES_1" && git init .
+cd "$FIXTURES_1"
 mkfiles 100 1M data/derived
 
 printf '\n--- CLI ADD: 100 x 1MB ---\n'
 DVS_REPO_CLI_1="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
 DVS_STORAGE_CLI_1="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_cli_XXX)"
-cd "$DVS_REPO_CLI_1" && git init .
+cd "$DVS_REPO_CLI_1"
 dvs init "$DVS_STORAGE_CLI_1"
 cp -r "$FIXTURES_1/data" "$DVS_REPO_CLI_1/data"
 time dvs add data/derived/*
@@ -37,7 +37,7 @@ time dvs get data/derived/*
 printf '\n--- RPKG ADD: 100 x 1MB ---\n'
 DVS_REPO_R_1="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
 DVS_STORAGE_R_1="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
-cd "$DVS_REPO_R_1" && git init .
+cd "$DVS_REPO_R_1"
 cp -r "$FIXTURES_1/data" "$DVS_REPO_R_1/data"
 
 Rscript --vanilla -e '
@@ -63,13 +63,13 @@ printf '  SCENARIO 2: 1 x 500MB file\n'
 printf '========================================\n\n'
 
 FIXTURES_2="$(mktemp -d "$SCRIPT_DIR"/dvs_fixture_XXX)"
-cd "$FIXTURES_2" && git init .
+cd "$FIXTURES_2"
 mkfiles 1 500M data/derived
 
 printf '\n--- CLI ADD: 1 x 500MB ---\n'
 DVS_REPO_CLI_2="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
 DVS_STORAGE_CLI_2="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_cli_XXX)"
-cd "$DVS_REPO_CLI_2" && git init .
+cd "$DVS_REPO_CLI_2"
 dvs init "$DVS_STORAGE_CLI_2"
 cp -r "$FIXTURES_2/data" "$DVS_REPO_CLI_2/data"
 time dvs add data/derived/file_1.bin
@@ -80,7 +80,7 @@ time dvs get data/derived/file_1.bin
 printf '\n--- RPKG ADD: 1 x 500MB ---\n'
 DVS_REPO_R_2="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
 DVS_STORAGE_R_2="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
-cd "$DVS_REPO_R_2" && git init .
+cd "$DVS_REPO_R_2"
 cp -r "$FIXTURES_2/data" "$DVS_REPO_R_2/data"
 
 Rscript --vanilla -e '

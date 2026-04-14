@@ -29,3 +29,4 @@ dvs_init_impl(
 \description{
 Creates the \code{.dvs} metadata folder and configures storage for versioned files.
 }
+\keyword{internal}
