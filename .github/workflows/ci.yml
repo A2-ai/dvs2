@@ -44,7 +44,7 @@ jobs:
 
       - name: restore rpkg vendor directory
         id: rpkg-vendor-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: dvs-rpkg/vendor
           key: ${{ runner.os }}-rpkg-vendor-${{ hashFiles('dvs-rpkg/inst/vendor.tar.xz') }}
@@ -64,7 +64,7 @@ jobs:
 
       - name: save rpkg vendor directory
         if: steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: dvs-rpkg/vendor
           key: ${{ steps.rpkg-vendor-cache.outputs.cache-primary-key }}
