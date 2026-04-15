@@ -4,10 +4,10 @@
 \alias{dvs_get}
 \title{Retrieve files from DVS storage into the working directory}
 \usage{
-dvs_get(files = character(0), glob = NULL, dry_run = NULL)
+dvs_get(paths = character(0), glob = NULL, dry_run = NULL)
 }
 \arguments{
-\item{files}{Character vector of \code{.dvs} metadata file paths to retrieve.}
+\item{paths}{Character vector of \code{.dvs} metadata file paths to retrieve.}
 
 \item{glob}{Optional glob pattern to select \code{.dvs} files (e.g. \code{"data/*.dvs"}).}
 

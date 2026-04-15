@@ -5,24 +5,20 @@
 \title{Report the sync status of DVS-managed files}
 \usage{
 dvs_status(
-  files = character(0),
+  paths = character(0),
   recursive = NULL,
-  current = NULL,
-  absent = NULL,
-  unsynced = NULL
+  status = c("current", "absent", "unsynced")
 )
 }
 \arguments{
-\item{files}{Character vector of file or directory paths to check status for.}
+\item{paths}{Character vector of file or directory paths to check status for.}
 
 \item{recursive}{If \code{TRUE}, recursively include files in subdirectories.}
 
-\item{current}{If \code{TRUE}, include files whose local copy matches storage.}
-
-\item{absent}{If \code{TRUE}, include files that exist in metadata but not locally.}
-
-\item{unsynced}{If \code{TRUE}, include files whose local copy differs from storage.}
+\item{status}{Character vector of statuses to include. Valid values are
+\code{"current"}, \code{"absent"}, and \code{"unsynced"}. When empty (default), all
+statuses are shown.}
 }
 \description{
-Compares \code{.dvs} metadata files against their stored contents and local working copies. By default all files are shown; pass filter flags to restrict output.
+Compares \code{.dvs} metadata files against their stored contents and local working copies. By default all statuses are shown; pass a character vector of status names (e.g. \code{c("current", "absent")}) to restrict output.
 }

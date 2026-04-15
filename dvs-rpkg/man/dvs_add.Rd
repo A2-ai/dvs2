@@ -4,10 +4,10 @@
 \alias{dvs_add}
 \title{Add files to DVS-managed storage}
 \usage{
-dvs_add(files = character(0), message = NULL, glob = NULL, dry_run = NULL)
+dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 }
 \arguments{
-\item{files}{Character vector of file paths to add.}
+\item{paths}{Character vector of file paths to add.}
 
 \item{message}{Optional commit message describing why the files were added.}
 

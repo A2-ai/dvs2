@@ -7,14 +7,15 @@ dvs_init <- function(
   root_dir = NULL,
   group = NULL,
   metadata_folder_name = NULL,
-  no_compression = NULL
+  compression = c("zstd", "none")
 ) {
+  compression <- match.arg(compression)
   dvs_init_impl(
     storage_path = storage_path,
     root_dir = root_dir,
     group = group,
     metadata_folder_name = metadata_folder_name,
-    no_compression = no_compression
+    compression = compression
   )
 }
 
@@ -22,7 +23,7 @@ dvs_init <- function(
 #' @rdname dvs_add
 #' @export
 dvs_add <- function(
-  files = character(0),
+  paths = character(0),
   message = NULL,
   glob = NULL,
   dry_run = NULL
@@ -34,7 +35,7 @@ dvs_add <- function(
   }
 
   result <- dvs_add_impl(
-    files = files,
+    paths = paths,
     message = message,
     glob = glob,
     dry_run = dry_run,
@@ -54,20 +55,16 @@ dvs_add <- function(
 #'
 #' @export
 dvs_status <- function(
-  files = character(0),
+  paths = character(0),
   recursive = NULL,
-  current = NULL,
-  absent = NULL,
-  unsynced = NULL
+  status = c("current", "absent", "unsynced")
 ) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   status_data_frame <-
     dvs_status_impl(
-      files = files,
+      paths = paths,
       recursive = recursive,
-      current = current,
-      absent = absent,
-      unsynced = unsynced
+      status = status
     )
   if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(status_data_frame)
@@ -79,7 +76,7 @@ dvs_status <- function(
 #' @inherit dvs_get_impl title description params
 #' @rdname dvs_get
 #' @export
-dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
+dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   progress_callback <- NULL
   if (!isTRUE(dry_run)) {
@@ -87,7 +84,7 @@ dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
   }
 
   get_data_frame <- dvs_get_impl(
-    files = files,
+    paths = paths,
     glob = glob,
     dry_run = dry_run,
     progress_callback = progress_callback
