@@ -6,6 +6,7 @@
 
 use miniextendr_api::ffi::{R_PreserveObject, R_ReleaseObject, SEXP};
 
+#[cfg(not(test))]
 unsafe extern "C" {
     fn cli_progress_bar_shim(total: f64, config: SEXP) -> SEXP;
     fn cli_progress_add_shim(bar: SEXP, inc: f64);
@@ -13,6 +14,21 @@ unsafe extern "C" {
     fn cli_progress_done_shim(bar: SEXP);
     fn cli_progress_set_clear_shim(bar: SEXP, clear: i32);
 }
+
+// Stubs for `cargo test` — the real shims are C functions only available
+// when linked into R's shared object.
+#[cfg(test)]
+unsafe fn cli_progress_bar_shim(_total: f64, _config: SEXP) -> SEXP {
+    SEXP::nil()
+}
+#[cfg(test)]
+unsafe fn cli_progress_add_shim(_bar: SEXP, _inc: f64) {}
+#[cfg(test)]
+unsafe fn cli_progress_set_shim(_bar: SEXP, _set: f64) {}
+#[cfg(test)]
+unsafe fn cli_progress_done_shim(_bar: SEXP) {}
+#[cfg(test)]
+unsafe fn cli_progress_set_clear_shim(_bar: SEXP, _clear: i32) {}
 
 /// Progress bar that supports growing total via bar recreation.
 pub struct CliProgressBar {
