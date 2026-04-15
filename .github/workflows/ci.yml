@@ -37,11 +37,39 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
 
+      - name: set global R_HOME
+        shell: pwsh
+        run: '"R_HOME=$env:RUNNER_TEMP" >> $env:GITHUB_ENV'
+
       - name: Build System Info
         run: rustc --version
 
-      - name: unpack rpkg vendor tarball
-        run: tar -xJf dvs-rpkg/inst/vendor.tar.xz -C dvs-rpkg
+      - name: restore rpkg vendor directory
+        id: rpkg-vendor-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: dvs-rpkg/vendor
+          key: ${{ runner.os }}-rpkg-vendor-${{ hashFiles('dvs-rpkg/inst/vendor.tar.xz') }}
+
+      - name: unpack rpkg vendor tarball (unix)
+        if: runner.os != 'Windows' && steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
+        run: |
+          start=$(date +%s)
+          tar -xJf dvs-rpkg/inst/vendor.tar.xz -C dvs-rpkg
+          end=$(date +%s)
+          echo "vendor unpack took $((end - start))s"
+
+      - name: unpack rpkg vendor tarball (windows)
+        if: runner.os == 'Windows' && steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: 7z x dvs-rpkg/inst/vendor.tar.xz -so | 7z x -si -ttar -odvs-rpkg -aoa
+
+      - name: save rpkg vendor directory
+        if: steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: dvs-rpkg/vendor
+          key: ${{ steps.rpkg-vendor-cache.outputs.cache-primary-key }}
 
       - name: check formatting
         run: |
@@ -60,5 +88,3 @@ jobs:
         run: |
           cargo check --manifest-path dvs-rpkg/src/rust/Cargo.toml
           cargo check --manifest-path dvs-rpkg/src/rust/Cargo.toml --all-features
-        env:
-          R_HOME: /tmp
