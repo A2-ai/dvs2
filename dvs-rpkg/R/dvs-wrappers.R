@@ -79,10 +79,10 @@ ProgressBarCallback$new <- function() {
 #' @rdname ProgressBarCallback
 `[[.ProgressBarCallback` <- `$.ProgressBarCallback`
 
-# Generated from Rust fn `dvs_add` (lib.rs:193:15)
+# Generated from Rust fn `dvs_add` (lib.rs:192:15)
 #' @title Add files to DVS-managed storage
-#' @description Hashes and copies the specified files into the content-addressable store, replacing each original with a `.dvs` metadata file.
-#' @param paths Character vector of file paths to add.
+#' @description Hashes and copies the specified files into DVS storage.
+#' @param paths Character vector of file paths to add to DVS storage.
 #' @param message Optional commit message describing why the files were added.
 #' @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 #' @param dry_run If `TRUE`, report what would be added without modifying anything.
@@ -108,11 +108,11 @@ dvs_add_impl <- function(paths = character(0), message = NULL, glob = NULL, dry_
   .val
 }
 
-# Generated from Rust fn `dvs_get` (lib.rs:327:15)
+# Generated from Rust fn `dvs_get` (lib.rs:326:15)
 #' @title Retrieve files from DVS storage into the working directory
-#' @description Reads `.dvs` metadata files, fetches the corresponding contents from the content-addressable store, and writes them to their original paths.
-#' @param paths Character vector of `.dvs` metadata file paths to retrieve.
-#' @param glob Optional glob pattern to select `.dvs` files (e.g. `"data/*.dvs"`).
+#' @description Fetches the specified files from DVS storage and writes them to their original paths in the working directory.
+#' @param paths Character vector of file paths to retrieve from DVS storage.
+#' @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 #' @param dry_run If `TRUE`, report what would be retrieved without writing files.
 #' @param progress_callback Optional handle to enable progress bar display.
 #' @keywords internal
@@ -169,9 +169,9 @@ dvs_init_impl <- function(storage_path, root_dir = NULL, group = NULL, metadata_
   .val
 }
 
-# Generated from Rust fn `dvs_status` (lib.rs:278:15)
+# Generated from Rust fn `dvs_status` (lib.rs:277:15)
 #' @title Report the sync status of DVS-managed files
-#' @description Compares `.dvs` metadata files against their stored contents and local working copies. By default all statuses are shown; pass a character vector of status names (e.g. `c("current", "absent")`) to restrict output.
+#' @description Reports the sync status of DVS-managed files. By default all statuses are shown; pass a character vector of status names (e.g. `c("current", "absent")`) to restrict output.
 #' @param paths Character vector of file or directory paths to check status for.
 #' @param recursive If `TRUE`, recursively include files in subdirectories.
 #' @param status Character vector of statuses to include. Valid values are
@@ -197,7 +197,7 @@ dvs_status_impl <- function(paths = character(0), recursive = NULL, status = c("
   .val
 }
 
-# Generated from Rust fn `dvs_set_threads` (lib.rs:371:15)
+# Generated from Rust fn `dvs_set_threads` (lib.rs:370:15)
 #' @title Set the number of threads used by DVS parallel operations
 #' @description Controls the thread pool size for add, get, and status operations. Pass `NULL` to revert to automatic detection.
 #' @param threads Integer number of threads, or `NULL` to reset.
