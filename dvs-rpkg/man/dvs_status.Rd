@@ -4,7 +4,11 @@
 \alias{dvs_status}
 \title{Report the sync status of DVS-managed files}
 \usage{
-dvs_status(paths = character(0), recursive = NULL, status = NULL)
+dvs_status(
+  paths = character(0),
+  recursive = NULL,
+  status = c("current", "absent", "unsynced")
+)
 }
 \arguments{
 \item{paths}{Character vector of file or directory paths to check status for.}
