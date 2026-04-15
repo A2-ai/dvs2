@@ -13,7 +13,7 @@ use std::thread;
 
 use miniextendr_api::externalptr::ExternalPtr;
 use miniextendr_api::serde::ColumnarDataFrame;
-use miniextendr_api::{AsSerializeRow, DataFrame, List, list, miniextendr, r_println};
+use miniextendr_api::{AsSerializeRow, DataFrame, List, MatchArg, list, miniextendr, r_println};
 
 use anyhow::{Result, anyhow};
 
@@ -219,35 +219,61 @@ pub(crate) fn dvs_add(
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
+/// Valid status filter choices for [`dvs_status`].
+///
+/// Used with `match.arg(status, several.ok = TRUE)` in the R wrapper to let
+/// users select which file statuses to include.
+#[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
+#[match_arg(rename_all = "lower")]
+pub enum StatusChoice {
+    /// Local file exists and matches stored version.
+    Current,
+    /// Metadata exists but local file is missing.
+    Absent,
+    /// Local file exists but differs from stored version.
+    Unsynced,
+}
+
 /// Report the sync status of DVS-managed files.
 ///
 /// Compares `.dvs` metadata files against their stored contents and local
-/// working copies. By default all files are shown; pass filter flags to
-/// restrict output.
+/// working copies. By default all statuses are shown; pass a character vector
+/// of status names (e.g. `c("current", "absent")`) to restrict output.
 ///
 /// @param files Character vector of file or directory paths to check status for.
 /// @param recursive If `TRUE`, recursively include files in subdirectories.
-/// @param current If `TRUE`, include files whose local copy matches storage.
-/// @param absent If `TRUE`, include files that exist in metadata but not locally.
-/// @param unsynced If `TRUE`, include files whose local copy differs from storage.
+/// @param status Character vector of statuses to include. Valid values are
+///   `"current"`, `"absent"`, and `"unsynced"`. When empty (default), all
+///   statuses are shown.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_status_impl")]
 pub(crate) fn dvs_status(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
-    #[miniextendr(default = "NULL")] current: Option<bool>,
-    #[miniextendr(default = "NULL")] absent: Option<bool>,
-    #[miniextendr(default = "NULL")] unsynced: Option<bool>,
+    #[miniextendr(default = "character(0)")] status: Vec<String>,
 ) -> Result<ColumnarDataFrame> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let current = current.unwrap_or(false);
-    let absent = absent.unwrap_or(false);
-    let unsynced = unsynced.unwrap_or(false);
-    let show_all = !current && !absent && !unsynced;
+    let status_choices: Vec<StatusChoice> = status
+        .iter()
+        .map(|s| {
+            StatusChoice::from_choice(s).ok_or_else(|| {
+                anyhow!(
+                    "'status' should be one of {}, got {:?}",
+                    StatusChoice::CHOICES
+                        .iter()
+                        .map(|c| format!("{:?}", c))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    s
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let show_all = status_choices.is_empty() || status_choices.len() == StatusChoice::CHOICES.len();
 
     let filter = if files.is_empty() {
         None
@@ -261,11 +287,11 @@ pub(crate) fn dvs_status(
     let mut statuses = get_status(&paths, filter.as_ref())?;
     if !show_all {
         statuses.retain(|x| match &x.detail {
-            StatusDetail::Success { status, .. } => {
-                (current && *status == Status::Current)
-                    || (absent && *status == Status::Absent)
-                    || (unsynced && *status == Status::Unsynced)
-            }
+            StatusDetail::Success { status, .. } => status_choices.iter().any(|c| match c {
+                StatusChoice::Current => *status == Status::Current,
+                StatusChoice::Absent => *status == Status::Absent,
+                StatusChoice::Unsynced => *status == Status::Unsynced,
+            }),
             StatusDetail::Error { .. } => true,
         });
     }

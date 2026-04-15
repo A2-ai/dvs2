@@ -110,11 +110,11 @@ echo "=== CLI: dvs status --absent (show only absent files) ==="
 cd "$DVS_REPO_CLI"
 dvs status --absent
 
-echo "=== R: dvs_status(absent = TRUE) ==="
+echo "=== R: dvs_status(status = 'absent') ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status(absent = TRUE)
+dvs_status(status = "absent")
 EOF
 
 # ── 6. Retrieve some files, then show mixed status ──
@@ -144,22 +144,22 @@ echo "=== CLI: dvs status -r data/ --current ==="
 cd "$DVS_REPO_CLI"
 dvs status -r data/ --current
 
-echo "=== R: dvs_status(files = 'data/', recursive = TRUE, current = TRUE) ==="
+echo "=== R: dvs_status(files = 'data/', recursive = TRUE, status = 'current') ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status(files = "data/", recursive = TRUE, current = TRUE)
+dvs_status(files = "data/", recursive = TRUE, status = "current")
 EOF
 
 echo "=== CLI: dvs status -r data/ --absent ==="
 cd "$DVS_REPO_CLI"
 dvs status -r data/ --absent
 
-echo "=== R: dvs_status(files = 'data/', recursive = TRUE, absent = TRUE) ==="
+echo "=== R: dvs_status(files = 'data/', recursive = TRUE, status = 'absent') ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status(files = "data/", recursive = TRUE, absent = TRUE)
+dvs_status(files = "data/", recursive = TRUE, status = "absent")
 EOF
 
 # ── 8. Multiple paths ──
