@@ -13,7 +13,7 @@ use std::thread;
 
 use miniextendr_api::externalptr::ExternalPtr;
 use miniextendr_api::serde::ColumnarDataFrame;
-use miniextendr_api::{AsSerializeRow, DataFrame, List, list, miniextendr, r_println};
+use miniextendr_api::{AsSerializeRow, DataFrame, List, MatchArg, list, miniextendr, r_println};
 
 use anyhow::{Result, anyhow};
 
@@ -124,6 +124,25 @@ impl ProgressBarCallback {
 
 // region: DVS operations
 
+/// Valid compression choices for [`dvs_init`].
+#[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
+#[match_arg(rename_all = "lower")]
+pub enum CompressionChoice {
+    /// Compress stored files with zstd (default).
+    Zstd,
+    /// Store files without compression.
+    None,
+}
+
+impl From<CompressionChoice> for Compression {
+    fn from(c: CompressionChoice) -> Self {
+        match c {
+            CompressionChoice::Zstd => Compression::Zstd,
+            CompressionChoice::None => Compression::None,
+        }
+    }
+}
+
 /// Initialize a DVS repository in the given directory.
 ///
 /// Creates the `.dvs` metadata folder and configures storage for versioned files.
@@ -132,7 +151,8 @@ impl ProgressBarCallback {
 /// @param root_dir Repository root directory. Defaults to the current working directory.
 /// @param group Unix group name to set on stored files for shared access.
 /// @param metadata_folder_name Name of the metadata folder. Defaults to `.dvs`.
-/// @param no_compression If `TRUE`, disable compression for stored files.
+/// @param compression Compression method for stored files. One of `"zstd"`
+///   (default) or `"none"`.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_init_impl")]
 pub(crate) fn dvs_init(
@@ -140,7 +160,7 @@ pub(crate) fn dvs_init(
     #[miniextendr(default = "NULL")] root_dir: Option<PathBuf>,
     #[miniextendr(default = "NULL")] group: Option<String>,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
-    #[miniextendr(default = "NULL")] no_compression: Option<bool>,
+    #[miniextendr(match_arg, default = "\"zstd\"")] compression: CompressionChoice,
 ) -> Result<List> {
     let root_dir = match root_dir {
         Some(d) => d,
@@ -148,9 +168,7 @@ pub(crate) fn dvs_init(
     };
     let mut config = Config::new_local(&storage_path, group)?;
 
-    if no_compression == Some(true) {
-        config.set_compression(Compression::None);
-    }
+    config.set_compression(compression.into());
     if let Some(m) = metadata_folder_name {
         config.set_metadata_folder_name(m);
     }
@@ -165,7 +183,7 @@ pub(crate) fn dvs_init(
 /// Hashes and copies the specified files into the content-addressable store,
 /// replacing each original with a `.dvs` metadata file.
 ///
-/// @param files Character vector of file paths to add.
+/// @param paths Character vector of file paths to add.
 /// @param message Optional commit message describing why the files were added.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 /// @param dry_run If `TRUE`, report what would be added without modifying anything.
@@ -173,7 +191,7 @@ pub(crate) fn dvs_init(
 /// @keywords internal
 #[miniextendr(r_name = "dvs_add_impl")]
 pub(crate) fn dvs_add(
-    #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] message: Option<String>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
@@ -181,9 +199,9 @@ pub(crate) fn dvs_add(
 ) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-    let paths = DvsPaths::from_cwd(&config)?;
+    let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let all_paths: Vec<_> = resolve_paths_for_add(files, glob.as_deref(), &paths)?
+    let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
         .into_iter()
         .collect();
     if all_paths.is_empty() {
@@ -196,7 +214,7 @@ pub(crate) fn dvs_add(
             let on_file_start = progress_on_file_start(tx);
             add_files(
                 all_paths.clone(),
-                &paths,
+                &dvs_paths,
                 config.backend(),
                 message.clone(),
                 config.compression(),
@@ -207,7 +225,7 @@ pub(crate) fn dvs_add(
     } else {
         add_files(
             all_paths,
-            &paths,
+            &dvs_paths,
             config.backend(),
             message,
             config.compression(),
@@ -219,52 +237,70 @@ pub(crate) fn dvs_add(
     Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
 }
 
+/// Valid status filter choices for [`dvs_status`].
+///
+/// Used with `match.arg(status, several.ok = TRUE)` in the R wrapper to let
+/// users select which file statuses to include.
+#[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
+#[match_arg(rename_all = "lower")]
+pub enum StatusChoice {
+    /// Local file exists and matches stored version.
+    Current,
+    /// Metadata exists but local file is missing.
+    Absent,
+    /// Local file exists but differs from stored version.
+    Unsynced,
+}
+
+impl From<StatusChoice> for Status {
+    fn from(c: StatusChoice) -> Self {
+        match c {
+            StatusChoice::Current => Status::Current,
+            StatusChoice::Absent => Status::Absent,
+            StatusChoice::Unsynced => Status::Unsynced,
+        }
+    }
+}
+
 /// Report the sync status of DVS-managed files.
 ///
 /// Compares `.dvs` metadata files against their stored contents and local
-/// working copies. By default all files are shown; pass filter flags to
-/// restrict output.
+/// working copies. By default all statuses are shown; pass a character vector
+/// of status names (e.g. `c("current", "absent")`) to restrict output.
 ///
-/// @param files Character vector of file or directory paths to check status for.
+/// @param paths Character vector of file or directory paths to check status for.
 /// @param recursive If `TRUE`, recursively include files in subdirectories.
-/// @param current If `TRUE`, include files whose local copy matches storage.
-/// @param absent If `TRUE`, include files that exist in metadata but not locally.
-/// @param unsynced If `TRUE`, include files whose local copy differs from storage.
+/// @param status Character vector of statuses to include. Valid values are
+///   `"current"`, `"absent"`, and `"unsynced"`. When empty (default), all
+///   statuses are shown.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_status_impl")]
 pub(crate) fn dvs_status(
-    #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
-    #[miniextendr(default = "NULL")] current: Option<bool>,
-    #[miniextendr(default = "NULL")] absent: Option<bool>,
-    #[miniextendr(default = "NULL")] unsynced: Option<bool>,
+    #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
 ) -> Result<ColumnarDataFrame> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-    let paths = DvsPaths::from_cwd(&config)?;
+    let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let current = current.unwrap_or(false);
-    let absent = absent.unwrap_or(false);
-    let unsynced = unsynced.unwrap_or(false);
-    let show_all = !current && !absent && !unsynced;
+    let show_all = status.is_empty() || status.len() == StatusChoice::CHOICES.len();
 
-    let filter = if files.is_empty() {
+    let filter = if paths.is_empty() {
         None
     } else {
         Some(StatusFilter::from_user_paths(
-            files,
+            paths,
             recursive.unwrap_or(false),
-            &paths,
+            &dvs_paths,
         ))
     };
-    let mut statuses = get_status(&paths, filter.as_ref())?;
+    let mut statuses = get_status(&dvs_paths, filter.as_ref())?;
     if !show_all {
         statuses.retain(|x| match &x.detail {
-            StatusDetail::Success { status, .. } => {
-                (current && *status == Status::Current)
-                    || (absent && *status == Status::Absent)
-                    || (unsynced && *status == Status::Unsynced)
+            StatusDetail::Success { status: s, .. } => {
+                status.iter().any(|c| *s == Status::from(*c))
             }
             StatusDetail::Error { .. } => true,
         });
@@ -282,14 +318,14 @@ pub(crate) fn dvs_status(
 /// Reads `.dvs` metadata files, fetches the corresponding contents from
 /// the content-addressable store, and writes them to their original paths.
 ///
-/// @param files Character vector of `.dvs` metadata file paths to retrieve.
+/// @param paths Character vector of `.dvs` metadata file paths to retrieve.
 /// @param glob Optional glob pattern to select `.dvs` files (e.g. `"data/*.dvs"`).
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_get_impl")]
 pub(crate) fn dvs_get(
-    #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
@@ -299,7 +335,7 @@ pub(crate) fn dvs_get(
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let all_paths: Vec<_> = resolve_paths_for_get(files, glob.as_deref(), &dvs_paths)?
+    let all_paths: Vec<_> = resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths)?
         .into_iter()
         .collect();
     if all_paths.is_empty() {

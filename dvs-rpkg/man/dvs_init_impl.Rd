@@ -12,7 +12,7 @@ dvs_init_impl(
   root_dir = NULL,
   group = NULL,
   metadata_folder_name = NULL,
-  no_compression = NULL
+  compression = "zstd"
 )
 }
 \arguments{
@@ -24,7 +24,8 @@ dvs_init_impl(
 
 \item{metadata_folder_name}{Name of the metadata folder. Defaults to \code{.dvs}.}
 
-\item{no_compression}{If \code{TRUE}, disable compression for stored files.}
+\item{compression}{Compression method for stored files. One of \code{"zstd"}
+(default) or \code{"none"}.}
 }
 \description{
 Creates the \code{.dvs} metadata folder and configures storage for versioned files.
