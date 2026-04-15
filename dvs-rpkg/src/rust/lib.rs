@@ -180,10 +180,9 @@ pub(crate) fn dvs_init(
 
 /// Add files to DVS-managed storage.
 ///
-/// Hashes and copies the specified files into the content-addressable store,
-/// replacing each original with a `.dvs` metadata file.
+/// Hashes and copies the specified files into DVS storage.
 ///
-/// @param paths Character vector of file paths to add.
+/// @param paths Character vector of file paths to add to DVS storage.
 /// @param message Optional commit message describing why the files were added.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 /// @param dry_run If `TRUE`, report what would be added without modifying anything.
@@ -264,8 +263,8 @@ impl From<StatusChoice> for Status {
 
 /// Report the sync status of DVS-managed files.
 ///
-/// Compares `.dvs` metadata files against their stored contents and local
-/// working copies. By default all statuses are shown; pass a character vector
+/// Reports the sync status of DVS-managed files. By default all statuses
+/// are shown; pass a character vector
 /// of status names (e.g. `c("current", "absent")`) to restrict output.
 ///
 /// @param paths Character vector of file or directory paths to check status for.
@@ -315,11 +314,11 @@ pub(crate) fn dvs_status(
 
 /// Retrieve files from DVS storage into the working directory.
 ///
-/// Reads `.dvs` metadata files, fetches the corresponding contents from
-/// the content-addressable store, and writes them to their original paths.
+/// Fetches the specified files from DVS storage and writes them
+/// to their original paths in the working directory.
 ///
-/// @param paths Character vector of `.dvs` metadata file paths to retrieve.
-/// @param glob Optional glob pattern to select `.dvs` files (e.g. `"data/*.dvs"`).
+/// @param paths Character vector of file paths to retrieve from DVS storage.
+/// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
