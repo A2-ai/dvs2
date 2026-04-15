@@ -469,7 +469,6 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "miniextendr-api"
 version = "0.1.0"
-source = "git+https://github.com/CGMossa/miniextendr#0ff07a0f82e321776cd96b10ca7eb212eeec079d"
 dependencies = [
  "ahash",
  "linkme",
@@ -480,7 +479,6 @@ dependencies = [
 [[package]]
 name = "miniextendr-lint"
 version = "0.1.0"
-source = "git+https://github.com/CGMossa/miniextendr#0ff07a0f82e321776cd96b10ca7eb212eeec079d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -490,7 +488,6 @@ dependencies = [
 [[package]]
 name = "miniextendr-macros"
 version = "0.1.0"
-source = "git+https://github.com/CGMossa/miniextendr#0ff07a0f82e321776cd96b10ca7eb212eeec079d"
 dependencies = [
  "miniextendr-macros-core",
  "proc-macro2",
@@ -501,7 +498,6 @@ dependencies = [
 [[package]]
 name = "miniextendr-macros-core"
 version = "0.1.0"
-source = "git+https://github.com/CGMossa/miniextendr#0ff07a0f82e321776cd96b10ca7eb212eeec079d"
 dependencies = [
  "proc-macro2",
  "quote",
