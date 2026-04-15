@@ -28,19 +28,17 @@ anyhow = "1"
 [build-dependencies]
 miniextendr-lint = { version = "*" }
 
-# codegen-units = 1 ensures the entire user crate compiles into a single .o file
-# inside the staticlib archive. This is required for linkme's distributed_slice:
-# the linker only pulls archive members that resolve undefined symbols, so with
-# multiple .o files, distributed_slice entries in unreferenced .o files get dropped.
-# With a single .o, pulling in R_init_<pkg> brings everything along.
-[patch.crates-io]
-miniextendr-api = { git = "https://github.com/CGMossa/miniextendr" }
-miniextendr-macros = { git = "https://github.com/CGMossa/miniextendr" }
-miniextendr-macros-core = { git = "https://github.com/CGMossa/miniextendr" }
-miniextendr-lint = { git = "https://github.com/CGMossa/miniextendr" }
-
 [profile.dev]
 codegen-units = 1
 
 [profile.release]
 codegen-units = 1
+
+[patch]
+
+[patch.crates-io]
+dvs = { path = "../../vendor/dvs" }
+miniextendr-lint = { path = "../../vendor/miniextendr-lint" }
+miniextendr-api = { path = "../../vendor/miniextendr-api" }
+miniextendr-macros-core = { path = "../../vendor/miniextendr-macros-core" }
+miniextendr-macros = { path = "../../vendor/miniextendr-macros" }
