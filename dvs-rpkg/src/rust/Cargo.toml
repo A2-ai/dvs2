@@ -37,8 +37,8 @@ codegen-units = 1
 [patch]
 
 [patch.crates-io]
-dvs = { path = "../../vendor/dvs" }
+miniextendr-macros = { path = "../../vendor/miniextendr-macros" }
+miniextendr-api = { path = "../../vendor/miniextendr-api" }
 miniextendr-macros-core = { path = "../../vendor/miniextendr-macros-core" }
 miniextendr-lint = { path = "../../vendor/miniextendr-lint" }
-miniextendr-api = { path = "../../vendor/miniextendr-api" }
-miniextendr-macros = { path = "../../vendor/miniextendr-macros" }
+dvs = { path = "../../vendor/dvs" }
