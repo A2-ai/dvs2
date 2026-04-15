@@ -60,6 +60,7 @@ dvs_status <- function(
   status = c("current", "absent", "unsynced")
 ) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
+  status <- match.arg(status, several.ok = TRUE)
   status_data_frame <-
     dvs_status_impl(
       paths = paths,
