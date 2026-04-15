@@ -124,6 +124,16 @@ impl ProgressBarCallback {
 
 // region: DVS operations
 
+/// Valid compression choices for [`dvs_init`].
+#[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
+#[match_arg(rename_all = "lower")]
+pub enum CompressionChoice {
+    /// Compress stored files with zstd (default).
+    Zstd,
+    /// Store files without compression.
+    None,
+}
+
 /// Initialize a DVS repository in the given directory.
 ///
 /// Creates the `.dvs` metadata folder and configures storage for versioned files.
@@ -132,7 +142,8 @@ impl ProgressBarCallback {
 /// @param root_dir Repository root directory. Defaults to the current working directory.
 /// @param group Unix group name to set on stored files for shared access.
 /// @param metadata_folder_name Name of the metadata folder. Defaults to `.dvs`.
-/// @param no_compression If `TRUE`, disable compression for stored files.
+/// @param compression Compression method for stored files. One of `"zstd"`
+///   (default) or `"none"`.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_init_impl")]
 pub(crate) fn dvs_init(
@@ -140,7 +151,7 @@ pub(crate) fn dvs_init(
     #[miniextendr(default = "NULL")] root_dir: Option<PathBuf>,
     #[miniextendr(default = "NULL")] group: Option<String>,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
-    #[miniextendr(default = "NULL")] no_compression: Option<bool>,
+    #[miniextendr(match_arg, default = "\"zstd\"")] compression: CompressionChoice,
 ) -> Result<List> {
     let root_dir = match root_dir {
         Some(d) => d,
@@ -148,9 +159,10 @@ pub(crate) fn dvs_init(
     };
     let mut config = Config::new_local(&storage_path, group)?;
 
-    if no_compression == Some(true) {
-        config.set_compression(Compression::None);
-    }
+    config.set_compression(match compression {
+        CompressionChoice::Zstd => Compression::Zstd,
+        CompressionChoice::None => Compression::None,
+    });
     if let Some(m) = metadata_folder_name {
         config.set_metadata_folder_name(m);
     }

@@ -7,14 +7,15 @@ dvs_init <- function(
   root_dir = NULL,
   group = NULL,
   metadata_folder_name = NULL,
-  no_compression = NULL
+  compression = c("zstd", "none")
 ) {
+  compression <- match.arg(compression)
   dvs_init_impl(
     storage_path = storage_path,
     root_dir = root_dir,
     group = group,
     metadata_folder_name = metadata_folder_name,
-    no_compression = no_compression
+    compression = compression
   )
 }
 
