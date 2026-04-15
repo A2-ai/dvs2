@@ -134,6 +134,15 @@ pub enum CompressionChoice {
     None,
 }
 
+impl From<CompressionChoice> for Compression {
+    fn from(c: CompressionChoice) -> Self {
+        match c {
+            CompressionChoice::Zstd => Compression::Zstd,
+            CompressionChoice::None => Compression::None,
+        }
+    }
+}
+
 /// Initialize a DVS repository in the given directory.
 ///
 /// Creates the `.dvs` metadata folder and configures storage for versioned files.
@@ -159,10 +168,7 @@ pub(crate) fn dvs_init(
     };
     let mut config = Config::new_local(&storage_path, group)?;
 
-    config.set_compression(match compression {
-        CompressionChoice::Zstd => Compression::Zstd,
-        CompressionChoice::None => Compression::None,
-    });
+    config.set_compression(compression.into());
     if let Some(m) = metadata_folder_name {
         config.set_metadata_folder_name(m);
     }
@@ -246,6 +252,16 @@ pub enum StatusChoice {
     Unsynced,
 }
 
+impl From<StatusChoice> for Status {
+    fn from(c: StatusChoice) -> Self {
+        match c {
+            StatusChoice::Current => Status::Current,
+            StatusChoice::Absent => Status::Absent,
+            StatusChoice::Unsynced => Status::Unsynced,
+        }
+    }
+}
+
 /// Report the sync status of DVS-managed files.
 ///
 /// Compares `.dvs` metadata files against their stored contents and local
@@ -299,11 +315,9 @@ pub(crate) fn dvs_status(
     let mut statuses = get_status(&paths, filter.as_ref())?;
     if !show_all {
         statuses.retain(|x| match &x.detail {
-            StatusDetail::Success { status, .. } => status_choices.iter().any(|c| match c {
-                StatusChoice::Current => *status == Status::Current,
-                StatusChoice::Absent => *status == Status::Absent,
-                StatusChoice::Unsynced => *status == Status::Unsynced,
-            }),
+            StatusDetail::Success { status, .. } => {
+                status_choices.iter().any(|c| *status == Status::from(*c))
+            }
             StatusDetail::Error { .. } => true,
         });
     }
