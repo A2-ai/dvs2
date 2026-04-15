@@ -57,9 +57,10 @@ dvs_add <- function(
 dvs_status <- function(
   paths = character(0),
   recursive = NULL,
-  status = NULL
+  status = c("current", "absent", "unsynced")
 ) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
+  status <- match.arg(status, several.ok = TRUE)
   status_data_frame <-
     dvs_status_impl(
       paths = paths,
