@@ -278,33 +278,14 @@ impl From<StatusChoice> for Status {
 pub(crate) fn dvs_status(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
-    // Vec<String> rather than Vec<StatusChoice> because miniextendr's MatchArg
-    // only supports scalar match.arg — no several.ok. R wrapper validates with
-    // match.arg(status, several.ok = TRUE); Rust converts via from_choice().
-    #[miniextendr(default = "character(0)")] status: Vec<String>,
+    #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
 ) -> Result<ColumnarDataFrame> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let paths = DvsPaths::from_cwd(&config)?;
 
-    let status_choices: Vec<StatusChoice> = status
-        .iter()
-        .map(|s| {
-            StatusChoice::from_choice(s).ok_or_else(|| {
-                anyhow!(
-                    "'status' should be one of {}, got {:?}",
-                    StatusChoice::CHOICES
-                        .iter()
-                        .map(|c| format!("{:?}", c))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    s
-                )
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let show_all = status_choices.is_empty() || status_choices.len() == StatusChoice::CHOICES.len();
+    let show_all = status.is_empty() || status.len() == StatusChoice::CHOICES.len();
 
     let filter = if files.is_empty() {
         None
@@ -318,8 +299,8 @@ pub(crate) fn dvs_status(
     let mut statuses = get_status(&paths, filter.as_ref())?;
     if !show_all {
         statuses.retain(|x| match &x.detail {
-            StatusDetail::Success { status, .. } => {
-                status_choices.iter().any(|c| *status == Status::from(*c))
+            StatusDetail::Success { status: s, .. } => {
+                status.iter().any(|c| *s == Status::from(*c))
             }
             StatusDetail::Error { .. } => true,
         });
