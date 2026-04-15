@@ -87,7 +87,7 @@ Rscript --vanilla -e '
 library(dvs)
 dvs_init("'"$DVS_STORAGE_R_2"'")
 cat("\n>>> dvs_add (1 x 500MB):\n")
-system.time(dvs_add(files = "data/derived/file_1.bin"))
+system.time(dvs_add(paths = "data/derived/file_1.bin"))
 '
 
 printf '\n--- RPKG GET: 1 x 500MB ---\n'
@@ -96,7 +96,7 @@ cd "$DVS_REPO_R_2"
 Rscript --vanilla -e '
 library(dvs)
 cat("\n>>> dvs_get (1 x 500MB):\n")
-system.time(dvs_get(files = "data/derived/file_1.bin"))
+system.time(dvs_get(paths = "data/derived/file_1.bin"))
 '
 
 printf '\n\n========================================\n  DONE\n========================================\n'

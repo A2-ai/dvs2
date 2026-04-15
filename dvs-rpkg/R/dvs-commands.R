@@ -23,7 +23,7 @@ dvs_init <- function(
 #' @rdname dvs_add
 #' @export
 dvs_add <- function(
-  files = character(0),
+  paths = character(0),
   message = NULL,
   glob = NULL,
   dry_run = NULL
@@ -35,7 +35,7 @@ dvs_add <- function(
   }
 
   result <- dvs_add_impl(
-    files = files,
+    paths = paths,
     message = message,
     glob = glob,
     dry_run = dry_run,
@@ -55,14 +55,15 @@ dvs_add <- function(
 #'
 #' @export
 dvs_status <- function(
-  files = character(0),
+  paths = character(0),
   recursive = NULL,
-  status = NULL
+  status = c("current", "absent", "unsynced")
 ) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
+  status <- match.arg(status, several.ok = TRUE)
   status_data_frame <-
     dvs_status_impl(
-      files = files,
+      paths = paths,
       recursive = recursive,
       status = status
     )
@@ -76,7 +77,7 @@ dvs_status <- function(
 #' @inherit dvs_get_impl title description params
 #' @rdname dvs_get
 #' @export
-dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
+dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   progress_callback <- NULL
   if (!isTRUE(dry_run)) {
@@ -84,7 +85,7 @@ dvs_get <- function(files = character(0), glob = NULL, dry_run = NULL) {
   }
 
   get_data_frame <- dvs_get_impl(
-    files = files,
+    paths = paths,
     glob = glob,
     dry_run = dry_run,
     progress_callback = progress_callback

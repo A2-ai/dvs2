@@ -183,7 +183,7 @@ pub(crate) fn dvs_init(
 /// Hashes and copies the specified files into the content-addressable store,
 /// replacing each original with a `.dvs` metadata file.
 ///
-/// @param files Character vector of file paths to add.
+/// @param paths Character vector of file paths to add.
 /// @param message Optional commit message describing why the files were added.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 /// @param dry_run If `TRUE`, report what would be added without modifying anything.
@@ -191,7 +191,7 @@ pub(crate) fn dvs_init(
 /// @keywords internal
 #[miniextendr(r_name = "dvs_add_impl")]
 pub(crate) fn dvs_add(
-    #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] message: Option<String>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
@@ -199,9 +199,9 @@ pub(crate) fn dvs_add(
 ) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-    let paths = DvsPaths::from_cwd(&config)?;
+    let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let all_paths: Vec<_> = resolve_paths_for_add(files, glob.as_deref(), &paths)?
+    let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
         .into_iter()
         .collect();
     if all_paths.is_empty() {
@@ -214,7 +214,7 @@ pub(crate) fn dvs_add(
             let on_file_start = progress_on_file_start(tx);
             add_files(
                 all_paths.clone(),
-                &paths,
+                &dvs_paths,
                 config.backend(),
                 message.clone(),
                 config.compression(),
@@ -225,7 +225,7 @@ pub(crate) fn dvs_add(
     } else {
         add_files(
             all_paths,
-            &paths,
+            &dvs_paths,
             config.backend(),
             message,
             config.compression(),
@@ -268,7 +268,7 @@ impl From<StatusChoice> for Status {
 /// working copies. By default all statuses are shown; pass a character vector
 /// of status names (e.g. `c("current", "absent")`) to restrict output.
 ///
-/// @param files Character vector of file or directory paths to check status for.
+/// @param paths Character vector of file or directory paths to check status for.
 /// @param recursive If `TRUE`, recursively include files in subdirectories.
 /// @param status Character vector of statuses to include. Valid values are
 ///   `"current"`, `"absent"`, and `"unsynced"`. When empty (default), all
@@ -276,27 +276,27 @@ impl From<StatusChoice> for Status {
 /// @keywords internal
 #[miniextendr(r_name = "dvs_status_impl")]
 pub(crate) fn dvs_status(
-    #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
     #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
 ) -> Result<ColumnarDataFrame> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-    let paths = DvsPaths::from_cwd(&config)?;
+    let dvs_paths = DvsPaths::from_cwd(&config)?;
 
     let show_all = status.is_empty() || status.len() == StatusChoice::CHOICES.len();
 
-    let filter = if files.is_empty() {
+    let filter = if paths.is_empty() {
         None
     } else {
         Some(StatusFilter::from_user_paths(
-            files,
+            paths,
             recursive.unwrap_or(false),
-            &paths,
+            &dvs_paths,
         ))
     };
-    let mut statuses = get_status(&paths, filter.as_ref())?;
+    let mut statuses = get_status(&dvs_paths, filter.as_ref())?;
     if !show_all {
         statuses.retain(|x| match &x.detail {
             StatusDetail::Success { status: s, .. } => {
@@ -318,14 +318,14 @@ pub(crate) fn dvs_status(
 /// Reads `.dvs` metadata files, fetches the corresponding contents from
 /// the content-addressable store, and writes them to their original paths.
 ///
-/// @param files Character vector of `.dvs` metadata file paths to retrieve.
+/// @param paths Character vector of `.dvs` metadata file paths to retrieve.
 /// @param glob Optional glob pattern to select `.dvs` files (e.g. `"data/*.dvs"`).
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_get_impl")]
 pub(crate) fn dvs_get(
-    #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
@@ -335,7 +335,7 @@ pub(crate) fn dvs_get(
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let all_paths: Vec<_> = resolve_paths_for_get(files, glob.as_deref(), &dvs_paths)?
+    let all_paths: Vec<_> = resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths)?
         .into_iter()
         .collect();
     if all_paths.is_empty() {
