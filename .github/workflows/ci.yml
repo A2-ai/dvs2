@@ -84,9 +84,16 @@ jobs:
       - name: run tests
         run: cargo test --all --all-features
 
-      - name: check rpkg
+      - name: check rpkg (unix)
+        if: runner.os != 'Windows'
         run: |
+          R_HOME=/tmp cargo check --manifest-path dvs-rpkg/src/rust/Cargo.toml
+          R_HOME=/tmp cargo check --manifest-path dvs-rpkg/src/rust/Cargo.toml --all-features
+
+      - name: check rpkg (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:R_HOME = (R RHOME).Trim()
           cargo check --manifest-path dvs-rpkg/src/rust/Cargo.toml
           cargo check --manifest-path dvs-rpkg/src/rust/Cargo.toml --all-features
-        env:
-          R_HOME: /tmp
