@@ -47,9 +47,22 @@ jobs:
           path: dvs-rpkg/vendor
           key: ${{ runner.os }}-rpkg-vendor-${{ hashFiles('dvs-rpkg/inst/vendor.tar.xz') }}
 
-      - name: unpack rpkg vendor tarball
-        if: steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
-        run: tar -xJf dvs-rpkg/inst/vendor.tar.xz -C dvs-rpkg
+      - name: unpack rpkg vendor tarball (unix)
+        if: runner.os != 'Windows' && steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
+        run: |
+          start=$(date +%s)
+          tar -xJf dvs-rpkg/inst/vendor.tar.xz -C dvs-rpkg
+          end=$(date +%s)
+          echo "vendor unpack took $((end - start))s"
+
+      - name: unpack rpkg vendor tarball (windows)
+        if: runner.os == 'Windows' && steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $start = Get-Date
+          7z x dvs-rpkg/inst/vendor.tar.xz -so | 7z x -si -ttar -odvs-rpkg -aoa
+          $elapsed = ((Get-Date) - $start).TotalSeconds
+          Write-Host ("vendor unpack took {0:N1}s" -f $elapsed)
 
       - name: save rpkg vendor directory
         if: steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
