@@ -278,6 +278,9 @@ impl From<StatusChoice> for Status {
 pub(crate) fn dvs_status(
     #[miniextendr(default = "character(0)")] files: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
+    // Vec<String> rather than Vec<StatusChoice> because miniextendr's MatchArg
+    // only supports scalar match.arg — no several.ok. R wrapper validates with
+    // match.arg(status, several.ok = TRUE); Rust converts via from_choice().
     #[miniextendr(default = "character(0)")] status: Vec<String>,
 ) -> Result<ColumnarDataFrame> {
     let current_dir = std::env::current_dir()?;

@@ -162,7 +162,16 @@ library(dvs)
 dvs_status(files = "data/", recursive = TRUE, status = "absent")
 EOF
 
-# ── 8. Multiple paths ──
+# ── 8. Status: multiple status values (several.ok) ──
+
+echo "=== R: dvs_status(status = c('current', 'absent')) ==="
+cd "$DVS_REPO_RPKG"
+print_eval_rscript <<EOF
+library(dvs)
+dvs_status(status = c("current", "absent"))
+EOF
+
+# ── 9. Multiple paths ──
 
 echo "=== CLI: dvs status data/raw/file_1.bin models/ ==="
 cd "$DVS_REPO_CLI"
