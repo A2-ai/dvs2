@@ -371,4 +371,12 @@ pub(crate) fn dvs_set_threads(#[miniextendr(default = "NULL")] threads: Option<u
     set_num_threads(threads.unwrap_or(0));
 }
 
+/// Format a byte count as a human-readable size string.
+///
+/// @param size_bytes non-negative integer representing file sizes in bytes.
+#[miniextendr]
+pub fn format_byte_size(size_bytes: u64) -> String {
+    dvs::format_size(size_bytes)
+}
+
 miniextendr_api::miniextendr_init!(dvs);
