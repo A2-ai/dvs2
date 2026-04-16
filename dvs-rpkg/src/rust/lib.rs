@@ -154,7 +154,7 @@ impl From<CompressionChoice> for Compression {
 /// @param compression Compression method for stored files. One of `"zstd"`
 ///   (default) or `"none"`.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_init_impl")]
+#[miniextendr(r_name = "dvs_init_impl", invisible)]
 pub(crate) fn dvs_init(
     storage_path: PathBuf,
     #[miniextendr(default = "NULL")] root_dir: Option<PathBuf>,
@@ -369,6 +369,20 @@ pub(crate) fn dvs_get(
 #[miniextendr(r_name = "dvs_set_threads_impl")]
 pub(crate) fn dvs_set_threads(#[miniextendr(default = "NULL")] threads: Option<usize>) {
     set_num_threads(threads.unwrap_or(0));
+}
+
+/// Format a byte count as a human-readable size string.
+///
+/// @param size_bytes non-negative integer representing file sizes in bytes.
+#[miniextendr]
+pub fn format_byte_size(size_bytes: u64) -> String {
+    dvs::format_size(size_bytes)
+}
+
+/// Version of the bundled DVS Rust core crate.
+#[miniextendr]
+pub fn dvs_version() -> String {
+    dvs::VERSION.to_string()
 }
 
 miniextendr_api::miniextendr_init!(dvs);
