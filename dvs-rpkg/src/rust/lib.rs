@@ -379,4 +379,10 @@ pub fn format_byte_size(size_bytes: u64) -> String {
     dvs::format_size(size_bytes)
 }
 
+/// Version of the bundled DVS Rust core crate.
+#[miniextendr]
+pub fn dvs_version() -> String {
+    dvs::VERSION.to_string()
+}
+
 miniextendr_api::miniextendr_init!(dvs);
