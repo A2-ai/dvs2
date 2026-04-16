@@ -166,7 +166,7 @@ dvs_init_impl <- function(storage_path, root_dir = NULL, group = NULL, metadata_
       list(message = .val$error, call = .val$call %||% sys.call(), kind = .val$kind)
     ))
   }
-  .val
+  invisible(.val)
 }
 
 # Generated from Rust fn `dvs_status` (lib.rs:277:15)

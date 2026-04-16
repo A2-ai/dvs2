@@ -154,7 +154,7 @@ impl From<CompressionChoice> for Compression {
 /// @param compression Compression method for stored files. One of `"zstd"`
 ///   (default) or `"none"`.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_init_impl")]
+#[miniextendr(r_name = "dvs_init_impl", invisible)]
 pub(crate) fn dvs_init(
     storage_path: PathBuf,
     #[miniextendr(default = "NULL")] root_dir: Option<PathBuf>,
