@@ -23,6 +23,8 @@ pub use paths::{AddPathStatus, DvsPaths, find_repo_root};
 pub use progress::FileProgress;
 pub use utils::{format_size, set_num_threads};
 
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[cfg(test)]
 pub mod testutil {
     use crate::config::Config;
