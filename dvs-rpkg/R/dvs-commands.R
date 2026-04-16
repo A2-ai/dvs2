@@ -42,6 +42,14 @@ dvs_add <- function(
     progress_callback = progress_callback
   )
 
+  result$size <- structure(
+    result$size, class = "dvs_bytes"
+  )
+  result$stored_size <- structure(
+    result$stored_size, class = "dvs_bytes"
+  )
+
+
   if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(result)
   } else {

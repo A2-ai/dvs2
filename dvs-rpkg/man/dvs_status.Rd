@@ -20,5 +20,5 @@ dvs_status(
 statuses are shown.}
 }
 \description{
-Compares \code{.dvs} metadata files against their stored contents and local working copies. By default all statuses are shown; pass a character vector of status names (e.g. \code{c("current", "absent")}) to restrict output.
+Reports the sync status of DVS-managed files. By default all statuses are shown; pass a character vector of status names (e.g. \code{c("current", "absent")}) to restrict output.
 }
