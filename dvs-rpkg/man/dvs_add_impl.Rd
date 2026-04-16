@@ -16,7 +16,7 @@ dvs_add_impl(
 )
 }
 \arguments{
-\item{paths}{Character vector of file paths to add.}
+\item{paths}{Character vector of file paths to add to DVS storage.}
 
 \item{message}{Optional commit message describing why the files were added.}
 
@@ -27,6 +27,6 @@ dvs_add_impl(
 \item{progress_callback}{Optional handle to enable progress bar display.}
 }
 \description{
-Hashes and copies the specified files into the content-addressable store, replacing each original with a \code{.dvs} metadata file.
+Hashes and copies the specified files into DVS storage.
 }
 \keyword{internal}

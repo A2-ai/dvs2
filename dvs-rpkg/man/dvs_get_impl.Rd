@@ -15,15 +15,15 @@ dvs_get_impl(
 )
 }
 \arguments{
-\item{paths}{Character vector of \code{.dvs} metadata file paths to retrieve.}
+\item{paths}{Character vector of file paths to retrieve from DVS storage.}
 
-\item{glob}{Optional glob pattern to select \code{.dvs} files (e.g. \code{"data/*.dvs"}).}
+\item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).}
 
 \item{dry_run}{If \code{TRUE}, report what would be retrieved without writing files.}
 
 \item{progress_callback}{Optional handle to enable progress bar display.}
 }
 \description{
-Reads \code{.dvs} metadata files, fetches the corresponding contents from the content-addressable store, and writes them to their original paths.
+Fetches the specified files from DVS storage and writes them to their original paths in the working directory.
 }
 \keyword{internal}
