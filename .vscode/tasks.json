@@ -1,0 +1,529 @@
+{
+  "version": "2.0.0",
+  "presentation": {
+    "reveal": "always",
+    "panel": "dedicated",
+    "clear": true,
+    "showReuseMessage": false
+  },
+  "tasks": [
+    {
+      "label": "just: default",
+      "type": "shell",
+      "command": "rtk just default",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "group": "utility"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: datasets",
+      "type": "shell",
+      "command": "rtk just datasets",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "group": "utility"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: build",
+      "type": "shell",
+      "command": "rtk just build ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "detail": "just build",
+      "presentation": {
+        "group": "rust-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: build-release",
+      "type": "shell",
+      "command": "rtk just build-release ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just build-release",
+      "presentation": {
+        "group": "rust-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: test",
+      "type": "shell",
+      "command": "rtk just test ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "detail": "just test",
+      "presentation": {
+        "group": "rust-test"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: clippy",
+      "type": "shell",
+      "command": "rtk just clippy ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just clippy",
+      "presentation": {
+        "group": "rust-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: fmt",
+      "type": "shell",
+      "command": "rtk just fmt ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just fmt",
+      "presentation": {
+        "group": "rust-build"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: check",
+      "type": "shell",
+      "command": "rtk just check ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just check",
+      "presentation": {
+        "group": "rust-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: doc",
+      "type": "shell",
+      "command": "rtk just doc ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just doc",
+      "presentation": {
+        "group": "rust-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: check-std-fs",
+      "type": "shell",
+      "command": "rtk just check-std-fs",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "group": "utility"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: install-cli",
+      "type": "shell",
+      "command": "rtk just install-cli ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just install-cli",
+      "presentation": {
+        "group": "rust-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: rpkg-configure",
+      "type": "shell",
+      "command": "rtk just rpkg-configure",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: rpkg-build",
+      "type": "shell",
+      "command": "rtk just rpkg-build ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just rpkg-build",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: rpkg-build-release",
+      "type": "shell",
+      "command": "rtk just rpkg-build-release ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just rpkg-build-release",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: rpkg-test",
+      "type": "shell",
+      "command": "rtk just rpkg-test ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "detail": "just rpkg-test",
+      "presentation": {
+        "group": "rpkg-test"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: rpkg-clippy",
+      "type": "shell",
+      "command": "rtk just rpkg-clippy ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just rpkg-clippy",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: rpkg-check",
+      "type": "shell",
+      "command": "rtk just rpkg-check ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just rpkg-check",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: rpkg-fmt",
+      "type": "shell",
+      "command": "rtk just rpkg-fmt ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just rpkg-fmt",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: rpkg-update",
+      "type": "shell",
+      "command": "rtk just rpkg-update ${input:justArgs}",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just rpkg-update",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: rpkg-document",
+      "type": "shell",
+      "command": "rtk just rpkg-document",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just rpkg-document",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: rpkg-install",
+      "type": "shell",
+      "command": "rtk just rpkg-install",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just rpkg-install",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: install-rpkg",
+      "type": "shell",
+      "command": "rtk just install-rpkg",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just install-rpkg",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: install-revendor",
+      "type": "shell",
+      "command": "rtk just install-revendor",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just install-revendor",
+      "presentation": {
+        "group": "vendor"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: vendor",
+      "type": "shell",
+      "command": "rtk just vendor",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just vendor",
+      "presentation": {
+        "group": "vendor"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: vendor-lib",
+      "type": "shell",
+      "command": "rtk just vendor-lib \"${input:vendorLibCrate}\" \"${input:vendorLibDevPath}\"",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just vendor-lib <crate> <dev_path>",
+      "presentation": {
+        "group": "vendor"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: build-all",
+      "type": "shell",
+      "command": "rtk just build-all",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just build-all",
+      "presentation": {
+        "group": "rust-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: test-all",
+      "type": "shell",
+      "command": "rtk just test-all",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "detail": "just test-all",
+      "presentation": {
+        "group": "rust-test"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: check-all",
+      "type": "shell",
+      "command": "rtk just check-all",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just check-all",
+      "presentation": {
+        "group": "rust-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: clippy-all",
+      "type": "shell",
+      "command": "rtk just clippy-all",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just clippy-all",
+      "presentation": {
+        "group": "rust-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: fmt-all",
+      "type": "shell",
+      "command": "rtk just fmt-all",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just fmt-all",
+      "presentation": {
+        "group": "rust-build"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: fmt-check",
+      "type": "shell",
+      "command": "rtk just fmt-check",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just fmt-check",
+      "presentation": {
+        "group": "rust-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: rpkg-bindgen-cli",
+      "type": "shell",
+      "command": "rtk just rpkg-bindgen-cli",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "just rpkg-bindgen-cli",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: ci",
+      "type": "shell",
+      "command": "rtk just ci",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "detail": "just ci",
+      "presentation": {
+        "group": "rust-test"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "justArgs",
+      "type": "promptString",
+      "description": "Optional extra arguments to pass to the just recipe",
+      "default": ""
+    },
+    {
+      "id": "vendorLibCrate",
+      "type": "promptString",
+      "description": "Crate name to vendor for the R package"
+    },
+    {
+      "id": "vendorLibDevPath",
+      "type": "promptString",
+      "description": "Development path to the monorepo crate"
+    }
+  ]
+}
