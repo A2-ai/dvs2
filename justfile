@@ -94,6 +94,10 @@ install-revendor:
 
 # Vendor all dependencies for offline/CRAN builds
 # Vendors deps, strips fat, freezes manifest, compresses into inst/vendor.tar.xz
+#
+# --force bypasses cargo-revendor's cache: source-only edits to workspace
+# crates leave Cargo.lock untouched, so without --force the cache check
+# skips re-vendoring and ships a stale tarball.
 vendor:
     cargo revendor \
       --manifest-path {{rpkg_dir}}/src/rust/Cargo.toml \
@@ -103,6 +107,7 @@ vendor:
       --compress {{rpkg_dir}}/inst/vendor.tar.xz \
       --blank-md \
       --source-marker \
+      --force \
       -v
 
 # Vendor monorepo library crates for CRAN (use_vendor_lib)
