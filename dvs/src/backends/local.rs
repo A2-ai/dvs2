@@ -4,7 +4,9 @@ use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
+#[cfg(unix)]
+use anyhow::anyhow;
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 
