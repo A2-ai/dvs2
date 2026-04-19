@@ -1,4 +1,4 @@
-AC_INIT([dvs], [1.0])
+AC_INIT([dvs], [0.1.0])
 
 dnl Use tools/ directory for auxiliary build files (config.guess, config.sub)
 dnl This avoids the CRAN NOTE about non-standard top-level files
@@ -53,29 +53,31 @@ AC_SUBST([NOT_CRAN])
 
 dnl Set cargo features flag
 dnl
-dnl Users can enable optional features via DVS_FEATURES environment variable.
+dnl Users can enable optional features via CARGO_FEATURES environment variable.
 dnl By default, no extra features are enabled.
 dnl
 dnl Note: 'nonapi' feature causes R CMD check warnings/errors (non-API calls).
 dnl Only enable when you specifically need those features and understand the risks.
-AC_ARG_VAR([DVS_FEATURES], [Comma-separated cargo features to enable (e.g., "nonapi,rayon")])
+AC_ARG_VAR([CARGO_FEATURES], [Comma-separated cargo features to enable (e.g., "nonapi,rayon")])
 
 dnl Default: no extra features enabled
-dnl Users can set DVS_FEATURES to enable specific features
-if test -z "${DVS_FEATURES+x}"; then
-  dnl DVS_FEATURES not set - auto-detect via R script if available
+dnl Users can set CARGO_FEATURES to enable specific features
+if test -z "${CARGO_FEATURES+x}"; then
+  dnl CARGO_FEATURES not set - auto-detect via R script if available
   if test -f "${srcdir}/tools/detect-features.R"; then
-    DVS_FEATURES=$("${R_HOME}/bin/Rscript" "${srcdir}/tools/detect-features.R" 2>/dev/null || echo "")
-    if test -n "$DVS_FEATURES"; then
-      AC_MSG_NOTICE([Auto-detected features: $DVS_FEATURES])
+    CARGO_FEATURES=$("${R_HOME}/bin/Rscript" "${srcdir}/tools/detect-features.R" 2>/dev/null || echo "")
+    if test -n "$CARGO_FEATURES"; then
+      AC_MSG_NOTICE([Auto-detected features: $CARGO_FEATURES])
     fi
   else
-    DVS_FEATURES=""
+    AC_MSG_NOTICE([tools/detect-features.R not found — building with no extra cargo features])
+    AC_MSG_NOTICE([  If your crate uses optional dependencies, set CARGO_FEATURES explicitly])
+    CARGO_FEATURES=""
   fi
 fi
 
-if test -n "$DVS_FEATURES"; then
-  CARGO_FEATURES_FLAG="--features=$DVS_FEATURES"
+if test -n "$CARGO_FEATURES"; then
+  CARGO_FEATURES_FLAG="--features=$CARGO_FEATURES"
 else
   CARGO_FEATURES_FLAG=""
 fi
@@ -227,8 +229,8 @@ AS_IF([test -n "$RUST_TOOLCHAIN"],
       [AC_MSG_NOTICE([RUST_TOOLCHAIN        = $RUST_TOOLCHAIN])])
 AS_IF([test -n "$CARGO_BUILD_TARGET"],
       [AC_MSG_NOTICE([CARGO_BUILD_TARGET    = $CARGO_BUILD_TARGET])])
-AS_IF([test -n "$DVS_FEATURES"],
-      [AC_MSG_NOTICE([DVS_FEATURES  = $DVS_FEATURES])])
+AS_IF([test -n "$CARGO_FEATURES"],
+      [AC_MSG_NOTICE([CARGO_FEATURES  = $CARGO_FEATURES])])
 
 dnl ---- package name → Rust-safe variants ----
 dnl Use PACKAGE_NAME (case-preserving) not PACKAGE_TARNAME (lowercased)
@@ -254,6 +256,14 @@ case "$host_os" in
 esac
 AC_SUBST([CDYLIB_PREFIX])
 AC_SUBST([CDYLIB_EXT])
+
+dnl ---- Native R package include paths (for bindgen C shim compilation) ----
+dnl Populated by minirextendr::use_native_package(). Each native package
+dnl adds -I<path> for its inst/include/ headers so the C compiler can
+dnl find them when compiling bindgen-generated static inline wrappers.
+NATIVE_PKG_CPPFLAGS=""
+dnl MINIREXTENDR: native-pkg-cppflags insertion marker
+AC_SUBST([NATIVE_PKG_CPPFLAGS])
 
 AC_CONFIG_SRCDIR([src/rust/lib.rs])  dnl safety check
 
@@ -295,7 +305,7 @@ AS_MKDIR_P([src/rust/.cargo])
 AC_CONFIG_FILES([
   src/rust/.cargo/config.toml:src/rust/cargo-config.toml.in
   src/Makevars:src/Makevars.in
-  src/dvs-win.def:src/win.def.in
+  src/$PACKAGE_NAME-win.def:src/win.def.in
 ])
 
 dnl 1) Remove cargo config in dev mode, or augment for CRAN mode
@@ -321,20 +331,9 @@ AC_CONFIG_COMMANDS([dev-cargo-config],
         echo "configure: added source replacement for git dep: $_url"
       fi
     done
-    dnl CRAN mode: rewrite external path deps in Cargo.toml to point to vendor/
-    _cargo_toml="src/rust/Cargo.toml"
-    for _path in $("$SED" -n 's/.*path = "\(\.\.\/@<:@^"@:>@*\)".*/\1/p' "$_cargo_toml" | sort -u); do
-      _escaped_path=$(echo "$_path" | "$SED" 's/\//\\\//g')
-      _name=$("$SED" -n "s/^\(@<:@A-Za-z0-9_-@:>@*\).*path = \"${_escaped_path}\".*/\1/p" "$_cargo_toml" | head -1)
-      if test -n "$_name" && test -d "$VENDOR_OUT/$_name"; then
-        _vendor_rel="../../vendor/$_name"
-        "$SED" -i.bak "s|path = \"$_path\"|path = \"$_vendor_rel\"|" "$_cargo_toml" && rm -f "$_cargo_toml.bak"
-        echo "configure: rewrote path dep: $_path -> $_vendor_rel"
-      fi
-    done
   fi
 ],
-[NOT_CRAN="$NOT_CRAN" SED="$SED" VENDOR_OUT="$VENDOR_OUT" VENDOR_OUT_CARGO="$VENDOR_OUT_CARGO"])
+[NOT_CRAN="$NOT_CRAN" SED="$SED"])
 
 dnl ---- AC_CONFIG_COMMANDS run after AC_CONFIG_FILES generates files ----
 dnl Order matters: lockfile-compat, then cargo-vendor, then post-vendor
@@ -412,12 +411,28 @@ AC_CONFIG_COMMANDS([cargo-vendor],
   fi
 
   if test "$NOT_CRAN" = "true"; then
-    if test "$FORCE_VENDOR" = "1"; then
-      echo "configure: FORCE_VENDOR — running cargo revendor"
+    dnl Auto-detect monorepo root (walk up from package directory)
+    _monorepo_root=""
+    _probe="$abs_rpkg_dir"
+    for _i in 1 2 3 4 5; do
+      _probe="$(dirname "$_probe")"
+      if test "$_probe" = "/" || test "$_probe" = "."; then break; fi
+      if test -f "$_probe/miniextendr-api/Cargo.toml"; then
+        _monorepo_root="$_probe"
+        break
+      fi
+    done
+
+    if test "$FORCE_VENDOR" = "1" || test -n "$_monorepo_root"; then
+      if test -n "$_monorepo_root"; then
+        echo "configure: dev mode — syncing vendor/ from monorepo at $_monorepo_root"
+      else
+        echo "configure: FORCE_VENDOR — running cargo revendor"
+      fi
       if command -v cargo-revendor >/dev/null 2>&1; then
         _source_root=""
-        if test -n "$MINIEXTENDR_LOCAL" && test -d "$MINIEXTENDR_LOCAL"; then
-          _source_root="--source-root $MINIEXTENDR_LOCAL"
+        if test -n "$_monorepo_root"; then
+          _source_root="--source-root $_monorepo_root"
         fi
         cargo revendor \
           --manifest-path src/rust/Cargo.toml \
@@ -430,24 +445,7 @@ AC_CONFIG_COMMANDS([cargo-vendor],
         }
       else
         echo "configure: error: cargo-revendor not found" >&2
-        echo "configure:        Install: cargo install --git https://github.com/CGMossa/miniextendr cargo-revendor" >&2
-        exit 1
-      fi
-    elif test -n "$MINIEXTENDR_LOCAL" && test -d "$MINIEXTENDR_LOCAL"; then
-      echo "configure: dev mode — syncing vendor/ from MINIEXTENDR_LOCAL=$MINIEXTENDR_LOCAL"
-      if command -v cargo-revendor >/dev/null 2>&1; then
-        cargo revendor \
-          --manifest-path src/rust/Cargo.toml \
-          --output "$VENDOR_OUT" \
-          --strip-all \
-          --source-marker \
-          --source-root "$MINIEXTENDR_LOCAL" -v || {
-          echo "configure: error: cargo revendor failed" >&2
-          exit 1
-        }
-      else
-        echo "configure: error: cargo-revendor not found" >&2
-        echo "configure:        Install: cargo install --git https://github.com/CGMossa/miniextendr cargo-revendor" >&2
+        echo "configure:        Install: cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor" >&2
         exit 1
       fi
     else
@@ -458,13 +456,13 @@ AC_CONFIG_COMMANDS([cargo-vendor],
     if test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
       echo "configure: error: CRAN build requires vendored sources." >&2
       echo "configure:        Run 'just vendor' to vendor deps." >&2
-      echo "configure:        Requires cargo-revendor: cargo install --git https://github.com/CGMossa/miniextendr cargo-revendor" >&2
+      echo "configure:        Requires cargo-revendor: cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor" >&2
       exit 1
     fi
     echo "configure: CRAN build — vendor ready"
   fi
 ],
-[NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" SED="$SED" FORCE_VENDOR="$FORCE_VENDOR" CARGO_CMD="$CARGO_CMD" MINIEXTENDR_LOCAL="$MINIEXTENDR_LOCAL" R_HOME="$R_HOME" TAR_FORCE_LOCAL="$TAR_FORCE_LOCAL"])
+[NOT_CRAN="$NOT_CRAN" VENDOR_OUT="$VENDOR_OUT" abs_rpkg_src="$abs_rpkg_src" abs_rpkg_dir="$abs_top_srcdir" SED="$SED" FORCE_VENDOR="$FORCE_VENDOR" CARGO_CMD="$CARGO_CMD" R_HOME="$R_HOME" TAR_FORCE_LOCAL="$TAR_FORCE_LOCAL"])
 
 dnl 4) Post-vendor tasks: ensure Cargo.lock exists, touch Cargo.toml to force rebuild
 AC_CONFIG_COMMANDS([post-vendor],
@@ -493,6 +491,6 @@ dnl NOTE: vendor.tar.xz is NOT created by configure. It is the canonical
 dnl offline artifact produced by `just vendor` (cargo revendor --compress).
 dnl A previous repack step here silently created stale tarballs that could
 dnl disagree with Cargo.lock, and also embedded macOS xattr metadata that
-dnl caused warnings on Linux. See CGMossa/miniextendr#157, #158.
+dnl caused warnings on Linux. See #157, #158.
 
 AC_OUTPUT

@@ -90,7 +90,7 @@ alias install-rpkg := rpkg-install
 
 # Install cargo-revendor (required for vendoring)
 install-revendor:
-    cargo install --git https://github.com/CGMossa/miniextendr cargo-revendor
+    cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor
 
 # Vendor all dependencies for offline/CRAN builds
 # Vendors deps, strips fat, freezes manifest, compresses into inst/vendor.tar.xz

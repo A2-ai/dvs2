@@ -96,7 +96,7 @@ The build uses autoconf (`configure.ac`) + Cargo with two modes:
 
 ### Key Dependencies
 
-- **miniextendr** (git: CGMossa/miniextendr) — Rust-to-R FFI framework with serde support
+- **miniextendr** (git: A2-ai/miniextendr) — Rust-to-R FFI framework with serde support
 - **dvs** (path: `../dvs`) — core DVS library (patched in Cargo.toml)
 - **R imports**: jsonlite
 - **Rust requires**: rustc >= 1.85.0
