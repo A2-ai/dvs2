@@ -430,7 +430,7 @@ AC_CONFIG_COMMANDS([cargo-vendor],
         }
       else
         echo "configure: error: cargo-revendor not found" >&2
-        echo "configure:        Install: cargo install --git https://github.com/CGMossa/miniextendr cargo-revendor" >&2
+        echo "configure:        Install: cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor" >&2
         exit 1
       fi
     elif test -n "$MINIEXTENDR_LOCAL" && test -d "$MINIEXTENDR_LOCAL"; then
@@ -447,7 +447,7 @@ AC_CONFIG_COMMANDS([cargo-vendor],
         }
       else
         echo "configure: error: cargo-revendor not found" >&2
-        echo "configure:        Install: cargo install --git https://github.com/CGMossa/miniextendr cargo-revendor" >&2
+        echo "configure:        Install: cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor" >&2
         exit 1
       fi
     else
@@ -458,7 +458,7 @@ AC_CONFIG_COMMANDS([cargo-vendor],
     if test ! -d "$VENDOR_OUT" || test -z "`ls -A \"$VENDOR_OUT\" 2>/dev/null`"; then
       echo "configure: error: CRAN build requires vendored sources." >&2
       echo "configure:        Run 'just vendor' to vendor deps." >&2
-      echo "configure:        Requires cargo-revendor: cargo install --git https://github.com/CGMossa/miniextendr cargo-revendor" >&2
+      echo "configure:        Requires cargo-revendor: cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor" >&2
       exit 1
     fi
     echo "configure: CRAN build — vendor ready"
@@ -493,6 +493,6 @@ dnl NOTE: vendor.tar.xz is NOT created by configure. It is the canonical
 dnl offline artifact produced by `just vendor` (cargo revendor --compress).
 dnl A previous repack step here silently created stale tarballs that could
 dnl disagree with Cargo.lock, and also embedded macOS xattr metadata that
-dnl caused warnings on Linux. See CGMossa/miniextendr#157, #158.
+dnl caused warnings on Linux. See A2-ai/miniextendr#157, #158.
 
 AC_OUTPUT
