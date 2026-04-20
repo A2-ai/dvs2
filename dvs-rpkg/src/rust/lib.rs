@@ -1,7 +1,8 @@
 //! dvs-rpkg: Data Version Control System R Bindings
 //!
 //! This crate provides R bindings for the DVS (Data Version Control System).
-//! Results are returned as JSON strings for efficient parsing in R.
+//! Results are returned as R DataFrames (and Lists) via miniextendr's
+//! `AsSerializeRow` / `ColumnarDataFrame` converters.
 
 mod cli_progress;
 
@@ -172,6 +173,20 @@ pub(crate) fn dvs_init(
     if let Some(m) = metadata_folder_name {
         config.set_metadata_folder_name(m);
     }
+
+    // Mirrors the CLI guard: refuse to store data inside the repo it's versioning.
+    let abs_storage = if storage_path.exists() {
+        std::fs::canonicalize(&storage_path)?
+    } else if let Some(parent) = storage_path.parent().filter(|p| p.exists()) {
+        std::fs::canonicalize(parent)?.join(storage_path.file_name().unwrap())
+    } else {
+        std::path::absolute(&storage_path)?
+    };
+    let abs_root = std::fs::canonicalize(&root_dir)?;
+    if abs_storage.starts_with(&abs_root) {
+        return Err(anyhow!("The given storage path is within the repository."));
+    }
+
     init(&root_dir, config)?;
 
     r_println!("DVS Initialized");
