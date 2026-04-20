@@ -430,18 +430,18 @@ dependencies = [
 
 [[package]]
 name = "linkme"
-version = "0.3.35"
+version = "0.3.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e3283ed2d0e50c06dd8602e0ab319bb048b6325d0bba739db64ed8205179898"
+checksum = "e83272d46373fb8decca684579ac3e7c8f3d71d4cc3aa693df8759e260ae41cf"
 dependencies = [
  "linkme-impl",
 ]
 
 [[package]]
 name = "linkme-impl"
-version = "0.3.35"
+version = "0.3.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5cec0ec4228b4853bb129c84dbf093a27e6c7a20526da046defc334a1b017f7"
+checksum = "32d59e20403c7d08fe62b4376edfe5c7fb2ef1e6b1465379686d0f21c8df444b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -469,6 +469,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "miniextendr-api"
 version = "0.1.0"
+source = "git+https://github.com/A2-ai/miniextendr#51ba9cf8b45c8eb9031c888fbde6d4714ae89202"
 dependencies = [
  "ahash",
  "linkme",
@@ -479,6 +480,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-lint"
 version = "0.1.0"
+source = "git+https://github.com/A2-ai/miniextendr#51ba9cf8b45c8eb9031c888fbde6d4714ae89202"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -488,6 +490,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-macros"
 version = "0.1.0"
+source = "git+https://github.com/A2-ai/miniextendr#51ba9cf8b45c8eb9031c888fbde6d4714ae89202"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -740,9 +743,9 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "sqlite-wasm-rs"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f4206ed3a67690b9c29b77d728f6acc3ce78f16bf846d83c94f76400320181b"
+checksum = "1b2c760607300407ddeaee518acf28c795661b7108c75421303dbefb237d3a36"
 dependencies = [
  "cc",
  "js-sys",
