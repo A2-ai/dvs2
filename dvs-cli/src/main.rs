@@ -14,7 +14,7 @@ use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
     AddDetail, Compression, FileMetadata, FileProgress, GetDetail, Outcome, Status, StatusDetail,
-    StatusFilter, add_files, format_size, get_files, get_status,
+    StatusFilter, add_files, format_size, get_files, get_status, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -93,6 +93,10 @@ pub struct Cli {
     /// Output results as JSON
     #[clap(long, global = true)]
     pub json: bool,
+
+    /// Number of threads for parallel operations (0 = auto-detect)
+    #[clap(long, global = true)]
+    pub threads: Option<usize>,
 
     #[clap(subcommand)]
     pub command: Command,
@@ -179,6 +183,9 @@ fn try_main() -> Result<()> {
     env_logger::init();
 
     let cli = Cli::parse();
+    if let Some(n) = cli.threads {
+        set_num_threads(n);
+    }
     let current_dir = std::env::current_dir()?;
 
     match cli.command {
