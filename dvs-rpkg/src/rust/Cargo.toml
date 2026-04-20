@@ -18,26 +18,22 @@ default = []
 nonapi = ["miniextendr-api/nonapi"]
 connections = ["miniextendr-api/connections"]
 
+# Source-of-truth deps: git for miniextendr, monorepo path for dvs.
+# `cargo revendor --freeze` rewrites these to vendor/ paths when packaging
+# for CRAN. The frozen form is produced by `just vendor` and shipped in
+# inst/vendor.tar.xz; never commit the frozen Cargo.toml itself.
 [dependencies]
-miniextendr-api = { version = "*", features = ["serde"] , path = "../../vendor/miniextendr-api" }
-dvs = { version = "*", path = "../../vendor/dvs" }
+miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", features = ["serde"] }
+dvs = { path = "../../../dvs" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 
 [build-dependencies]
-miniextendr-lint = { version = "*" , path = "../../vendor/miniextendr-lint" }
+miniextendr-lint = { git = "https://github.com/A2-ai/miniextendr" }
 
 [profile.dev]
 codegen-units = 1
 
 [profile.release]
 codegen-units = 1
-
-[patch]
-
-[patch.crates-io]
-dvs = { path = "../../vendor/dvs" }
-miniextendr-api = { path = "../../vendor/miniextendr-api" }
-miniextendr-lint = { path = "../../vendor/miniextendr-lint" }
-miniextendr-macros = { path = "../../vendor/miniextendr-macros" }

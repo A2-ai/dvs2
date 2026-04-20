@@ -44,32 +44,51 @@ jobs:
       - name: Build System Info
         run: rustc --version
 
-      - name: restore rpkg vendor directory
+      - name: Cache cargo-revendor
+        id: revendor-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-revendor
+            ~/.cargo/bin/cargo-revendor.exe
+          key: ${{ runner.os }}-cargo-revendor-v1
+
+      - name: Install cargo-revendor
+        if: steps.revendor-cache.outputs.cache-hit != 'true'
+        run: cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor
+
+      # Share the vendored output across the matrix. Key is OS-independent
+      # (depends only on the source Cargo.toml + Cargo.lock), so the first
+      # matrix job that finishes populates the cache for the others.
+      - name: Cache rpkg vendor output
         id: rpkg-vendor-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache@v4
         with:
-          path: dvs-rpkg/vendor
-          key: ${{ runner.os }}-rpkg-vendor-${{ hashFiles('dvs-rpkg/inst/vendor.tar.xz') }}
+          path: |
+            dvs-rpkg/vendor
+            dvs-rpkg/src/rust/Cargo.toml
+            dvs-rpkg/src/rust/Cargo.lock
+            dvs-rpkg/inst/vendor.tar.xz
+          key: rpkg-vendor-${{ hashFiles('dvs-rpkg/src/rust/Cargo.toml', 'dvs-rpkg/src/rust/Cargo.lock') }}
 
-      - name: unpack rpkg vendor tarball (unix)
-        if: runner.os != 'Windows' && steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
-        run: |
-          start=$(date +%s)
-          tar -xJf dvs-rpkg/inst/vendor.tar.xz -C dvs-rpkg
-          end=$(date +%s)
-          echo "vendor unpack took $((end - start))s"
-
-      - name: unpack rpkg vendor tarball (windows)
-        if: runner.os == 'Windows' && steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: 7z x dvs-rpkg/inst/vendor.tar.xz -so | 7z x -si -ttar -odvs-rpkg -aoa
-
-      - name: save rpkg vendor directory
+      - name: Vendor rpkg deps
         if: steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: dvs-rpkg/vendor
-          key: ${{ steps.rpkg-vendor-cache.outputs.cache-primary-key }}
+        shell: bash
+        env:
+          # Windows runners ship a BSD tar that lacks --xz; skip the tarball
+          # there. The tarball is only shipped from linux/macos builds.
+          COMPRESS_FLAG: ${{ runner.os == 'Windows' && ' ' || '--compress dvs-rpkg/inst/vendor.tar.xz' }}
+        run: |
+          cargo revendor \
+            --manifest-path dvs-rpkg/src/rust/Cargo.toml \
+            --output dvs-rpkg/vendor \
+            --strip-all \
+            --freeze \
+            $COMPRESS_FLAG \
+            --blank-md \
+            --source-marker \
+            --force \
+            -v
 
       - name: check formatting
         run: |
