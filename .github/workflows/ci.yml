@@ -57,7 +57,22 @@ jobs:
         if: steps.revendor-cache.outputs.cache-hit != 'true'
         run: cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor
 
+      # Share the vendored output across the matrix. Key is OS-independent
+      # (depends only on the source Cargo.toml + Cargo.lock), so the first
+      # matrix job that finishes populates the cache for the others.
+      - name: Cache rpkg vendor output
+        id: rpkg-vendor-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dvs-rpkg/vendor
+            dvs-rpkg/src/rust/Cargo.toml
+            dvs-rpkg/src/rust/Cargo.lock
+            dvs-rpkg/inst/vendor.tar.xz
+          key: rpkg-vendor-${{ hashFiles('dvs-rpkg/src/rust/Cargo.toml', 'dvs-rpkg/src/rust/Cargo.lock') }}
+
       - name: Vendor rpkg deps
+        if: steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
         shell: bash
         env:
           # Windows runners ship a BSD tar that lacks --xz; skip the tarball
