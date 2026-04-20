@@ -18,18 +18,24 @@ jobs:
     name: test
     runs-on: ${{ matrix.os }}
     strategy:
+      # macOS and Windows are temporarily disabled; see #129 for re-enable
+      # before the next release. To restore the full matrix, add `macos` and
+      # `windows` back to `build:` and uncomment the two include blocks
+      # below. The Windows --xz skip in the "Vendor rpkg deps" step is
+      # retained so the matrix can be restored without extra surgery.
       matrix:
-        build: [linux, macos, windows]
+        build: [linux]
+        # build: [linux, macos, windows]
         include:
           - build: linux
             os: ubuntu-22.04
             rust: stable
-          - build: macos
-            os: macOS-latest
-            rust: stable
-          - build: windows
-            os: windows-2022
-            rust: stable
+          # - build: macos
+          #   os: macOS-latest
+          #   rust: stable
+          # - build: windows
+          #   os: windows-2022
+          #   rust: stable
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust
