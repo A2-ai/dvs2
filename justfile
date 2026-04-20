@@ -101,6 +101,7 @@ install-revendor:
 vendor:
     cargo revendor \
       --manifest-path {{rpkg_dir}}/src/rust/Cargo.toml \
+      --source-root . \
       --output {{rpkg_dir}}/vendor \
       --strip-all \
       --freeze \
