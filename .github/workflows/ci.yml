@@ -59,13 +59,17 @@ jobs:
 
       - name: Vendor rpkg deps
         shell: bash
+        env:
+          # Windows runners ship a BSD tar that lacks --xz; skip the tarball
+          # there. The tarball is only shipped from linux/macos builds.
+          COMPRESS_FLAG: ${{ runner.os == 'Windows' && ' ' || '--compress dvs-rpkg/inst/vendor.tar.xz' }}
         run: |
           cargo revendor \
             --manifest-path dvs-rpkg/src/rust/Cargo.toml \
             --output dvs-rpkg/vendor \
             --strip-all \
             --freeze \
-            --compress dvs-rpkg/inst/vendor.tar.xz \
+            $COMPRESS_FLAG \
             --blank-md \
             --source-marker \
             --force \
