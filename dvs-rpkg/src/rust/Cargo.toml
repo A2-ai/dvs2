@@ -19,14 +19,14 @@ nonapi = ["miniextendr-api/nonapi"]
 connections = ["miniextendr-api/connections"]
 
 [dependencies]
-miniextendr-api = { version = "*", features = ["serde"] , path = "../../vendor/miniextendr-api-0.1.0" }
-dvs = { version = "*", path = "../../vendor/dvs-0.3.0" }
+miniextendr-api = { version = "*", features = ["serde"] , path = "../../vendor/miniextendr-api" }
+dvs = { version = "*", path = "../../vendor/dvs" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 
 [build-dependencies]
-miniextendr-lint = { version = "*" , path = "../../vendor/miniextendr-lint-0.1.0" }
+miniextendr-lint = { version = "*" , path = "../../vendor/miniextendr-lint" }
 
 [profile.dev]
 codegen-units = 1
@@ -37,7 +37,7 @@ codegen-units = 1
 [patch]
 
 [patch.crates-io]
-dvs = { path = "../../vendor/dvs-0.3.0" }
-miniextendr-api = { path = "../../vendor/miniextendr-api-0.1.0" }
-miniextendr-lint = { path = "../../vendor/miniextendr-lint-0.1.0" }
-miniextendr-macros = { path = "../../vendor/miniextendr-macros-0.1.0" }
+dvs = { path = "../../vendor/dvs" }
+miniextendr-api = { path = "../../vendor/miniextendr-api" }
+miniextendr-lint = { path = "../../vendor/miniextendr-lint" }
+miniextendr-macros = { path = "../../vendor/miniextendr-macros" }
