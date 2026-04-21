@@ -1,0 +1,24 @@
+name: release-rpkg
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  pull_request:
+    types: [labeled, synchronize, closed]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Separate by event + tag/PR so a tag push and a PR push don't cancel
+  # each other, but pushes to the same PR do cancel in-flight dev builds.
+  group: release-rpkg-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Filled in by subsequent tasks.
+  noop:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - run: "placeholder — replaced in later tasks"
