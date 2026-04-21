@@ -112,7 +112,12 @@ pub fn resolve_paths_for_get(
         paths
             .into_iter()
             .map(|p| {
-                if let Some(prefix) = cwd_prefix {
+                if p.is_absolute() {
+                    match p.strip_prefix(dvs_paths.repo_root()) {
+                        Ok(r) => r.to_path_buf(),
+                        Err(_) => p,
+                    }
+                } else if let Some(prefix) = cwd_prefix {
                     prefix.join(&p)
                 } else {
                     p
@@ -286,5 +291,36 @@ mod tests {
         assert!(result.contains(&PathBuf::from("foo.txt")));
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
+    }
+
+    #[test]
+    fn get_absolute_file_path() {
+        let (temp, dvs_paths) = setup_test_repo();
+        let abs_path = temp.path().canonicalize().unwrap().join("foo.txt");
+        let result = resolve_paths_for_get(vec![abs_path], None, &dvs_paths).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+    }
+
+    #[test]
+    fn get_absolute_directory_path() {
+        let (temp, dvs_paths) = setup_test_repo();
+        let abs_path = temp.path().canonicalize().unwrap().join("data");
+        let result = resolve_paths_for_get(vec![abs_path], None, &dvs_paths).unwrap();
+
+        assert!(result.contains(&PathBuf::from("data/a.csv")));
+        assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
+        assert!(!result.contains(&PathBuf::from("foo.txt")));
+    }
+
+    #[test]
+    fn add_absolute_file_path() {
+        let (temp, dvs_paths) = setup_test_repo();
+        let abs_path = temp.path().canonicalize().unwrap().join("foo.txt");
+        let result = resolve_paths_for_add(vec![abs_path], None, &dvs_paths).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&PathBuf::from("foo.txt")));
     }
 }
