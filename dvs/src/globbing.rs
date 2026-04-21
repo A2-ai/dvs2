@@ -130,25 +130,33 @@ pub fn resolve_paths_for_get(
     let dir_filters: Vec<PathBuf> = if paths.is_empty() {
         vec![cwd_prefix.map(|p| p.to_path_buf()).unwrap_or_default()]
     } else {
-        paths
-            .into_iter()
-            .map(|p| -> Result<PathBuf> {
-                if p.is_absolute() {
-                    // Canonicalize so that symlinked prefixes (e.g. `/tmp` ->
-                    // `/private/tmp` on macOS) compare equal to the already-canonical
-                    // `repo_root`. The file may not exist yet — that's fine.
-                    let canonical = canonicalize_existing_prefix(&p).unwrap_or_else(|| p.clone());
-                    match canonical.strip_prefix(dvs_paths.repo_root()) {
-                        Ok(r) => Ok(r.to_path_buf()),
-                        Err(_) => bail!("Path is outside project: {}", p.display()),
-                    }
-                } else if let Some(prefix) = cwd_prefix {
-                    Ok(prefix.join(&p))
-                } else {
-                    Ok(p)
+        let mut filters = Vec::with_capacity(paths.len());
+        let mut outside = Vec::new();
+        for p in paths {
+            if p.is_absolute() {
+                // Canonicalize so that symlinked prefixes (e.g. `/tmp` ->
+                // `/private/tmp` on macOS) compare equal to the already-canonical
+                // `repo_root`. The file may not exist yet — that's fine.
+                let canonical = canonicalize_existing_prefix(&p).unwrap_or_else(|| p.clone());
+                match canonical.strip_prefix(dvs_paths.repo_root()) {
+                    Ok(r) => filters.push(r.to_path_buf()),
+                    Err(_) => outside.push(p),
                 }
-            })
-            .collect::<Result<Vec<_>>>()?
+            } else if let Some(prefix) = cwd_prefix {
+                filters.push(prefix.join(&p));
+            } else {
+                filters.push(p);
+            }
+        }
+        if !outside.is_empty() {
+            let listed = outside
+                .iter()
+                .map(|p| format!("  - {}", p.display()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!("The following paths are outside the project:\n{listed}");
+        }
+        filters
     };
 
     // Walk all metadata files
@@ -369,10 +377,29 @@ mod tests {
         let (_temp, dvs_paths) = setup_test_repo();
         let outside = TempDir::new().unwrap();
         let abs_path = outside.path().canonicalize().unwrap().join("bogus.txt");
+        let expected_display = abs_path.display().to_string();
         let result = resolve_paths_for_get(vec![abs_path], None, &dvs_paths);
 
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("outside project"), "unexpected error: {err}");
+        assert!(err.contains("outside the project"), "unexpected error: {err}");
+        assert!(err.contains(&expected_display), "missing path in: {err}");
+    }
+
+    #[test]
+    fn get_reports_all_outside_paths_not_just_first() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let outside_a = TempDir::new().unwrap();
+        let outside_b = TempDir::new().unwrap();
+        let p_a = outside_a.path().canonicalize().unwrap().join("a.txt");
+        let p_b = outside_b.path().canonicalize().unwrap().join("b.txt");
+        let disp_a = p_a.display().to_string();
+        let disp_b = p_b.display().to_string();
+
+        let result = resolve_paths_for_get(vec![p_a, p_b], None, &dvs_paths);
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains(&disp_a), "missing first outside path in: {err}");
+        assert!(err.contains(&disp_b), "missing second outside path in: {err}");
     }
 
     // Covers macOS `/tmp` -> `/private/tmp` class of issues: an absolute
