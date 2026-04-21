@@ -1,7 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use fs_err as fs;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -9,6 +9,7 @@ use walkdir::WalkDir;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
+use crate::globbing::canonicalize_existing_prefix;
 use crate::paths::DvsPaths;
 use crate::utils::get_threadpool;
 use crate::{Status, cache};
@@ -63,32 +64,50 @@ fn normalize_path(p: PathBuf) -> Option<PathBuf> {
 impl StatusFilter {
     /// Create a filter from user-provided paths (relative to cwd) and a recursive flag.
     /// Translates cwd-relative paths to repo-root-relative using `dvs_paths.cwd_relative_to_root()`.
+    /// Returns an error listing every input that does not resolve inside the repo (absolute
+    /// paths outside `repo_root`, or relative paths that `../..` past it).
     pub fn from_user_paths(
         user_paths: Vec<PathBuf>,
         recursive: bool,
         dvs_paths: &DvsPaths,
-    ) -> Self {
+    ) -> Result<Self> {
         let cwd_prefix = dvs_paths.cwd_relative_to_root();
         let repo_root = dvs_paths.repo_root();
-        let paths = user_paths
-            .into_iter()
-            .filter_map(|p| {
-                if p.is_absolute() {
-                    p.strip_prefix(repo_root)
-                        .ok()
-                        .map(|r| r.to_path_buf())
-                        .and_then(normalize_path)
+        let mut paths = Vec::with_capacity(user_paths.len());
+        let mut outside = Vec::new();
+        for p in user_paths {
+            let resolved = if p.is_absolute() {
+                // Canonicalize so symlinked prefixes (e.g. macOS `/tmp` -> `/private/tmp`)
+                // compare equal to the canonical `repo_root`. Fall back to the deepest
+                // existing ancestor when the file itself does not exist.
+                let canonical = canonicalize_existing_prefix(&p).unwrap_or_else(|| p.clone());
+                canonical
+                    .strip_prefix(repo_root)
+                    .ok()
+                    .map(|r| r.to_path_buf())
+                    .and_then(normalize_path)
+            } else {
+                let joined = if let Some(prefix) = cwd_prefix {
+                    prefix.join(&p)
                 } else {
-                    let joined = if let Some(prefix) = cwd_prefix {
-                        prefix.join(&p)
-                    } else {
-                        p
-                    };
-                    normalize_path(joined)
-                }
-            })
-            .collect();
-        StatusFilter { paths, recursive }
+                    p.clone()
+                };
+                normalize_path(joined)
+            };
+            match resolved {
+                Some(r) => paths.push(r),
+                None => outside.push(p),
+            }
+        }
+        if !outside.is_empty() {
+            let listed = outside
+                .iter()
+                .map(|p| format!("  - {}", p.display()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!("The following paths are outside the project:\n{listed}");
+        }
+        Ok(StatusFilter { paths, recursive })
     }
 
     fn matches(&self, tracked_path: &Path) -> bool {
@@ -495,7 +514,7 @@ mod tests {
 
         // Absolute path filter via from_user_paths
         let abs_path = paths.repo_root().join("dir1/b.txt");
-        let filter = StatusFilter::from_user_paths(vec![abs_path], false, &paths);
+        let filter = StatusFilter::from_user_paths(vec![abs_path], false, &paths).unwrap();
         let statuses = get_status(&paths, Some(&filter)).unwrap();
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
@@ -517,15 +536,16 @@ mod tests {
             ".dvs",
         )
         .unwrap();
-        let filter = StatusFilter::from_user_paths(vec![PathBuf::from("../foo")], false, &paths);
+        let filter = StatusFilter::from_user_paths(vec![PathBuf::from("../foo")], false, &paths)
+            .unwrap();
         assert_eq!(filter.paths, vec![PathBuf::from("foo")]);
 
-        // From subdir/: ../../foo → escapes root → dropped (empty)
-        let filter = StatusFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths);
-        assert!(
-            filter.paths.is_empty(),
-            "../../foo should escape root and be dropped"
-        );
+        // From subdir/: ../../foo → escapes root → reported as outside (not silent)
+        let result =
+            StatusFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths);
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("outside the project"), "unexpected error: {err}");
+        assert!(err.contains("../../foo"), "missing offending path in: {err}");
 
         // From subdir/deep/: ../../foo → resolves to "foo" (valid, 2 levels up = root)
         let paths_deep = DvsPaths::new(
@@ -535,17 +555,60 @@ mod tests {
         )
         .unwrap();
         let filter =
-            StatusFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths_deep);
+            StatusFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths_deep)
+                .unwrap();
         assert_eq!(filter.paths, vec![PathBuf::from("foo")]);
 
         // From subdir/: ../dir2/file.txt → resolves to "dir2/file.txt"
         let filter =
-            StatusFilter::from_user_paths(vec![PathBuf::from("../dir2/file.txt")], false, &paths);
+            StatusFilter::from_user_paths(vec![PathBuf::from("../dir2/file.txt")], false, &paths)
+                .unwrap();
         assert_eq!(filter.paths, vec![PathBuf::from("dir2/file.txt")]);
 
         // From subdir/: absolute path with .. like <root>/subdir/../a.txt → normalizes to "a.txt"
         let abs_with_dotdot = root.join("subdir/../a.txt");
-        let filter = StatusFilter::from_user_paths(vec![abs_with_dotdot], false, &paths);
+        let filter =
+            StatusFilter::from_user_paths(vec![abs_with_dotdot], false, &paths).unwrap();
         assert_eq!(filter.paths, vec![PathBuf::from("a.txt")]);
+    }
+
+    #[test]
+    fn from_user_paths_absolute_outside_repo_errors() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (_config, _dvs_dir) = init_dvs_repo(&root);
+        let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs").unwrap();
+
+        let outside = tempfile::TempDir::new().unwrap();
+        let abs_a = outside.path().canonicalize().unwrap().join("a.txt");
+        let abs_b = outside.path().canonicalize().unwrap().join("b.txt");
+        let disp_a = abs_a.display().to_string();
+        let disp_b = abs_b.display().to_string();
+
+        let err = StatusFilter::from_user_paths(vec![abs_a, abs_b], false, &paths)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("outside the project"), "unexpected error: {err}");
+        assert!(err.contains(&disp_a), "missing first outside path in: {err}");
+        assert!(err.contains(&disp_b), "missing second outside path in: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_user_paths_absolute_via_symlink() {
+        use std::os::unix::fs::symlink;
+        let (_tmp, root) = create_temp_git_repo();
+        let (_config, _dvs_dir) = init_dvs_repo(&root);
+        fs::create_dir_all(root.join("dir1")).unwrap();
+        fs::write(root.join("dir1/b.txt"), b"").unwrap();
+        let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs").unwrap();
+
+        let link_holder = tempfile::TempDir::new().unwrap();
+        let link_path = link_holder.path().join("repo-link");
+        symlink(&root, &link_path).unwrap();
+
+        let abs_via_link = link_path.join("dir1/b.txt");
+        let filter =
+            StatusFilter::from_user_paths(vec![abs_via_link], false, &paths).unwrap();
+        assert_eq!(filter.paths, vec![PathBuf::from("dir1/b.txt")]);
     }
 }

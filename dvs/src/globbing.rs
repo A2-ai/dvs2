@@ -12,7 +12,7 @@ use walkdir::WalkDir;
 /// to canonicalizing the deepest existing ancestor and appending the remainder.
 /// This is how absolute user-paths get compared consistently against the
 /// canonicalized `repo_root`.
-fn canonicalize_existing_prefix(p: &Path) -> Option<PathBuf> {
+pub(crate) fn canonicalize_existing_prefix(p: &Path) -> Option<PathBuf> {
     if let Ok(canonical) = p.canonicalize() {
         return Some(canonical);
     }

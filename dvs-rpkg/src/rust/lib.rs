@@ -308,7 +308,7 @@ pub(crate) fn dvs_status(
             paths,
             recursive.unwrap_or(false),
             &dvs_paths,
-        ))
+        )?)
     };
     let mut statuses = get_status(&dvs_paths, filter.as_ref())?;
     if !show_all {
