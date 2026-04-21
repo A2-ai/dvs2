@@ -13,7 +13,9 @@ use std::sync::mpsc::{self, SyncSender};
 use std::thread;
 
 use miniextendr_api::externalptr::ExternalPtr;
+use miniextendr_api::into_r::IntoR;
 use miniextendr_api::serde::ColumnarDataFrame;
+use miniextendr_api::time::OffsetDateTime;
 use miniextendr_api::{AsSerializeRow, DataFrame, List, MatchArg, list, miniextendr, r_println};
 
 use anyhow::{Result, anyhow};
@@ -320,8 +322,24 @@ pub(crate) fn dvs_status(
         });
     }
 
+    // Build a POSIXct-backed column for `add_time` by converting each jiff
+    // `Timestamp` to a `time::OffsetDateTime` (via nanoseconds since epoch).
+    // The column lives at `metadata_add_time` until `strip_prefix` below
+    // renames it to `add_time`.
+    let add_times: Vec<Option<OffsetDateTime>> = statuses
+        .iter()
+        .map(|s| match &s.detail {
+            StatusDetail::Success {
+                metadata: Some(m), ..
+            } => OffsetDateTime::from_unix_timestamp_nanos(m.add_time.as_nanosecond()).ok(),
+            _ => None,
+        })
+        .collect();
+    let add_time_sexp = add_times.into_sexp();
+
     Ok(miniextendr_api::serde::vec_to_dataframe(&statuses)?
         .drop("metadata_hashes_md5")
+        .with_column("metadata_add_time", add_time_sexp)
         .strip_prefix("metadata_hashes_")
         .strip_prefix("metadata_")
         .rename("blake3", "hash"))
