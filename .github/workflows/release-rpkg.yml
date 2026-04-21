@@ -301,3 +301,27 @@ jobs:
             echo "- Asset: \`$ASSET\`"
             echo "- Install URL: $INSTALL_URL"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  cleanup-dev:
+    name: Cleanup dev prerelease
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUM: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Delete prerelease and tag if present
+        run: |
+          set -euo pipefail
+          TAG="pr-${PR_NUM}-dev"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --yes --cleanup-tag
+            echo "Deleted release and tag $TAG"
+          else
+            echo "No release $TAG to clean up"
+          fi
