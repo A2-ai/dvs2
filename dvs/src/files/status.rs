@@ -536,16 +536,21 @@ mod tests {
             ".dvs",
         )
         .unwrap();
-        let filter = StatusFilter::from_user_paths(vec![PathBuf::from("../foo")], false, &paths)
-            .unwrap();
+        let filter =
+            StatusFilter::from_user_paths(vec![PathBuf::from("../foo")], false, &paths).unwrap();
         assert_eq!(filter.paths, vec![PathBuf::from("foo")]);
 
         // From subdir/: ../../foo → escapes root → reported as outside (not silent)
-        let result =
-            StatusFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths);
+        let result = StatusFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths);
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("outside the project"), "unexpected error: {err}");
-        assert!(err.contains("../../foo"), "missing offending path in: {err}");
+        assert!(
+            err.contains("outside the project"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.contains("../../foo"),
+            "missing offending path in: {err}"
+        );
 
         // From subdir/deep/: ../../foo → resolves to "foo" (valid, 2 levels up = root)
         let paths_deep = DvsPaths::new(
@@ -567,8 +572,7 @@ mod tests {
 
         // From subdir/: absolute path with .. like <root>/subdir/../a.txt → normalizes to "a.txt"
         let abs_with_dotdot = root.join("subdir/../a.txt");
-        let filter =
-            StatusFilter::from_user_paths(vec![abs_with_dotdot], false, &paths).unwrap();
+        let filter = StatusFilter::from_user_paths(vec![abs_with_dotdot], false, &paths).unwrap();
         assert_eq!(filter.paths, vec![PathBuf::from("a.txt")]);
     }
 
@@ -587,9 +591,18 @@ mod tests {
         let err = StatusFilter::from_user_paths(vec![abs_a, abs_b], false, &paths)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("outside the project"), "unexpected error: {err}");
-        assert!(err.contains(&disp_a), "missing first outside path in: {err}");
-        assert!(err.contains(&disp_b), "missing second outside path in: {err}");
+        assert!(
+            err.contains("outside the project"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.contains(&disp_a),
+            "missing first outside path in: {err}"
+        );
+        assert!(
+            err.contains(&disp_b),
+            "missing second outside path in: {err}"
+        );
     }
 
     #[cfg(unix)]
@@ -607,8 +620,7 @@ mod tests {
         symlink(&root, &link_path).unwrap();
 
         let abs_via_link = link_path.join("dir1/b.txt");
-        let filter =
-            StatusFilter::from_user_paths(vec![abs_via_link], false, &paths).unwrap();
+        let filter = StatusFilter::from_user_paths(vec![abs_via_link], false, &paths).unwrap();
         assert_eq!(filter.paths, vec![PathBuf::from("dir1/b.txt")]);
     }
 }

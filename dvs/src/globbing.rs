@@ -381,7 +381,10 @@ mod tests {
         let result = resolve_paths_for_get(vec![abs_path], None, &dvs_paths);
 
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("outside the project"), "unexpected error: {err}");
+        assert!(
+            err.contains("outside the project"),
+            "unexpected error: {err}"
+        );
         assert!(err.contains(&expected_display), "missing path in: {err}");
     }
 
@@ -398,8 +401,14 @@ mod tests {
         let result = resolve_paths_for_get(vec![p_a, p_b], None, &dvs_paths);
 
         let err = result.unwrap_err().to_string();
-        assert!(err.contains(&disp_a), "missing first outside path in: {err}");
-        assert!(err.contains(&disp_b), "missing second outside path in: {err}");
+        assert!(
+            err.contains(&disp_a),
+            "missing first outside path in: {err}"
+        );
+        assert!(
+            err.contains(&disp_b),
+            "missing second outside path in: {err}"
+        );
     }
 
     // Covers macOS `/tmp` -> `/private/tmp` class of issues: an absolute
