@@ -318,7 +318,7 @@ fn try_main() -> Result<()> {
             } else {
                 Some(StatusFilter::from_user_paths(
                     user_paths, recursive, &dvs_paths,
-                ))
+                )?)
             };
             let mut statuses = get_status(&dvs_paths, filter.as_ref())?;
             if !show_all {
