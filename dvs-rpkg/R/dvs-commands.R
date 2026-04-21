@@ -43,10 +43,10 @@ dvs_add <- function(
   )
 
   result$size <- structure(
-    result$size, class = "dvs_bytes"
+    result$size, class = c("dvs_bytes", "numeric")
   )
   result$stored_size <- structure(
-    result$stored_size, class = "dvs_bytes"
+    result$stored_size, class = c("dvs_bytes", "numeric")
   )
 
 
@@ -76,7 +76,7 @@ dvs_status <- function(
     )
 
   status_data_frame$size <- structure(
-    status_data_frame$size, class = "dvs_bytes"
+    status_data_frame$size, class = c("dvs_bytes", "numeric")
   )
 
   if (requireNamespace("tibble", quietly = TRUE)) {
@@ -104,7 +104,7 @@ dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
   )
 
   get_data_frame$size <- structure(
-    get_data_frame$size, class = "dvs_bytes"
+    get_data_frame$size, class = c("dvs_bytes", "numeric")
   )
 
   if (requireNamespace("tibble", quietly = TRUE)) {
