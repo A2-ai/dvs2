@@ -29,4 +29,11 @@ test_that("dvs_status returns add_time as POSIXct", {
   expect_true("add_time" %in% names(result))
   expect_s3_class(result$add_time, "POSIXct")
   expect_false(any(is.na(result$add_time)))
+  expect_s3_class(result$size, "dvs_bytes")
+
+  # Remove the tracked file so dvs_get has something to retrieve.
+  # dvs_get resolves paths relative to the repo root, so pass the basename.
+  file.remove(data_file)
+  got <- dvs_get(paths = "data.txt")
+  expect_s3_class(got$size, "dvs_bytes")
 })
