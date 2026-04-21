@@ -3,6 +3,7 @@
 S3method(as.character,dvs_bytes)
 S3method(format,dvs_bytes)
 S3method(print,dvs_bytes)
+export(as.dvs_bytes)
 export(dvs_add)
 export(dvs_get)
 export(dvs_init)

@@ -43,10 +43,10 @@ dvs_add <- function(
   )
 
   if (!is.null(result$size)) {
-    result$size <- as_dvs_bytes(result$size)
+    result$size <- as.dvs_bytes(result$size)
   }
   if (!is.null(result$stored_size)) {
-    result$stored_size <- as_dvs_bytes(result$stored_size)
+    result$stored_size <- as.dvs_bytes(result$stored_size)
   }
 
 
@@ -76,7 +76,7 @@ dvs_status <- function(
     )
 
   if (!is.null(status_data_frame$size)) {
-    status_data_frame$size <- as_dvs_bytes(status_data_frame$size)
+    status_data_frame$size <- as.dvs_bytes(status_data_frame$size)
   }
 
   if (requireNamespace("tibble", quietly = TRUE)) {
@@ -104,7 +104,7 @@ dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
   )
 
   if (!is.null(get_data_frame$size)) {
-    get_data_frame$size <- as_dvs_bytes(get_data_frame$size)
+    get_data_frame$size <- as.dvs_bytes(get_data_frame$size)
   }
 
   if (requireNamespace("tibble", quietly = TRUE)) {
