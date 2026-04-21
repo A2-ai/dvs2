@@ -42,12 +42,12 @@ dvs_add <- function(
     progress_callback = progress_callback
   )
 
-  result$size <- structure(
-    result$size, class = c("dvs_bytes", "numeric")
-  )
-  result$stored_size <- structure(
-    result$stored_size, class = c("dvs_bytes", "numeric")
-  )
+  if (!is.null(result$size)) {
+    result$size <- as_dvs_bytes(result$size)
+  }
+  if (!is.null(result$stored_size)) {
+    result$stored_size <- as_dvs_bytes(result$stored_size)
+  }
 
 
   if (requireNamespace("tibble", quietly = TRUE)) {
@@ -75,9 +75,9 @@ dvs_status <- function(
       status = status
     )
 
-  status_data_frame$size <- structure(
-    status_data_frame$size, class = c("dvs_bytes", "numeric")
-  )
+  if (!is.null(status_data_frame$size)) {
+    status_data_frame$size <- as_dvs_bytes(status_data_frame$size)
+  }
 
   if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(status_data_frame)
@@ -103,9 +103,9 @@ dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
     progress_callback = progress_callback
   )
 
-  get_data_frame$size <- structure(
-    get_data_frame$size, class = c("dvs_bytes", "numeric")
-  )
+  if (!is.null(get_data_frame$size)) {
+    get_data_frame$size <- as_dvs_bytes(get_data_frame$size)
+  }
 
   if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(get_data_frame)
