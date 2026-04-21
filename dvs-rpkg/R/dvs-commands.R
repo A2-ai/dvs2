@@ -74,6 +74,11 @@ dvs_status <- function(
       recursive = recursive,
       status = status
     )
+
+  status_data_frame$size <- structure(
+    status_data_frame$size, class = "dvs_bytes"
+  )
+
   if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(status_data_frame)
   } else {
@@ -97,6 +102,11 @@ dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
     dry_run = dry_run,
     progress_callback = progress_callback
   )
+
+  get_data_frame$size <- structure(
+    get_data_frame$size, class = "dvs_bytes"
+  )
+
   if (requireNamespace("tibble", quietly = TRUE)) {
     tibble::as_tibble(get_data_frame)
   } else {
