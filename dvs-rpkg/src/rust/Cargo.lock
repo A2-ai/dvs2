@@ -160,6 +160,7 @@ dependencies = [
 [[package]]
 name = "dvs"
 version = "0.3.0"
+source = "git+https://github.com/A2-ai/dvs2?branch=feat%2Fadd-time-posixct#a70f813130c7aa7365f4df411c1f571ff59bae11"
 dependencies = [
  "anyhow",
  "blake3",
@@ -478,6 +479,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "miniextendr-api"
 version = "0.1.0"
+source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#e47834c4971c14f6b910298fcc9c1ffee5815ff8"
 dependencies = [
  "ahash",
  "linkme",
@@ -489,6 +491,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-lint"
 version = "0.1.0"
+source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#e47834c4971c14f6b910298fcc9c1ffee5815ff8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -498,6 +501,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-macros"
 version = "0.1.0"
+source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#e47834c4971c14f6b910298fcc9c1ffee5815ff8"
 dependencies = [
  "proc-macro2",
  "quote",
