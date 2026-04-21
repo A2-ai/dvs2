@@ -479,7 +479,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "miniextendr-api"
 version = "0.1.0"
-source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#e47834c4971c14f6b910298fcc9c1ffee5815ff8"
+source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#0d80e302ce676701e7608e82f11e8ac9be8ea82d"
 dependencies = [
  "ahash",
  "linkme",
@@ -491,7 +491,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-lint"
 version = "0.1.0"
-source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#e47834c4971c14f6b910298fcc9c1ffee5815ff8"
+source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#0d80e302ce676701e7608e82f11e8ac9be8ea82d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -501,7 +501,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-macros"
 version = "0.1.0"
-source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#e47834c4971c14f6b910298fcc9c1ffee5815ff8"
+source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#0d80e302ce676701e7608e82f11e8ac9be8ea82d"
 dependencies = [
  "proc-macro2",
  "quote",
