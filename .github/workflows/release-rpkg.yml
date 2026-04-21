@@ -153,3 +153,151 @@ jobs:
             dvs_*.tar.gz.sha256
           if-no-files-found: error
           retention-days: 7
+
+  publish-dev:
+    name: Publish dev prerelease
+    needs: build-rpkg
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'pull_request'
+      && github.event.action != 'closed'
+      && contains(github.event.pull_request.labels.*.name, 'release-dev')
+      && github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUM: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dvs-rpkg-tarball
+
+      - name: Compute names
+        id: names
+        run: |
+          set -euo pipefail
+          TAG="pr-${PR_NUM}-dev"
+          SHORT_SHA="${HEAD_SHA:0:8}"
+          SRC=$(find . -maxdepth 1 -name 'dvs_*.tar.gz' | head -1)
+          SRC="${SRC#./}"
+          # dvs_0.3.0.9000.tar.gz -> dvs_0.3.0.9000-pr<N>-<sha>.tar.gz
+          ASSET="${SRC%.tar.gz}-pr${PR_NUM}-${SHORT_SHA}.tar.gz"
+          mv "$SRC" "$ASSET"
+          mv "${SRC}.sha256" "${ASSET}.sha256"
+          # Regenerate sha256 (path inside file changed).
+          sha256sum "$ASSET" > "${ASSET}.sha256"
+
+          {
+            echo "tag=$TAG"
+            echo "asset=$ASSET"
+            echo "short_sha=$SHORT_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or refresh prerelease
+        id: publish
+        env:
+          TAG: ${{ steps.names.outputs.tag }}
+          ASSET: ${{ steps.names.outputs.asset }}
+        run: |
+          set -euo pipefail
+          INSTALL_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
+
+          NOTES=$(cat <<EOF
+          Dev build for PR #${PR_NUM} at commit ${HEAD_SHA}.
+
+          **Install:**
+          \`\`\`r
+          install.packages(
+            "${INSTALL_URL}",
+            repos = NULL, type = "source"
+          )
+          \`\`\`
+
+          Requires: Rust toolchain (\`rustc >= 1.85.0\`) on \`PATH\`.
+
+          _This prerelease is replaced on every push to the PR and deleted when the PR closes._
+          EOF
+          )
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Delete existing dvs_* assets so old-commit assets don't pile up.
+            mapfile -t OLD < <(gh release view "$TAG" --json assets -q '.assets[].name' | grep '^dvs_' || true)
+            for name in "${OLD[@]}"; do
+              gh release delete-asset "$TAG" "$name" --yes || true
+            done
+            gh release upload "$TAG" "$ASSET" "${ASSET}.sha256"
+            gh release edit "$TAG" \
+              --target "$HEAD_SHA" \
+              --title "Dev build for PR #${PR_NUM}" \
+              --notes "$NOTES" \
+              --prerelease
+          else
+            gh release create "$TAG" "$ASSET" "${ASSET}.sha256" \
+              --target "$HEAD_SHA" \
+              --prerelease \
+              --title "Dev build for PR #${PR_NUM}" \
+              --notes "$NOTES"
+          fi
+
+          echo "install_url=$INSTALL_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on PR (create or update)
+        env:
+          TAG: ${{ steps.names.outputs.tag }}
+          ASSET: ${{ steps.names.outputs.asset }}
+        run: |
+          set -euo pipefail
+          INSTALL_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
+          MARKER="<!-- dvs-rpkg-dev-release -->"
+
+          BODY=$(cat <<EOF
+          ${MARKER}
+          ### Dev R package build
+
+          Tarball: [\`${ASSET}\`](${INSTALL_URL})
+
+          \`\`\`r
+          install.packages(
+            "${INSTALL_URL}",
+            repos = NULL, type = "source"
+          )
+          \`\`\`
+
+          Requires: Rust toolchain (\`rustc >= 1.85.0\`) on \`PATH\`.
+          Built from commit \`${HEAD_SHA}\`. Updated on every push.
+          EOF
+          )
+
+          # Find existing comment by marker.
+          COMMENT_ID=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUM}/comments" \
+            --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" \
+            | head -1)
+
+          if [ -n "$COMMENT_ID" ]; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
+              -f body="$BODY" >/dev/null
+            echo "Updated PR comment ${COMMENT_ID}"
+          else
+            gh pr comment "$PR_NUM" --body "$BODY"
+            echo "Posted new PR comment"
+          fi
+
+      - name: Step summary
+        env:
+          TAG: ${{ steps.names.outputs.tag }}
+          ASSET: ${{ steps.names.outputs.asset }}
+        run: |
+          INSTALL_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
+          {
+            echo "## Dev prerelease published"
+            echo ""
+            echo "- Tag: \`$TAG\`"
+            echo "- Asset: \`$ASSET\`"
+            echo "- Install URL: $INSTALL_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
