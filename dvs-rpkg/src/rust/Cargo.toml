@@ -34,7 +34,7 @@ connections = ["miniextendr-api/connections"]
 # block, or rely on `just` recipes that vendor from the local checkout.
 [dependencies]
 # TEMPORARY branch pins — remove after the upstream PRs land:
-#   * miniextendr#<PR>: `ColumnarDataFrame::with_column`
+#   * miniextendr#297: `ColumnarDataFrame::with_column`
 #   * dvs2#<PR>: `FileMetadata.add_time: jiff::Timestamp` (this PR)
 # Once both are on `main`, drop the `branch = "..."` fields.
 miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", branch = "feat/columnar-with-column", features = ["serde", "time"] }
