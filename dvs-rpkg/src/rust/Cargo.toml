@@ -33,14 +33,19 @@ connections = ["miniextendr-api/connections"]
 # `[patch."https://github.com/A2-ai/dvs2"] dvs = { path = "../../../dvs" }`
 # block, or rely on `just` recipes that vendor from the local checkout.
 [dependencies]
-miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", features = ["serde"] }
-dvs = { git = "https://github.com/A2-ai/dvs2", package = "dvs" }
+# TEMPORARY branch pins — remove after the upstream PRs land:
+#   * miniextendr#297: `ColumnarDataFrame::with_column`
+#   * dvs2#<PR>: `FileMetadata.add_time: jiff::Timestamp` (this PR)
+# Once both are on `main`, drop the `branch = "..."` fields.
+miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", branch = "feat/columnar-with-column", features = ["serde", "time"] }
+dvs = { git = "https://github.com/A2-ai/dvs2", branch = "feat/add-time-posixct", package = "dvs" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 
 [build-dependencies]
-miniextendr-lint = { git = "https://github.com/A2-ai/miniextendr" }
+# TEMPORARY: same branch pin as miniextendr-api above.
+miniextendr-lint = { git = "https://github.com/A2-ai/miniextendr", branch = "feat/columnar-with-column" }
 
 [profile.dev]
 codegen-units = 1

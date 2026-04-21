@@ -6,25 +6,28 @@
 
 mod cli_progress;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::thread;
 
 use miniextendr_api::externalptr::ExternalPtr;
+use miniextendr_api::into_r::IntoR;
 use miniextendr_api::serde::ColumnarDataFrame;
+use miniextendr_api::time::OffsetDateTime;
 use miniextendr_api::{AsSerializeRow, DataFrame, List, MatchArg, list, miniextendr, r_println};
 
 use anyhow::{Result, anyhow};
+use serde::Serialize;
 
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddResult, Compression, FileProgress, GetResult, Status, StatusDetail, StatusFilter, add_files,
-    get_files, get_status, set_num_threads,
+    AddResult, Compression, FileMetadata, FileProgress, FileStatus, GetResult, Hashes, Status,
+    StatusDetail, StatusFilter, add_files, get_files, get_status, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -320,12 +323,102 @@ pub(crate) fn dvs_status(
         });
     }
 
-    Ok(miniextendr_api::serde::vec_to_dataframe(&statuses)?
+    // Serialize through a local view that omits `add_time` from the serde
+    // path — jiff's `Timestamp` serde format is RFC 3339, and stringifying
+    // into a character column only to throw it away when appending the
+    // POSIXct column below is wasted work. The jiff timestamps are instead
+    // passed straight through to `time::OffsetDateTime` → POSIXct.
+    let views: Vec<FileStatusView<'_>> = statuses.iter().map(FileStatusView::from).collect();
+    let add_times: Vec<Option<OffsetDateTime>> = statuses
+        .iter()
+        .map(|s| match &s.detail {
+            StatusDetail::Success {
+                metadata: Some(m), ..
+            } => OffsetDateTime::from_unix_timestamp_nanos(m.add_time.as_nanosecond()).ok(),
+            _ => None,
+        })
+        .collect();
+    let add_time_sexp = add_times.into_sexp();
+
+    Ok(miniextendr_api::serde::vec_to_dataframe(&views)?
         .drop("metadata_hashes_md5")
         .strip_prefix("metadata_hashes_")
         .strip_prefix("metadata_")
-        .rename("blake3", "hash"))
+        .rename("blake3", "hash")
+        .with_column("add_time", add_time_sexp))
 }
+
+// region: FileStatus serde view (skips add_time)
+
+/// Serialize-only mirror of [`FileStatus`] whose [`FileMetadata`] view
+/// omits `add_time`. The caller appends `add_time` as a POSIXct column
+/// directly from the original `jiff::Timestamp` values.
+#[derive(Serialize)]
+struct FileStatusView<'a> {
+    path: &'a Path,
+    #[serde(flatten)]
+    detail: StatusDetailView<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum StatusDetailView<'a> {
+    Success {
+        status: &'a Status,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metadata: Option<FileMetadataView<'a>>,
+    },
+    Error {
+        error: &'a str,
+    },
+}
+
+#[derive(Serialize)]
+struct FileMetadataView<'a> {
+    hashes: &'a Hashes,
+    size: u64,
+    created_by: &'a str,
+    // `add_time` deliberately omitted — surfaced as a POSIXct column at the
+    // DataFrame boundary, not stringified into the serde output.
+    compression: &'a Compression,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<&'a str>,
+}
+
+impl<'a> From<&'a FileStatus> for FileStatusView<'a> {
+    fn from(fs: &'a FileStatus) -> Self {
+        FileStatusView {
+            path: fs.path.as_path(),
+            detail: (&fs.detail).into(),
+        }
+    }
+}
+
+impl<'a> From<&'a StatusDetail> for StatusDetailView<'a> {
+    fn from(detail: &'a StatusDetail) -> Self {
+        match detail {
+            StatusDetail::Success { status, metadata } => StatusDetailView::Success {
+                status,
+                metadata: metadata.as_ref().map(FileMetadataView::from),
+            },
+            StatusDetail::Error { error } => StatusDetailView::Error { error },
+        }
+    }
+}
+
+impl<'a> From<&'a FileMetadata> for FileMetadataView<'a> {
+    fn from(m: &'a FileMetadata) -> Self {
+        FileMetadataView {
+            hashes: &m.hashes,
+            size: m.size,
+            created_by: &m.created_by,
+            compression: &m.compression,
+            message: m.message.as_deref(),
+        }
+    }
+}
+
+// endregion
 
 /// Retrieve files from DVS storage into the working directory.
 ///

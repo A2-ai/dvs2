@@ -116,7 +116,7 @@ struct StatusRowFull<'a> {
     size: String,
     hash: &'a str,
     created_by: &'a str,
-    add_time: &'a str,
+    add_time: String,
     compression: String,
     message: &'a str,
 }
@@ -127,7 +127,7 @@ impl<'a> From<&'a FileMetadata> for StatusRowFull<'a> {
             size: m.size.to_string(),
             hash: m.hashes.blake3.as_str(),
             created_by: m.created_by.as_str(),
-            add_time: m.add_time.as_str(),
+            add_time: m.add_time.to_string(),
             compression: m.compression.to_string(),
             message: m.message.as_deref().unwrap_or(""),
             ..Default::default()

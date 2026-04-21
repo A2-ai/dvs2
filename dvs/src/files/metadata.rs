@@ -14,7 +14,7 @@ pub struct FileMetadata {
     pub hashes: Hashes,
     pub size: u64,
     pub created_by: String,
-    pub add_time: String,
+    pub add_time: jiff::Timestamp,
     pub compression: Compression,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -37,7 +37,7 @@ impl FileMetadata {
             hashes,
             size,
             created_by: whoami::username().unwrap_or_else(|_| "unknown".to_string()),
-            add_time: jiff::Timestamp::now().to_string(),
+            add_time: jiff::Timestamp::now(),
             compression,
             message,
         }
@@ -54,7 +54,7 @@ impl FileMetadata {
 
         let (hashes, size) = Hashes::compute_from_path(path.as_ref(), &[])?;
         let created_by = whoami::username()?;
-        let add_time = jiff::Timestamp::now().to_string();
+        let add_time = jiff::Timestamp::now();
 
         Ok(Self {
             hashes,
@@ -220,6 +220,33 @@ mod tests {
         assert_eq!(metadata.hashes.blake3.len(), 64);
         assert_eq!(metadata.size, 11);
         assert_eq!(metadata.message, Some("test message".to_string()));
+    }
+
+    /// Locks in the `.dvs` JSON wire format for `add_time`: RFC 3339 with a `Z`
+    /// suffix (UTC). Changing `FileMetadata.add_time` from `String` to
+    /// `jiff::Timestamp` must keep the serialized form identical so existing
+    /// `.dvs` files round-trip unchanged.
+    #[test]
+    fn file_metadata_add_time_serde_roundtrip_rfc3339() {
+        let blake3 = "a".repeat(64);
+        let json = format!(
+            r#"{{
+                "hashes": {{"blake3": "{blake3}"}},
+                "size": 11,
+                "created_by": "tester",
+                "add_time": "2024-01-02T03:04:05Z",
+                "compression": "none"
+            }}"#
+        );
+        let meta: FileMetadata =
+            serde_json::from_str(&json).expect("parse FileMetadata with RFC 3339 timestamp");
+        assert_eq!(meta.add_time.to_string(), "2024-01-02T03:04:05Z");
+
+        let reserialized = serde_json::to_string(&meta).expect("serialize FileMetadata");
+        assert!(
+            reserialized.contains("\"add_time\":\"2024-01-02T03:04:05Z\""),
+            "add_time must serialize as RFC 3339 string; got: {reserialized}"
+        );
     }
 
     #[test]

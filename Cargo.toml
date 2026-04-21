@@ -28,7 +28,7 @@ log = "0.4.29"
 blake3 = "1.8.3"
 walkdir = "2"
 md5 = "0.8.0"
-jiff = "0.2.18"
+jiff = { version = "0.2.18", features = ["serde"] }
 anyhow = "1.0.100"
 whoami = "2"
 uuid = "1.20.0"
