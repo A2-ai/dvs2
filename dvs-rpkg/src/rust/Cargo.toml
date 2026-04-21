@@ -18,13 +18,23 @@ default = []
 nonapi = ["miniextendr-api/nonapi"]
 connections = ["miniextendr-api/connections"]
 
-# Source-of-truth deps: git for miniextendr, monorepo path for dvs.
+# Source-of-truth deps: git for both miniextendr and dvs.
+#
+# Both use git so the crate is resolvable when R extracts `dvs-rpkg/`
+# alone into a tempdir (rv sync / install.packages() / remotes::install_github()),
+# which does NOT bring sibling monorepo crates along. A path dep to
+# `../../../dvs` fails `cargo metadata` in that context.
+#
 # `cargo revendor --freeze` rewrites these to vendor/ paths when packaging
 # for CRAN. The frozen form is produced by `just vendor` and shipped in
 # inst/vendor.tar.xz; never commit the frozen Cargo.toml itself.
+#
+# Monorepo dev iterating on local `dvs`: add an uncommitted
+# `[patch."https://github.com/A2-ai/dvs2"] dvs = { path = "../../../dvs" }`
+# block, or rely on `just` recipes that vendor from the local checkout.
 [dependencies]
 miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", features = ["serde"] }
-dvs = { path = "../../../dvs" }
+dvs = { git = "https://github.com/A2-ai/dvs2", package = "dvs" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
