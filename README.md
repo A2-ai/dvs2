@@ -17,15 +17,19 @@ in — installing does not re-download crates. You still need a Rust toolchain
 
 ### Latest release
 
+Open the [Releases page][releases], pick the version you want, and copy the
+`dvs_<version>.tar.gz` asset URL:
+
 ```r
 install.packages(
-  "https://github.com/A2-ai/dvs2/releases/latest/download/dvs_<version>.tar.gz",
+  "https://github.com/A2-ai/dvs2/releases/download/v0.3.0/dvs_0.3.0.tar.gz",
   repos = NULL, type = "source"
 )
 ```
 
-Substitute `<version>` for the current release. See [Releases][releases] for
-available versions.
+(Replace `v0.3.0` / `0.3.0` with the version you want. GitHub's
+`/releases/latest/download/<asset>` redirect can't be used directly here
+because the asset filename includes the version number.)
 
 ### Dev build from an open PR
 

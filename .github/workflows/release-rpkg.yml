@@ -121,7 +121,7 @@ jobs:
         id: tarball
         run: |
           set -euo pipefail
-          TARBALL=$(find . -maxdepth 1 -name 'dvs_*.tar.gz' | head -1)
+          TARBALL=$(find . -maxdepth 1 -name 'dvs_*.tar.gz' -print -quit)
           test -n "$TARBALL" || { echo "::error::R CMD build did not produce a tarball"; exit 1; }
           TARBALL="${TARBALL#./}"
           echo "path=$TARBALL" >> "$GITHUB_OUTPUT"
@@ -182,7 +182,7 @@ jobs:
           set -euo pipefail
           TAG="pr-${PR_NUM}-dev"
           SHORT_SHA="${HEAD_SHA:0:8}"
-          SRC=$(find . -maxdepth 1 -name 'dvs_*.tar.gz' | head -1)
+          SRC=$(find . -maxdepth 1 -name 'dvs_*.tar.gz' -print -quit)
           SRC="${SRC#./}"
           # dvs_0.3.0.9000.tar.gz -> dvs_0.3.0.9000-pr<N>-<sha>.tar.gz
           ASSET="${SRC%.tar.gz}-pr${PR_NUM}-${SHORT_SHA}.tar.gz"
@@ -223,25 +223,20 @@ jobs:
           EOF
           )
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            # Delete existing dvs_* assets so old-commit assets don't pile up.
-            mapfile -t OLD < <(gh release view "$TAG" --json assets -q '.assets[].name' | grep '^dvs_' || true)
-            for name in "${OLD[@]}"; do
-              gh release delete-asset "$TAG" "$name" --yes || true
-            done
-            gh release upload "$TAG" "$ASSET" "${ASSET}.sha256"
-            gh release edit "$TAG" \
-              --target "$HEAD_SHA" \
-              --title "Dev build for PR #${PR_NUM}" \
-              --notes "$NOTES" \
-              --prerelease
-          else
-            gh release create "$TAG" "$ASSET" "${ASSET}.sha256" \
-              --target "$HEAD_SHA" \
-              --prerelease \
-              --title "Dev build for PR #${PR_NUM}" \
-              --notes "$NOTES"
-          fi
+          # Delete any existing release + tag so we create fresh on the new
+          # commit SHA. `gh release edit --target` does not reliably move
+          # the tag on published prereleases, so we don't rely on it.
+          # Tolerate missing release or tag.
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          # Belt-and-braces: if the release existed but delete failed to
+          # remove the tag, drop the tag explicitly via the git refs API.
+          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" 2>/dev/null || true
+
+          gh release create "$TAG" "$ASSET" "${ASSET}.sha256" \
+            --target "$HEAD_SHA" \
+            --prerelease \
+            --title "Dev build for PR #${PR_NUM}" \
+            --notes "$NOTES"
 
           echo "install_url=$INSTALL_URL" >> "$GITHUB_OUTPUT"
 
@@ -343,7 +338,7 @@ jobs:
         id: tarball
         run: |
           set -euo pipefail
-          TARBALL=$(find . -maxdepth 1 -name 'dvs_*.tar.gz' | head -1)
+          TARBALL=$(find . -maxdepth 1 -name 'dvs_*.tar.gz' -print -quit)
           TARBALL="${TARBALL#./}"
           VERSION="${TARBALL#dvs_}"
           VERSION="${VERSION%.tar.gz}"
