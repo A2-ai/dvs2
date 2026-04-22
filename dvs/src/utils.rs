@@ -40,24 +40,21 @@ const TB: u64 = 1_024 * 1_024 * 1_024 * 1_024;
 pub fn format_size(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB", "PB"];
 
-    if bytes < KB {
-        return format!("{bytes} B");
+    if bytes == 0 {
+        return "0 B".to_string();
     }
 
-    let mut value = bytes as f64;
-    let mut idx = 0;
-    while value >= 1024.0 && idx + 1 < UNITS.len() {
-        value /= 1024.0;
+    // Each unit is 2^10× the previous, so ilog2(bytes) / 10 picks the unit.
+    let mut idx = ((bytes.ilog2() / 10) as usize).min(UNITS.len() - 1);
+    let mut rounded = (bytes as f64 / (1u64 << (idx * 10)) as f64).round() as u64;
+
+    // Rounding can spill into the next unit (e.g. 1023.6 KB → 1024 → 1 MB).
+    if rounded >= 1024 && idx + 1 < UNITS.len() {
         idx += 1;
+        rounded = (bytes as f64 / (1u64 << (idx * 10)) as f64).round() as u64;
     }
 
-    // If rounding to an integer would hit 1024, promote to the next unit.
-    if value.round() >= 1024.0 && idx + 1 < UNITS.len() {
-        value /= 1024.0;
-        idx += 1;
-    }
-
-    format!("{} {}", value.round() as u64, UNITS[idx])
+    format!("{rounded} {}", UNITS[idx])
 }
 
 /// Takes a human formatted byte size and convert it to the number of bytes
