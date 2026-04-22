@@ -124,7 +124,7 @@ struct StatusRowFull<'a> {
 impl<'a> From<&'a FileMetadata> for StatusRowFull<'a> {
     fn from(m: &'a FileMetadata) -> Self {
         Self {
-            size: m.size.to_string(),
+            size: format_size(m.size),
             hash: m.hashes.blake3.as_str(),
             created_by: m.created_by.as_str(),
             add_time: m.add_time.to_string(),
@@ -376,7 +376,7 @@ fn try_main() -> Result<()> {
                         .filter_map(|fs| match &fs.detail {
                             StatusDetail::Success { status, metadata } => {
                                 let size = match metadata {
-                                    Some(m) => m.size.to_string(),
+                                    Some(m) => format_size(m.size),
                                     None => String::new(),
                                 };
                                 Some(StatusRow {
