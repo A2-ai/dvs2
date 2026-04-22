@@ -30,19 +30,37 @@ const MB: u64 = 1_024 * 1_024;
 const GB: u64 = 1_024 * 1_024 * 1_024;
 const TB: u64 = 1_024 * 1_024 * 1_024 * 1_024;
 
-/// Formats a byte count into a human-readable string (e.g. "10.5 MB").
+/// Formats a byte count into a human-readable string (e.g. "10.5 MB", "3 MB").
 /// Uses base-1024 divisors to match `ls -h` / `du -h` output.
+///
+/// - Whole numbers are rendered without a trailing `.0` (`1 MB`, not `1.0 MB`).
+/// - Values that would round to `1024.0 <unit>` promote to the next unit
+///   (`1048575 B` → `1 MB`, never `1024.0 KB`).
 pub fn format_size(bytes: u64) -> String {
-    if bytes >= TB {
-        format!("{:.1} TB", bytes as f64 / TB as f64)
-    } else if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB", "PB"];
+
+    if bytes < KB {
+        return format!("{bytes} B");
+    }
+
+    let mut value = bytes as f64;
+    let mut idx = 0;
+    while value >= 1024.0 && idx + 1 < UNITS.len() {
+        value /= 1024.0;
+        idx += 1;
+    }
+
+    // If rounding to one decimal would hit 1024.0, promote to the next unit.
+    let rounded = (value * 10.0).round() / 10.0;
+    if rounded >= 1024.0 && idx + 1 < UNITS.len() {
+        value = rounded / 1024.0;
+        idx += 1;
+    }
+
+    if ((value * 10.0).round() as i64) % 10 == 0 {
+        format!("{:.0} {}", value, UNITS[idx])
     } else {
-        format!("{bytes} B")
+        format!("{:.1} {}", value, UNITS[idx])
     }
 }
 
@@ -139,5 +157,30 @@ mod tests {
         assert!(parse_size("").is_err());
         assert!(parse_size("MB").is_err());
         assert!(parse_size("500XB").is_err());
+    }
+
+    #[test]
+    fn format_size_drops_trailing_zero() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(500), "500 B");
+        assert_eq!(format_size(KB), "1 KB");
+        assert_eq!(format_size(MB), "1 MB");
+        assert_eq!(format_size(GB), "1 GB");
+        assert_eq!(format_size(TB), "1 TB");
+        assert_eq!(format_size(3 * MB), "3 MB");
+    }
+
+    #[test]
+    fn format_size_keeps_fractions() {
+        assert_eq!(format_size(KB + KB / 2), "1.5 KB");
+        assert_eq!(format_size(MB + MB / 2), "1.5 MB");
+    }
+
+    #[test]
+    fn format_size_rolls_over_at_1024() {
+        // bytes just below the next unit must not render as "1024.0 <unit>"
+        assert_eq!(format_size(MB - 1), "1 MB");
+        assert_eq!(format_size(GB - 1), "1 GB");
+        assert_eq!(format_size(TB - 1), "1 TB");
     }
 }
