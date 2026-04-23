@@ -12,9 +12,9 @@ test_that("dvs_add on a single Theoph CSV returns a tibble with bytes columns", 
   )
   expect_s3_class(result$size, "dvs_bytes")
   expect_s3_class(result$stored_size, "dvs_bytes")
-  expect_equal(typeof(unclass(result$size)), "integer")
-  expect_equal(typeof(unclass(result$stored_size)), "integer")
-  expect_true(result$size > 0L)
+  expect_equal(typeof(unclass(result$size)), "double")
+  expect_equal(typeof(unclass(result$stored_size)), "double")
+  expect_true(result$size > 0)
   expect_true(nzchar(result$hash))
   expect_equal(result$outcome, "copied")
 })
@@ -33,7 +33,7 @@ test_that("dvs_add on several shuffled Theoph variants produces distinct hashes"
   expect_equal(nrow(result), 3L)
   expect_equal(length(unique(result$hash)), 3L)
   expect_true(all(result$outcome == "copied"))
-  expect_true(all(result$size > 0L))
+  expect_true(all(result$size > 0))
 })
 
 test_that("re-adding the same path reports 'present'", {
@@ -80,4 +80,26 @@ test_that("dvs_add on nonexistent path errors", {
   expect_error(
     dvs_add(paths = file.path(getwd(), "does-not-exist.csv"))
   )
+})
+
+test_that("dvs_add with glob picks up matching files", {
+  new_dvs_test_repo()
+  write_theoph_shuffled("data_a.csv", seed = 7)
+  write_theoph_shuffled("data_b.csv", seed = 8)
+  writeLines("other", "notes.txt")
+
+  result <- dvs_add(glob = "*.csv")
+  expect_s3_class(result, "tbl_df")
+  expect_equal(nrow(result), 2L)
+  expect_setequal(basename(result$path), c("data_a.csv", "data_b.csv"))
+})
+
+test_that("dvs_add accepts a message without error", {
+  new_dvs_test_repo()
+  write_theoph("t.csv")
+  result <- dvs_add(
+    paths = file.path(getwd(), "t.csv"),
+    message = "added theoph"
+  )
+  expect_equal(result$outcome, "copied")
 })

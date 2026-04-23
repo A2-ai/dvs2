@@ -65,6 +65,23 @@ test_that("dvs_status ignores untracked files (files never added)", {
   expect_equal(basename(result$path), "tracked.csv")
 })
 
+test_that("dvs_status with paths and recursive=TRUE restricts to a subtree", {
+  new_dvs_test_repo()
+  dir.create("sub")
+  write_theoph_shuffled("top.csv", seed = 11)
+  write_theoph_shuffled(file.path("sub", "nested.csv"), seed = 12)
+  dvs_add(
+    paths = c(
+      file.path(getwd(), "top.csv"),
+      file.path(getwd(), "sub", "nested.csv")
+    )
+  )
+
+  subtree <- dvs_status(paths = "sub", recursive = TRUE)
+  expect_equal(nrow(subtree), 1L)
+  expect_equal(basename(subtree$path), "nested.csv")
+})
+
 test_that("dvs_status returns POSIXct add_time and dvs_bytes size", {
   new_dvs_test_repo()
   write_theoph("t.csv")
@@ -74,5 +91,5 @@ test_that("dvs_status returns POSIXct add_time and dvs_bytes size", {
   expect_s3_class(result$add_time, "POSIXct")
   expect_false(any(is.na(result$add_time)))
   expect_s3_class(result$size, "dvs_bytes")
-  expect_true(typeof(unclass(result$size)) %in% c("integer", "double"))
+  expect_equal(typeof(unclass(result$size)), "double")
 })
