@@ -42,19 +42,14 @@ dvs_add <- function(
     progress_callback = progress_callback
   )
 
-  result$size <- structure(
-    result$size, class = "dvs_bytes"
-  )
-  result$stored_size <- structure(
-    result$stored_size, class = "dvs_bytes"
-  )
-
-
-  if (requireNamespace("tibble", quietly = TRUE)) {
-    tibble::as_tibble(result)
-  } else {
-    result
+  if (!is.null(result$size)) {
+    result$size <- new_dvs_bytes(result$size)
   }
+  if (!is.null(result$stored_size)) {
+    result$stored_size <- new_dvs_bytes(result$stored_size)
+  }
+
+  tibble::as_tibble(result)
 }
 
 #' @inherit dvs_status_impl title description params
@@ -75,15 +70,11 @@ dvs_status <- function(
       status = status
     )
 
-  status_data_frame$size <- structure(
-    status_data_frame$size, class = "dvs_bytes"
-  )
-
-  if (requireNamespace("tibble", quietly = TRUE)) {
-    tibble::as_tibble(status_data_frame)
-  } else {
-    status_data_frame
+  if (!is.null(status_data_frame$size)) {
+    status_data_frame$size <- new_dvs_bytes(status_data_frame$size)
   }
+
+  tibble::as_tibble(status_data_frame)
 }
 
 #' @inherit dvs_get_impl title description params
@@ -103,13 +94,9 @@ dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
     progress_callback = progress_callback
   )
 
-  get_data_frame$size <- structure(
-    get_data_frame$size, class = "dvs_bytes"
-  )
-
-  if (requireNamespace("tibble", quietly = TRUE)) {
-    tibble::as_tibble(get_data_frame)
-  } else {
-    get_data_frame
+  if (!is.null(get_data_frame$size)) {
+    get_data_frame$size <- new_dvs_bytes(get_data_frame$size)
   }
+
+  tibble::as_tibble(get_data_frame)
 }

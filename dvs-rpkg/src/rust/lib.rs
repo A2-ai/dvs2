@@ -26,7 +26,7 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddResult, Compression, FileMetadata, FileProgress, FileStatus, GetResult, Hashes, Status,
+    AddDetail, Compression, FileMetadata, FileProgress, FileStatus, GetResult, Hashes, Status,
     StatusDetail, StatusFilter, add_files, get_files, get_status, set_num_threads,
 };
 
@@ -213,7 +213,7 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
+) -> Result<ColumnarDataFrame> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
@@ -251,7 +251,22 @@ pub(crate) fn dvs_add(
         )?
     };
 
-    Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
+    // Rebuild `stored_size` as an atomic numeric column. The serde-based
+    // `vec_to_dataframe` path can't infer the inner type when every row has
+    // `stored_size = None` (e.g. dry_run) and falls back to a list column.
+    // `Vec<Option<u64>>::into_sexp` emits INTSXP (or REALSXP for wide
+    // values) with `NA` for `None`.
+    let stored_sizes: Vec<Option<u64>> = results
+        .iter()
+        .map(|r| match &r.detail {
+            AddDetail::Success { stored_size, .. } => *stored_size,
+            AddDetail::Error { .. } => None,
+        })
+        .collect();
+    let stored_size_sexp = stored_sizes.into_sexp();
+
+    Ok(miniextendr_api::serde::vec_to_dataframe(&results)?
+        .with_column("stored_size", stored_size_sexp))
 }
 
 /// Valid status filter choices for [`dvs_status`].

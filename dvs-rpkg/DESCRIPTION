@@ -17,11 +17,12 @@ Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 SystemRequirements: Cargo (Rust package manager), rustc >= 1.85.0
 Imports:
-    cli
+    cli,
+    pillar,
+    tibble
 LinkingTo:
     cli
 Suggests:
-    tibble,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
 Config/build/bootstrap: TRUE
