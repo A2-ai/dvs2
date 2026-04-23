@@ -5,9 +5,11 @@ test_that("dvs_status on an empty repo returns an empty tibble", {
   expect_equal(nrow(result), 0L)
 })
 
-test_that("dvs_status() defaults to showing ALL statuses (not only 'current')", {
-  new_dvs_test_repo()
-
+# Plant one file in each of the three filterable statuses:
+#   current.csv  -> Status::Current (added, unchanged)
+#   absent.csv   -> Status::Absent (added, then deleted on disk)
+#   unsynced.csv -> Status::Unsynced (added, then modified on disk)
+plant_three_statuses <- function() {
   write_theoph_shuffled("current.csv", seed = 10)
   write_theoph_shuffled("absent.csv", seed = 20)
   write_theoph_shuffled("unsynced.csv", seed = 30)
@@ -17,9 +19,13 @@ test_that("dvs_status() defaults to showing ALL statuses (not only 'current')", 
       c("current.csv", "absent.csv", "unsynced.csv")
     )
   )
-
   file.remove("absent.csv")
   writeLines("totally different content", "unsynced.csv")
+}
+
+test_that("dvs_status() with no filter shows all three statuses", {
+  new_dvs_test_repo()
+  plant_three_statuses()
 
   result <- dvs_status()
 
@@ -28,29 +34,71 @@ test_that("dvs_status() defaults to showing ALL statuses (not only 'current')", 
   expect_setequal(result$status, c("current", "absent", "unsynced"))
 })
 
-test_that("dvs_status filters by status", {
+test_that("dvs_status(status = 'current') returns only current", {
   new_dvs_test_repo()
+  plant_three_statuses()
 
-  write_theoph_shuffled("a.csv", seed = 1)
-  write_theoph_shuffled("b.csv", seed = 2)
-  write_theoph_shuffled("c.csv", seed = 3)
-  dvs_add(paths = file.path(getwd(), c("a.csv", "b.csv", "c.csv")))
+  result <- dvs_status(status = "current")
+  expect_equal(nrow(result), 1L)
+  expect_equal(result$status, "current")
+})
 
-  file.remove("b.csv")
-  writeLines("different", "c.csv")
+test_that("dvs_status(status = 'absent') returns only absent", {
+  new_dvs_test_repo()
+  plant_three_statuses()
 
-  only_current <- dvs_status(status = "current")
-  only_absent <- dvs_status(status = "absent")
-  absent_or_unsynced <- dvs_status(status = c("absent", "unsynced"))
+  result <- dvs_status(status = "absent")
+  expect_equal(nrow(result), 1L)
+  expect_equal(result$status, "absent")
+})
 
-  expect_equal(nrow(only_current), 1L)
-  expect_equal(only_current$status, "current")
+test_that("dvs_status(status = 'unsynced') returns only unsynced", {
+  new_dvs_test_repo()
+  plant_three_statuses()
 
-  expect_equal(nrow(only_absent), 1L)
-  expect_equal(only_absent$status, "absent")
+  result <- dvs_status(status = "unsynced")
+  expect_equal(nrow(result), 1L)
+  expect_equal(result$status, "unsynced")
+})
 
-  expect_equal(nrow(absent_or_unsynced), 2L)
-  expect_setequal(absent_or_unsynced$status, c("absent", "unsynced"))
+test_that("dvs_status(status = c('current','absent')) returns that pair", {
+  new_dvs_test_repo()
+  plant_three_statuses()
+
+  result <- dvs_status(status = c("current", "absent"))
+  expect_equal(nrow(result), 2L)
+  expect_setequal(result$status, c("current", "absent"))
+})
+
+test_that("dvs_status(status = c('current','unsynced')) returns that pair", {
+  new_dvs_test_repo()
+  plant_three_statuses()
+
+  result <- dvs_status(status = c("current", "unsynced"))
+  expect_equal(nrow(result), 2L)
+  expect_setequal(result$status, c("current", "unsynced"))
+})
+
+test_that("dvs_status(status = c('absent','unsynced')) returns that pair", {
+  new_dvs_test_repo()
+  plant_three_statuses()
+
+  result <- dvs_status(status = c("absent", "unsynced"))
+  expect_equal(nrow(result), 2L)
+  expect_setequal(result$status, c("absent", "unsynced"))
+})
+
+test_that("dvs_status(status = c('current','absent','unsynced')) == no filter", {
+  new_dvs_test_repo()
+  plant_three_statuses()
+
+  explicit_all <- dvs_status(status = c("current", "absent", "unsynced"))
+  default_all <- dvs_status()
+
+  expect_equal(nrow(explicit_all), 3L)
+  expect_setequal(explicit_all$status, c("current", "absent", "unsynced"))
+  expect_setequal(explicit_all$path, default_all$path)
+  expect_setequal(explicit_all$status, default_all$status)
 })
 
 test_that("dvs_status ignores untracked files (files never added)", {
