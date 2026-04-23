@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod backends;
+pub mod batch;
 mod cache;
 pub mod config;
 mod files;
@@ -12,11 +13,12 @@ pub mod progress;
 pub(crate) mod utils;
 
 pub use backends::Backend;
+pub use batch::BatchOutcome;
 pub use config::Compression;
-pub use files::add::{AddDetail, AddResult, add_files};
-pub use files::get::{GetDetail, GetResult, get_files};
+pub use files::add::{AddError, AddSuccess, add_files};
+pub use files::get::{GetError, GetSuccess, get_files};
 pub use files::metadata::FileMetadata;
-pub use files::status::{FileStatus, StatusDetail, StatusFilter, get_status};
+pub use files::status::{StatusError, StatusFilter, StatusSuccess, get_status};
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use paths::{AddPathStatus, DvsPaths, find_repo_root};

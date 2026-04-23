@@ -29,9 +29,10 @@ connections = ["miniextendr-api/connections"]
 # for CRAN. The frozen form is produced by `just vendor` and shipped in
 # inst/vendor.tar.xz; never commit the frozen Cargo.toml itself.
 #
-# Monorepo dev iterating on local `dvs`: add an uncommitted
-# `[patch."https://github.com/A2-ai/dvs2"] dvs = { path = "../../../dvs" }`
-# block, or rely on `just` recipes that vendor from the local checkout.
+# Monorepo dev uses the sibling `../../../dvs` checkout, and `just vendor`
+# freezes that local crate into `vendor/` / `inst/vendor.tar.xz`. When the
+# package is built outside the monorepo, `configure` rewrites this patch to
+# the vendored copy before cargo runs.
 [dependencies]
 # TEMPORARY branch pins — remove after the upstream PRs land:
 #   * miniextendr#297: `ColumnarDataFrame::with_column`
@@ -52,3 +53,6 @@ codegen-units = 1
 
 [profile.release]
 codegen-units = 1
+
+[patch."https://github.com/A2-ai/dvs2"]
+dvs = { path = "../../../dvs" }

@@ -13,26 +13,6 @@ use crate::paths::DvsPaths;
 use crate::utils::get_threadpool;
 use crate::{Status, cache};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FileStatus {
-    pub path: PathBuf,
-    #[serde(flatten)]
-    pub detail: StatusDetail,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(untagged)]
-pub enum StatusDetail {
-    Success {
-        status: Status,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metadata: Option<FileMetadata>,
-    },
-    Error {
-        error: String,
-    },
-}
-
 /// Which paths to get status for
 /// eg you can pass dir1/ dir2/ and it will expand to dir1/* dir2/*
 /// If `recursive` is `true`, then it will expand to dir1/**/* dir2/**/*
@@ -128,7 +108,10 @@ fn get_file_status(
     }
 }
 
-pub fn get_status(paths: &DvsPaths, filter: Option<&StatusFilter>) -> Result<Vec<FileStatus>> {
+pub fn get_status(
+    paths: &DvsPaths,
+    filter: Option<&StatusFilter>,
+) -> Result<crate::BatchOutcome<StatusSuccess, StatusError>> {
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
     let cache = try_open_cache(paths);
@@ -149,46 +132,113 @@ pub fn get_status(paths: &DvsPaths, filter: Option<&StatusFilter>) -> Result<Vec
 
     let pool = get_threadpool(entries.len())?;
 
-    let mut results: Vec<FileStatus> = pool.install(|| {
+    let mut rows: Vec<Row> = pool.install(|| {
         entries
             .into_par_iter()
-            .filter_map(|dvs_path| {
+            .map(|dvs_path| {
                 let relative = match dvs_path.strip_prefix(&dvs_directory) {
                     Ok(r) => r.with_extension(""),
                     Err(e) => {
-                        return Some(FileStatus {
-                            path: dvs_path,
-                            detail: StatusDetail::Error {
-                                error: format!("failed to determine relative path: {e}"),
-                            },
+                        return Row::Err(StatusError::RelativePath {
+                            metadata_path: dvs_path.clone(),
+                            reason: e.to_string(),
                         });
                     }
                 };
                 if let Some(f) = filter {
                     if !f.matches(&relative) {
-                        return None;
+                        return Row::Skip;
                     }
                 }
-                let detail = match get_file_status(paths, &relative, cache.as_ref()) {
-                    Ok((status, file_metadata)) => StatusDetail::Success {
+                match get_file_status(paths, &relative, cache.as_ref()) {
+                    Ok((status, metadata)) => Row::Ok(StatusSuccess {
+                        path: relative,
                         status,
-                        metadata: file_metadata,
-                    },
-                    Err(e) => StatusDetail::Error {
-                        error: e.to_string(),
-                    },
-                };
-                Some(FileStatus {
-                    path: relative.to_path_buf(),
-                    detail,
-                })
+                        metadata,
+                    }),
+                    Err(e) => {
+                        let reason = e.to_string();
+                        if reason.contains("blake3") || reason.contains("hash") {
+                            Row::Err(StatusError::HashFailure {
+                                path: relative,
+                                reason,
+                            })
+                        } else {
+                            Row::Err(StatusError::MetadataRead {
+                                path: relative,
+                                reason,
+                            })
+                        }
+                    }
+                }
             })
             .collect()
     });
-    results.sort_by(|a, b| a.path.cmp(&b.path));
+    rows.sort_by(|a, b| status_row_key(a).cmp(status_row_key(b)));
 
-    log::debug!("Found {} tracked files", results.len());
-    Ok(results)
+    let mut outcome = crate::BatchOutcome::<StatusSuccess, StatusError>::new();
+    for row in rows {
+        match row {
+            Row::Ok(success) => outcome.ok.push(success),
+            Row::Err(err) => outcome.err.push(err),
+            Row::Skip => {}
+        }
+    }
+
+    log::debug!(
+        "Found {} tracked files ({} errors)",
+        outcome.ok.len(),
+        outcome.err.len()
+    );
+    Ok(outcome)
+}
+
+/// Successful status row for a single tracked file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StatusSuccess {
+    pub path: PathBuf,
+    pub status: Status,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<FileMetadata>,
+}
+
+/// Structured failure for a single file in `get_status`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StatusError {
+    /// Internal: could not determine the path relative to the `.dvs` folder.
+    RelativePath { metadata_path: PathBuf, reason: String },
+    /// Reading the `.dvs` metadata file failed.
+    MetadataRead { path: PathBuf, reason: String },
+    /// Hashing the on-disk file to compare against metadata failed.
+    HashFailure { path: PathBuf, reason: String },
+}
+
+impl StatusError {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            StatusError::RelativePath { .. } => "relative_path",
+            StatusError::MetadataRead { .. } => "metadata_read",
+            StatusError::HashFailure { .. } => "hash_failure",
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Row {
+    Ok(StatusSuccess),
+    Err(StatusError),
+    Skip,
+}
+
+fn status_row_key(row: &Row) -> &Path {
+    match row {
+        Row::Ok(success) => success.path.as_path(),
+        Row::Err(StatusError::RelativePath { metadata_path, .. }) => metadata_path.as_path(),
+        Row::Err(StatusError::MetadataRead { path, .. }) => path.as_path(),
+        Row::Err(StatusError::HashFailure { path, .. }) => path.as_path(),
+        Row::Skip => Path::new(""),
+    }
 }
 
 #[cfg(test)]
@@ -280,6 +330,38 @@ mod tests {
     }
 
     #[test]
+    fn status_error_serializes_with_snake_case_kind() {
+        let cases: Vec<(StatusError, &str)> = vec![
+            (
+                StatusError::RelativePath {
+                    metadata_path: "a".into(),
+                    reason: "x".into(),
+                },
+                "relative_path",
+            ),
+            (
+                StatusError::MetadataRead {
+                    path: "a".into(),
+                    reason: "x".into(),
+                },
+                "metadata_read",
+            ),
+            (
+                StatusError::HashFailure {
+                    path: "a".into(),
+                    reason: "x".into(),
+                },
+                "hash_failure",
+            ),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.kind(), expected);
+            let json = serde_json::to_value(&err).unwrap();
+            assert_eq!(json["kind"], expected);
+        }
+    }
+
+    #[test]
     fn get_file_status_returns_unsynced_when_file_modified() {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
@@ -324,18 +406,14 @@ mod tests {
                 .unwrap();
         }
 
-        let statuses = get_status(&paths, None).unwrap();
-        assert_eq!(statuses.len(), 3);
+        let outcome = get_status(&paths, None).unwrap();
+        assert!(outcome.err.is_empty());
+        assert_eq!(outcome.ok.len(), 3);
 
         // All should be Current
-        for status in &statuses {
-            match &status.detail {
-                StatusDetail::Success { status, metadata } => {
-                    assert_eq!(*status, Status::Current);
-                    assert!(metadata.is_some());
-                }
-                StatusDetail::Error { error } => panic!("unexpected error: {error}"),
-            }
+        for status in &outcome.ok {
+            assert_eq!(status.status, Status::Current);
+            assert!(status.metadata.is_some());
         }
     }
 
@@ -489,16 +567,18 @@ mod tests {
             paths: vec![PathBuf::from("dir1")],
             recursive: false,
         };
-        let statuses = get_status(&paths, Some(&filter)).unwrap();
-        assert_eq!(statuses.len(), 1);
-        assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
+        let outcome = get_status(&paths, Some(&filter)).unwrap();
+        assert!(outcome.err.is_empty());
+        assert_eq!(outcome.ok.len(), 1);
+        assert_eq!(outcome.ok[0].path, PathBuf::from("dir1/b.txt"));
 
         // Absolute path filter via from_user_paths
         let abs_path = paths.repo_root().join("dir1/b.txt");
         let filter = StatusFilter::from_user_paths(vec![abs_path], false, &paths);
-        let statuses = get_status(&paths, Some(&filter)).unwrap();
-        assert_eq!(statuses.len(), 1);
-        assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
+        let outcome = get_status(&paths, Some(&filter)).unwrap();
+        assert!(outcome.err.is_empty());
+        assert_eq!(outcome.ok.len(), 1);
+        assert_eq!(outcome.ok[0].path, PathBuf::from("dir1/b.txt"));
     }
 
     #[test]

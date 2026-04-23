@@ -160,7 +160,6 @@ dependencies = [
 [[package]]
 name = "dvs"
 version = "0.3.0"
-source = "git+https://github.com/A2-ai/dvs2?branch=feat%2Fadd-time-posixct#a70f813130c7aa7365f4df411c1f571ff59bae11"
 dependencies = [
  "anyhow",
  "blake3",
@@ -479,7 +478,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "miniextendr-api"
 version = "0.1.0"
-source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#0d80e302ce676701e7608e82f11e8ac9be8ea82d"
+source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#456a81188bf8d1df24a7fef349e0e286985d813e"
 dependencies = [
  "ahash",
  "linkme",
@@ -491,7 +490,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-lint"
 version = "0.1.0"
-source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#0d80e302ce676701e7608e82f11e8ac9be8ea82d"
+source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#456a81188bf8d1df24a7fef349e0e286985d813e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -501,7 +500,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-macros"
 version = "0.1.0"
-source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#0d80e302ce676701e7608e82f11e8ac9be8ea82d"
+source = "git+https://github.com/A2-ai/miniextendr?branch=feat%2Fcolumnar-with-column#456a81188bf8d1df24a7fef349e0e286985d813e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -868,7 +867,7 @@ version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
 dependencies = [
- "winnow 1.0.1",
+ "winnow 1.0.2",
 ]
 
 [[package]]
@@ -1092,9 +1091,9 @@ checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 
 [[package]]
 name = "winnow"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09dac053f1cd375980747450bfc7250c264eaae0583872e845c0c7cd578872b5"
+checksum = "2ee1708bef14716a11bae175f579062d4554d95be2c6829f518df847b7b3fdd0"
 
 [[package]]
 name = "wit-bindgen"

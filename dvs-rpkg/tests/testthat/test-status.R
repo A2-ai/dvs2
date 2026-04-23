@@ -26,15 +26,32 @@ test_that("dvs_status returns add_time as POSIXct", {
   dvs_add(paths = data_file)
 
   result <- dvs_status()
-  expect_true("add_time" %in% names(result))
-  expect_s3_class(result$add_time, "POSIXct")
-  expect_false(any(is.na(result$add_time)))
-  expect_s3_class(result$size, "dvs_bytes")
+  expect_true("add_time" %in% names(result$ok))
+  expect_s3_class(result$ok$add_time, "POSIXct")
+  expect_false(any(is.na(result$ok$add_time)))
+  expect_s3_class(result$ok$size, "dvs_bytes")
 
   # Remove the tracked file so dvs_get has something to retrieve.
   # dvs_get resolves paths relative to the repo root (unlike dvs_add,
   # which accepts absolute paths), so feed it the repo-relative basename.
   file.remove(data_file)
   got <- dvs_get(paths = basename(data_file))
-  expect_s3_class(got$size, "dvs_bytes")
+  expect_s3_class(got$ok$size, "dvs_bytes")
+})
+
+test_that("dvs_status returns $ok only when nothing fails", {
+  tmp <- withr::local_tempdir()
+  withr::local_dir(tmp)
+  dir.create(".git")
+  storage <- withr::local_tempdir()
+  dvs::dvs_init(storage_path = storage)
+
+  writeLines("x", "a.csv")
+  dvs::dvs_add("a.csv")
+
+  res <- dvs::dvs_status()
+  expect_true(!is.null(res$ok))
+  expect_null(res$err)
+  expect_equal(nrow(res$ok), 1L)
+  expect_equal(res$ok$path, "a.csv")
 })

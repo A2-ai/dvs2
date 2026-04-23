@@ -93,21 +93,6 @@ fn get_file(
     Ok((Outcome::Copied, metadata.size))
 }
 
-/// Result of getting a single file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetResult {
-    pub path: PathBuf,
-    #[serde(flatten)]
-    pub detail: GetDetail,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum GetDetail {
-    Success { outcome: Outcome, size: u64 },
-    Error { error: String },
-}
-
 /// Gets files matching a glob pattern from DVS storage.
 ///
 /// The pattern is matched against tracked files (paths in metadata folder).
@@ -118,87 +103,174 @@ pub fn get_files(
     backend: &dyn Backend,
     dry_run: bool,
     on_file_start: Option<&OnFileStart>,
-) -> Result<Vec<GetResult>> {
+) -> Result<crate::BatchOutcome<GetSuccess, GetError>> {
     let matched_paths = paths.validate_for_get(&files);
     let pool = get_threadpool(matched_paths.len())?;
     let cache = try_open_cache(paths);
 
-    let mut results: Vec<GetResult> = pool.install(|| {
+    let mut rows: Vec<Row> = pool.install(|| {
         matched_paths
             .into_par_iter()
-            .map(|(relative_path, validation)| {
-                match validation {
-                    GetPathStatus::NotFound => {
-                        return GetResult {
-                            path: relative_path,
-                            detail: GetDetail::Error {
-                                error: "file not found".to_string(),
-                            },
-                        };
-                    }
-                    GetPathStatus::NotTracked => {
-                        return GetResult {
-                            path: relative_path,
-                            detail: GetDetail::Error {
-                                error: "not tracked by DVS".to_string(),
-                            },
-                        };
-                    }
-                    GetPathStatus::Tracked => {}
-                }
-                let file_size = {
-                    let meta_path = paths.metadata_path(&relative_path);
-                    std::fs::File::open(&meta_path)
-                        .ok()
-                        .and_then(|f| serde_json::from_reader::<_, FileMetadata>(f).ok())
-                        .map(|m| m.size)
-                        .unwrap_or(0)
-                };
-                let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
-                let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
+            .map(|(relative_path, validation)| match validation {
+                GetPathStatus::NotFound => Row::Err(GetError::NotFound {
+                    path: relative_path,
+                }),
+                GetPathStatus::NotTracked => Row::Err(GetError::NotTracked {
+                    path: relative_path,
+                }),
+                GetPathStatus::Tracked => {
+                    let file_size = {
+                        let meta_path = paths.metadata_path(&relative_path);
+                        std::fs::File::open(&meta_path)
+                            .ok()
+                            .and_then(|f| serde_json::from_reader::<_, FileMetadata>(f).ok())
+                            .map(|m| m.size)
+                            .unwrap_or(0)
+                    };
+                    let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
+                    let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
 
-                match get_file(
-                    backend,
-                    paths,
-                    &relative_path,
-                    cache.as_ref(),
-                    dry_run,
-                    on_bytes,
-                ) {
-                    Ok((outcome, size)) => {
-                        log::info!(
-                            "Successfully retrieved {} ({:?})",
-                            relative_path.display(),
-                            outcome
-                        );
-                        GetResult {
-                            path: relative_path,
-                            detail: GetDetail::Success { outcome, size },
+                    match get_file(
+                        backend,
+                        paths,
+                        &relative_path,
+                        cache.as_ref(),
+                        dry_run,
+                        on_bytes,
+                    ) {
+                        Ok((outcome, size)) => {
+                            log::info!(
+                                "Successfully retrieved {} ({:?})",
+                                relative_path.display(),
+                                outcome
+                            );
+                            Row::Ok(GetSuccess {
+                                path: relative_path,
+                                outcome,
+                                size,
+                            })
                         }
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to get {}: {e}", relative_path.display());
-                        GetResult {
-                            path: relative_path,
-                            detail: GetDetail::Error {
-                                error: e.to_string(),
-                            },
+                        Err(e) => {
+                            log::warn!("Failed to get {}: {e}", relative_path.display());
+                            classify_get_runtime_err(relative_path, e)
                         }
                     }
                 }
             })
             .collect()
     });
-    results.sort_by(|a, b| a.path.cmp(&b.path));
+    rows.sort_by(|a, b| {
+        let a_path = match a {
+            Row::Ok(success) => success.path.as_path(),
+            Row::Err(err) => err.path().unwrap_or(Path::new("")),
+        };
+        let b_path = match b {
+            Row::Ok(success) => success.path.as_path(),
+            Row::Err(err) => err.path().unwrap_or(Path::new("")),
+        };
+        a_path.cmp(b_path)
+    });
 
-    Ok(results)
+    let mut outcome = crate::BatchOutcome::<GetSuccess, GetError>::new();
+    for row in rows {
+        match row {
+            Row::Ok(success) => outcome.ok.push(success),
+            Row::Err(err) => outcome.err.push(err),
+        }
+    }
+
+    Ok(outcome)
+}
+
+/// Successful get of a single file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetSuccess {
+    pub path: PathBuf,
+    pub outcome: Outcome,
+    pub size: u64,
+}
+
+/// Structured failure for a single file in `get_files`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GetError {
+    /// Pre-flight: user path does not resolve to any tracked file.
+    NotFound { path: PathBuf },
+    /// Pre-flight: the file exists on disk but is not tracked by DVS.
+    NotTracked { path: PathBuf },
+    /// Pre-flight: glob pattern could not be compiled.
+    GlobFailure { pattern: String, reason: String },
+    /// Runtime: reading the `.dvs` metadata file failed.
+    MetadataRead { path: PathBuf, reason: String },
+    /// Runtime: stored object is missing in the backend for the tracked hash.
+    StorageMissing { path: PathBuf, hash: String },
+    /// Runtime: backend retrieval failed.
+    StorageRead { path: PathBuf, reason: String },
+    /// Runtime: retrieved object did not hash to the expected value.
+    HashMismatch {
+        path: PathBuf,
+        expected: String,
+        got: String,
+    },
+}
+
+impl GetError {
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            GetError::NotFound { path }
+            | GetError::NotTracked { path }
+            | GetError::MetadataRead { path, .. }
+            | GetError::StorageMissing { path, .. }
+            | GetError::StorageRead { path, .. }
+            | GetError::HashMismatch { path, .. } => Some(path.as_path()),
+            GetError::GlobFailure { .. } => None,
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            GetError::NotFound { .. } => "not_found",
+            GetError::NotTracked { .. } => "not_tracked",
+            GetError::GlobFailure { .. } => "glob_failure",
+            GetError::MetadataRead { .. } => "metadata_read",
+            GetError::StorageMissing { .. } => "storage_missing",
+            GetError::StorageRead { .. } => "storage_read",
+            GetError::HashMismatch { .. } => "hash_mismatch",
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Row {
+    Ok(GetSuccess),
+    Err(GetError),
+}
+
+fn classify_get_runtime_err(path: PathBuf, err: anyhow::Error) -> Row {
+    let reason = err.to_string();
+    if reason.contains("is not tracked") {
+        Row::Err(GetError::NotTracked { path })
+    } else if reason.starts_with("Storage file missing") {
+        let hash = reason.rsplit(':').next().unwrap_or("").trim().to_string();
+        Row::Err(GetError::StorageMissing { path, hash })
+    } else if reason.contains("does not match expected hash") {
+        Row::Err(GetError::HashMismatch {
+            path,
+            expected: String::new(),
+            got: String::new(),
+        })
+    } else if reason.contains("metadata") || reason.contains("serde_json") {
+        Row::Err(GetError::MetadataRead { path, reason })
+    } else {
+        Row::Err(GetError::StorageRead { path, reason })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::add_files;
-    use crate::files::add::AddDetail;
+    use crate::files::add::AddSuccess;
     use crate::files::status::get_status;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
     use uuid::Uuid;
@@ -308,12 +380,71 @@ mod tests {
         )
         .unwrap();
 
-        let results =
+        let outcome =
             get_files(vec!["nonexistent.csv".into()], &paths, backend, false, None).unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(
-            matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not found"))
-        );
+        assert!(outcome.ok.is_empty());
+        assert_eq!(outcome.err.len(), 1);
+        assert!(matches!(outcome.err[0], GetError::NotFound { .. }));
+    }
+
+    #[test]
+    fn get_error_serializes_with_snake_case_kind() {
+        let cases: Vec<(GetError, &str)> = vec![
+            (GetError::NotFound { path: "a".into() }, "not_found"),
+            (GetError::NotTracked { path: "a".into() }, "not_tracked"),
+            (
+                GetError::GlobFailure {
+                    pattern: "*".into(),
+                    reason: "x".into(),
+                },
+                "glob_failure",
+            ),
+            (
+                GetError::MetadataRead {
+                    path: "a".into(),
+                    reason: "x".into(),
+                },
+                "metadata_read",
+            ),
+            (
+                GetError::StorageMissing {
+                    path: "a".into(),
+                    hash: "h".into(),
+                },
+                "storage_missing",
+            ),
+            (
+                GetError::StorageRead {
+                    path: "a".into(),
+                    reason: "x".into(),
+                },
+                "storage_read",
+            ),
+            (
+                GetError::HashMismatch {
+                    path: "a".into(),
+                    expected: "x".into(),
+                    got: "y".into(),
+                },
+                "hash_mismatch",
+            ),
+        ];
+        for (err, expected_kind) in cases {
+            assert_eq!(err.kind(), expected_kind);
+            let json = serde_json::to_value(&err).unwrap();
+            assert_eq!(json["kind"], expected_kind);
+        }
+    }
+
+    #[test]
+    fn get_success_roundtrips_json() {
+        let s = GetSuccess {
+            path: "a".into(),
+            outcome: Outcome::Copied,
+            size: 10,
+        };
+        let back: GetSuccess = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.size, 10);
     }
 
     #[test]
@@ -326,12 +457,11 @@ mod tests {
         // Create a file on disk but don't dvs add it
         create_file(&root, "untracked.txt", b"hello");
 
-        let results =
+        let outcome =
             get_files(vec!["untracked.txt".into()], &paths, backend, false, None).unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(
-            matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not tracked"))
-        );
+        assert!(outcome.ok.is_empty());
+        assert_eq!(outcome.err.len(), 1);
+        assert!(matches!(outcome.err[0], GetError::NotTracked { .. }));
     }
 
     fn run_add_get_roundtrip(file_paths: Vec<PathBuf>, expected_files: &[&str]) {
@@ -345,7 +475,7 @@ mod tests {
         create_file(&root, "c.csv", b"c");
 
         // Add files
-        let results = add_files(
+        let outcome = add_files(
             file_paths.clone(),
             &paths,
             backend,
@@ -355,11 +485,12 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(results.len(), expected_files.len());
-        for result in &results {
+        assert!(outcome.err.is_empty());
+        assert_eq!(outcome.ok.len(), expected_files.len());
+        for result in &outcome.ok {
             assert!(matches!(
-                result.detail,
-                AddDetail::Success {
+                result,
+                AddSuccess {
                     outcome: Outcome::Copied,
                     ..
                 }
@@ -368,8 +499,13 @@ mod tests {
 
         // Verify correct files are tracked
         let statuses = get_status(&paths, None).unwrap();
-        assert_eq!(statuses.len(), expected_files.len());
-        let tracked_names: Vec<_> = statuses.iter().map(|s| s.path.to_str().unwrap()).collect();
+        assert!(statuses.err.is_empty());
+        assert_eq!(statuses.ok.len(), expected_files.len());
+        let tracked_names: Vec<_> = statuses
+            .ok
+            .iter()
+            .map(|status| status.path.to_str().unwrap())
+            .collect();
         for expected in expected_files {
             assert!(
                 tracked_names.contains(expected),
@@ -383,16 +519,11 @@ mod tests {
         }
 
         // Get files back
-        let results = get_files(file_paths, &paths, backend, false, None).unwrap();
-        assert_eq!(results.len(), expected_files.len());
-        for result in &results {
-            assert!(matches!(
-                result.detail,
-                GetDetail::Success {
-                    outcome: Outcome::Copied,
-                    size: _,
-                }
-            ));
+        let outcome = get_files(file_paths, &paths, backend, false, None).unwrap();
+        assert!(outcome.err.is_empty());
+        assert_eq!(outcome.ok.len(), expected_files.len());
+        for result in &outcome.ok {
+            assert_eq!(result.outcome, Outcome::Copied);
         }
 
         // Verify files restored

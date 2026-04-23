@@ -60,26 +60,27 @@ rpkg-configure:
     bash ./configure
 
 rpkg-build *args:
-    cargo build --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cd {{quote(rpkg_dir / "src/rust")}} && cargo build {{args}}
 
 rpkg-build-release *args:
-    cargo build --manifest-path={{quote(rpkg_manifest)}} --release {{args}}
+    cd {{quote(rpkg_dir / "src/rust")}} && cargo build --release {{args}}
 
 rpkg-test *args:
-    cargo test --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    just vendor
+    cd {{quote(rpkg_dir / "src/rust")}} && cargo test {{args}}
     bash {{quote(rpkg_dir / "tests/rv")}}
 
 rpkg-clippy *args:
-    cargo clippy --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cd {{quote(rpkg_dir / "src/rust")}} && cargo clippy {{args}}
 
 rpkg-check *args:
-    cargo check --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cd {{quote(rpkg_dir / "src/rust")}} && cargo check {{args}}
 
 rpkg-fmt *args:
-    cargo fmt --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cd {{quote(rpkg_dir / "src/rust")}} && cargo fmt {{args}}
 
 rpkg-update *args:
-    cargo update --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cd {{quote(rpkg_dir / "src/rust")}} && cargo update {{args}}
 
 rpkg-document:
     Rscript -e 'devtools::document("{{rpkg_dir}}")'
@@ -99,8 +100,13 @@ install-revendor:
 # crates leave Cargo.lock untouched, so without --force the cache check
 # skips re-vendoring and ships a stale tarball.
 vendor:
+    set -eu; \
+    manifest={{quote(rpkg_manifest)}}; \
+    manifest_backup=$(mktemp "${TMPDIR:-/tmp}/dvs-rpkg-cargo-toml.XXXXXX"); \
+    cp "$manifest" "$manifest_backup"; \
+    trap 'cp "$manifest_backup" "$manifest"; rm -f "$manifest_backup"' EXIT; \
     cargo revendor \
-      --manifest-path {{rpkg_dir}}/src/rust/Cargo.toml \
+      --manifest-path "$manifest" \
       --source-root . \
       --output {{rpkg_dir}}/vendor \
       --strip-all \

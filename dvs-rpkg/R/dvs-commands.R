@@ -42,19 +42,23 @@ dvs_add <- function(
     progress_callback = progress_callback
   )
 
-  result$size <- structure(
-    result$size, class = "dvs_bytes"
-  )
-  result$stored_size <- structure(
-    result$stored_size, class = "dvs_bytes"
-  )
-
-
-  if (requireNamespace("tibble", quietly = TRUE)) {
-    tibble::as_tibble(result)
-  } else {
-    result
+  if ("size" %in% names(result$ok)) {
+    result$ok$size <- structure(
+      result$ok$size, class = "dvs_bytes"
+    )
   }
+  if ("stored_size" %in% names(result$ok)) {
+    result$ok$stored_size <- structure(
+      result$ok$stored_size, class = "dvs_bytes"
+    )
+  }
+  if (requireNamespace("tibble", quietly = TRUE)) {
+    result$ok <- tibble::as_tibble(result$ok)
+    if (!is.null(result$err)) {
+      result$err <- tibble::as_tibble(result$err)
+    }
+  }
+  result
 }
 
 #' @inherit dvs_status_impl title description params
@@ -75,15 +79,18 @@ dvs_status <- function(
       status = status
     )
 
-  status_data_frame$size <- structure(
-    status_data_frame$size, class = "dvs_bytes"
-  )
-
-  if (requireNamespace("tibble", quietly = TRUE)) {
-    tibble::as_tibble(status_data_frame)
-  } else {
-    status_data_frame
+  if ("size" %in% names(status_data_frame$ok)) {
+    status_data_frame$ok$size <- structure(
+      status_data_frame$ok$size, class = "dvs_bytes"
+    )
   }
+  if (requireNamespace("tibble", quietly = TRUE)) {
+    status_data_frame$ok <- tibble::as_tibble(status_data_frame$ok)
+    if (!is.null(status_data_frame$err)) {
+      status_data_frame$err <- tibble::as_tibble(status_data_frame$err)
+    }
+  }
+  status_data_frame
 }
 
 #' @inherit dvs_get_impl title description params
@@ -96,20 +103,23 @@ dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
     progress_callback <- ProgressBarCallback$new()
   }
 
-  get_data_frame <- dvs_get_impl(
+  result <- dvs_get_impl(
     paths = paths,
     glob = glob,
     dry_run = dry_run,
     progress_callback = progress_callback
   )
 
-  get_data_frame$size <- structure(
-    get_data_frame$size, class = "dvs_bytes"
-  )
-
-  if (requireNamespace("tibble", quietly = TRUE)) {
-    tibble::as_tibble(get_data_frame)
-  } else {
-    get_data_frame
+  if ("size" %in% names(result$ok)) {
+    result$ok$size <- structure(
+      result$ok$size, class = "dvs_bytes"
+    )
   }
+  if (requireNamespace("tibble", quietly = TRUE)) {
+    result$ok <- tibble::as_tibble(result$ok)
+    if (!is.null(result$err)) {
+      result$err <- tibble::as_tibble(result$err)
+    }
+  }
+  result
 }

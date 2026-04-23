@@ -14,9 +14,8 @@ use std::thread;
 
 use miniextendr_api::externalptr::ExternalPtr;
 use miniextendr_api::into_r::IntoR;
-use miniextendr_api::serde::ColumnarDataFrame;
 use miniextendr_api::time::OffsetDateTime;
-use miniextendr_api::{AsSerializeRow, DataFrame, List, MatchArg, list, miniextendr, r_println};
+use miniextendr_api::{List, MatchArg, list, miniextendr, r_println};
 
 use anyhow::{Result, anyhow};
 use serde::Serialize;
@@ -26,8 +25,8 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddResult, Compression, FileMetadata, FileProgress, FileStatus, GetResult, Hashes, Status,
-    StatusDetail, StatusFilter, add_files, get_files, get_status, set_num_threads,
+    BatchOutcome, Compression, FileMetadata, FileProgress, Hashes, Status, StatusFilter,
+    StatusSuccess, add_files, get_files, get_status, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -128,6 +127,23 @@ impl ProgressBarCallback {
 
 // region: DVS operations
 
+/// Convert a BatchOutcome to an R list with `$ok` and optional `$err`.
+fn outcome_to_r<S, E>(outcome: BatchOutcome<S, E>) -> Result<List>
+where
+    S: Serialize,
+    E: Serialize,
+{
+    let ok_df = miniextendr_api::serde::vec_to_dataframe(&outcome.ok)
+        .map_err(|e| anyhow!("serializing ok rows: {e}"))?;
+    if outcome.err.is_empty() {
+        Ok(list!("ok" = ok_df))
+    } else {
+        let err_df = miniextendr_api::serde::vec_to_dataframe(&outcome.err)
+            .map_err(|e| anyhow!("serializing err rows: {e}"))?;
+        Ok(list!("ok" = ok_df, "err" = err_df))
+    }
+}
+
 /// Valid compression choices for [`dvs_init`].
 #[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
 #[match_arg(rename_all = "lower")]
@@ -213,20 +229,20 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<DataFrame<AsSerializeRow<AddResult>>> {
+) -> Result<List> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
-        .into_iter()
-        .collect();
-    if all_paths.is_empty() {
+    let (all_paths, mut resolve_errs) = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths);
+    if all_paths.is_empty() && resolve_errs.is_empty() {
         return Err(anyhow!("No files to add"));
     }
 
     let dry_run = dry_run.unwrap_or(false);
-    let results = if progress_callback.is_some() {
+    let mut outcome = if all_paths.is_empty() {
+        BatchOutcome::new()
+    } else if progress_callback.is_some() {
         run_with_progress(|tx| {
             let on_file_start = progress_on_file_start(tx);
             add_files(
@@ -250,8 +266,8 @@ pub(crate) fn dvs_add(
             None,
         )?
     };
-
-    Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
+    outcome.err.append(&mut resolve_errs);
+    outcome_to_r(outcome)
 }
 
 /// Valid status filter choices for [`dvs_status`].
@@ -296,7 +312,7 @@ pub(crate) fn dvs_status(
     #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
     #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
-) -> Result<ColumnarDataFrame> {
+) -> Result<List> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -313,64 +329,53 @@ pub(crate) fn dvs_status(
             &dvs_paths,
         ))
     };
-    let mut statuses = get_status(&dvs_paths, filter.as_ref())?;
+    let mut outcome = get_status(&dvs_paths, filter.as_ref())?;
     if !show_all {
-        statuses.retain(|x| match &x.detail {
-            StatusDetail::Success { status: s, .. } => {
-                status.iter().any(|c| *s == Status::from(*c))
-            }
-            StatusDetail::Error { .. } => true,
-        });
+        outcome
+            .ok
+            .retain(|row| status.iter().any(|choice| row.status == Status::from(*choice)));
     }
 
-    // Serialize through a local view that omits `add_time` from the serde
-    // path — jiff's `Timestamp` serde format is RFC 3339, and stringifying
-    // into a character column only to throw it away when appending the
-    // POSIXct column below is wasted work. The jiff timestamps are instead
-    // passed straight through to `time::OffsetDateTime` → POSIXct.
-    let views: Vec<FileStatusView<'_>> = statuses.iter().map(FileStatusView::from).collect();
-    let add_times: Vec<Option<OffsetDateTime>> = statuses
+    let views: Vec<StatusSuccessView<'_>> = outcome.ok.iter().map(StatusSuccessView::from).collect();
+    let add_times: Vec<Option<OffsetDateTime>> = outcome
+        .ok
         .iter()
-        .map(|s| match &s.detail {
-            StatusDetail::Success {
-                metadata: Some(m), ..
-            } => OffsetDateTime::from_unix_timestamp_nanos(m.add_time.as_nanosecond()).ok(),
-            _ => None,
+        .map(|status| match &status.metadata {
+            Some(metadata) => {
+                OffsetDateTime::from_unix_timestamp_nanos(metadata.add_time.as_nanosecond()).ok()
+            }
+            None => None,
         })
         .collect();
     let add_time_sexp = add_times.into_sexp();
 
-    Ok(miniextendr_api::serde::vec_to_dataframe(&views)?
+    let ok_df = miniextendr_api::serde::vec_to_dataframe(&views)?
         .drop("metadata_hashes_md5")
         .strip_prefix("metadata_hashes_")
         .strip_prefix("metadata_")
         .rename("blake3", "hash")
-        .with_column("add_time", add_time_sexp))
+        .with_column("add_time", add_time_sexp);
+
+    if outcome.err.is_empty() {
+        Ok(list!("ok" = ok_df))
+    } else {
+        let err_df = miniextendr_api::serde::vec_to_dataframe(&outcome.err)
+            .map_err(|e| anyhow!("serializing status err rows: {e}"))?;
+        Ok(list!("ok" = ok_df, "err" = err_df))
+    }
 }
 
-// region: FileStatus serde view (skips add_time)
+// region: StatusSuccess serde view (skips add_time)
 
-/// Serialize-only mirror of [`FileStatus`] whose [`FileMetadata`] view
+/// Serialize-only mirror of [`StatusSuccess`] whose [`FileMetadata`] view
 /// omits `add_time`. The caller appends `add_time` as a POSIXct column
 /// directly from the original `jiff::Timestamp` values.
 #[derive(Serialize)]
-struct FileStatusView<'a> {
+struct StatusSuccessView<'a> {
     path: &'a Path,
-    #[serde(flatten)]
-    detail: StatusDetailView<'a>,
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-enum StatusDetailView<'a> {
-    Success {
-        status: &'a Status,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metadata: Option<FileMetadataView<'a>>,
-    },
-    Error {
-        error: &'a str,
-    },
+    status: &'a Status,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<FileMetadataView<'a>>,
 }
 
 #[derive(Serialize)]
@@ -385,23 +390,12 @@ struct FileMetadataView<'a> {
     message: Option<&'a str>,
 }
 
-impl<'a> From<&'a FileStatus> for FileStatusView<'a> {
-    fn from(fs: &'a FileStatus) -> Self {
-        FileStatusView {
-            path: fs.path.as_path(),
-            detail: (&fs.detail).into(),
-        }
-    }
-}
-
-impl<'a> From<&'a StatusDetail> for StatusDetailView<'a> {
-    fn from(detail: &'a StatusDetail) -> Self {
-        match detail {
-            StatusDetail::Success { status, metadata } => StatusDetailView::Success {
-                status,
-                metadata: metadata.as_ref().map(FileMetadataView::from),
-            },
-            StatusDetail::Error { error } => StatusDetailView::Error { error },
+impl<'a> From<&'a StatusSuccess> for StatusSuccessView<'a> {
+    fn from(status: &'a StatusSuccess) -> Self {
+        StatusSuccessView {
+            path: status.path.as_path(),
+            status: &status.status,
+            metadata: status.metadata.as_ref().map(FileMetadataView::from),
         }
     }
 }
@@ -436,21 +430,21 @@ pub(crate) fn dvs_get(
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
+) -> Result<List> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let all_paths: Vec<_> = resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths)?
-        .into_iter()
-        .collect();
-    if all_paths.is_empty() {
+    let (all_paths, mut resolve_errs) = resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths);
+    if all_paths.is_empty() && resolve_errs.is_empty() {
         return Err(anyhow!("No files to get"));
     }
 
     let dry_run = dry_run.unwrap_or(false);
-    let results = if progress_callback.is_some() {
+    let mut outcome = if all_paths.is_empty() {
+        BatchOutcome::new()
+    } else if progress_callback.is_some() {
         run_with_progress(|tx| {
             let on_file_start = progress_on_file_start(tx);
             get_files(
@@ -464,7 +458,8 @@ pub(crate) fn dvs_get(
     } else {
         get_files(all_paths, &dvs_paths, config.backend(), dry_run, None)?
     };
-    Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
+    outcome.err.append(&mut resolve_errs);
+    outcome_to_r(outcome)
 }
 
 /// Set the number of threads used by DVS parallel operations.

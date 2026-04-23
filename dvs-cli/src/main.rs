@@ -1,3 +1,5 @@
+mod output;
+
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -13,8 +15,8 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddDetail, Compression, FileMetadata, FileProgress, GetDetail, Outcome, Status, StatusDetail,
-    StatusFilter, add_files, format_size, get_files, get_status, set_num_threads,
+    Compression, FileMetadata, FileProgress, Status, StatusFilter, add_files, format_size,
+    get_files, get_status, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -237,67 +239,40 @@ fn try_main() -> Result<()> {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
-                .into_iter()
-                .collect();
-            if all_paths.is_empty() {
+            let (all_paths, mut resolve_errs) =
+                resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths);
+            if all_paths.is_empty() && resolve_errs.is_empty() {
                 return Err(anyhow!("No files to add"));
             }
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
 
             let on_file_start = make_progress_callback(config.progress_bytes_threshold());
-            let results = add_files(
-                all_paths,
-                &dvs_paths,
-                config.backend(),
-                message,
-                config.compression(),
-                dry_run,
-                if show_progress {
-                    Some(&on_file_start)
-                } else {
-                    None
-                },
-            )?;
-            let has_errors = results
-                .iter()
-                .any(|r| matches!(r.detail, AddDetail::Error { .. }));
-            if cli.json {
-                println!("{}", serde_json::to_string(&results)?);
+            let mut outcome = if all_paths.is_empty() {
+                dvs::BatchOutcome::new()
             } else {
-                for result in &results {
-                    match &result.detail {
-                        AddDetail::Error { error: err } => {
-                            eprintln!("Error adding {}: {err}", result.path.display());
-                        }
-                        AddDetail::Success {
-                            outcome,
-                            hash,
-                            size,
-                            stored_size,
-                        } => match outcome {
-                            Outcome::Copied => {
-                                let msg = if dry_run { "To add" } else { "Added" };
-                                let stored_info = match stored_size {
-                                    Some(ss) => {
-                                        format!(" --> saved [{}]", format_size(*ss))
-                                    }
-                                    None => String::new(),
-                                };
-                                println!(
-                                    "{msg}: {} [{}]{stored_info} as {hash}",
-                                    result.path.display(),
-                                    format_size(*size),
-                                );
-                            }
-                            Outcome::Present => {}
-                        },
-                    }
-                }
+                add_files(
+                    all_paths,
+                    &dvs_paths,
+                    config.backend(),
+                    message,
+                    config.compression(),
+                    dry_run,
+                    if show_progress {
+                        Some(&on_file_start)
+                    } else {
+                        None
+                    },
+                )?
+            };
+            outcome.err.append(&mut resolve_errs);
+            if cli.json {
+                println!("{}", serde_json::to_string(&outcome)?);
+            } else {
+                output::print_add(&outcome.ok, &outcome.err, dry_run, format_size);
             }
-            if has_errors {
-                return Err(anyhow!("Some files failed to add"));
+            if !outcome.err.is_empty() {
+                std::process::exit(1);
             }
         }
         Command::Status {
@@ -320,80 +295,61 @@ fn try_main() -> Result<()> {
                     user_paths, recursive, &dvs_paths,
                 ))
             };
-            let mut statuses = get_status(&dvs_paths, filter.as_ref())?;
+            let mut outcome = get_status(&dvs_paths, filter.as_ref())?;
             if !show_all {
-                statuses.retain(|x| match &x.detail {
-                    StatusDetail::Success { status, .. } => {
-                        (current && *status == Status::Current)
-                            || (absent && *status == Status::Absent)
-                            || (unsynced && *status == Status::Unsynced)
-                    }
-                    StatusDetail::Error { .. } => true,
+                outcome.ok.retain(|status| {
+                    (current && status.status == Status::Current)
+                        || (absent && status.status == Status::Absent)
+                        || (unsynced && status.status == Status::Unsynced)
                 });
             }
-            let has_errors = statuses
-                .iter()
-                .any(|s| matches!(s.detail, StatusDetail::Error { .. }));
             if cli.json {
-                println!("{}", serde_json::to_string(&statuses)?);
-            } else if statuses.is_empty() {
-                if show_all {
-                    println!("No tracked files");
-                } else {
-                    println!("No tracked files matching the filter")
-                }
+                println!("{}", serde_json::to_string(&outcome)?);
             } else {
-                for file_status in &statuses {
-                    if let StatusDetail::Error { error } = &file_status.detail {
-                        eprintln!(
-                            "Error getting status for {}: {error}",
-                            file_status.path.display()
-                        );
+                output::print_status_failures(&outcome.err);
+                if outcome.ok.is_empty() {
+                    if show_all {
+                        println!("No tracked files");
+                    } else {
+                        println!("No tracked files matching the filter")
                     }
-                }
-
-                if with_metadata {
-                    let rows: Vec<StatusRowFull> = statuses
+                } else if with_metadata {
+                    let rows: Vec<StatusRowFull> = outcome
+                        .ok
                         .iter()
-                        .filter_map(|fs| match &fs.detail {
-                            StatusDetail::Success { status, metadata } => {
-                                let mut row = metadata
-                                    .as_ref()
-                                    .map(StatusRowFull::from)
-                                    .unwrap_or_default();
-                                row.path = fs.path.display().to_string();
-                                row.status = status.to_string();
-                                Some(row)
-                            }
-                            StatusDetail::Error { .. } => None,
+                        .map(|status| {
+                            let mut row = status
+                                .metadata
+                                .as_ref()
+                                .map(StatusRowFull::from)
+                                .unwrap_or_default();
+                            row.path = status.path.display().to_string();
+                            row.status = status.status.to_string();
+                            row
                         })
                         .collect();
                     let table = tabled::Table::new(rows).to_string();
                     println!("{table}");
                 } else {
-                    let rows: Vec<StatusRow> = statuses
+                    let rows: Vec<StatusRow> = outcome
+                        .ok
                         .iter()
-                        .filter_map(|fs| match &fs.detail {
-                            StatusDetail::Success { status, metadata } => {
-                                let size = match metadata {
-                                    Some(m) => format_size(m.size),
-                                    None => String::new(),
-                                };
-                                Some(StatusRow {
-                                    path: fs.path.display().to_string(),
-                                    status: status.to_string(),
-                                    size,
-                                })
-                            }
-                            StatusDetail::Error { .. } => None,
+                        .map(|status| StatusRow {
+                            path: status.path.display().to_string(),
+                            status: status.status.to_string(),
+                            size: status
+                                .metadata
+                                .as_ref()
+                                .map(|metadata| format_size(metadata.size))
+                                .unwrap_or_default(),
                         })
                         .collect();
                     let table = tabled::Table::new(rows).to_string();
                     println!("{table}");
                 }
             }
-            if has_errors {
-                return Err(anyhow!("Some files failed to get status"));
+            if !outcome.err.is_empty() {
+                std::process::exit(1);
             }
         }
         Command::Get {
@@ -404,55 +360,38 @@ fn try_main() -> Result<()> {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let all_paths: Vec<_> = resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths)?
-                .into_iter()
-                .collect();
-            if all_paths.is_empty() {
+            let (all_paths, mut resolve_errs) =
+                resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths);
+            if all_paths.is_empty() && resolve_errs.is_empty() {
                 return Err(anyhow!("No files to get"));
             }
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
 
             let on_file_start = make_progress_callback(config.progress_bytes_threshold());
-            let results = get_files(
-                all_paths,
-                &dvs_paths,
-                config.backend(),
-                dry_run,
-                if show_progress {
-                    Some(&on_file_start)
-                } else {
-                    None
-                },
-            )?;
-            let has_errors = results
-                .iter()
-                .any(|r| matches!(r.detail, GetDetail::Error { .. }));
-            if cli.json {
-                println!("{}", serde_json::to_string(&results)?);
+            let mut outcome = if all_paths.is_empty() {
+                dvs::BatchOutcome::new()
             } else {
-                let mut total_files = 0u64;
-                let mut total_bytes = 0u64;
-                for result in &results {
-                    match &result.detail {
-                        GetDetail::Success { outcome, size } => {
-                            if *outcome == Outcome::Copied {
-                                println!("{} [{}]", result.path.display(), format_size(*size));
-                                total_files += 1;
-                                total_bytes += size;
-                            }
-                        }
-                        GetDetail::Error { error } => {
-                            eprintln!("Error: {} - {}", result.path.display(), error)
-                        }
-                    }
-                }
-                if total_files > 0 {
-                    println!("Total: {} files, {}", total_files, format_size(total_bytes));
-                }
+                get_files(
+                    all_paths,
+                    &dvs_paths,
+                    config.backend(),
+                    dry_run,
+                    if show_progress {
+                        Some(&on_file_start)
+                    } else {
+                        None
+                    },
+                )?
+            };
+            outcome.err.append(&mut resolve_errs);
+            if cli.json {
+                println!("{}", serde_json::to_string(&outcome)?);
+            } else {
+                output::print_get(&outcome.ok, &outcome.err, format_size);
             }
-            if has_errors {
-                return Err(anyhow!("Some files failed to get"));
+            if !outcome.err.is_empty() {
+                std::process::exit(1);
             }
         }
     }
