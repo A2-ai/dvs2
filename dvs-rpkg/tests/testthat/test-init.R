@@ -1,14 +1,16 @@
 test_that("dvs_init creates storage and metadata folders", {
-  repo <- file.path(tempfile("dvs-repo-"))
-  storage <- file.path(tempfile("dvs-storage-"))
+  repo <- tempfile("dvs-repo-")
+  storage <- tempfile("dvs-storage-")
   dir.create(repo)
-
   old_wd <- getwd()
-  withr::defer({
-    setwd(old_wd)
-    unlink(repo, recursive = TRUE, force = TRUE)
-    unlink(storage, recursive = TRUE, force = TRUE)
-  })
+  on.exit(
+    {
+      setwd(old_wd)
+      unlink(repo, recursive = TRUE, force = TRUE)
+      unlink(storage, recursive = TRUE, force = TRUE)
+    },
+    add = TRUE
+  )
   setwd(repo)
 
   stopifnot(system2("git", c("init", "-q")) == 0L)
@@ -21,16 +23,18 @@ test_that("dvs_init creates storage and metadata folders", {
 })
 
 test_that("dvs_init respects metadata_folder_name", {
-  repo <- file.path(tempfile("dvs-repo-"))
-  storage <- file.path(tempfile("dvs-storage-"))
+  repo <- tempfile("dvs-repo-")
+  storage <- tempfile("dvs-storage-")
   dir.create(repo)
-
   old_wd <- getwd()
-  withr::defer({
-    setwd(old_wd)
-    unlink(repo, recursive = TRUE, force = TRUE)
-    unlink(storage, recursive = TRUE, force = TRUE)
-  })
+  on.exit(
+    {
+      setwd(old_wd)
+      unlink(repo, recursive = TRUE, force = TRUE)
+      unlink(storage, recursive = TRUE, force = TRUE)
+    },
+    add = TRUE
+  )
   setwd(repo)
 
   stopifnot(system2("git", c("init", "-q")) == 0L)
