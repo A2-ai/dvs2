@@ -11,4 +11,6 @@ repositories = [
 dependencies = [
   {name = "minirextendr", git = "https://github.com/A2-ai/miniextendr", branch = "main", directory = "minirextendr"},
     "cli",
+    "tibble",
+    "pillar",
 ]
