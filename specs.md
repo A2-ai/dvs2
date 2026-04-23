@@ -48,6 +48,15 @@ A file in a `dvs` project can be in 3 states:
 
 ## In-depth spec
 
+### errors / failures
+
+- [ ] describe --fail-fast
+- [ ] do we stop processing when an error occurred?
+
+#### CLI
+
+#### R package
+
 ### init
 
 init will always error if a `dvs.toml` already exists in the target directory.
@@ -55,6 +64,10 @@ This check is local: a `dvs.toml` in a parent directory does not prevent initial
 
 On partial failure (e.g., metadata folder or storage creation fails after `dvs.toml` is written),
 init attempts best-effort cleanup of local artifacts (`dvs.toml` and, if it didn't exist beforehand, the metadata folder) so that a retry is possible.
+
+A storage directory or backend is bound to one dvs repository.
+
+`metadata_folder_name` is omitted from `dvs.toml` if not specified.
 
 #### CLI
 
@@ -86,12 +99,21 @@ Options:
 
 #### Rust library
 
+- [ ] figure out the actual spec for the library, other than being the engine
+  behind both CLI and R package.
+
 Library takes a project directory and the config to save.
 
 #### R package
 
 ```r
-dvs_init(storage_path, root_dir = ".", group = NULL, metadata_folder_name = NULL, no_compression = FALSE)
+dvs_init(
+  storage_path,
+  root_dir = NULL,
+  group = NULL,
+  metadata_folder_name = NULL,
+  compression = c("zstd", "none")
+)
 ```
 
 - `storage_path`: where the data will be stored (required, same as CLI's `<PATH>`)
@@ -100,9 +122,14 @@ dvs_init(storage_path, root_dir = ".", group = NULL, metadata_folder_name = NULL
 - `metadata_folder_name`: custom name for the metadata folder (default `.dvs`)
 - `no_compression`: disable zstd compression of stored files
 
-Returns a list with `status = "initialized"`.
+Returns a list with `status = "initialized"`, invisibly.
 
 ### add
+
+- [ ] does not support folder as an argument
+- [ ] does not support overriding compression of the storage data, e.g. if repo
+  is not set to use compression, we cannot add one file that selectively is
+  then compressed.
 
 It only takes files as input, directories will not work unless combined with a glob. It can also take an optional
 message that will be recorded in the metadata file.
@@ -121,10 +148,12 @@ Symlinks are resolved before adding. If a symlink target resolves to a path outs
 Each `add` operation is atomic: the storage write and metadata update either both succeed or both roll back. A
 failure writing to storage will not leave behind a partial metadata file, and vice versa.
 
-You can also do a dry run from the CLI or the library that will return the outcome that would have happened  for each file but 
+You can also do a dry run from the CLI,the library, or R package that will return the outcome that would have happened for each file but
 without actually doing them.
 
 #### CLI
+
+- [ ] missing `-r, --recursive` options that `dvs status` has.
 
 ```shell
 ❯ dvs add --help
@@ -147,7 +176,7 @@ Options:
 You can run `dvs add *.csv` and it will be expanded by your shell before calling `dvs`.
 To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library.
 
-This will exit with `1` if one or more files could not be added to the storage (file does not exist, no permissions etc).
+This will exit with `1` if one or more files could not be added to the storage (file does not exist, no permissions, etc).
 
 #### Rust library
 
@@ -157,16 +186,19 @@ It otherwise returns a list of results sorted alphabetically by path, letting us
 #### R package
 
 ```r
-dvs_add(files = character(0), message, glob = NULL, dry_run = FALSE)
+dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 ```
 
 - `files`: character vector of file paths to add (can be empty if `glob` is provided)
-- `message`: optional message recorded in the metadata file. Omit or pass `NULL` to skip
+- `message`: optional message recorded in the metadata file.
 - `glob`: pattern to match files (same resolution rules as CLI `--glob`)
 - `dry_run`: if `TRUE`, returns what would be added without making changes
 
 Returns a data frame with one row per file. Errors if no files match.
 Glob resolution uses the same rules as the CLI — see the Globbing section.
+
+- [ ] Partial completion results in a list containing two elements named `result`
+and `error`, each containing data-frames describing the failures and successes.
 
 ### get
 
@@ -182,10 +214,12 @@ is deleted and the operation fails for that file.
 Users can use `get` with specific paths or globs. In practice those will be ran on the metadata folder rather
 than the actual project, to know what to pull but the resolution works the same way as `add`.
 
-You can also do a dry run from the CLI or the library that will return the outcome that would have happened for each file but
+You can also do a dry run from the CLI, R package or the library that will return the outcome that would have happened for each file but
 without actually doing them.
 
 #### CLI
+
+- [ ] missing `-r, --recursive` options that `dvs status` has.
 
 ```shell
 ❯ dvs get --help
@@ -207,13 +241,14 @@ Options:
 This will exit with `1` if one or more files could not be retrieved.
 
 #### Rust library
+
 The library automatically sets up parallelism and the only error it can return is if it couldn't set up the threadpool.
 It otherwise returns a list of results sorted alphabetically by path, letting users decide what to do with each.
 
 #### R package
 
 ```r
-dvs_get(files = character(0), glob = NULL, dry_run = FALSE)
+dvs_get(paths = character(0), glob = NULL, dry_run = NULL)
 ```
 
 - `files`: character vector of file paths to retrieve (can be empty if `glob` is provided)
@@ -222,7 +257,12 @@ dvs_get(files = character(0), glob = NULL, dry_run = FALSE)
 
 Returns a data frame with one row per file. Errors if no files match.
 
+- [ ] Partial completion results in a list containing two elements named `result`
+and `error`, each containing data-frames describing the failures and successes.
+
 ### status
+
+- [ ] does not show "untracked" files even when a folder is provided
 
 This returns the status (mentioned in the high level overview above) of the tracked files in the project.
 
@@ -260,10 +300,16 @@ as per-file errors in the result list.
 #### R package
 
 ```r
-dvs_status(current = FALSE, absent = FALSE, unsynced = FALSE)
+dvs_status(
+  paths = character(0),
+  recursive = NULL,
+  status = c("current", "absent", "unsynced")
+)
 ```
 
-- `current`, `absent`, `unsynced`: filter flags. When all are `FALSE` (default), all tracked files are returned. When one or more are `TRUE`, only files matching those states are returned. Errors are always included.
+- `paths` optional vector of files to retrieve status of
+- `status` represent the filter flags `current`, `absent`, `unsynced`.
+  When all are `FALSE` (default), all tracked files are returned. When one or more are `TRUE`, only files matching those states are returned. Errors are always included.
 
 Returns a data frame with one row per tracked file.
 
@@ -317,7 +363,6 @@ prevents partial blobs from appearing in storage mapping to an expected file.
 
 Stored files are set read-only after writing.
 
-
 ### Audit trail
 
 Every `add` operation is logged to an append-only audit file (`audit.log.jsonl`) in the storage directory. Each
@@ -326,11 +371,36 @@ entry records:
 - `operation_id`: a UUID grouping all files from one `add` invocation
 - `timestamp`: unix seconds
 - `user`: the system username of whoever ran the command
-- `file`: path and hashes of the added file
 - `action`: currently only `add`
+
+`add` is an object that contains
+
+- `file`: path and hashes of the added file
+- `compression`: `"zstd"` or `"none"`, see add section above
 
 The audit log is protected by a mutex so a single `dvs` process cannot corrupt it but there is no protection against
 multiple processes appending logs.
+
+Example:
+
+```json
+{
+  "operation_id": "93ca9155-b767-47e8-b433-a110f5943212",
+  "timestamp": 1776959650,
+  "user": "elea",
+  "action": {
+    "add": {
+      "file": {
+        "path": "data/derived/many34.csv",
+        "hashes": {
+          "blake3": "55539acdd1e0617c9180f8a593aeda480b7fab415faef16596f25098908b8487"
+        }
+      },
+      "compression": "zstd"
+    }
+  }
+}
+```
 
 ### Hash cache
 
@@ -342,10 +412,17 @@ and operations proceed without it if that also fails.
 
 ### Parallelism
 
+- [ ] update the threads strategy here to reflect that of current `dvs2`.
+
 `add`, `get`, and `status` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
 variable to control the thread count. If it is unset, the default is `min(available_parallelism * 4, 16)`.
 If it is set to a positive integer, the override is capped at 32. In both cases the final thread count is
 clamped to the number of files being processed.
+
+#### R package
+
+The environment variable `DVS_NUM_THREADS` takes precedence over the threadpool
+size set by the R package.
 
 ### Gitignore
 
