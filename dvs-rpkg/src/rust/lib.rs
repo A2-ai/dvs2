@@ -5,6 +5,7 @@
 //! `AsSerializeRow` / `ColumnarDataFrame` converters.
 
 mod cli_progress;
+mod test_support;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
