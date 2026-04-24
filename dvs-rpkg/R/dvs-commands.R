@@ -44,11 +44,6 @@ dvs_add <- function(
     progress_callback = progress_callback
   )
 
-  error_rows <- result[!is.na(result[["error"]]), ]
-  for (i in seq_len(nrow(error_rows))) {
-    warning("Error adding ", error_rows$path[i], ": ", error_rows$error[i], call. = FALSE)
-  }
-
   if (!is.null(result$size)) {
     result$size <- new_dvs_bytes(result$size)
   }
@@ -85,14 +80,6 @@ dvs_status <- function(
     } else {
       message("No tracked files matching the filter")
     }
-  } else {
-    error_rows <- status_data_frame[!is.na(status_data_frame[["error"]]), ]
-    for (i in seq_len(nrow(error_rows))) {
-      warning(
-        "Error getting status for ", error_rows$path[i], ": ", error_rows$error[i],
-        call. = FALSE
-      )
-    }
   }
 
   if (!is.null(status_data_frame$size)) {
@@ -121,11 +108,6 @@ dvs_get <- function(paths = character(0), glob = NULL, recursive = NULL, dry_run
     dry_run = dry_run,
     progress_callback = progress_callback
   )
-
-  error_rows <- get_data_frame[!is.na(get_data_frame[["error"]]), ]
-  for (i in seq_len(nrow(error_rows))) {
-    warning("Error: ", error_rows$path[i], " - ", error_rows$error[i], call. = FALSE)
-  }
 
   copied_mask <- !is.na(get_data_frame[["outcome"]]) & get_data_frame[["outcome"]] == "copied"
   total_files <- sum(copied_mask)
