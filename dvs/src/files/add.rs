@@ -31,7 +31,7 @@ pub enum AddDetail {
         outcome: Outcome,
         hash: String,
         size: u64,
-        stored_size: Option<u64>,
+        stored_size: u64,
     },
     Error {
         error: String,
@@ -176,6 +176,7 @@ pub fn add_files(
                             relative_path.display(),
                             outcome
                         );
+                        let stored_size = stored_size.unwrap_or(metadata.size);
                         AddResult {
                             path: relative_path,
                             detail: AddDetail::Success {
