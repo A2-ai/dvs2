@@ -48,10 +48,10 @@ A file in a `dvs` project can be in 3 states:
 
 ## In-depth spec
 
-### errors / failures
+### Errors / failures
 
-- [ ] describe --fail-fast
-- [ ] do we stop processing when an error occurred?
+All input must be evaluated, and errors as well as successes must be collated
+are reported back to the user.
 
 #### CLI
 
@@ -126,13 +126,8 @@ Returns a list with `status = "initialized"`, invisibly.
 
 ### add
 
-- [ ] does not support folder as an argument
-- [ ] does not support overriding compression of the storage data, e.g. if repo
-  is not set to use compression, we cannot add one file that selectively is
-  then compressed.
-
 It only takes files as input, directories will not work unless combined with a glob. It can also take an optional
-message that will be recorded in the metadata file.
+message that will be recorded in the metadata file. Similarly, `add` must not have a recursive option; The glob mechanism is sufficient, and intentional when used.
 
 This method follows a best-effort approach: even if some files failed to be added, it will still try to add everything
 and not stop.
@@ -152,8 +147,6 @@ You can also do a dry run from the CLI,the library, or R package that will retur
 without actually doing them.
 
 #### CLI
-
-- [ ] missing `-r, --recursive` options that `dvs status` has.
 
 ```shell
 ❯ dvs add --help
@@ -262,9 +255,8 @@ and `error`, each containing data-frames describing the failures and successes.
 
 ### status
 
-- [ ] does not show "untracked" files even when a folder is provided
-
-This returns the status (mentioned in the high level overview above) of the tracked files in the project.
+This returns the status (mentioned in the high level overview above)
+ of the tracked files in the project.
 
 #### CLI
 
@@ -309,7 +301,7 @@ dvs_status(
 
 - `paths` optional vector of files to retrieve status of
 - `status` represent the filter flags `current`, `absent`, `unsynced`.
-  When all are `FALSE` (default), all tracked files are returned. When one or more are `TRUE`, only files matching those states are returned. Errors are always included.
+  When omitted, all three states are present in the returned data-frame, otherwise serval filtering status can be provided.
 
 Returns a data frame with one row per tracked file.
 
@@ -433,7 +425,11 @@ the `add` operation to fail.
 
 ### Globbing
 
+<<<<<<< HEAD
 `add`, `status`, `get` accept a `--glob` flag. The resolution works the following way:
+=======
+`add`, `status`,  `get` both accept a `--glob` flag. The resolution works the following way:
+>>>>>>> 6f99880 (updated spec based on slack feedback)
 
 - Explicit files: added/retrieved directly (glob ignored)
 - Explicit directories with a glob: walked and filtered by glob
