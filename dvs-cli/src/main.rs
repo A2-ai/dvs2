@@ -279,11 +279,10 @@ fn try_main() -> Result<()> {
                         } => match outcome {
                             Outcome::Copied => {
                                 let msg = if dry_run { "To add" } else { "Added" };
-                                let stored_info = match stored_size {
-                                    Some(ss) => {
-                                        format!(" --> saved [{}]", format_size(*ss))
-                                    }
-                                    None => String::new(),
+                                let stored_info = if size != stored_size {
+                                    format!(" --> saved [{}]", format_size(*stored_size))
+                                } else {
+                                    String::new()
                                 };
                                 println!(
                                     "{msg}: {} [{}]{stored_info} as {hash}",
