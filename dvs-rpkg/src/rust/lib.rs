@@ -1,8 +1,6 @@
 //! dvs-rpkg: Data Version Control System R Bindings
 //!
 //! This crate provides R bindings for the DVS (Data Version Control System).
-//! Results are returned as R DataFrames (and Lists) via miniextendr's
-//! `AsSerializeRow` / `ColumnarDataFrame` converters.
 
 mod cli_progress;
 mod test_support;
