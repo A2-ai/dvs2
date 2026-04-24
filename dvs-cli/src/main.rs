@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde_json::json;
 use tabled::Tabled;
+use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
 
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
@@ -367,7 +368,10 @@ fn try_main() -> Result<()> {
                             StatusDetail::Error { .. } => None,
                         })
                         .collect();
-                    let table = tabled::Table::new(rows).to_string();
+                    let mut table = tabled::Table::new(rows);
+                    table
+                        .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
+                        .with(Modify::new(Rows::first()).with(Alignment::left()));
                     println!("{table}");
                 } else {
                     let rows: Vec<StatusRow> = statuses
@@ -387,7 +391,10 @@ fn try_main() -> Result<()> {
                             StatusDetail::Error { .. } => None,
                         })
                         .collect();
-                    let table = tabled::Table::new(rows).to_string();
+                    let mut table = tabled::Table::new(rows);
+                    table
+                        .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
+                        .with(Modify::new(Rows::first()).with(Alignment::left()));
                     println!("{table}");
                 }
             }
