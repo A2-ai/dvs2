@@ -7,7 +7,7 @@
 new_dvs_bytes(x)
 }
 \arguments{
-\item{x}{input to coerce}
+\item{x}{atomic numeric / integer / logical vector (incl. \code{NA})}
 }
 \value{
 a \code{dvs_bytes} object inheriting from \code{numeric}
@@ -18,13 +18,4 @@ tag byte-size columns so that pillar renders them as human-readable sizes
 in tibble output. Stored as \code{double} to safely represent file sizes up to
 \code{2^53} bytes — \code{integer} in R is 32 bits and would silently overflow at
 ~2 GB.
-}
-\details{
-\code{x} may be:
-\itemize{
-\item \code{NULL} — treated as \code{numeric(0)}
-\item an atomic numeric / integer / logical vector (incl. \code{NA})
-\item a list of length-1 numeric vectors or \code{NULL}s, as produced by serde
-\verb{Option<u64>} (e.g. \code{stored_size} in \code{dvs_add(dry_run = TRUE)})
-}
 }

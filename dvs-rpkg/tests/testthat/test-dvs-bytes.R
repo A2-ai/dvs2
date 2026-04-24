@@ -16,20 +16,21 @@ test_that("new_dvs_bytes handles NA, NULL and zero-length input", {
   expect_true(is.na(unclass(new_dvs_bytes(NA_real_))))
 })
 
-test_that("new_dvs_bytes and format_byte_size handle 2.5 GB without overflow", {
-  size_bytes <- 2.5 * 1024^3  # 2,684,354,560 — exceeds 32-bit integer max
+test_that("2.5 GiB u64 from Rust survives the trip to dvs_bytes and formats correctly", {
+  # dvs_test_2_5_gib_bytes() crosses the Rust → R boundary as a numeric
+  size_bytes <- dvs:::dvs_test_2_5_gib_bytes()
 
-  # R-side: new_dvs_bytes must store it as double without precision loss
+  expect_equal(size_bytes, 2.5 * 1024^3)
+  expect_equal(typeof(size_bytes), "double")
+
   x <- new_dvs_bytes(size_bytes)
   expect_s3_class(x, "dvs_bytes")
   expect_equal(typeof(unclass(x)), "double")
-  expect_equal(unclass(x), size_bytes)
+  expect_equal(unclass(x), 2.5 * 1024^3)
   expect_false(is.na(unclass(x)))
 
-  # Rust-side: format_byte_size receives the u64 and must format it in GB
-  formatted <- format_byte_size(size_bytes)
-  expect_match(formatted, "GB")
-  expect_match(formatted, "2\\.5")
+  expect_match(format_byte_size(size_bytes), "2\\.5")
+  expect_match(format_byte_size(size_bytes), "GB")
 })
 
 test_that("dvs_bytes + and - preserve class", {
