@@ -461,7 +461,7 @@ fn try_main() -> Result<()> {
 
 fn main() {
     if let Err(e) = try_main() {
-        eprintln!("{e:?}");
+        eprintln!("Error: {e}");
         ::std::process::exit(1)
     }
 }
