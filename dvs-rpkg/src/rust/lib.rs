@@ -26,7 +26,7 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddDetail, Compression, FileMetadata, FileProgress, FileStatus, GetResult, Hashes, Status,
+    Compression, FileMetadata, FileProgress, FileStatus, GetResult, Hashes, Status,
     StatusDetail, StatusFilter, add_files, get_files, get_status, set_num_threads,
 };
 
@@ -251,22 +251,7 @@ pub(crate) fn dvs_add(
         )?
     };
 
-    // Rebuild `stored_size` as an atomic numeric column. The serde-based
-    // `vec_to_dataframe` path can't infer the inner type when every row has
-    // `stored_size = None` (e.g. dry_run) and falls back to a list column.
-    // `Vec<Option<u64>>::into_sexp` emits INTSXP (or REALSXP for wide
-    // values) with `NA` for `None`.
-    let stored_sizes: Vec<Option<u64>> = results
-        .iter()
-        .map(|r| match &r.detail {
-            AddDetail::Success { stored_size, .. } => *stored_size,
-            AddDetail::Error { .. } => None,
-        })
-        .collect();
-    let stored_size_sexp = stored_sizes.into_sexp();
-
-    Ok(miniextendr_api::serde::vec_to_dataframe(&results)?
-        .with_column("stored_size", stored_size_sexp))
+    Ok(miniextendr_api::serde::vec_to_dataframe(&results)?)
 }
 
 /// Valid status filter choices for [`dvs_status`].

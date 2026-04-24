@@ -9,16 +9,27 @@ test_that("new_dvs_bytes stores as double so >2 GB sizes don't overflow", {
   expect_false(is.na(unclass(big)))
 })
 
-test_that("new_dvs_bytes coerces list(NULL) dry_run values to NA", {
-  x <- new_dvs_bytes(list(NULL, 100, NULL))
-  expect_equal(typeof(unclass(x)), "double")
-  expect_equal(unclass(x), c(NA_real_, 100, NA_real_))
-})
-
-test_that("new_dvs_bytes handles NULL and zero-length input", {
+test_that("new_dvs_bytes handles NA, NULL and zero-length input", {
   expect_equal(length(new_dvs_bytes(NULL)), 0L)
   expect_s3_class(new_dvs_bytes(NULL), "dvs_bytes")
   expect_equal(length(new_dvs_bytes(integer(0))), 0L)
+  expect_true(is.na(unclass(new_dvs_bytes(NA_real_))))
+})
+
+test_that("new_dvs_bytes and format_byte_size handle 2.5 GB without overflow", {
+  size_bytes <- 2.5 * 1024^3  # 2,684,354,560 — exceeds 32-bit integer max
+
+  # R-side: new_dvs_bytes must store it as double without precision loss
+  x <- new_dvs_bytes(size_bytes)
+  expect_s3_class(x, "dvs_bytes")
+  expect_equal(typeof(unclass(x)), "double")
+  expect_equal(unclass(x), size_bytes)
+  expect_false(is.na(unclass(x)))
+
+  # Rust-side: format_byte_size receives the u64 and must format it in GB
+  formatted <- format_byte_size(size_bytes)
+  expect_match(formatted, "GB")
+  expect_match(formatted, "2\\.5")
 })
 
 test_that("dvs_bytes + and - preserve class", {

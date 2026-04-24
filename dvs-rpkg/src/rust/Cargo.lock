@@ -160,7 +160,7 @@ dependencies = [
 [[package]]
 name = "dvs"
 version = "0.3.0"
-source = "git+https://github.com/A2-ai/dvs2?branch=feat%2Fadd-time-posixct#a70f813130c7aa7365f4df411c1f571ff59bae11"
+source = "git+https://github.com/A2-ai/dvs2?branch=main#0ffc789d39a3f4b1bcc06559298fbffc540d01d3"
 dependencies = [
  "anyhow",
  "blake3",
