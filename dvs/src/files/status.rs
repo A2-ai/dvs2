@@ -147,6 +147,10 @@ pub fn get_status(paths: &DvsPaths, filter: Option<&StatusFilter>) -> Result<Vec
         .map(|e| e.into_path())
         .collect();
 
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let pool = get_threadpool(entries.len())?;
 
     let mut results: Vec<FileStatus> = pool.install(|| {
@@ -337,6 +341,16 @@ mod tests {
                 StatusDetail::Error { error } => panic!("unexpected error: {error}"),
             }
         }
+    }
+
+    #[test]
+    fn get_status_returns_empty_vec_for_repo_with_no_tracked_files() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let paths = make_paths(&root, &config);
+
+        let statuses = get_status(&paths, None).unwrap();
+        assert!(statuses.is_empty());
     }
 
     #[test]

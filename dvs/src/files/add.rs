@@ -97,6 +97,9 @@ pub fn add_files(
     on_file_start: Option<&OnFileStart>,
 ) -> Result<Vec<AddResult>> {
     let matched_paths = paths.validate_for_add(&files);
+    if matched_paths.is_empty() {
+        return Ok(Vec::new());
+    }
     let pool = get_threadpool(matched_paths.len())?;
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
