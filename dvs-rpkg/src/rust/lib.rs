@@ -204,6 +204,9 @@ pub(crate) fn dvs_init(
 /// @param paths Character vector of file paths to add to DVS storage.
 /// @param message Optional commit message describing why the files were added.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
+///   Globs use a literal path separator: `*.csv` only matches files in the
+///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
+///   match recursively across subdirectories.
 /// @param dry_run If `TRUE`, report what would be added without modifying anything.
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
@@ -428,6 +431,9 @@ impl<'a> From<&'a FileMetadata> for FileMetadataView<'a> {
 ///
 /// @param paths Character vector of file paths to retrieve from DVS storage.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
+///   Globs use a literal path separator: `*.csv` only matches files in the
+///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
+///   match recursively across subdirectories.
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
