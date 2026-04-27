@@ -11,7 +11,10 @@ dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 
 \item{message}{Optional commit message describing why the files were added.}
 
-\item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).}
+\item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).
+Globs use a literal path separator: \verb{*.csv} only matches files in the
+target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} to
+match recursively across subdirectories.}
 
 \item{dry_run}{If \code{TRUE}, report what would be added without modifying anything.}
 }
