@@ -27,8 +27,8 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileMetadata, FileProgress, FileStatus, GetResult, Hashes, Status,
-    StatusDetail, StatusFilter, add_files, get_files, get_status, set_num_threads,
+    Compression, FileMetadata, FileProgress, FileStatus, GetResult, Hashes, Status, StatusDetail,
+    StatusFilter, add_files, get_files, get_status, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
