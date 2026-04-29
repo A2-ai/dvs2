@@ -9,7 +9,13 @@ ROOT_DIR="$(cd "${RPKG_DIR}/.." && pwd)"
 TMPDIR="$(mktemp -d)"
 LIB="$TMPDIR/Rlib"
 mkdir -p "$LIB"
-trap 'rm -rf "$TMPDIR"' EXIT
+
+RESTORE_PATHS=("dvs-rpkg/src/rust/Cargo.toml" "dvs-rpkg/src/rust/Cargo.lock")
+cleanup() {
+  rm -rf "$TMPDIR"
+  ( cd "$ROOT_DIR" && git checkout HEAD -- "${RESTORE_PATHS[@]}" 2>/dev/null || true )
+}
+trap cleanup EXIT
 
 echo "=== just vendor (populate inst/vendor.tar.xz) ==="
 ( cd "$ROOT_DIR" && just vendor )
@@ -26,7 +32,14 @@ CARGO_HOME="$TMPDIR/cargo-home" \
 CARGO_NET_OFFLINE=1 \
   R CMD INSTALL --no-test-load --library="$LIB" "$TARBALL"
 
-echo "=== verify dvs is loadable ==="
-Rscript -e ".libPaths(c('$LIB', .libPaths())); library(dvs); cat('dvs loaded successfully\n')"
+echo "=== FFI smoke: dvs_init ==="
+SMOKE_ROOT="$(mktemp -d)"
+SMOKE_STORE="$(mktemp -d)"
+Rscript -e "
+  .libPaths(c('$LIB', .libPaths()))
+  dvs::dvs_init('$SMOKE_STORE', root_dir = '$SMOKE_ROOT')
+  cat('dvs FFI smoke OK\n')
+"
+rm -rf "$SMOKE_ROOT" "$SMOKE_STORE"
 
 echo "PASS"
