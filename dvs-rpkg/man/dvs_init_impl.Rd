@@ -27,6 +27,10 @@ dvs_init_impl(
 \item{compression}{Compression method for stored files. One of \code{"zstd"}
 (default) or \code{"none"}.}
 }
+\value{
+A single-row data frame describing the resulting configuration:
+\code{compression}, \code{metadata_folder_name}, \code{backend_path}, \code{backend_group}.
+}
 \description{
 Creates the \code{.dvs} metadata folder and configures storage for versioned files.
 }

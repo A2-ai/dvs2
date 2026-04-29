@@ -15,7 +15,7 @@ use miniextendr_api::into_r::IntoR;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
 use miniextendr_api::time::OffsetDateTime;
-use miniextendr_api::{DataFrame, List, MatchArg, list, miniextendr, r_println};
+use miniextendr_api::{DataFrame, MatchArg, miniextendr};
 
 use anyhow::{Result, anyhow};
 use serde::Serialize;
@@ -150,15 +150,17 @@ impl From<CompressionChoice> for Compression {
 /// @param metadata_folder_name Name of the metadata folder. Defaults to `.dvs`.
 /// @param compression Compression method for stored files. One of `"zstd"`
 ///   (default) or `"none"`.
+/// @return A single-row data frame describing the resulting configuration:
+///   `compression`, `metadata_folder_name`, `backend_path`, `backend_group`.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_init_impl", invisible)]
+#[miniextendr(r_name = "dvs_init_impl")]
 pub(crate) fn dvs_init(
     storage_path: PathBuf,
     #[miniextendr(default = "NULL")] root_dir: Option<PathBuf>,
     #[miniextendr(default = "NULL")] group: Option<String>,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
     #[miniextendr(match_arg, default = "\"zstd\"")] compression: CompressionChoice,
-) -> Result<List> {
+) -> Result<DataFrame> {
     let root_dir = match root_dir {
         Some(d) => d,
         None => std::env::current_dir()?,
@@ -170,10 +172,10 @@ pub(crate) fn dvs_init(
         config.set_metadata_folder_name(m);
     }
 
-    init(&root_dir, config)?;
+    // `init` enforces the in-repo storage guard and is all-or-nothing.
+    init(&root_dir, config.clone())?;
 
-    r_println!("DVS Initialized");
-    Ok(list!("status" = "initialized"))
+    Ok(miniextendr_api::serde::vec_to_dataframe(&[config])?)
 }
 
 /// Add files to DVS-managed storage.

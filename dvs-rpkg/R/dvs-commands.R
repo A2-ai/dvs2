@@ -10,13 +10,14 @@ dvs_init <- function(
   compression = c("zstd", "none")
 ) {
   compression <- match.arg(compression)
-  dvs_init_impl(
+  result <- dvs_init_impl(
     storage_path = storage_path,
     root_dir = root_dir,
     group = group,
     metadata_folder_name = metadata_folder_name,
     compression = compression
   )
+  tibble::as_tibble(result)
 }
 
 #' @inherit dvs_add_impl title description params
