@@ -3,16 +3,17 @@
 # Showcase dvs status features: path filtering and recursive flag
 # Compares CLI and R package behavior side-by-side.
 
-set -euox pipefail
+set -eu
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
-
-echo "NOTE: \`just install-all\` should have been called prior to this so the dvs CLI binary on PATH and the installed dvs R package both reflect the current branch."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # shellcheck source=ui/helpers.sh
 source "${SCRIPT_DIR}/helpers.sh"
+set -xo pipefail
+
+say "NOTE: \`just install-all\` should have been called prior to this so the dvs CLI binary on PATH and the installed dvs R package both reflect the current branch."
 
 # ── Setup: two repos (CLI + R), nested directory structure ──
 

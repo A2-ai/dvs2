@@ -9,7 +9,7 @@ PS4='> '
 # suppress that first line.  Filtering on the xtrace file-descriptor is the
 # only reliable mechanism.  The filter is a one-time setup: all subsequent
 # xtrace output for the sourcing script passes through it.
-exec {_say_xtfd}> >(grep -E --line-buffered -v '^> say($| )' >&2)
+exec {_say_xtfd}> >(grep -E --line-buffered -v '^> say($| )|^> set [+-]x$|^>>+' >&2)
 BASH_XTRACEFD=$_say_xtfd
 
 # Echo without leaving an xtrace line for the echo itself.
