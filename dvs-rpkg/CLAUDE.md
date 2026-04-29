@@ -149,6 +149,9 @@ Results are returned as DataFrames using miniextendr's `AsSerializeRow` trait. E
 | `CARGO_PROFILE` | `release` (default) or `debug` |
 | `CARGO_FEATURES` | Comma-separated cargo features (e.g., `nonapi`) |
 | `RUST_TOOLCHAIN` | e.g., `+stable`, `+nightly` |
+| `DVS_AUTO_FEATURES` | Escape hatch for `tools/detect-features.R`; inject features without setting `CARGO_FEATURES` (which would skip the script entirely) |
+
+**Migration note (post #171):** the package-level cargo-features env var renamed from `DVS_FEATURES` to `CARGO_FEATURES`. Existing scripts setting `DVS_FEATURES` are now no-ops — update them or set both during transition.
 
 ## Adding New Rust Functions
 
