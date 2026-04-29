@@ -38,10 +38,7 @@ dvsR/2026-*.txt
 # Archived crates (server/daemon moved here)
 archived-crates.zip
 
-.dvs/
-dvs.toml
-.storage
-# markdown rendering artefacts 
+# markdown rendering artefacts
 ui/*_files
 /README.md
 dvs_repo_*
