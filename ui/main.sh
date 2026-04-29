@@ -5,6 +5,8 @@ set -euox pipefail
 # prints the line in script that errors
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
 
+echo "NOTE: \`just install-all\` should have been called prior to this so the dvs CLI binary on PATH and the installed dvs R package both reflect the current branch."
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -81,10 +83,6 @@ dvs_status()
 
 EOF
 
-# TODO:
-#   [ ] make tibble a Suggests, and _impl post-fix the dvs_* from Rust stuff
-#   [ ] truncate the hash
-
 # # Compare dvs.toml (created by init)
 # diff "${DVS_REPO_CLI}"/dvs.toml "${DVS_REPO_RPKG}"/dvs.toml
 
@@ -96,5 +94,5 @@ EOF
 
 
 
-
+w
 printf '\nCleanup: bash %s/cleanup.sh\n' "$SCRIPT_DIR"
