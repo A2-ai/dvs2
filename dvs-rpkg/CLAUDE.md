@@ -18,7 +18,7 @@ dvs-rpkg is an R package providing bindings for DVS (Data Version Control System
 
 ### Quick Reference (justfile)
 
-Run from the repo root (`dvs2/`). The justfile sets `NOT_CRAN=true` automatically.
+Run from the repo root (`dvs2/`).
 
 ```bash
 # Configure (required before first R CMD operation)
@@ -47,14 +47,15 @@ just ci                      # Full CI: fmt-check, clippy, check-std-fs, test
 
 ```bash
 # Configure (required before first build, re-run after changing configure.ac)
-bash ./configure                    # Dev mode (auto-detects monorepo)
-NOT_CRAN=false bash ./configure     # CRAN mode (offline, vendored deps)
+bash ./configure
+# Install mode is auto-detected: tarball/offline if inst/vendor.tar.xz is present,
+# source/network otherwise.
 
 # Build and install the R package
 R CMD build .
 R CMD INSTALL .
 
-# Dev workflow (in R console) — bootstrap.R auto-sets NOT_CRAN=true
+# Dev workflow (in R console)
 devtools::load_all()           # Build Rust + load package
 devtools::document()           # Regenerate roxygen docs
 
@@ -83,12 +84,12 @@ Always run `./configure` (or `just rpkg-configure`) before any R CMD operation. 
 
 ### Build System
 
-The build uses autoconf (`configure.ac`) + Cargo with two modes:
+The build uses autoconf (`configure.ac`) + Cargo with two install modes, selected by the presence of `inst/vendor.tar.xz`:
 
 | Mode | Trigger | Behavior |
 |------|---------|----------|
-| **Dev** | `NOT_CRAN=true` or monorepo detected | Network-enabled, uses `[patch]` paths to `../dvs` |
-| **CRAN** | `NOT_CRAN=false` or vendor artifacts present | Offline, unpacks `inst/vendor.tar.xz` |
+| **Source** | `inst/vendor.tar.xz` absent | Cargo resolves deps over the network; in monorepo, `[patch]` paths route to workspace siblings (e.g. `../dvs`) |
+| **Tarball** | `inst/vendor.tar.xz` present | Offline; configure unpacks the tarball and writes a vendored cargo source replacement |
 
 `Makevars.in` is a template — `configure` generates `src/Makevars`. The build produces two libraries:
 - **staticlib** — linked into the final R shared object
@@ -145,12 +146,9 @@ Results are returned as DataFrames using miniextendr's `AsSerializeRow` trait. E
 
 | Variable | Effect |
 |----------|--------|
-| `NOT_CRAN` | `true` = dev mode (network), `false`/unset = CRAN mode (offline) |
 | `CARGO_PROFILE` | `release` (default) or `debug` |
-| `DVS_FEATURES` | Comma-separated cargo features (e.g., `nonapi`) |
+| `CARGO_FEATURES` | Comma-separated cargo features (e.g., `nonapi`) |
 | `RUST_TOOLCHAIN` | e.g., `+stable`, `+nightly` |
-| `PREPARE_CRAN` | `true` = explicit CRAN release prep mode |
-| `FORCE_VENDOR` | `1` = force re-vendor in dev mode |
 
 ## Adding New Rust Functions
 

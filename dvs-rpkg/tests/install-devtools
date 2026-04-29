@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RPKG_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${RPKG_DIR}/.." && pwd)"
+
+REMOTE_REPO="${DVS_REMOTE_REPO:-A2-ai/dvs2}"
+
+cd "$ROOT_DIR"
+SHA="$(git rev-parse HEAD)"
+echo "=== HEAD: $SHA ==="
+
+git fetch origin --quiet
+if ! git branch -r --contains "$SHA" 2>/dev/null | grep -q '^[[:space:]]*origin/'; then
+  echo "SKIP: $SHA is not on origin yet — push the branch before running this test"
+  exit 0
+fi
+
+TMPDIR="$(mktemp -d)"
+LIB="$TMPDIR/Rlib"
+mkdir -p "$LIB"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+echo "=== devtools::install_github $REMOTE_REPO@$SHA, subdir=dvs-rpkg ==="
+Rscript --vanilla - <<RSCRIPT
+.libPaths(c("$LIB", .libPaths()))
+if (!requireNamespace("devtools", quietly = TRUE)) {
+  install.packages("devtools", lib = "$LIB", repos = "https://cloud.r-project.org")
+}
+devtools::install_github(
+  "$REMOTE_REPO",
+  subdir = "dvs-rpkg",
+  ref = "$SHA",
+  upgrade = "never",
+  lib = "$LIB"
+)
+RSCRIPT
+
+echo "=== verify dvs is loadable ==="
+Rscript -e ".libPaths(c('$LIB', .libPaths())); library(dvs); cat('dvs loaded successfully\n')"
+
+echo "PASS"
