@@ -38,7 +38,14 @@ devtools::install_github(
 )
 RSCRIPT
 
-echo "=== verify dvs is loadable ==="
-Rscript -e ".libPaths(c('$LIB', .libPaths())); library(dvs); cat('dvs loaded successfully\n')"
+echo "=== FFI smoke: dvs_init ==="
+SMOKE_ROOT="$(mktemp -d)"
+SMOKE_STORE="$(mktemp -d)"
+Rscript -e "
+  .libPaths(c('$LIB', .libPaths()))
+  dvs::dvs_init('$SMOKE_STORE', root_dir = '$SMOKE_ROOT')
+  cat('dvs FFI smoke OK\n')
+"
+rm -rf "$SMOKE_ROOT" "$SMOKE_STORE"
 
 echo "PASS"

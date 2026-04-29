@@ -28,7 +28,23 @@ rv init
 echo "=== rv add dvs --git $REMOTE_URL --commit $SHA --directory dvs-rpkg ==="
 rv add dvs --git "$REMOTE_URL" --commit "$SHA" --directory dvs-rpkg
 
-echo "=== verify dvs is loadable ==="
-Rscript -e 'library(dvs); cat("dvs loaded successfully\n")'
+echo "=== resolve rv library path ==="
+# rv lays out packages at rv/library/<R-version>/<arch>/ (no trailing /library)
+RV_LIB="$(echo "$TMPDIR"/rv/library/*/*)"
+if [ ! -d "$RV_LIB" ]; then
+  echo "ERROR: rv library directory not found at expected glob $TMPDIR/rv/library/*/*" >&2
+  exit 1
+fi
+echo "rv lib: $RV_LIB"
+
+echo "=== FFI smoke: dvs_init ==="
+SMOKE_ROOT="$(mktemp -d)"
+SMOKE_STORE="$(mktemp -d)"
+Rscript -e "
+  .libPaths(c('$RV_LIB', .libPaths()))
+  dvs::dvs_init('$SMOKE_STORE', root_dir = '$SMOKE_ROOT')
+  cat('dvs FFI smoke OK\n')
+"
+rm -rf "$SMOKE_ROOT" "$SMOKE_STORE"
 
 echo "PASS"
