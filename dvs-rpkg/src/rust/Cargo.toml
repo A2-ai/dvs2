@@ -33,14 +33,14 @@ connections = ["miniextendr-api/connections"]
 # `[patch."https://github.com/A2-ai/dvs2"] dvs = { path = "../../../dvs" }`
 # block, or rely on `just` recipes that vendor from the local checkout.
 [dependencies]
-miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", branch = "feat/columnar-with-column", features = ["serde", "time"] }
+miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", features = ["serde", "time"] }
 dvs = { git = "https://github.com/A2-ai/dvs2", branch = "main", package = "dvs" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 
 [build-dependencies]
-miniextendr-lint = { git = "https://github.com/A2-ai/miniextendr", branch = "feat/columnar-with-column" }
+miniextendr-lint = { git = "https://github.com/A2-ai/miniextendr" }
 
 [profile.dev]
 codegen-units = 1
