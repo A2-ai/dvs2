@@ -40,6 +40,8 @@ cd "$DVS_REPO_CLI"
 mkfiles 3 1K data/raw
 mkfiles 2 1K data/derived
 mkfiles 2 1K models/v1
+say "--- tree (3 raw + 2 derived + 2 models, 7 files total) ---"
+tree --noreport
 
 dvs add --glob "data/**/*.bin"
 dvs add --glob "models/**/*.bin"
@@ -48,6 +50,8 @@ cd "$DVS_REPO_RPKG"
 mkfiles 3 1K data/raw
 mkfiles 2 1K data/derived
 mkfiles 2 1K models/v1
+say "--- tree (3 raw + 2 derived + 2 models, 7 files total) ---"
+tree --noreport
 
 print_eval_rscript <<EOF
 library(dvs)

@@ -42,15 +42,18 @@ EOF
 
 cd "$DVS_REPO_CLI"
 mkfiles 5 10M data/derived
-dvs add data/derived/file_*.bin
-
 mkdatasetfiles 5 10M data/derived chickweight
+say "--- tree data (5 .bin + 5 chickweight .csv) ---"
+tree --noreport data
+dvs add data/derived/file_*.bin
 dvs add data/derived/file_chickweight_*.csv
 
 cd "$DVS_REPO_RPKG"
 
 mkfiles 5 10M data/derived
 mkdatasetfiles 5 10M data/derived chickweight
+say "--- tree data (5 .bin + 5 chickweight .csv) ---"
+tree --noreport data
 
 print_eval_rscript <<EOF
 library(dvs)
