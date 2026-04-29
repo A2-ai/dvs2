@@ -182,3 +182,5 @@ done
 if [ "$_anomalies" -gt 0 ]; then
   printf 'NOTE: %d anomaly detected — likely OS cache pressure, not a real regression\n' "$_anomalies" >&2
 fi
+
+printf '\nCleanup: bash %s/cleanup.sh\n' "$SCRIPT_DIR"

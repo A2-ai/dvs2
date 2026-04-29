@@ -203,3 +203,5 @@ print_eval_rscript <<EOF
 library(dvs)
 dvs_status(paths = c("data/raw/file_1.bin", "models/"))
 EOF
+
+printf '\nCleanup: bash %s/cleanup.sh\n' "$SCRIPT_DIR"

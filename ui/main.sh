@@ -97,5 +97,4 @@ EOF
 
 
 
-# This will delete everything.
-# bash ${SCRIPT_DIR}/cleanup.sh
+printf '\nCleanup: bash %s/cleanup.sh\n' "$SCRIPT_DIR"
