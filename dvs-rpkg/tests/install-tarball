@@ -27,6 +27,6 @@ CARGO_NET_OFFLINE=1 \
   R CMD INSTALL --no-test-load --library="$LIB" "$TARBALL"
 
 echo "=== verify dvs is loadable ==="
-R_LIBS_USER="$LIB" Rscript -e 'library(dvs); cat("dvs loaded successfully\n")'
+Rscript -e ".libPaths(c('$LIB', .libPaths())); library(dvs); cat('dvs loaded successfully\n')"
 
 echo "PASS"
