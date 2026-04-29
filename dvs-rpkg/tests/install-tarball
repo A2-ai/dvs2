@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RPKG_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${RPKG_DIR}/.." && pwd)"
+
+TMPDIR="$(mktemp -d)"
+LIB="$TMPDIR/Rlib"
+mkdir -p "$LIB"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+echo "=== just vendor (populate inst/vendor.tar.xz) ==="
+( cd "$ROOT_DIR" && just vendor )
+
+echo "=== R CMD build dvs-rpkg ==="
+cd "$TMPDIR"
+R CMD build "$RPKG_DIR"
+TARBALL="$(find . -maxdepth 1 -name 'dvs_*.tar.gz' -print -quit)"
+test -n "$TARBALL"
+echo "Built: $TARBALL"
+
+echo "=== R CMD INSTALL --library=$LIB (offline) ==="
+CARGO_HOME="$TMPDIR/cargo-home" \
+CARGO_NET_OFFLINE=1 \
+  R CMD INSTALL --no-test-load --library="$LIB" "$TARBALL"
+
+echo "=== verify dvs is loadable ==="
+R_LIBS_USER="$LIB" Rscript -e 'library(dvs); cat("dvs loaded successfully\n")'
+
+echo "PASS"
