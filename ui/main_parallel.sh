@@ -31,14 +31,19 @@ printf '\n=== Parallel test: %d files × %s, threads=%s ===\n\n' \
 
 # ── Generate files once ─────────────────────────────────────────────
 
+# All dirs in this run share one mktemp suffix so it's obvious they belong
+# together. The R variants R0..R3 use a `_R<n>_` infix to stay distinct while
+# keeping the same trailing run-suffix.
 FIXTURES="$(mktemp -d "$SCRIPT_DIR"/dvs_fixture_XXX)"
+RUN_SUFFIX="${FIXTURES##*_}"
 cd "$FIXTURES"
 mkfiles "$N_FILES" "$FILE_SIZE" data/derived
 
 # ── CLI: DVS_NUM_THREADS env var ────────────────────────────────────
 
-DVS_REPO_CLI="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
-DVS_STORAGE_CLI="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_cli_XXX)"
+DVS_REPO_CLI="$SCRIPT_DIR/dvs_repo_cli_$RUN_SUFFIX"
+DVS_STORAGE_CLI="$SCRIPT_DIR/dvs_storage_cli_$RUN_SUFFIX"
+mkdir "$DVS_REPO_CLI" "$DVS_STORAGE_CLI"
 cd "$DVS_REPO_CLI"
 dvs init "$DVS_STORAGE_CLI"
 cp -r "$FIXTURES/data" "$DVS_REPO_CLI/data"
@@ -49,14 +54,16 @@ CLI_ELAPSED="$( { time DVS_NUM_THREADS="$THREADS" dvs add data/derived/file_*.bi
 
 # ── R: all three methods in one process ─────────────────────────────
 
-DVS_REPO_R0="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
-DVS_STORAGE_R0="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
-DVS_REPO_R1="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
-DVS_STORAGE_R1="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
-DVS_REPO_R2="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
-DVS_STORAGE_R2="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
-DVS_REPO_R3="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
-DVS_STORAGE_R3="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
+DVS_REPO_R0="$SCRIPT_DIR/dvs_repo_rpkg_R0_$RUN_SUFFIX"
+DVS_STORAGE_R0="$SCRIPT_DIR/dvs_storage_rpkg_R0_$RUN_SUFFIX"
+DVS_REPO_R1="$SCRIPT_DIR/dvs_repo_rpkg_R1_$RUN_SUFFIX"
+DVS_STORAGE_R1="$SCRIPT_DIR/dvs_storage_rpkg_R1_$RUN_SUFFIX"
+DVS_REPO_R2="$SCRIPT_DIR/dvs_repo_rpkg_R2_$RUN_SUFFIX"
+DVS_STORAGE_R2="$SCRIPT_DIR/dvs_storage_rpkg_R2_$RUN_SUFFIX"
+DVS_REPO_R3="$SCRIPT_DIR/dvs_repo_rpkg_R3_$RUN_SUFFIX"
+DVS_STORAGE_R3="$SCRIPT_DIR/dvs_storage_rpkg_R3_$RUN_SUFFIX"
+mkdir "$DVS_REPO_R0" "$DVS_STORAGE_R0" "$DVS_REPO_R1" "$DVS_STORAGE_R1" \
+      "$DVS_REPO_R2" "$DVS_STORAGE_R2" "$DVS_REPO_R3" "$DVS_STORAGE_R3"
 
 for d in "$DVS_REPO_R0" "$DVS_REPO_R1" "$DVS_REPO_R2" "$DVS_REPO_R3"; do
   cd "$d" && cp -r "$FIXTURES/data" "$d/data"

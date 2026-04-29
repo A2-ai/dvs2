@@ -15,10 +15,11 @@ source "${SCRIPT_DIR}/helpers.sh"
 # ── Setup: two repos (CLI + R), nested directory structure ──
 
 DVS_REPO_CLI="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
-DVS_STORAGE_CLI="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_cli_XXX)"
-
-DVS_REPO_RPKG="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
-DVS_STORAGE_RPKG="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
+RUN_SUFFIX="${DVS_REPO_CLI##*_}"
+DVS_STORAGE_CLI="$SCRIPT_DIR/dvs_storage_cli_$RUN_SUFFIX"
+DVS_REPO_RPKG="$SCRIPT_DIR/dvs_repo_rpkg_$RUN_SUFFIX"
+DVS_STORAGE_RPKG="$SCRIPT_DIR/dvs_storage_rpkg_$RUN_SUFFIX"
+mkdir "$DVS_STORAGE_CLI" "$DVS_REPO_RPKG" "$DVS_STORAGE_RPKG"
 
 # ── Init ──
 
