@@ -208,6 +208,24 @@ R wrappers are auto-generated during build. Just rebuild:
 just rpkg-configure && just rpkg-install && just rpkg-document
 ```
 
+### Stale `dvs` git pin in `Cargo.lock`
+
+`src/rust/Cargo.toml` pulls `dvs` from a branch (e.g. `feat/get-recursive`), but Cargo records the resolved commit hash in `Cargo.lock` and **does not refresh it on subsequent builds** — even after the branch tip moves or is force-pushed. Result: the R package keeps building against an old commit while the Rust core has new code.
+
+Symptom: behaviour diverges between the CLI (which builds against the working tree via the workspace) and the R package (built against the locked git commit). Running `dvs ...` and `dvs_...(...)` on the same repo gives different results.
+
+To refresh:
+
+```bash
+cd dvs-rpkg/src/rust
+rm -f .cargo/config.toml Cargo.lock      # vendor-mode config redirects sources; remove for a clean re-resolve
+cargo generate-lockfile                  # re-fetches the branch HEAD, writes new commit hash into Cargo.lock
+```
+
+Then `git diff Cargo.lock` and confirm the `source = "git+https://github.com/A2-ai/dvs2?branch=...#<HASH>"` line for `dvs` is the expected commit. Commit the lockfile change.
+
+Note: `cargo update -p dvs` does **not** work here — the package isn't in the current workspace as a path dep, and the registry lookup fails with `package ID specification 'dvs' did not match any packages`. Regenerating the whole lockfile is the reliable way.
+
 ### R tests fail with "could not find function"
 
 Check:
