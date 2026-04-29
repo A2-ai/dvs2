@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RPKG_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${RPKG_DIR}/.." && pwd)"
+
+REMOTE_URL="${DVS_REMOTE_URL:-https://github.com/A2-ai/dvs2}"
+
+cd "$ROOT_DIR"
+SHA="$(git rev-parse HEAD)"
+echo "=== HEAD: $SHA ==="
+
+git fetch origin --quiet
+if ! git branch -r --contains "$SHA" 2>/dev/null | grep -q '^[[:space:]]*origin/'; then
+  echo "SKIP: $SHA is not on origin yet — push the branch before running this test"
+  exit 0
+fi
+
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+echo "=== rv init ==="
+cd "$TMPDIR"
+rv init
+
+echo "=== rv add dvs --git $REMOTE_URL --commit $SHA --directory dvs-rpkg ==="
+rv add dvs --git "$REMOTE_URL" --commit "$SHA" --directory dvs-rpkg
+
+echo "=== verify dvs is loadable ==="
+Rscript -e 'library(dvs); cat("dvs loaded successfully\n")'
+
+echo "PASS"

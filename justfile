@@ -1,7 +1,5 @@
 # https://just.systems
 
-export NOT_CRAN := "true"
-
 rpkg_dir := "dvs-rpkg"
 rpkg_manifest := rpkg_dir / "src/rust/Cargo.toml"
 

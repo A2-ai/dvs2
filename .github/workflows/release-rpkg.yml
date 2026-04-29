@@ -129,7 +129,6 @@ jobs:
 
       - name: Offline smoke-install
         env:
-          NOT_CRAN: "false"
           CARGO_NET_OFFLINE: "1"
         run: |
           set -euo pipefail
