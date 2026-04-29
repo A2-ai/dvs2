@@ -86,6 +86,18 @@ rpkg-install:
     Rscript -e 'install.packages("{{rpkg_dir}}", repos = NULL, type = "source")'
 alias install-rpkg := rpkg-install
 
+# Run the four install-* integration tests sequentially.
+# install-tarball requires cargo-revendor; it is skipped if not installed.
+rpkg-test-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v cargo-revendor >/dev/null \
+      && bash {{quote(rpkg_dir / "tests/install-tarball")}} \
+      || echo "skipping install-tarball: cargo-revendor not installed"
+    bash {{quote(rpkg_dir / "tests/install-github")}}
+    bash {{quote(rpkg_dir / "tests/install-devtools")}}
+    bash {{quote(rpkg_dir / "tests/install-rv-github")}}
+
 # Install cargo-revendor (required for vendoring)
 install-revendor:
     cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor

@@ -127,7 +127,7 @@ jobs:
           echo "path=$TARBALL" >> "$GITHUB_OUTPUT"
           echo "Built: $TARBALL"
 
-      - name: Offline smoke-install
+      - name: Offline smoke-install + FFI smoke
         env:
           CARGO_NET_OFFLINE: "1"
         run: |
@@ -136,7 +136,15 @@ jobs:
           export CARGO_HOME
           LIB=$(mktemp -d)
           R CMD INSTALL --no-test-load --library="$LIB" "${{ steps.tarball.outputs.path }}"
-          echo "Offline install OK (library: $LIB)"
+          SMOKE_ROOT="$(mktemp -d)"
+          SMOKE_STORE="$(mktemp -d)"
+          Rscript -e "
+            .libPaths(c('$LIB', .libPaths()))
+            dvs::dvs_init('$SMOKE_STORE', root_dir = '$SMOKE_ROOT')
+            cat('dvs FFI smoke OK\n')
+          "
+          rm -rf "$SMOKE_ROOT" "$SMOKE_STORE"
+          echo "Offline install + FFI smoke OK (library: $LIB)"
 
       - name: Generate sha256
         run: |
