@@ -32,8 +32,7 @@ mkdir "$DVS_REPO_RPKG" "$DVS_STORAGE_RPKG"
 
 cd "$DVS_REPO_RPKG"
 
-# this `tee` prints the R-script being executed
-tee /dev/stderr <<EOF | Rscript -
+print_eval_rscript <<EOF
 library(dvs)
 
 dvs_init("$DVS_STORAGE_RPKG")
@@ -53,12 +52,12 @@ cd "$DVS_REPO_RPKG"
 mkfiles 5 10M data/derived
 mkdatasetfiles 5 10M data/derived chickweight
 
-tee /dev/stderr <<EOF | Rscript -
+print_eval_rscript <<EOF
 library(dvs)
 
 # dvs_add("data/derived") # ERROR
 
-dvs_add("$DVS_REPO_RPKG/data/derived", glob = "*") # WORKS
+dvs_add("$DVS_REPO_RPKG/data/derived", glob = "*") |> print(width = Inf) # WORKS
 
 # conclusion: the data-frame does not contain the absolute paths even if we give it absolute paths of the files
 # data_derived_files <- c($(find "$DVS_REPO_RPKG"/data/derived -type f | sed 's/.*/"&"/' | paste -sd, -))
@@ -79,7 +78,7 @@ cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
 
-dvs_status()
+dvs_status() |> print(width = Inf)
 
 EOF
 

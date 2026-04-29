@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+# Use '> ' as the xtrace prefix instead of bash's default '+ '.
+PS4='> '
+
+# Echo without leaving an xtrace line for the echo itself.
+# Use for blank-line separators and "=== section ===" headers.
+say() { { set +x; } 2>/dev/null; echo "$@"; { set -x; } 2>/dev/null; }
+
 print_eval_rscript() {
   tee /dev/stderr | Rscript -
 }
@@ -61,6 +68,20 @@ mkfiles() {
     padded="$(printf '%0*d' "$width" "$i")"
     head -c "$bytes" /dev/urandom > "$dir/file_${padded}.bin"
   done
+  set -x
+}
+
+# Create a single random-content file at PATH (default 1KB).
+# Wraps `head -c … /dev/urandom > path` so the path shows up in `set -x` traces
+# rather than ten identical "head -c 1024 /dev/urandom" lines.
+mkrandfile() {
+  { set +x; } 2>/dev/null
+  local path="${1:?path is required}"
+  local size="${2:-1K}"
+  local bytes
+  bytes="$(size_to_bytes "$size")"
+  mkdir -p "$(dirname "$path")"
+  head -c "$bytes" /dev/urandom > "$path"
   set -x
 }
 

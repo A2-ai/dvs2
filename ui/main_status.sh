@@ -51,83 +51,83 @@ mkfiles 2 1K models/v1
 
 print_eval_rscript <<EOF
 library(dvs)
-dvs_add(glob = "data/**/*.bin")
-dvs_add(glob = "models/**/*.bin")
+dvs_add(glob = "data/**/*.bin") |> print(width = Inf)
+dvs_add(glob = "models/**/*.bin") |> print(width = Inf)
 EOF
 
 # ── 1. Status: all files (default) ──
 
-echo
-echo "=== CLI: dvs status (all files) ==="
+say
+say "=== CLI: dvs status (all files) ==="
 cd "$DVS_REPO_CLI"
 dvs status
 
-echo
-echo "=== R: dvs_status() (all files) ==="
+say
+say "=== R: dvs_status() (all files) ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status()
+dvs_status() |> print(width = Inf)
 EOF
 
 # ── 2. Status: filter to a single file ──
 
-echo
-echo "=== CLI: dvs status data/raw/file_1.bin ==="
+say
+say "=== CLI: dvs status data/raw/file_1.bin ==="
 cd "$DVS_REPO_CLI"
 dvs status data/raw/file_1.bin
 
-echo
-echo "=== R: dvs_status(paths = 'data/raw/file_1.bin') ==="
+say
+say "=== R: dvs_status(paths = 'data/raw/file_1.bin') ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status(paths = "data/raw/file_1.bin")
+dvs_status(paths = "data/raw/file_1.bin") |> print(width = Inf)
 EOF
 
 # ── 3. Status: filter to a directory (non-recursive) ──
 
-echo
-echo "=== CLI: dvs status data/ (non-recursive — direct children only) ==="
+say
+say "=== CLI: dvs status data/ (non-recursive — direct children only) ==="
 cd "$DVS_REPO_CLI"
 dvs status data/
 
-echo
-echo "=== R: dvs_status(paths = 'data/') (non-recursive) ==="
+say
+say "=== R: dvs_status(paths = 'data/') (non-recursive) ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status(paths = "data/")
+dvs_status(paths = "data/") |> print(width = Inf)
 EOF
 
 # ── 4. Status: filter to a directory (recursive) ──
 
-echo
-echo "=== CLI: dvs status -r data/ (recursive — all descendants) ==="
+say
+say "=== CLI: dvs status -r data/ (recursive — all descendants) ==="
 cd "$DVS_REPO_CLI"
 dvs status -r data/
 
-echo
-echo "=== R: dvs_status(paths = 'data/', recursive = TRUE) ==="
+say
+say "=== R: dvs_status(paths = 'data/', recursive = TRUE) ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status(paths = "data/", recursive = TRUE)
+dvs_status(paths = "data/", recursive = TRUE) |> print(width = Inf)
 EOF
 
 # ── 5. Status: filter with status flags ──
 
-echo
-echo "=== CLI: dvs status --absent (show only absent files) ==="
+say
+say "=== CLI: dvs status --absent (show only absent files) ==="
 cd "$DVS_REPO_CLI"
 dvs status --absent
 
-echo
-echo "=== R: dvs_status(status = 'absent') ==="
+say
+say "=== R: dvs_status(status = 'absent') ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status(status = "absent")
+dvs_status(status = "absent") |> print(width = Inf)
 EOF
 
 # ── 6. Retrieve some files, then show mixed status ──
@@ -135,75 +135,75 @@ EOF
 cd "$DVS_REPO_CLI"
 dvs get data/raw/file_1.bin
 
-echo
-echo "=== CLI: dvs status (mixed: 1 current, rest absent) ==="
+say
+say "=== CLI: dvs status (mixed: 1 current, rest absent) ==="
 dvs status
 
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_get(paths = "data/raw/file_1.bin")
+dvs_get(paths = "data/raw/file_1.bin") |> print(width = Inf)
 EOF
 
-echo
-echo "=== R: dvs_status() (mixed: 1 current, rest absent) ==="
+say
+say "=== R: dvs_status() (mixed: 1 current, rest absent) ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status()
+dvs_status() |> print(width = Inf)
 EOF
 
 # ── 7. Combined: path filter + status flag ──
 
-echo
-echo "=== CLI: dvs status -r data/ --current ==="
+say
+say "=== CLI: dvs status -r data/ --current ==="
 cd "$DVS_REPO_CLI"
 dvs status -r data/ --current
 
-echo
-echo "=== R: dvs_status(paths = 'data/', recursive = TRUE, status = 'current') ==="
+say
+say "=== R: dvs_status(paths = 'data/', recursive = TRUE, status = 'current') ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status(paths = "data/", recursive = TRUE, status = "current")
+dvs_status(paths = "data/", recursive = TRUE, status = "current") |> print(width = Inf)
 EOF
 
-echo
-echo "=== CLI: dvs status -r data/ --absent ==="
+say
+say "=== CLI: dvs status -r data/ --absent ==="
 cd "$DVS_REPO_CLI"
 dvs status -r data/ --absent
 
-echo
-echo "=== R: dvs_status(paths = 'data/', recursive = TRUE, status = 'absent') ==="
+say
+say "=== R: dvs_status(paths = 'data/', recursive = TRUE, status = 'absent') ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status(paths = "data/", recursive = TRUE, status = "absent")
+dvs_status(paths = "data/", recursive = TRUE, status = "absent") |> print(width = Inf)
 EOF
 
 # ── 8. Status: multiple status values (several.ok) ──
 
-echo
-echo "=== R: dvs_status(status = c('current', 'absent')) ==="
+say
+say "=== R: dvs_status(status = c('current', 'absent')) ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status(status = c("current", "absent"))
+dvs_status(status = c("current", "absent")) |> print(width = Inf)
 EOF
 
 # ── 9. Multiple paths ──
 
-echo
-echo "=== CLI: dvs status data/raw/file_1.bin models/ ==="
+say
+say "=== CLI: dvs status data/raw/file_1.bin models/ ==="
 cd "$DVS_REPO_CLI"
 dvs status data/raw/file_1.bin models/
 
-echo
-echo "=== R: dvs_status(paths = c('data/raw/file_1.bin', 'models/')) ==="
+say
+say "=== R: dvs_status(paths = c('data/raw/file_1.bin', 'models/')) ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
-dvs_status(paths = c("data/raw/file_1.bin", "models/"))
+dvs_status(paths = c("data/raw/file_1.bin", "models/")) |> print(width = Inf)
 EOF
 
 printf '\nCleanup: bash %s/cleanup.sh\n' "$SCRIPT_DIR"

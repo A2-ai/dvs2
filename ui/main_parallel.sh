@@ -119,7 +119,7 @@ dvs_init("$DVS_STORAGE_R3")
 Sys.setenv(DVS_NUM_THREADS = "${THREADS}")
 
 start <- proc.time()
-dvs_add(glob = "data/derived/*")
+dvs_add(glob = "data/derived/*") |> print(width = Inf)
 r_env_elapsed <- (proc.time() - start)[["elapsed"]]
 
 Sys.unsetenv("DVS_NUM_THREADS")
