@@ -164,3 +164,58 @@ rpkg-bindgen-cli:
 
 ci: fmt-check clippy check-std-fs test
     @echo "All CI checks passed!"
+
+# ============================================================================
+# UI test outputs (publish to alx project in .alx/config.yaml)
+# ============================================================================
+
+# Names correspond to ui/main_<NAME>.sh (and ui/main.sh for "main").
+# Each name has matching ui/output/ui-<NAME>.html and alx topic ui-<NAME>.
+ui_names := "main status progress parallel recursive"
+
+# Run all ui/main*.sh scripts and capture each log into /tmp/ui-<NAME>.log
+ui-run:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    bash ui/cleanup.sh >/dev/null 2>&1 || true
+    for name in {{ui_names}}; do
+        if [[ "$name" == "main" ]]; then script="ui/main.sh"; else script="ui/main_${name}.sh"; fi
+        log="/tmp/ui-${name}.log"
+        echo "Running ${script} → ${log}"
+        bash "$script" > "$log" 2>&1 || echo "  WARN: ${script} exited nonzero (log captured anyway)"
+    done
+
+# Wrap each /tmp/ui-<NAME>.log into ui/output/ui-<NAME>.html
+ui-render:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p ui/output
+    for name in {{ui_names}}; do
+        log="/tmp/ui-${name}.log"
+        out="ui/output/ui-${name}.html"
+        if [[ ! -f "$log" ]]; then echo "skipping ${name} (no ${log})"; continue; fi
+        {
+            printf '<!DOCTYPE html>\n<html><head><meta charset="utf-8"><title>ui-%s</title>\n' "$name"
+            printf '<style>body{font-family:ui-monospace,Menlo,Consolas,monospace;background:#1e1e1e;color:#e6e6e6;padding:1rem;margin:0}pre{white-space:pre-wrap;word-wrap:break-word;font-size:20px;line-height:1.45}h1{color:#9ecbff;font-family:system-ui,sans-serif;font-size:1.5rem;margin:0 0 1rem}</style></head><body>\n'
+            printf '<h1>ui-%s</h1>\n<pre>' "$name"
+            sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' "$log"
+            printf '</pre></body></html>\n'
+        } > "$out"
+        echo "wrote ${out}"
+    done
+
+# Publish ui/output/ui-<NAME>.html to alx with each script as source attachment
+ui-publish-only:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    for name in {{ui_names}}; do
+        if [[ "$name" == "main" ]]; then script="ui/main.sh"; else script="ui/main_${name}.sh"; fi
+        out="ui/output/ui-${name}.html"
+        if [[ ! -f "$out" ]]; then echo "skipping ${name} (no ${out})"; continue; fi
+        echo "--- alx publish ui-${name} ---"
+        alx publish "$out" -S "$script" -S ui/helpers.sh -t "ui-${name}" \
+            --overwrite --skip-warnings --no-prompt 2>&1 | tail -8
+    done
+
+# Full pipeline: run scripts → render HTML → publish to alx
+ui-publish: ui-run ui-render ui-publish-only

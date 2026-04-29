@@ -8,6 +8,8 @@
 set -euox pipefail
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
 
+echo "NOTE: \`just install-all\` should have been called prior to this so the dvs CLI binary on PATH and the installed dvs R package both reflect the current branch."
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -19,13 +21,19 @@ printf '\n\n========================================\n'
 printf '  SCENARIO 1: 100 x 1MB files\n'
 printf '========================================\n\n'
 
+# All scenario-1 dirs share one mktemp suffix so it's obvious they belong
+# together: dvs_fixture_AbC, dvs_repo_cli_AbC, dvs_storage_cli_AbC, etc.
 FIXTURES_1="$(mktemp -d "$SCRIPT_DIR"/dvs_fixture_XXX)"
+RUN_SUFFIX_1="${FIXTURES_1##*_}"
+DVS_REPO_CLI_1="$SCRIPT_DIR/dvs_repo_cli_$RUN_SUFFIX_1"
+DVS_STORAGE_CLI_1="$SCRIPT_DIR/dvs_storage_cli_$RUN_SUFFIX_1"
+DVS_REPO_R_1="$SCRIPT_DIR/dvs_repo_rpkg_$RUN_SUFFIX_1"
+DVS_STORAGE_R_1="$SCRIPT_DIR/dvs_storage_rpkg_$RUN_SUFFIX_1"
+mkdir "$DVS_REPO_CLI_1" "$DVS_STORAGE_CLI_1" "$DVS_REPO_R_1" "$DVS_STORAGE_R_1"
 cd "$FIXTURES_1"
 mkfiles 100 1M data/derived
 
 printf '\n--- CLI ADD: 100 x 1MB ---\n'
-DVS_REPO_CLI_1="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
-DVS_STORAGE_CLI_1="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_cli_XXX)"
 cd "$DVS_REPO_CLI_1"
 dvs init "$DVS_STORAGE_CLI_1"
 cp -r "$FIXTURES_1/data" "$DVS_REPO_CLI_1/data"
@@ -35,8 +43,6 @@ printf '\n--- CLI GET: 100 x 1MB ---\n'
 time dvs get data/derived/*
 
 printf '\n--- RPKG ADD: 100 x 1MB ---\n'
-DVS_REPO_R_1="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
-DVS_STORAGE_R_1="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
 cd "$DVS_REPO_R_1"
 cp -r "$FIXTURES_1/data" "$DVS_REPO_R_1/data"
 
@@ -62,13 +68,18 @@ printf '\n\n========================================\n'
 printf '  SCENARIO 2: 1 x 500MB file\n'
 printf '========================================\n\n'
 
+# Scenario-2 dirs share their own suffix, distinct from scenario-1's.
 FIXTURES_2="$(mktemp -d "$SCRIPT_DIR"/dvs_fixture_XXX)"
+RUN_SUFFIX_2="${FIXTURES_2##*_}"
+DVS_REPO_CLI_2="$SCRIPT_DIR/dvs_repo_cli_$RUN_SUFFIX_2"
+DVS_STORAGE_CLI_2="$SCRIPT_DIR/dvs_storage_cli_$RUN_SUFFIX_2"
+DVS_REPO_R_2="$SCRIPT_DIR/dvs_repo_rpkg_$RUN_SUFFIX_2"
+DVS_STORAGE_R_2="$SCRIPT_DIR/dvs_storage_rpkg_$RUN_SUFFIX_2"
+mkdir "$DVS_REPO_CLI_2" "$DVS_STORAGE_CLI_2" "$DVS_REPO_R_2" "$DVS_STORAGE_R_2"
 cd "$FIXTURES_2"
 mkfiles 1 500M data/derived
 
 printf '\n--- CLI ADD: 1 x 500MB ---\n'
-DVS_REPO_CLI_2="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
-DVS_STORAGE_CLI_2="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_cli_XXX)"
 cd "$DVS_REPO_CLI_2"
 dvs init "$DVS_STORAGE_CLI_2"
 cp -r "$FIXTURES_2/data" "$DVS_REPO_CLI_2/data"
@@ -78,8 +89,6 @@ printf '\n--- CLI GET: 1 x 500MB ---\n'
 time dvs get data/derived/file_1.bin
 
 printf '\n--- RPKG ADD: 1 x 500MB ---\n'
-DVS_REPO_R_2="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
-DVS_STORAGE_R_2="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
 cd "$DVS_REPO_R_2"
 cp -r "$FIXTURES_2/data" "$DVS_REPO_R_2/data"
 

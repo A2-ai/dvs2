@@ -13,6 +13,8 @@
 set -euox pipefail
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
 
+echo "NOTE: \`just install-all\` should have been called prior to this so the dvs CLI binary on PATH and the installed dvs R package both reflect the current branch."
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -31,14 +33,19 @@ printf '\n=== Parallel test: %d files × %s, threads=%s ===\n\n' \
 
 # ── Generate files once ─────────────────────────────────────────────
 
+# All dirs in this run share one mktemp suffix so it's obvious they belong
+# together. The R variants R0..R3 use a `_R<n>_` infix to stay distinct while
+# keeping the same trailing run-suffix.
 FIXTURES="$(mktemp -d "$SCRIPT_DIR"/dvs_fixture_XXX)"
+RUN_SUFFIX="${FIXTURES##*_}"
 cd "$FIXTURES"
 mkfiles "$N_FILES" "$FILE_SIZE" data/derived
 
 # ── CLI: DVS_NUM_THREADS env var ────────────────────────────────────
 
-DVS_REPO_CLI="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
-DVS_STORAGE_CLI="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_cli_XXX)"
+DVS_REPO_CLI="$SCRIPT_DIR/dvs_repo_cli_$RUN_SUFFIX"
+DVS_STORAGE_CLI="$SCRIPT_DIR/dvs_storage_cli_$RUN_SUFFIX"
+mkdir "$DVS_REPO_CLI" "$DVS_STORAGE_CLI"
 cd "$DVS_REPO_CLI"
 dvs init "$DVS_STORAGE_CLI"
 cp -r "$FIXTURES/data" "$DVS_REPO_CLI/data"
@@ -49,14 +56,16 @@ CLI_ELAPSED="$( { time DVS_NUM_THREADS="$THREADS" dvs add data/derived/file_*.bi
 
 # ── R: all three methods in one process ─────────────────────────────
 
-DVS_REPO_R0="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
-DVS_STORAGE_R0="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
-DVS_REPO_R1="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
-DVS_STORAGE_R1="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
-DVS_REPO_R2="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
-DVS_STORAGE_R2="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
-DVS_REPO_R3="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_rpkg_XXX)"
-DVS_STORAGE_R3="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_rpkg_XXX)"
+DVS_REPO_R0="$SCRIPT_DIR/dvs_repo_rpkg_R0_$RUN_SUFFIX"
+DVS_STORAGE_R0="$SCRIPT_DIR/dvs_storage_rpkg_R0_$RUN_SUFFIX"
+DVS_REPO_R1="$SCRIPT_DIR/dvs_repo_rpkg_R1_$RUN_SUFFIX"
+DVS_STORAGE_R1="$SCRIPT_DIR/dvs_storage_rpkg_R1_$RUN_SUFFIX"
+DVS_REPO_R2="$SCRIPT_DIR/dvs_repo_rpkg_R2_$RUN_SUFFIX"
+DVS_STORAGE_R2="$SCRIPT_DIR/dvs_storage_rpkg_R2_$RUN_SUFFIX"
+DVS_REPO_R3="$SCRIPT_DIR/dvs_repo_rpkg_R3_$RUN_SUFFIX"
+DVS_STORAGE_R3="$SCRIPT_DIR/dvs_storage_rpkg_R3_$RUN_SUFFIX"
+mkdir "$DVS_REPO_R0" "$DVS_STORAGE_R0" "$DVS_REPO_R1" "$DVS_STORAGE_R1" \
+      "$DVS_REPO_R2" "$DVS_STORAGE_R2" "$DVS_REPO_R3" "$DVS_STORAGE_R3"
 
 for d in "$DVS_REPO_R0" "$DVS_REPO_R1" "$DVS_REPO_R2" "$DVS_REPO_R3"; do
   cd "$d" && cp -r "$FIXTURES/data" "$d/data"
@@ -110,7 +119,7 @@ dvs_init("$DVS_STORAGE_R3")
 Sys.setenv(DVS_NUM_THREADS = "${THREADS}")
 
 start <- proc.time()
-dvs_add(glob = "data/derived/*")
+dvs_add(glob = "data/derived/*") |> print(width = Inf)
 r_env_elapsed <- (proc.time() - start)[["elapsed"]]
 
 Sys.unsetenv("DVS_NUM_THREADS")
@@ -175,3 +184,5 @@ done
 if [ "$_anomalies" -gt 0 ]; then
   printf 'NOTE: %d anomaly detected — likely OS cache pressure, not a real regression\n' "$_anomalies" >&2
 fi
+
+printf '\nCleanup: bash %s/cleanup.sh\n' "$SCRIPT_DIR"
