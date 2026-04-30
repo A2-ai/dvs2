@@ -500,4 +500,17 @@ pub fn dvs_version() -> String {
     dvs::VERSION.to_string()
 }
 
+/// Set the Rust-core log level filter.
+///
+/// Routes Rust `log` crate messages to R's console. Valid levels are
+/// "error", "warn", "info", "debug", "trace", and "off". Invalid strings
+/// default to "info". The default at package load is "info".
+///
+/// @param level Character string giving the desired log level.
+/// @keywords internal
+#[miniextendr(r_name = "dvs_set_log_level_impl")]
+pub(crate) fn dvs_set_log_level(level: &str) {
+    miniextendr_api::optionals::log_impl::set_log_level(level);
+}
+
 miniextendr_api::miniextendr_init!(dvs);
