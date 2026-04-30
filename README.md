@@ -9,44 +9,6 @@ Rewrite of `dvs`, the data-version-control system made by A2-AI.
 DVS (Data Version System) is a tool for versioning large or sensitive files under Git without tracking the file content directly.
 
 
-## Installation — R package
-
-The `dvs` R package ships as a source tarball with Rust dependencies vendored
-in — installing does not re-download crates. You still need a Rust toolchain
-(`rustc >= 1.85.0`) on `PATH`, since the Rust core compiles locally on install.
-
-### Latest release
-
-Open the [Releases page][releases], pick the version you want, and copy the
-`dvs_<version>.tar.gz` asset URL:
-
-```r
-install.packages(
-  "https://github.com/A2-ai/dvs2/releases/download/v0.3.0/dvs_0.3.0.tar.gz",
-  repos = NULL, type = "source"
-)
-```
-
-(Replace `v0.3.0` / `0.3.0` with the version you want. GitHub's
-`/releases/latest/download/<asset>` redirect can't be used directly here
-because the asset filename includes the version number.)
-
-### Dev build from an open PR
-
-When a PR is labeled `release-dev`, CI publishes a rolling prerelease at tag
-`pr-<N>-dev` and posts the install URL as a comment on the PR. General form:
-
-```r
-install.packages(
-  "https://github.com/A2-ai/dvs2/releases/download/pr-<N>-dev/dvs_<version>-pr<N>-<sha>.tar.gz",
-  repos = NULL, type = "source"
-)
-```
-
-The prerelease is deleted when the PR closes.
-
-[releases]: https://github.com/A2-ai/dvs2/releases
-
 ## TODOs
 
 - Azure backend
