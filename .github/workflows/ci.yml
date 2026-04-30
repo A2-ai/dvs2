@@ -43,6 +43,10 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
 
+      - name: set global R_HOME
+        shell: pwsh
+        run: '"R_HOME=$env:RUNNER_TEMP" >> $env:GITHUB_ENV'
+
       - name: Build System Info
         run: rustc --version
 
