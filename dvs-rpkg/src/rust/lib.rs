@@ -58,6 +58,10 @@ where
         let mut bar = CliProgressBar::new();
 
         while let Ok(bytes) = rx.recv() {
+            // Drain buffered log records from rayon worker threads so they
+            // appear mid-operation (interleaved with the progress bar) rather
+            // than all at once when the FFI call exits.
+            miniextendr_api::optionals::log_impl::drain_log_queue();
             if bytes < 0 {
                 bar.grow_total((-bytes) as f64);
             } else {

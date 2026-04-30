@@ -102,20 +102,28 @@ Rust `log` crate messages are routed to R's console via `miniextendr-api`'s
 
 - `error!` / `warn!` → `REprintf` (stderr, non-interrupting)
 - `info!` / `debug!` / `trace!` → `Rprintf` (stdout/console)
-- Thread safety: messages from non-main threads are silently dropped.
+- Thread safety: messages from non-main threads are buffered in a bounded
+  queue and drained to R's console on the next main-thread FFI exit or on
+  explicit `drain_log_queue()` calls. No log output is dropped as long as
+  the queue does not overflow.
 
 The R logger is installed automatically by `miniextendr`'s `package_init`
 (triggered by `miniextendr_init!(dvs)` in `lib.rs`) when the `"log"` feature
 is enabled in `miniextendr-api`. No `.onLoad` hook is required.
 
-Default level at load: **info** (info, warn, error visible; debug and trace hidden).
+Default level at load: **off** (no Rust log output reaches R until the user
+calls `set_dvs_log_level()`).
+
+`dvs_add` and `dvs_get` call `drain_log_queue()` on each iteration of their
+progress loop, so worker-thread log lines appear mid-operation (interleaved
+with the progress bar) instead of all at the end.
 
 From R, users can change the level:
 
 ```r
+set_dvs_log_level("info")    # opt in to typical log output (info, warn, error)
 set_dvs_log_level("debug")   # see debug messages from Rust core
 set_dvs_log_level("off")     # suppress all Rust log output
-set_dvs_log_level("info")    # restore default
 ```
 
 ### Key Dependencies
