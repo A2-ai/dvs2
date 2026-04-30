@@ -34,3 +34,34 @@ set_dvs_threads <- function(threads) {
   options(dvs.num_threads = threads)
   invisible(old)
 }
+
+#' Set the log level for DVS Rust-core messages
+#'
+#' Controls which log messages from the Rust core are routed to R's console.
+#' `error` and `warn` messages go to stderr via `REprintf`; `info`, `debug`,
+#' and `trace` messages go to stdout via `Rprintf`. The default level at
+#' package load is `"info"`.
+#'
+#' @param level Character string giving the desired log level. One of
+#'   `"error"`, `"warn"`, `"info"`, `"debug"`, `"trace"`, `"off"`.
+#'
+#' @return Called for its side effect; returns `NULL` invisibly.
+#'
+#' @examples
+#' \dontrun{
+#' # Show debug-level messages from the Rust core
+#' set_dvs_log_level("debug")
+#'
+#' # Suppress all log output
+#' set_dvs_log_level("off")
+#'
+#' # Restore default
+#' set_dvs_log_level("info")
+#' }
+#'
+#' @export
+set_dvs_log_level <- function(level) {
+  level <- match.arg(level, c("error", "warn", "info", "debug", "trace", "off"))
+  dvs_set_log_level_impl(level)
+  invisible(NULL)
+}
