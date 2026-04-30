@@ -190,7 +190,7 @@ dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 Returns a data frame with one row per file. Errors if no files match.
 Glob resolution uses the same rules as the CLI — see the Globbing section.
 
-- [ ] Partial completion results in a list containing two elements named `result`
+Partial completion leads to a return value as a list containing two elements named `result`
 and `error`, each containing data-frames describing the failures and successes.
 
 ### get
@@ -250,7 +250,7 @@ dvs_get(paths = character(0), glob = NULL, dry_run = NULL)
 
 Returns a data frame with one row per file. Errors if no files match.
 
-- [ ] Partial completion results in a list containing two elements named `result`
+Partial completion leads to a return value as a list containing two elements named `result`
 and `error`, each containing data-frames describing the failures and successes.
 
 ### status
@@ -407,7 +407,8 @@ and operations proceed without it if that also fails.
 - [ ] update the threads strategy here to reflect that of current `dvs2`.
 
 `add`, `get`, and `status` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
-variable to control the thread count. If it is unset, the default is `min(available_parallelism * 4, 16)`.
+variable to control the thread count, if the CLI and R package have not set the number
+of threads directly. If it is unset, the default is `min(available_parallelism * 4, 16)`.
 If it is set to a positive integer, the override is capped at 32. In both cases the final thread count is
 clamped to the number of files being processed.
 
