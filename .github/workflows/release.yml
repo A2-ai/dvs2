@@ -52,6 +52,10 @@ jobs:
           fi
           cargo build --all --features=cli --release --target ${{ matrix.target }}
 
+      - name: Smoke-test built binary
+        if: matrix.target == 'x86_64-unknown-linux-gnu'  # only native target
+        run: ./target/${{ matrix.target }}/release/dvs --version
+
       - name: Prepare binary for upload
         run: |
           mkdir -p artifacts
@@ -69,6 +73,7 @@ jobs:
   Create-Release:
     needs: [Build-Binaries]
     runs-on: ubuntu-latest
+    # Guard for workflow_dispatch (manual) runs — only release on tag pushes, never on dispatch.
     if: ${{ github.ref_type == 'tag' }}
     permissions:
       contents: write
