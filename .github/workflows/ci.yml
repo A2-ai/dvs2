@@ -43,10 +43,6 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
 
-      - name: set global R_HOME
-        shell: pwsh
-        run: '"R_HOME=$env:RUNNER_TEMP" >> $env:GITHUB_ENV'
-
       - name: Build System Info
         run: rustc --version
 
@@ -57,7 +53,7 @@ jobs:
           path: |
             ~/.cargo/bin/cargo-revendor
             ~/.cargo/bin/cargo-revendor.exe
-          key: ${{ runner.os }}-cargo-revendor-v1
+          key: ${{ runner.os }}-cargo-revendor-v2-strip-fix
 
       - name: Install cargo-revendor
         if: steps.revendor-cache.outputs.cache-hit != 'true'
@@ -75,7 +71,7 @@ jobs:
             dvs-rpkg/src/rust/Cargo.toml
             dvs-rpkg/src/rust/Cargo.lock
             dvs-rpkg/inst/vendor.tar.xz
-          key: rpkg-vendor-${{ hashFiles('dvs-rpkg/src/rust/Cargo.toml', 'dvs-rpkg/src/rust/Cargo.lock') }}
+          key: rpkg-vendor-v2-${{ hashFiles('dvs-rpkg/src/rust/Cargo.toml', 'dvs-rpkg/src/rust/Cargo.lock') }}
 
       - name: Vendor rpkg deps
         if: steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
@@ -113,3 +109,37 @@ jobs:
         run: |
           cargo check --manifest-path dvs-rpkg/src/rust/Cargo.toml
           cargo check --manifest-path dvs-rpkg/src/rust/Cargo.toml --all-features
+
+  install-tarball:
+    name: rpkg install-tarball smoke
+    runs-on: ubuntu-22.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: dvs-rpkg
+          needs: check
+      - name: Install just
+        uses: taiki-e/install-action@just
+      - name: Cache cargo-revendor
+        id: revendor-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-revendor
+          key: ${{ runner.os }}-cargo-revendor-v2-strip-fix
+      - name: Install cargo-revendor
+        if: steps.revendor-cache.outputs.cache-hit != 'true'
+        run: cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor
+      - name: Install autoconf
+        run: sudo apt-get update && sudo apt-get install -y autoconf
+      - name: Run install-tarball
+        run: bash dvs-rpkg/tests/install-tarball
