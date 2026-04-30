@@ -58,31 +58,27 @@ pub fn resolve_paths_for_add(
             };
             out.insert(relative_to_root);
         } else if full_path.is_dir() {
-            let Some(matcher) = &glob_matcher else {
-                bail!(
-                    "'{}' is a directory; pass a glob pattern (e.g. --glob '*' or --glob '**/*.csv') to select files within it",
-                    path.display()
-                );
-            };
-            for entry in WalkDir::new(&full_path).into_iter().filter_map(|e| e.ok()) {
-                let entry_path = entry.path().canonicalize()?;
-                // Skip directories and metadata root folder
-                if !entry_path.is_file() || entry_path.starts_with(&metadata_root) {
-                    continue;
-                }
+            if let Some(matcher) = &glob_matcher {
+                for entry in WalkDir::new(&full_path).into_iter().filter_map(|e| e.ok()) {
+                    let entry_path = entry.path().canonicalize()?;
+                    // Skip directories and metadata root folder
+                    if !entry_path.is_file() || entry_path.starts_with(&metadata_root) {
+                        continue;
+                    }
 
-                // Get path relative to the walked directory for matching
-                let relative_to_dir = match entry_path.strip_prefix(&full_path) {
-                    Ok(p) => p,
-                    Err(_) => continue,
-                };
-                if matcher.is_match(relative_to_dir) {
-                    // Return path relative to repo root
-                    let relative_to_root = match entry_path.strip_prefix(&repo_root) {
-                        Ok(p) => p.to_path_buf(),
+                    // Get path relative to the walked directory for matching
+                    let relative_to_dir = match entry_path.strip_prefix(&full_path) {
+                        Ok(p) => p,
                         Err(_) => continue,
                     };
-                    out.insert(relative_to_root);
+                    if matcher.is_match(relative_to_dir) {
+                        // Return path relative to repo root
+                        let relative_to_root = match entry_path.strip_prefix(&repo_root) {
+                            Ok(p) => p.to_path_buf(),
+                            Err(_) => continue,
+                        };
+                        out.insert(relative_to_root);
+                    }
                 }
             }
         } else {
@@ -252,17 +248,6 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Path not found"));
-    }
-
-    #[test]
-    fn add_directory_without_glob_errors_helpfully() {
-        let (_temp, dvs_paths) = setup_test_repo();
-        let result = resolve_paths_for_add(vec![PathBuf::from("data")], None, &dvs_paths);
-
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("is a directory"), "got: {msg}");
-        assert!(msg.contains("--glob"), "got: {msg}");
     }
 
     #[test]
