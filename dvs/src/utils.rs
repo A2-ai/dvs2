@@ -81,47 +81,43 @@ pub fn parse_size(size: &str) -> Result<u64> {
     Ok((num * multiplier as f64) as u64)
 }
 
-/// Creates a rayon thread pool.
+/// Creates a rayon thread pool with a thread count resolved from a 3-tier
+/// priority chain, each clamped to `work_items`:
 ///
-/// Thread count priority (highest to lowest):
-/// 1. Global override via [`set_num_threads`] (capped at 32)
-/// 2. `DVS_NUM_THREADS` environment variable (capped at 32)
-/// 3. Default: `available_cpus * 4` (capped at 16)
-///
-/// The result is always clamped to the number of work items.
+/// 1. **Override** — `set_num_threads(n)` (capped at `ENV_MAX_THREADS`)
+/// 2. **Env** — `DVS_NUM_THREADS` env var, must parse to `usize > 0`
+///    (capped at `ENV_MAX_THREADS`)
+/// 3. **Default** — `available_cpus * DEFAULT_THREADS_PER_CPU`
+///    (capped at `DEFAULT_MAX_THREADS`)
 pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
     debug_assert_ne!(
         work_items, 0,
         "the thread pool should not be instantiated when there are no work items to process"
     );
-    // a proxy for available logical cpu cores
-    let available = std::thread::available_parallelism()
+    let work_limit = work_items.max(1);
+    let available_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
         .max(1);
-    let env_threads = std::env::var("DVS_NUM_THREADS")
+
+    let (num_threads, source) = if let Some(n) = get_num_threads() {
+        (n.min(ENV_MAX_THREADS).min(work_limit), "override")
+    } else if let Some(n) = std::env::var("DVS_NUM_THREADS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0);
-    // Priority: set_num_threads() > DVS_NUM_THREADS env var > default
-    let (num_threads, source) = {
-        let work_limit = work_items.max(1);
-
-        let (configured, source) = match (get_num_threads(), env_threads) {
-            (Some(n), _) => (n.min(ENV_MAX_THREADS), "override"),
-            (None, Some(n)) => (n.min(ENV_MAX_THREADS), "env"),
-            (None, None) => (
-                available
-                    .saturating_mul(DEFAULT_THREADS_PER_CPU)
-                    .min(DEFAULT_MAX_THREADS),
-                "default",
-            ),
-        };
-        (configured.min(work_limit), source)
+        .filter(|&n| n > 0)
+    {
+        (n.min(ENV_MAX_THREADS).min(work_limit), "env")
+    } else {
+        let n = available_cpus
+            .saturating_mul(DEFAULT_THREADS_PER_CPU)
+            .min(DEFAULT_MAX_THREADS)
+            .min(work_limit);
+        (n, "default")
     };
 
     log::debug!(
-        "thread pool: {num_threads} threads (source: {source}, work_items={work_items})"
+        "thread pool: {num_threads} threads (source: {source}, work_items={work_items})",
     );
 
     let pool = rayon::ThreadPoolBuilder::new()

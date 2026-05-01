@@ -217,11 +217,17 @@ ui-render:
         echo "wrote ${out}"
     done
 
-# Publish ui/output/ui-<NAME>.html to alx with each script as source attachment
-ui-publish-only:
+# Publish ui/output/ui-<NAME>.html to alx with each script as source attachment.
+# No args → publish all ui_names. Args → publish only those names.
+# Examples: `just ui-publish-only`            (all)
+#           `just ui-publish-only threads`    (one)
+#           `just ui-publish-only threads parallel`  (subset)
+ui-publish-only *names:
     #!/usr/bin/env bash
     set -uo pipefail
-    for name in {{ui_names}}; do
+    targets="{{names}}"
+    if [[ -z "$targets" ]]; then targets="{{ui_names}}"; fi
+    for name in $targets; do
         if [[ "$name" == "main" ]]; then script="ui/main.sh"; else script="ui/main_${name}.sh"; fi
         out="ui/output/ui-${name}.html"
         if [[ ! -f "$out" ]]; then echo "skipping ${name} (no ${out})"; continue; fi
