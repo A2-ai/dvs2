@@ -19,6 +19,14 @@ Called for its side effect; returns \code{NULL} invisibly.
 \description{
 Controls which log messages from the DVS internals are routed to R's console. \code{error} and \code{warn} go to \code{\link[=stderr]{stderr()}}; \code{info}, \code{debug}, and \code{trace} go to stdout.
 }
+\details{
+The R package does not consult the \code{RUST_LOG} environment variable.
+\code{RUST_LOG=dvs=<level>} only affects the \code{dvs} CLI binary; in R you must
+call \code{set_dvs_log_level()}.
+
+Default at package load: \code{"off"} — no log output is produced until this
+function is called.
+}
 \examples{
 \dontrun{
 set_dvs_log_level("info")    # opt in
