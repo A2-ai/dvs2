@@ -54,18 +54,16 @@ where
     F: FnOnce(SyncSender<ProgressBytes>) -> Result<T> + Send,
 {
     let mut bar = CliProgressBar::new();
-    let result = WorkerPump::<ProgressBytes>::new()
-        .channel_capacity(64)
-        .run(
-            |tx| task(tx).map_err(Into::into),
-            |bytes| {
-                if bytes < 0 {
-                    bar.grow_total((-bytes) as f64);
-                } else {
-                    bar.add(bytes as f64);
-                }
-            },
-        );
+    let result = WorkerPump::<ProgressBytes>::new().channel_capacity(64).run(
+        |tx| task(tx).map_err(Into::into),
+        |bytes| {
+            if bytes < 0 {
+                bar.grow_total((-bytes) as f64);
+            } else {
+                bar.add(bytes as f64);
+            }
+        },
+    );
     bar.done();
     result.map_err(|e| anyhow!("{e}"))
 }
@@ -510,9 +508,7 @@ pub fn dvs_version() -> String {
 /// @param level Character string giving the desired log level.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_set_log_level_impl")]
-pub(crate) fn dvs_set_log_level(
-    #[miniextendr(match_arg)] level: log::LevelFilter,
-) {
+pub(crate) fn dvs_set_log_level(#[miniextendr(match_arg)] level: log::LevelFilter) {
     log::set_max_level(level);
 }
 
