@@ -1,30 +1,3 @@
-#' Set the log level for DVS Rust-core messages
-#'
-#' Controls which log messages from the Rust core are routed to R's console.
-#' `error` and `warn` go to stderr via `REprintf`; `info`, `debug`, and `trace`
-#' go to stdout via `Rprintf`.
-#'
-#' Default at package load: `"off"` — no Rust log output reaches R until this
-#' function is called.
-#'
-#' @param level Character string giving the desired log level. Choices come
-#'   from `log::LevelFilter` via miniextendr's `match.arg` machinery.
-#'
-#' @return Called for its side effect; returns `NULL` invisibly.
-#'
-#' @examples
-#' \dontrun{
-#' set_dvs_log_level("info")    # opt in
-#' set_dvs_log_level("debug")
-#' set_dvs_log_level("off")     # restore default (silent)
-#' }
-#'
-#' @export
-set_dvs_log_level <- function(level) {
-  dvs_set_log_level_impl(level)
-  invisible(NULL)
-}
-
 #' Set the number of threads used by DVS operations
 #'
 #' Controls the thread pool size for parallel file operations (add, get, status).

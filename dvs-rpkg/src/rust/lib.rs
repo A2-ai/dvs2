@@ -495,20 +495,29 @@ pub fn dvs_version() -> String {
     dvs::VERSION.to_string()
 }
 
-/// Set the Rust-core log level filter.
+/// Set the log level for DVS Rust-core messages
 ///
-/// Routes Rust `log` crate messages to R's console. The R wrapper takes a
-/// `level` character (validated against the canonical lowercase names from
-/// `log::LevelFilter`) and converts to the matching variant before calling
-/// this function.
+/// Controls which log messages from the Rust core are routed to R's console.
+/// `error` and `warn` go to stderr via `REprintf`; `info`, `debug`, and `trace`
+/// go to stdout via `Rprintf`.
 ///
-/// Default at package load: `"off"` — no Rust log output reaches R until
-/// this function is called.
+/// Default at package load: `"off"` — no Rust log output reaches R until this
+/// function is called.
 ///
-/// @param level Character string giving the desired log level.
-/// @keywords internal
-#[miniextendr(r_name = "dvs_set_log_level_impl")]
-pub(crate) fn dvs_set_log_level(#[miniextendr(match_arg)] level: log::LevelFilter) {
+/// @param level Character string giving the desired log level. Choices come
+///   from `log::LevelFilter` via miniextendr's `match.arg` machinery; the
+///   default is `"off"`.
+///
+/// @return Called for its side effect; returns `NULL` invisibly.
+///
+/// @examples
+/// \dontrun{
+/// set_dvs_log_level("info")    # opt in
+/// set_dvs_log_level("debug")
+/// set_dvs_log_level("off")     # restore default (silent)
+/// }
+#[miniextendr(invisible)]
+pub fn set_dvs_log_level(#[miniextendr(match_arg)] level: log::LevelFilter) {
     log::set_max_level(level);
 }
 
