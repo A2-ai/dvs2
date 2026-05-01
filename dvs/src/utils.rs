@@ -140,9 +140,7 @@ pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
         ThreadSource::Default
     };
 
-    log::debug!(
-        "thread pool: {num_threads} threads (source: {source}, work_items={work_items})",
-    );
+    log::debug!("thread pool: {num_threads} threads (source: {source}, work_items={work_items})",);
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
