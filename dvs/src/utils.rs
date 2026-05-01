@@ -25,6 +25,24 @@ pub(crate) fn get_num_threads() -> Option<usize> {
     }
 }
 
+/// Which tier of the priority chain produced the thread count.
+#[derive(Debug, Clone, Copy)]
+enum ThreadSource {
+    Override,
+    Environment,
+    Default,
+}
+
+impl std::fmt::Display for ThreadSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Override => "override",
+            Self::Environment => "environment",
+            Self::Default => "default",
+        })
+    }
+}
+
 const KB: u64 = 1_024;
 const MB: u64 = 1_024 * 1_024;
 const GB: u64 = 1_024 * 1_024 * 1_024;
@@ -100,25 +118,27 @@ pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
         .unwrap_or(1)
         .max(1);
 
-    let num_threads;
-    let source;
-    if let Some(n) = get_num_threads() {
-        num_threads = n.min(ENV_MAX_THREADS).min(work_limit);
-        source = "override";
-    } else if let Some(n) = std::env::var("DVS_NUM_THREADS")
+    let override_threads = get_num_threads();
+    let env_threads = std::env::var("DVS_NUM_THREADS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-    {
-        num_threads = n.min(ENV_MAX_THREADS).min(work_limit);
-        source = "environment";
-    } else {
-        num_threads = available_cpus
+        .filter(|&n| n > 0);
+
+    let num_threads = match (override_threads, env_threads) {
+        (Some(n), _) | (None, Some(n)) => n.min(ENV_MAX_THREADS).min(work_limit),
+        (None, None) => available_cpus
             .saturating_mul(DEFAULT_THREADS_PER_CPU)
             .min(DEFAULT_MAX_THREADS)
-            .min(work_limit);
-        source = "default";
-    }
+            .min(work_limit),
+    };
+
+    let source = if override_threads.is_some() {
+        ThreadSource::Override
+    } else if env_threads.is_some() {
+        ThreadSource::Environment
+    } else {
+        ThreadSource::Default
+    };
 
     log::debug!(
         "thread pool: {num_threads} threads (source: {source}, work_items={work_items})",
