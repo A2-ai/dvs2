@@ -100,21 +100,25 @@ pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
         .unwrap_or(1)
         .max(1);
 
-    let (num_threads, source) = if let Some(n) = get_num_threads() {
-        (n.min(ENV_MAX_THREADS).min(work_limit), "override")
+    let num_threads;
+    let source;
+    if let Some(n) = get_num_threads() {
+        num_threads = n.min(ENV_MAX_THREADS).min(work_limit);
+        source = "override";
     } else if let Some(n) = std::env::var("DVS_NUM_THREADS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
     {
-        (n.min(ENV_MAX_THREADS).min(work_limit), "env")
+        num_threads = n.min(ENV_MAX_THREADS).min(work_limit);
+        source = "environment";
     } else {
-        let n = available_cpus
+        num_threads = available_cpus
             .saturating_mul(DEFAULT_THREADS_PER_CPU)
             .min(DEFAULT_MAX_THREADS)
             .min(work_limit);
-        (n, "default")
-    };
+        source = "default";
+    }
 
     log::debug!(
         "thread pool: {num_threads} threads (source: {source}, work_items={work_items})",
