@@ -501,6 +501,10 @@ pub fn dvs_version() -> String {
 /// console. `error` and `warn` go to [stderr()]; `info`, `debug`, and `trace`
 /// go to stdout.
 ///
+/// The R package does not consult the `RUST_LOG` environment variable.
+/// `RUST_LOG=dvs=<level>` only affects the `dvs` CLI binary; in R you must
+/// call `set_dvs_log_level()`.
+///
 /// Default at package load: `"off"` — no log output is produced until this
 /// function is called.
 ///
