@@ -495,18 +495,17 @@ pub fn dvs_version() -> String {
     dvs::VERSION.to_string()
 }
 
-/// Set the log level for DVS Rust-core messages
+/// Set the log level for DVS internals
 ///
-/// Controls which log messages from the Rust core are routed to R's console.
-/// `error` and `warn` go to stderr via `REprintf`; `info`, `debug`, and `trace`
-/// go to stdout via `Rprintf`.
+/// Controls which log messages from the DVS internals are routed to R's
+/// console. `error` and `warn` go to [stderr()]; `info`, `debug`, and `trace`
+/// go to stdout.
 ///
-/// Default at package load: `"off"` — no Rust log output reaches R until this
+/// Default at package load: `"off"` — no log output is produced until this
 /// function is called.
 ///
-/// @param level Character string giving the desired log level. Choices come
-///   from `log::LevelFilter` via miniextendr's `match.arg` machinery; the
-///   default is `"off"`.
+/// @param level Character string giving the desired log level. The default
+///   is `"off"`.
 ///
 /// @return Called for its side effect; returns `NULL` invisibly.
 ///

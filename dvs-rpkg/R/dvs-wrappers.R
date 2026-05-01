@@ -275,12 +275,11 @@ format_byte_size <- function(size_bytes) {
   .val
 }
 
-# Generated from Rust fn `set_dvs_log_level` (lib.rs:520:8)
-#' @title Set the log level for DVS Rust-core messages
-#' @description Controls which log messages from the Rust core are routed to R's console. `error` and `warn` go to stderr via `REprintf`; `info`, `debug`, and `trace` go to stdout via `Rprintf`.
-#' @param level Character string giving the desired log level. Choices come
-#' from `log::LevelFilter` via miniextendr's `match.arg` machinery; the
-#' default is `"off"`.
+# Generated from Rust fn `set_dvs_log_level` (lib.rs:519:8)
+#' @title Set the log level for DVS internals
+#' @description Controls which log messages from the DVS internals are routed to R's console. `error` and `warn` go to [stderr()]; `info`, `debug`, and `trace` go to stdout.
+#' @param level Character string giving the desired log level. The default
+#' is `"off"`.
 #' @return Called for its side effect; returns `NULL` invisibly.
 #' @examples
 #' \dontrun{
