@@ -134,6 +134,9 @@ vendor-lib crate dev_path:
 
 build-all: build rpkg-build
 
+# Install both the dvs CLI binary and the dvs R package from the current branch
+install-all: install-cli rpkg-install
+
 test-all: test rpkg-test
 
 check-all: check rpkg-check
