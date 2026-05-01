@@ -104,17 +104,25 @@ pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0);
     // Priority: set_num_threads() > DVS_NUM_THREADS env var > default
-    let num_threads = {
+    let (num_threads, source) = {
         let work_limit = work_items.max(1);
 
-        let configured = match get_num_threads().or(env_threads) {
-            Some(n) => n.min(ENV_MAX_THREADS),
-            None => available
-                .saturating_mul(DEFAULT_THREADS_PER_CPU)
-                .min(DEFAULT_MAX_THREADS),
+        let (configured, source) = match (get_num_threads(), env_threads) {
+            (Some(n), _) => (n.min(ENV_MAX_THREADS), "override"),
+            (None, Some(n)) => (n.min(ENV_MAX_THREADS), "env"),
+            (None, None) => (
+                available
+                    .saturating_mul(DEFAULT_THREADS_PER_CPU)
+                    .min(DEFAULT_MAX_THREADS),
+                "default",
+            ),
         };
-        configured.min(work_limit)
+        (configured.min(work_limit), source)
     };
+
+    log::debug!(
+        "thread pool: {num_threads} threads (source: {source}, work_items={work_items})"
+    );
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
