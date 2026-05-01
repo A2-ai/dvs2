@@ -17,18 +17,20 @@ Called for its side effect; returns \code{NULL} invisibly.
 Controls which log messages from the Rust core are routed to R's console.
 \code{error} and \code{warn} messages go to stderr via \code{REprintf}; \code{info}, \code{debug},
 and \code{trace} messages go to stdout via \code{Rprintf}. The default level at
-package load is \code{"info"}.
+package load is \code{"off"} — no Rust log output reaches R until this function
+is called. Worker-thread log records (from \code{dvs_add}, \code{dvs_get}) are
+buffered and drained in real time via \code{WorkerPump}'s built-in drain.
 }
 \examples{
 \dontrun{
+# Opt in to info-level messages from the Rust core
+set_dvs_log_level("info")
+
 # Show debug-level messages from the Rust core
 set_dvs_log_level("debug")
 
-# Suppress all log output
+# Suppress all log output (default)
 set_dvs_log_level("off")
-
-# Restore default
-set_dvs_log_level("info")
 }
 
 }

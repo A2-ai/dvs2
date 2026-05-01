@@ -10,11 +10,11 @@ mod test_support;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::mpsc::{self, SyncSender};
-use std::thread;
+use std::sync::mpsc::SyncSender;
 
 use miniextendr_api::externalptr::ExternalPtr;
 use miniextendr_api::into_r::IntoR;
+use miniextendr_api::pump::WorkerPump;
 use miniextendr_api::serde::ColumnarDataFrame;
 use miniextendr_api::time::OffsetDateTime;
 use miniextendr_api::{AsSerializeRow, DataFrame, List, MatchArg, list, miniextendr, r_println};
@@ -42,35 +42,31 @@ type ProgressBytes = i64;
 const BATCH_THRESHOLD: i64 = 256 * 1024;
 
 /// Run `task` on a worker thread with a cli progress bar on the R main thread.
+///
+/// Uses `WorkerPump` to coordinate the worker and progress-bar threads.
+/// `WorkerPump`'s default `drain_logs_each_tick(true)` drains the
+/// cross-thread log queue on every pump tick, so worker-thread log records
+/// surface in real time without a manual `drain_log_queue()` call.
 fn run_with_progress<T, F>(task: F) -> Result<T>
 where
     T: Send,
     F: FnOnce(SyncSender<ProgressBytes>) -> Result<T> + Send,
 {
-    thread::scope(|scope| {
-        let (tx, rx) = mpsc::sync_channel(64);
-        let worker = scope.spawn(move || {
-            let result = task(tx.clone());
-            drop(tx);
-            result
-        });
-
-        let mut bar = CliProgressBar::new();
-
-        while let Ok(bytes) = rx.recv() {
-            if bytes < 0 {
-                bar.grow_total((-bytes) as f64);
-            } else {
-                bar.add(bytes as f64);
-            }
-        }
-
-        bar.done();
-
-        worker
-            .join()
-            .map_err(|_| anyhow!("Progress worker thread panicked"))?
-    })
+    let mut bar = CliProgressBar::new();
+    let result = WorkerPump::<ProgressBytes>::new()
+        .channel_capacity(64)
+        .run(
+            |tx| task(tx).map_err(Into::into),
+            |bytes| {
+                if bytes < 0 {
+                    bar.grow_total((-bytes) as f64);
+                } else {
+                    bar.add(bytes as f64);
+                }
+            },
+        );
+    bar.done();
+    result.map_err(|e| anyhow!("{e}"))
 }
 
 /// Build the `on_file_start` closure that feeds byte-level progress.

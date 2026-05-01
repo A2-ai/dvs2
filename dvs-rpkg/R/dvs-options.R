@@ -40,7 +40,9 @@ set_dvs_threads <- function(threads) {
 #' Controls which log messages from the Rust core are routed to R's console.
 #' `error` and `warn` messages go to stderr via `REprintf`; `info`, `debug`,
 #' and `trace` messages go to stdout via `Rprintf`. The default level at
-#' package load is `"info"`.
+#' package load is `"off"` — no Rust log output reaches R until this function
+#' is called. Worker-thread log records (from `dvs_add`, `dvs_get`) are
+#' buffered and drained in real time via `WorkerPump`'s built-in drain.
 #'
 #' @param level Character string giving the desired log level. One of
 #'   `"error"`, `"warn"`, `"info"`, `"debug"`, `"trace"`, `"off"`.
@@ -49,14 +51,14 @@ set_dvs_threads <- function(threads) {
 #'
 #' @examples
 #' \dontrun{
+#' # Opt in to info-level messages from the Rust core
+#' set_dvs_log_level("info")
+#'
 #' # Show debug-level messages from the Rust core
 #' set_dvs_log_level("debug")
 #'
-#' # Suppress all log output
+#' # Suppress all log output (default)
 #' set_dvs_log_level("off")
-#'
-#' # Restore default
-#' set_dvs_log_level("info")
 #' }
 #'
 #' @export
