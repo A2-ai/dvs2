@@ -50,12 +50,19 @@ A file in a `dvs` project can be in 3 states:
 
 ### Errors / failures
 
-All input must be evaluated, and errors as well as successes must be collated
-are reported back to the user.
+All input must be evaluated, and errors as well as successes must be collected,
+and then reported back to the user.
 
 #### CLI
 
+Error handling in CLI must be designed around the use case of being a part
+of pipelines, or non-interactive workflows. Returning error codes is necessary.
+
 #### R package
+
+Error handling in the R package assumes interactive, long-lived sessions. Thus,
+the R package must provide comprehensive information, that the end-user can
+explore.
 
 ### init
 
@@ -99,10 +106,7 @@ Options:
 
 #### Rust library
 
-- [ ] figure out the actual spec for the library, other than being the engine
-  behind both CLI and R package.
-
-Library takes a project directory and the config to save.
+Library takes a project directory and the configuration of the backend to initiate repository.
 
 #### R package
 
