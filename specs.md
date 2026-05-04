@@ -50,8 +50,8 @@ A file in a `dvs` project can be in 3 states:
 
 ### Errors / failures
 
-All input must be evaluated, and errors as well as successes must be collected,
-and then reported back to the user.
+All input must be evaluated, and errors as well as successes must be collected
+are then reported back to the user.
 
 #### CLI
 
@@ -124,7 +124,7 @@ dvs_init(
 - `root_dir`: project root where `dvs.toml` is created (defaults to working directory)
 - `group`: Unix group to set on storage directory and files
 - `metadata_folder_name`: custom name for the metadata folder (default `.dvs`)
-- `no_compression`: disable zstd compression of stored files
+- `compression`: desired compression for the stored date (default `zstd`)
 
 Returns a list with `status = "initialized"`, invisibly.
 
@@ -186,7 +186,7 @@ It otherwise returns a list of results sorted alphabetically by path, letting us
 dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 ```
 
-- `files`: character vector of file paths to add (can be empty if `glob` is provided)
+- `paths`: character vector of file paths to add (can be empty if `glob` is provided)
 - `message`: optional message recorded in the metadata file.
 - `glob`: pattern to match files (same resolution rules as CLI `--glob`)
 - `dry_run`: if `TRUE`, returns what would be added without making changes
@@ -215,8 +215,6 @@ You can also do a dry run from the CLI, R package or the library that will retur
 without actually doing them.
 
 #### CLI
-
-- [ ] missing `-r, --recursive` options that `dvs status` has.
 
 ```shell
 ❯ dvs get --help
@@ -303,9 +301,9 @@ dvs_status(
 )
 ```
 
-- `paths` optional vector of files to retrieve status of
-- `status` represent the filter flags `current`, `absent`, `unsynced`.
-  When omitted, all three states are present in the returned data-frame, otherwise serval filtering status can be provided.
+- `paths` optional vector of paths files to retrieve status of
+- `status` represent the filter flags `current`, `absent`, `unsynced`
+  When omitted, all three states are present in the returned data-frame, otherwise serval filtering status can be provided
 
 Returns a data frame with one row per tracked file.
 
@@ -408,8 +406,6 @@ and operations proceed without it if that also fails.
 
 ### Parallelism
 
-- [ ] update the threads strategy here to reflect that of current `dvs2`.
-
 `add`, `get`, and `status` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
 variable to control the thread count, if the CLI and R package have not set the number
 of threads directly. If it is unset, the default is `min(available_parallelism * 4, 16)`.
@@ -430,11 +426,7 @@ the `add` operation to fail.
 
 ### Globbing
 
-<<<<<<< HEAD
 `add`, `status`, `get` accept a `--glob` flag. The resolution works the following way:
-=======
-`add`, `status`,  `get` both accept a `--glob` flag. The resolution works the following way:
->>>>>>> 6f99880 (updated spec based on slack feedback)
 
 - Explicit files: added/retrieved directly (glob ignored)
 - Explicit directories with a glob: walked and filtered by glob
