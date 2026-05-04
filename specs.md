@@ -10,7 +10,7 @@
 
 All configuration is handled in a `dvs.toml` config file.
 
-All CLI commands take a `--json` flag if you want to get JSON output.
+All CLI subcommands accept `--json` (JSON output) and `--threads` (thread count override) as global options — they may appear before or after the subcommand name (e.g., `dvs status --json` or `dvs --json status`). `--threads` overrides the `DVS_NUM_THREADS` environment variable for a single invocation; see the Parallelism section for the full thread-count rules.
 
 ## Glossary
 
@@ -59,7 +59,6 @@ init attempts best-effort cleanup of local artifacts (`dvs.toml` and, if it didn
 #### CLI
 
 ```
- dvs init --help
 Starts a new dvs project. This will create a `dvs.toml` file in the current folder of where the user is calling the CLI from
 
 Usage: dvs init [OPTIONS] <PATH>
@@ -70,6 +69,8 @@ Arguments:
 Options:
       --json
           Output results as JSON
+      --threads <THREADS>
+          Number of threads for parallel operations (0 = auto-detect)
       --root-dir <ROOT_DIR>
           If you want to use a root folder other than the current directory
       --metadata-folder-name <METADATA_FOLDER_NAME>
@@ -133,8 +134,9 @@ Arguments:
   [PATHS]...  
 
 Options:
-      --glob <GLOB>        
       --json               Output results as JSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+      --glob <GLOB>        
   -m, --message <MESSAGE>  An optional message to add
       --dry-run            Show what would be added without making any actual changes
   -h, --help               Print help
@@ -184,7 +186,6 @@ without actually doing them.
 #### CLI
 
 ```
- dvs get --help
 Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided
 
 Usage: dvs get [OPTIONS] [PATHS]...
@@ -193,10 +194,11 @@ Arguments:
   [PATHS]...  
 
 Options:
-  -g, --glob <GLOB>  
-      --json         Output results as JSON
-      --dry-run      Show what would be retrieved without making any actual changes
-  -h, --help         Print help
+      --json               Output results as JSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+  -g, --glob <GLOB>        
+      --dry-run            Show what would be retrieved without making any actual changes
+  -h, --help               Print help
 ```
 
 This will exit with `1` if one or more files could not be retrieved.
@@ -224,22 +226,28 @@ This returns the status (mentioned in the high level overview above) of the trac
 #### CLI
 
 ```
- dvs status --help
-Gets the status of each tracked file in the current repository.
-By default shows all tracked files; use the flags below to filter.
+Gets the status of each files in the current repository
 
-Usage: dvs status [OPTIONS]
+Usage: dvs status [OPTIONS] [PATHS]...
+
+Arguments:
+  [PATHS]...  Paths (files or directories) to check status for
 
 Options:
-      --current   Include the files that are current
-      --json      Output results as JSON
-      --absent    Include the files that are absent
-      --unsynced  Include the files that are unsynced
-  -h, --help      Print help
+      --json               Output results as JSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+  -r, --recursive          Recursively include files in subdirectories for given directories
+      --current            Include the files that are current
+      --absent             Include the files that are absent
+      --unsynced           Include the files that are unsynced
+      --with-metadata      Show all metadata columns in the table output
+  -h, --help               Print help
 ```
 
-By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`, and
+By default (no flags and no paths), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`, and
 `--unsynced` flags are filters: when one or more are provided, only files matching those states are shown.
+
+One or more `[PATHS]` can be provided to scope the output to specific files or directories. When a directory path is given, only files directly inside it are checked; use `-r` / `--recursive` to include files in subdirectories. `--with-metadata` adds additional columns (message, add time, etc.) to the table output.
 
 #### Rust library
 
@@ -250,10 +258,12 @@ as per-file errors in the result list.
 #### R package
 
 ```r
-dvs_status(current = FALSE, absent = FALSE, unsynced = FALSE)
+dvs_status(paths = character(0), recursive = NULL, status = c("current", "absent", "unsynced"))
 ```
 
-- `current`, `absent`, `unsynced`: filter flags. When all are `FALSE` (default), all tracked files are returned. When one or more are `TRUE`, only files matching those states are returned. Errors are always included.
+- `paths`: character vector of file or directory paths to check status for. When empty (default), all tracked files are checked.
+- `recursive`: if `TRUE`, recursively include files in subdirectories for given directory paths.
+- `status`: character vector of statuses to include. Valid values are `"current"`, `"absent"`, and `"unsynced"`. When the full default vector is passed, all statuses are shown.
 
 Returns a data frame with one row per tracked file.
 

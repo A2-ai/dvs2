@@ -153,7 +153,7 @@ All defined in `src/rust/lib.rs` with `#[miniextendr]`:
 |----------|---------|---------|
 | `dvs_init(storage_path, root_dir?, group?, metadata_folder_name?, no_compression?)` | Initialize a DVS repository | List |
 | `dvs_add(files?, message?, glob?, dry_run?)` | Add files to content-addressable storage | DataFrame |
-| `dvs_status(current?, absent?, unsynced?)` | Report sync status of managed files | DataFrame |
+| `dvs_status(paths?, recursive?, status?)` | Report sync status of managed files | DataFrame |
 | `dvs_get(files?, glob?, dry_run?)` | Retrieve files from storage | DataFrame |
 
 Results are returned as DataFrames using miniextendr's `AsSerializeRow` trait. Errors propagate as `anyhow::Result<T>` converted to R error objects.
