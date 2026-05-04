@@ -80,7 +80,7 @@ dvs_status <- function(
 #' @inherit dvs_get_impl title description params
 #' @rdname dvs_get
 #' @export
-dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
+dvs_get <- function(paths = character(0), glob = NULL, recursive = NULL, dry_run = NULL) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   progress_callback <- NULL
   if (!isTRUE(dry_run)) {
@@ -90,6 +90,7 @@ dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
   get_data_frame <- dvs_get_impl(
     paths = paths,
     glob = glob,
+    recursive = recursive,
     dry_run = dry_run,
     progress_callback = progress_callback
   )

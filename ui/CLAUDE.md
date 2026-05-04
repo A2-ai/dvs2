@@ -3,11 +3,12 @@
 ## Running UI tests
 
 ```bash
-bash ui/main_status.sh    # Status filtering, path filtering, recursive
-bash ui/main_progress.sh  # Progress bars: 100x1MB + 1x500MB
-bash ui/main_parallel.sh  # Thread control benchmarks
-bash ui/main_log.sh       # Logging: off/info/debug/warn/error, threads, transitions
-bash ui/cleanup.sh        # Remove temp dirs left by tests
+bash ui/main_status.sh       # Status filtering, path filtering, recursive
+bash ui/main_recursive.sh    # Recursive flag across add/get/status
+bash ui/main_progress.sh     # Progress bars: 100x1MB + 1x500MB
+bash ui/main_parallel.sh     # Thread control benchmarks
+bash ui/main_log.sh          # Logging: off/info/debug/warn/error, threads, transitions
+bash ui/cleanup.sh           # Remove temp dirs left by tests
 ```
 
 All scripts use `set -euox pipefail` and trap on ERR, so a nonzero exit code means something failed. But **exit code 0 is not sufficient** — always redirect output to a log file, then read the log and verify:

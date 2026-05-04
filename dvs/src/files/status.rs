@@ -44,7 +44,7 @@ pub struct StatusFilter {
 
 /// We need to handle `.`, `./` etc but we can't canonicalize because
 /// the path might not exist and we want the path relative to the directory so no symlink resolution
-fn normalize_path(p: PathBuf) -> Option<PathBuf> {
+pub(crate) fn normalize_path(p: PathBuf) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {

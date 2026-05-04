@@ -13,7 +13,11 @@ dvs_status(
 \arguments{
 \item{paths}{Character vector of file or directory paths to check status for.}
 
-\item{recursive}{If \code{TRUE}, recursively include files in subdirectories.}
+\item{recursive}{If \code{TRUE}, directory inputs include all descendants;
+if \code{FALSE} or \code{NULL} (default), only direct children of the directory
+are returned. The flag only constrains descendants of paths passed
+explicitly — when \code{paths} is empty, every tracked file is returned
+regardless of nesting depth, and \code{recursive} has no effect.}
 
 \item{status}{Character vector of statuses to include. Valid values are
 \code{"current"}, \code{"absent"}, and \code{"unsynced"}. When empty (default), all
