@@ -12,7 +12,7 @@ dvs_init_impl(
   root_dir = NULL,
   group = NULL,
   metadata_folder_name = NULL,
-  compression = "zstd"
+  compression = c("zstd", "none")
 )
 }
 \arguments{
