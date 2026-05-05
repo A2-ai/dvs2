@@ -22,10 +22,18 @@ ProgressBarCallback <- new.env(parent = emptyenv())
 ProgressBarCallback$new <- function() {
   .val <- .Call(C_ProgressBarCallback__new, .call = match.call())
   if (inherits(.val, "rust_error_value") && isTRUE(attr(.val, "__rust_error__"))) {
-    stop(structure(
-      class = c("rust_error", "simpleError", "error", "condition"),
-      list(message = .val$error, call = .val$call %||% sys.call(), kind = .val$kind)
-    ))
+    .msg <- .val$error
+    .call <- .val$call %||% sys.call()
+    .class <- .val$class
+    switch(.val$kind,
+      error = stop(structure(list(message = .msg, call = .call, kind = "error"),class = c(.class, "rust_error", "simpleError", "error", "condition"))),
+      warning = { warning(structure(list(message = .msg, call = .call, kind = "warning"),class = c(.class, "rust_warning", "simpleWarning", "warning", "condition"))); return(invisible(NULL)) },
+      message = { message(structure(list(message = paste0(.msg, "\n"), call = NULL, kind = "message"),class = c(.class, "rust_message", "simpleMessage", "message", "condition"))); return(invisible(NULL)) },
+      condition = { signalCondition(structure(list(message = .msg, call = .call, kind = "condition"),class = c(.class, "rust_condition", "simpleCondition", "condition"))); return(invisible(NULL)) },
+      panic = stop(structure(list(message = .msg, call = .call, kind = "panic"),class = c("rust_error", "simpleError", "error", "condition"))),
+      stop(structure(list(message = .msg, call = .call, kind = .val$kind),
+        class = c("rust_error", "simpleError", "error", "condition")))
+    )
   }
   self <- .val
   class(self) <- "ProgressBarCallback"
@@ -86,10 +94,18 @@ ProgressBarCallback$new <- function() {
 dvs_test_2_5_gib_bytes <- function() {
   .val <- .Call(C_dvs_test_2_5_gib_bytes, .call = match.call())
   if (inherits(.val, "rust_error_value") && isTRUE(attr(.val, "__rust_error__"))) {
-    stop(structure(
-      class = c("rust_error", "simpleError", "error", "condition"),
-      list(message = .val$error, call = .val$call %||% sys.call(), kind = .val$kind)
-    ))
+      .msg <- .val$error
+      .call <- .val$call %||% sys.call()
+      .class <- .val$class
+      switch(.val$kind,
+        error = stop(structure(list(message = .msg, call = .call, kind = "error"),class = c(.class, "rust_error", "simpleError", "error", "condition"))),
+        warning = { warning(structure(list(message = .msg, call = .call, kind = "warning"),class = c(.class, "rust_warning", "simpleWarning", "warning", "condition"))); return(invisible(NULL)) },
+        message = { message(structure(list(message = paste0(.msg, "\n"), call = NULL, kind = "message"),class = c(.class, "rust_message", "simpleMessage", "message", "condition"))); return(invisible(NULL)) },
+        condition = { signalCondition(structure(list(message = .msg, call = .call, kind = "condition"),class = c(.class, "rust_condition", "simpleCondition", "condition"))); return(invisible(NULL)) },
+        panic = stop(structure(list(message = .msg, call = .call, kind = "panic"),class = c("rust_error", "simpleError", "error", "condition"))),
+        stop(structure(list(message = .msg, call = .call, kind = .val$kind),
+          class = c("rust_error", "simpleError", "error", "condition")))
+      )
   }
   .val
 }
@@ -118,10 +134,18 @@ dvs_add_impl <- function(paths = character(0), message = NULL, glob = NULL, dry_
   )
   .val <- .Call(C_dvs_add, .call = match.call(), paths, message, glob, dry_run, progress_callback)
   if (inherits(.val, "rust_error_value") && isTRUE(attr(.val, "__rust_error__"))) {
-    stop(structure(
-      class = c("rust_error", "simpleError", "error", "condition"),
-      list(message = .val$error, call = .val$call %||% sys.call(), kind = .val$kind)
-    ))
+      .msg <- .val$error
+      .call <- .val$call %||% sys.call()
+      .class <- .val$class
+      switch(.val$kind,
+        error = stop(structure(list(message = .msg, call = .call, kind = "error"),class = c(.class, "rust_error", "simpleError", "error", "condition"))),
+        warning = { warning(structure(list(message = .msg, call = .call, kind = "warning"),class = c(.class, "rust_warning", "simpleWarning", "warning", "condition"))); return(invisible(NULL)) },
+        message = { message(structure(list(message = paste0(.msg, "\n"), call = NULL, kind = "message"),class = c(.class, "rust_message", "simpleMessage", "message", "condition"))); return(invisible(NULL)) },
+        condition = { signalCondition(structure(list(message = .msg, call = .call, kind = "condition"),class = c(.class, "rust_condition", "simpleCondition", "condition"))); return(invisible(NULL)) },
+        panic = stop(structure(list(message = .msg, call = .call, kind = "panic"),class = c("rust_error", "simpleError", "error", "condition"))),
+        stop(structure(list(message = .msg, call = .call, kind = .val$kind),
+          class = c("rust_error", "simpleError", "error", "condition")))
+      )
   }
   .val
 }
@@ -147,10 +171,18 @@ dvs_get_impl <- function(paths = character(0), glob = NULL, dry_run = NULL, prog
   )
   .val <- .Call(C_dvs_get, .call = match.call(), paths, glob, dry_run, progress_callback)
   if (inherits(.val, "rust_error_value") && isTRUE(attr(.val, "__rust_error__"))) {
-    stop(structure(
-      class = c("rust_error", "simpleError", "error", "condition"),
-      list(message = .val$error, call = .val$call %||% sys.call(), kind = .val$kind)
-    ))
+      .msg <- .val$error
+      .call <- .val$call %||% sys.call()
+      .class <- .val$class
+      switch(.val$kind,
+        error = stop(structure(list(message = .msg, call = .call, kind = "error"),class = c(.class, "rust_error", "simpleError", "error", "condition"))),
+        warning = { warning(structure(list(message = .msg, call = .call, kind = "warning"),class = c(.class, "rust_warning", "simpleWarning", "warning", "condition"))); return(invisible(NULL)) },
+        message = { message(structure(list(message = paste0(.msg, "\n"), call = NULL, kind = "message"),class = c(.class, "rust_message", "simpleMessage", "message", "condition"))); return(invisible(NULL)) },
+        condition = { signalCondition(structure(list(message = .msg, call = .call, kind = "condition"),class = c(.class, "rust_condition", "simpleCondition", "condition"))); return(invisible(NULL)) },
+        panic = stop(structure(list(message = .msg, call = .call, kind = "panic"),class = c("rust_error", "simpleError", "error", "condition"))),
+        stop(structure(list(message = .msg, call = .call, kind = .val$kind),
+          class = c("rust_error", "simpleError", "error", "condition")))
+      )
   }
   .val
 }
@@ -166,7 +198,7 @@ dvs_get_impl <- function(paths = character(0), glob = NULL, dry_run = NULL, prog
 #' (default) or `"none"`.
 #' @keywords internal
 #' @source Generated by miniextendr from Rust fn `dvs_init`
-dvs_init_impl <- function(storage_path, root_dir = NULL, group = NULL, metadata_folder_name = NULL, compression = "zstd") {
+dvs_init_impl <- function(storage_path, root_dir = NULL, group = NULL, metadata_folder_name = NULL, compression = c("zstd", "none")) {
   stopifnot(
     "'storage_path' must be character" = is.character(storage_path),
     "'storage_path' must have length 1" = length(storage_path) == 1L,
@@ -177,15 +209,22 @@ dvs_init_impl <- function(storage_path, root_dir = NULL, group = NULL, metadata_
     "'metadata_folder_name' must be NULL or character" = is.null(metadata_folder_name) || is.character(metadata_folder_name),
     "'metadata_folder_name' must be NULL or have length 1" = is.null(metadata_folder_name) || length(metadata_folder_name) == 1L
   )
-  .__mx_choices_compression <- .Call(C_dvs_init__match_arg_choices__compression, .call = match.call())
   compression <- if (is.factor(compression)) as.character(compression) else compression
-  compression <- base::match.arg(compression, .__mx_choices_compression)
+  compression <- base::match.arg(compression)
   .val <- .Call(C_dvs_init, .call = match.call(), storage_path, root_dir, group, metadata_folder_name, compression)
   if (inherits(.val, "rust_error_value") && isTRUE(attr(.val, "__rust_error__"))) {
-    stop(structure(
-      class = c("rust_error", "simpleError", "error", "condition"),
-      list(message = .val$error, call = .val$call %||% sys.call(), kind = .val$kind)
-    ))
+      .msg <- .val$error
+      .call <- .val$call %||% sys.call()
+      .class <- .val$class
+      switch(.val$kind,
+        error = stop(structure(list(message = .msg, call = .call, kind = "error"),class = c(.class, "rust_error", "simpleError", "error", "condition"))),
+        warning = { warning(structure(list(message = .msg, call = .call, kind = "warning"),class = c(.class, "rust_warning", "simpleWarning", "warning", "condition"))); return(invisible(NULL)) },
+        message = { message(structure(list(message = paste0(.msg, "\n"), call = NULL, kind = "message"),class = c(.class, "rust_message", "simpleMessage", "message", "condition"))); return(invisible(NULL)) },
+        condition = { signalCondition(structure(list(message = .msg, call = .call, kind = "condition"),class = c(.class, "rust_condition", "simpleCondition", "condition"))); return(invisible(NULL)) },
+        panic = stop(structure(list(message = .msg, call = .call, kind = "panic"),class = c("rust_error", "simpleError", "error", "condition"))),
+        stop(structure(list(message = .msg, call = .call, kind = .val$kind),
+          class = c("rust_error", "simpleError", "error", "condition")))
+      )
   }
   invisible(.val)
 }
@@ -205,15 +244,22 @@ dvs_status_impl <- function(paths = character(0), recursive = NULL, status = c("
     "'recursive' must be NULL or logical" = is.null(recursive) || is.logical(recursive),
     "'recursive' must be NULL or have length 1" = is.null(recursive) || length(recursive) == 1L
   )
-  .__mx_choices_status <- .Call(C_dvs_status__match_arg_choices__status, .call = match.call())
   status <- if (is.factor(status)) as.character(status) else status
-  status <- base::match.arg(status, .__mx_choices_status, several.ok = TRUE)
+  status <- base::match.arg(status, several.ok = TRUE)
   .val <- .Call(C_dvs_status, .call = match.call(), paths, recursive, status)
   if (inherits(.val, "rust_error_value") && isTRUE(attr(.val, "__rust_error__"))) {
-    stop(structure(
-      class = c("rust_error", "simpleError", "error", "condition"),
-      list(message = .val$error, call = .val$call %||% sys.call(), kind = .val$kind)
-    ))
+      .msg <- .val$error
+      .call <- .val$call %||% sys.call()
+      .class <- .val$class
+      switch(.val$kind,
+        error = stop(structure(list(message = .msg, call = .call, kind = "error"),class = c(.class, "rust_error", "simpleError", "error", "condition"))),
+        warning = { warning(structure(list(message = .msg, call = .call, kind = "warning"),class = c(.class, "rust_warning", "simpleWarning", "warning", "condition"))); return(invisible(NULL)) },
+        message = { message(structure(list(message = paste0(.msg, "\n"), call = NULL, kind = "message"),class = c(.class, "rust_message", "simpleMessage", "message", "condition"))); return(invisible(NULL)) },
+        condition = { signalCondition(structure(list(message = .msg, call = .call, kind = "condition"),class = c(.class, "rust_condition", "simpleCondition", "condition"))); return(invisible(NULL)) },
+        panic = stop(structure(list(message = .msg, call = .call, kind = "panic"),class = c("rust_error", "simpleError", "error", "condition"))),
+        stop(structure(list(message = .msg, call = .call, kind = .val$kind),
+          class = c("rust_error", "simpleError", "error", "condition")))
+      )
   }
   .val
 }
@@ -224,10 +270,18 @@ dvs_status_impl <- function(paths = character(0), recursive = NULL, status = c("
 dvs_version <- function() {
   .val <- .Call(C_dvs_version, .call = match.call())
   if (inherits(.val, "rust_error_value") && isTRUE(attr(.val, "__rust_error__"))) {
-    stop(structure(
-      class = c("rust_error", "simpleError", "error", "condition"),
-      list(message = .val$error, call = .val$call %||% sys.call(), kind = .val$kind)
-    ))
+      .msg <- .val$error
+      .call <- .val$call %||% sys.call()
+      .class <- .val$class
+      switch(.val$kind,
+        error = stop(structure(list(message = .msg, call = .call, kind = "error"),class = c(.class, "rust_error", "simpleError", "error", "condition"))),
+        warning = { warning(structure(list(message = .msg, call = .call, kind = "warning"),class = c(.class, "rust_warning", "simpleWarning", "warning", "condition"))); return(invisible(NULL)) },
+        message = { message(structure(list(message = paste0(.msg, "\n"), call = NULL, kind = "message"),class = c(.class, "rust_message", "simpleMessage", "message", "condition"))); return(invisible(NULL)) },
+        condition = { signalCondition(structure(list(message = .msg, call = .call, kind = "condition"),class = c(.class, "rust_condition", "simpleCondition", "condition"))); return(invisible(NULL)) },
+        panic = stop(structure(list(message = .msg, call = .call, kind = "panic"),class = c("rust_error", "simpleError", "error", "condition"))),
+        stop(structure(list(message = .msg, call = .call, kind = .val$kind),
+          class = c("rust_error", "simpleError", "error", "condition")))
+      )
   }
   .val
 }
@@ -246,10 +300,18 @@ dvs_set_threads_impl <- function(threads = NULL) {
   )
   .val <- .Call(C_dvs_set_threads, .call = match.call(), threads)
   if (inherits(.val, "rust_error_value") && isTRUE(attr(.val, "__rust_error__"))) {
-    stop(structure(
-      class = c("rust_error", "simpleError", "error", "condition"),
-      list(message = .val$error, call = .val$call %||% sys.call(), kind = .val$kind)
-    ))
+      .msg <- .val$error
+      .call <- .val$call %||% sys.call()
+      .class <- .val$class
+      switch(.val$kind,
+        error = stop(structure(list(message = .msg, call = .call, kind = "error"),class = c(.class, "rust_error", "simpleError", "error", "condition"))),
+        warning = { warning(structure(list(message = .msg, call = .call, kind = "warning"),class = c(.class, "rust_warning", "simpleWarning", "warning", "condition"))); return(invisible(NULL)) },
+        message = { message(structure(list(message = paste0(.msg, "\n"), call = NULL, kind = "message"),class = c(.class, "rust_message", "simpleMessage", "message", "condition"))); return(invisible(NULL)) },
+        condition = { signalCondition(structure(list(message = .msg, call = .call, kind = "condition"),class = c(.class, "rust_condition", "simpleCondition", "condition"))); return(invisible(NULL)) },
+        panic = stop(structure(list(message = .msg, call = .call, kind = "panic"),class = c("rust_error", "simpleError", "error", "condition"))),
+        stop(structure(list(message = .msg, call = .call, kind = .val$kind),
+          class = c("rust_error", "simpleError", "error", "condition")))
+      )
   }
   invisible(.val)
 }
@@ -267,10 +329,18 @@ format_byte_size <- function(size_bytes) {
   )
   .val <- .Call(C_format_byte_size, .call = match.call(), size_bytes)
   if (inherits(.val, "rust_error_value") && isTRUE(attr(.val, "__rust_error__"))) {
-    stop(structure(
-      class = c("rust_error", "simpleError", "error", "condition"),
-      list(message = .val$error, call = .val$call %||% sys.call(), kind = .val$kind)
-    ))
+      .msg <- .val$error
+      .call <- .val$call %||% sys.call()
+      .class <- .val$class
+      switch(.val$kind,
+        error = stop(structure(list(message = .msg, call = .call, kind = "error"),class = c(.class, "rust_error", "simpleError", "error", "condition"))),
+        warning = { warning(structure(list(message = .msg, call = .call, kind = "warning"),class = c(.class, "rust_warning", "simpleWarning", "warning", "condition"))); return(invisible(NULL)) },
+        message = { message(structure(list(message = paste0(.msg, "\n"), call = NULL, kind = "message"),class = c(.class, "rust_message", "simpleMessage", "message", "condition"))); return(invisible(NULL)) },
+        condition = { signalCondition(structure(list(message = .msg, call = .call, kind = "condition"),class = c(.class, "rust_condition", "simpleCondition", "condition"))); return(invisible(NULL)) },
+        panic = stop(structure(list(message = .msg, call = .call, kind = "panic"),class = c("rust_error", "simpleError", "error", "condition"))),
+        stop(structure(list(message = .msg, call = .call, kind = .val$kind),
+          class = c("rust_error", "simpleError", "error", "condition")))
+      )
   }
   .val
 }
@@ -290,15 +360,22 @@ format_byte_size <- function(size_bytes) {
 #' @source Generated by miniextendr from Rust fn `set_dvs_log_level`
 #' @export
 set_dvs_log_level <- function(level = c("off", "error", "warn", "info", "debug", "trace")) {
-  .__mx_choices_level <- .Call(C_set_dvs_log_level__match_arg_choices__level, .call = match.call())
   level <- if (is.factor(level)) as.character(level) else level
-  level <- base::match.arg(level, .__mx_choices_level)
+  level <- base::match.arg(level)
   .val <- .Call(C_set_dvs_log_level, .call = match.call(), level)
   if (inherits(.val, "rust_error_value") && isTRUE(attr(.val, "__rust_error__"))) {
-    stop(structure(
-      class = c("rust_error", "simpleError", "error", "condition"),
-      list(message = .val$error, call = .val$call %||% sys.call(), kind = .val$kind)
-    ))
+      .msg <- .val$error
+      .call <- .val$call %||% sys.call()
+      .class <- .val$class
+      switch(.val$kind,
+        error = stop(structure(list(message = .msg, call = .call, kind = "error"),class = c(.class, "rust_error", "simpleError", "error", "condition"))),
+        warning = { warning(structure(list(message = .msg, call = .call, kind = "warning"),class = c(.class, "rust_warning", "simpleWarning", "warning", "condition"))); return(invisible(NULL)) },
+        message = { message(structure(list(message = paste0(.msg, "\n"), call = NULL, kind = "message"),class = c(.class, "rust_message", "simpleMessage", "message", "condition"))); return(invisible(NULL)) },
+        condition = { signalCondition(structure(list(message = .msg, call = .call, kind = "condition"),class = c(.class, "rust_condition", "simpleCondition", "condition"))); return(invisible(NULL)) },
+        panic = stop(structure(list(message = .msg, call = .call, kind = "panic"),class = c("rust_error", "simpleError", "error", "condition"))),
+        stop(structure(list(message = .msg, call = .call, kind = .val$kind),
+          class = c("rust_error", "simpleError", "error", "condition")))
+      )
   }
   invisible(.val)
 }
