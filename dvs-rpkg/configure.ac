@@ -36,15 +36,67 @@ abs_rpkg_src="$abs_top_srcdir/src"
 AC_SUBST([ABS_RPKG_SRCDIR], ["$abs_rpkg_src"])
 RUST_SRC_DIR="$abs_rpkg_src/rust"
 
+dnl ---- install-mode self-repair ----
+dnl Goal: a tarball that arrives missing inst/vendor.tar.xz becomes self-repairing
+dnl at install time, so end users (who don't have `just`) get an offline-mode
+dnl build automatically without manual vendoring.
+dnl
+dnl Triggers cargo-revendor when ALL of these hold:
+dnl   1. inst/vendor.tar.xz is absent (nothing to install offline from)
+dnl   2. cargo-revendor is on PATH (end user has the toolchain to do it)
+dnl   3. we are NOT in a developer source tree (no .git ancestor)
+dnl
+dnl Skipping in git-tracked source trees keeps `bash ./configure` from devsource
+dnl fast: the dev workflow uses explicit `miniextendr_vendor()` to produce the
+dnl tarball when needed, and dev iteration runs in source-mode against
+dnl whichever path overrides the .cargo/config.toml provides.
+dnl
+dnl Failure mode: if cargo-revendor itself fails, fall through to source mode
+dnl rather than aborting — installs without network or without a working cargo
+dnl-revendor still proceed via cargo's network resolution at compile time.
+dnl
+dnl On CRAN's offline build farm the auto-vendor branch is never taken
+dnl (cargo-revendor isn't installed there), so a maintainer who ships a tarball
+dnl missing inst/vendor.tar.xz fails CRAN's offline check loudly. That is the
+dnl intended canary.
+SOURCE_IS_GIT=false
+_walk_dir="$abs_top_srcdir"
+while test -n "$_walk_dir" && test "$_walk_dir" != "/"; do
+  if test -e "$_walk_dir/.git"; then
+    SOURCE_IS_GIT=true
+    break
+  fi
+  _walk_dir=`dirname "$_walk_dir"`
+done
+
+if test ! -f "$abs_top_srcdir/inst/vendor.tar.xz" \
+   && test "$SOURCE_IS_GIT" = "false" \
+   && command -v cargo-revendor >/dev/null 2>&1; then
+  AC_MSG_NOTICE([auto-vendor: inst/vendor.tar.xz absent, running cargo-revendor])
+  mkdir -p "$abs_top_srcdir/inst"
+  if (cd "$abs_top_srcdir" && cargo revendor \
+        --manifest-path src/rust/Cargo.toml \
+        --output vendor \
+        --compress inst/vendor.tar.xz \
+        --blank-md --source-marker --force) >&2; then
+    AC_MSG_NOTICE([auto-vendor: produced inst/vendor.tar.xz])
+  else
+    AC_MSG_WARN([auto-vendor: cargo-revendor failed; falling through to source mode])
+    rm -f "$abs_top_srcdir/inst/vendor.tar.xz"
+  fi
+fi
+
 dnl ---- install-mode detection ----
-dnl Single signal: presence of inst/vendor.tar.xz.
-dnl   Tarball install (R CMD INSTALL <built-tarball>): tarball is shipped inside
-dnl     the build artifact by `just vendor` (called from `just r-cmd-build`).
-dnl     configure unpacks it, writes a vendored cargo source replacement, and
-dnl     builds offline.
-dnl   Source install (R CMD INSTALL ., devtools::install, install_github, etc.):
-dnl     no tarball. configure leaves vendoring alone and lets cargo resolve
-dnl     deps over the network (or via monorepo path overrides — see below).
+dnl Single signal: presence of inst/vendor.tar.xz (possibly produced by the
+dnl self-repair block above, by bootstrap.R at build time, or by an explicit
+dnl `miniextendr_vendor()` call).
+dnl   Tarball install (R CMD INSTALL <built-tarball>): tarball is in the
+dnl     artifact. configure unpacks it, writes a vendored cargo source
+dnl     replacement, and builds offline.
+dnl   Source install (R CMD INSTALL ., devtools::install, install_github, etc.,
+dnl     in a git-tracked source tree): no tarball, no auto-vendor. configure
+dnl     leaves vendoring alone and lets cargo resolve deps over the network
+dnl     (or via monorepo path overrides — see below).
 dnl
 dnl See docs/CRAN_COMPATIBILITY.md for the full decision table.
 if test -f "$abs_top_srcdir/inst/vendor.tar.xz"; then
@@ -142,6 +194,39 @@ AC_ARG_VAR([RUST_TOOLCHAIN],[Rust toolchain selector like '+stable' or '+nightly
 : ${RUST_TOOLCHAIN=""}
 AC_SUBST([RUST_TOOLCHAIN])
 
+dnl ---- wasm32 / webR install detection ----
+dnl When R CMD INSTALL passes CC=emcc (webR's Makevars injects this), we're
+dnl cross-compiling for wasm32. Override the Cargo target, force nightly only
+dnl if the user hasn't pinned RUST_TOOLCHAIN, and validate that the
+dnl pre-generated wasm_registry.rs is present.
+AC_MSG_CHECKING([whether CC is emscripten (webR/wasm32 install)])
+case "${CC}" in
+  *emcc*|*em++*)
+    is_wasm_install=true
+    CARGO_BUILD_TARGET=wasm32-unknown-emscripten
+    if test -z "$RUST_TOOLCHAIN"; then
+      RUST_TOOLCHAIN="+nightly"
+    fi
+    CARGO_BUILD_STD_FLAG="-Z build-std=std,panic_abort"
+    AC_MSG_RESULT([yes])
+    ;;
+  *)
+    is_wasm_install=false
+    CARGO_BUILD_STD_FLAG=
+    AC_MSG_RESULT([no])
+    ;;
+esac
+if test "$is_wasm_install" = true; then
+  if test ! -f "$srcdir/src/rust/wasm_registry.rs"; then
+    AC_MSG_ERROR([wasm32 install requires src/rust/wasm_registry.rs.
+Run 'R CMD INSTALL' (or 'just rcmdinstall') on the host first to regenerate
+it from the cdylib slice contents, then ship the source tree to the wasm builder.])
+  fi
+fi
+AC_SUBST([IS_WASM_INSTALL], [$is_wasm_install])
+AC_SUBST([CARGO_BUILD_STD_FLAG])
+dnl CARGO_BUILD_TARGET is AC_SUBST'd later in the Cargo target/profile section.
+
 dnl Convenience: cargo command that includes optional toolchain selector
 CARGO_CMD="$CARGO $RUST_TOOLCHAIN"
 
@@ -219,6 +304,8 @@ AS_IF([test -n "$CARGO_BUILD_TARGET"],
       [AC_MSG_NOTICE([CARGO_BUILD_TARGET    = $CARGO_BUILD_TARGET])])
 AS_IF([test -n "$CARGO_FEATURES"],
       [AC_MSG_NOTICE([CARGO_FEATURES  = $CARGO_FEATURES])])
+AS_IF([test "$IS_WASM_INSTALL" = "true"],  [AC_MSG_NOTICE([IS_WASM_INSTALL      = true (CC=emcc detected)])])
+AS_IF([test -n "$CARGO_BUILD_STD_FLAG"],   [AC_MSG_NOTICE([CARGO_BUILD_STD_FLAG = $CARGO_BUILD_STD_FLAG])])
 
 dnl ---- package name → Rust-safe variants ----
 dnl Use PACKAGE_NAME (case-preserving) not PACKAGE_TARNAME (lowercased)
@@ -331,18 +418,12 @@ AC_CONFIG_COMMANDS([unpack-vendor-tarball],
     else
       echo "configure: tarball install — vendor/ already populated"
     fi
-    dnl Strip checksum lines from Cargo.lock unconditionally in tarball mode.
-    dnl Vendored sources carry no registry checksums, but Cargo.lock can
-    dnl re-acquire them after a cargo update, a fresh git checkout, or any
-    dnl workspace edit that regenerates the lockfile. Cargo 1.95+ refuses to
-    dnl verify checksums against a vendored-sources tree, producing errors like:
-    dnl   error: checksum for `<crate>` could not be calculated, but a checksum
-    dnl          is listed in the existing lock file
-    dnl The sed invocation is idempotent (no-op when no checksum lines exist).
-    if test -f "$abs_rpkg_src/rust/Cargo.lock"; then
-      $SED -i.bak '/^checksum = /d' "$abs_rpkg_src/rust/Cargo.lock" && \
-        rm -f "$abs_rpkg_src/rust/Cargo.lock.bak"
-    fi
+    dnl AUDIT-427: checksum strip removed. PR #408 rewrote cargo-revendor to
+    dnl preserve the original `package` field in each .cargo-checksum.json
+    dnl (matching the lockfile's `checksum = "..."` line). Cargo can therefore
+    dnl verify checksums end-to-end; stripping them discards a valid integrity
+    dnl check. See issue #427 and tools/lock-shape-check.R which explicitly
+    dnl documents that checksum lines are allowed in tarball-shape locks.
   fi
 ],
 [IS_TARBALL_INSTALL="$IS_TARBALL_INSTALL"
@@ -371,6 +452,15 @@ dnl
 dnl Source install + no monorepo:
 dnl   [build]                                 target-dir = "<rust-target>"
 dnl   (cargo follows the git URL declared in Cargo.toml)
+dnl
+dnl WARNING: stale inst/vendor.tar.xz hazard.
+dnl   `just r-cmd-build` and `just r-cmd-check` create inst/vendor.tar.xz
+dnl   transiently and remove it via `trap ... EXIT`.  If the process is killed
+dnl   before the trap fires, the file is left behind.  Configure then detects
+dnl   it and sets IS_TARBALL_INSTALL=true, which (a) writes a tarball-mode
+dnl   config.toml here and (b) makes Makevars.in's post-build cleanup delete
+dnl   src/rust/.cargo/ from the SOURCE TREE on the next `R CMD INSTALL .`.
+dnl   Recovery: rm inst/vendor.tar.xz && bash ./configure
 AC_CONFIG_COMMANDS([cargo-config],
 [
   RPKG_CFG="src/rust/.cargo/config.toml"
@@ -438,7 +528,25 @@ AC_CONFIG_COMMANDS([cargo-config],
  CARGO_TARGET_DIR_CARGO="$CARGO_TARGET_DIR_CARGO"
  SED="$SED"])
 
-dnl ---- 3) Cargo.lock compatibility ----
+dnl ---- 3) Cargo.lock shape check (tarball mode only) ----
+dnl In tarball mode, the lock must be in tarball-shape: no checksum = lines and
+dnl no path+... sources for framework crates. Drift is fatal at offline install
+dnl time; we catch it here before cargo starts building.
+dnl In source mode, cargo silently rewrites the lock; drift is tolerated.
+AC_CONFIG_COMMANDS([lock-shape-check],
+[
+  if test "$IS_TARBALL_INSTALL" = "true"; then
+    if "${R_HOME}/bin/Rscript" tools/lock-shape-check.R "tarball" "src/rust/Cargo.lock"; then
+      echo "configure: lock-shape OK"
+    else
+      AC_MSG_ERROR([Cargo.lock shape drift detected in tarball mode; see message above])
+    fi
+  fi
+],
+[IS_TARBALL_INSTALL="$IS_TARBALL_INSTALL"
+ R_HOME="$R_HOME"])
+
+dnl ---- 4) Cargo.lock compatibility ----
 dnl Older cargo releases (<1.78) cannot read lockfile version 4. Regenerate
 dnl in-place if the toolchain on this machine can't read what's committed.
 AC_CONFIG_COMMANDS([cargo-lockfile-compat],
@@ -470,7 +578,7 @@ AC_CONFIG_COMMANDS([cargo-lockfile-compat],
 ],
 [CARGO_CMD="$CARGO_CMD" CARGO_OFFLINE_FLAG="$CARGO_OFFLINE_FLAG" SED="$SED"])
 
-dnl ---- 4) Ensure Cargo.lock exists; touch Cargo.toml to force rebuild ----
+dnl ---- 5) Ensure Cargo.lock exists; touch Cargo.toml to force rebuild ----
 AC_CONFIG_COMMANDS([post-config],
 [
   dnl Ensure Cargo.lock exists (needed by cargo for reproducible builds)
