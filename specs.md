@@ -12,7 +12,7 @@ All configuration is handled in a `dvs.toml` config file.
 
 All CLI commands take a `--json` flag if you want to get JSON output.
 
-The Rust library shall not contain anything specific to the CLI or the R package. It must not depend on `miniextendr-*` or any other R FFI crate, must not print to stdout or stderr (no `println!`, `eprintln!`, `print!`, `eprint!`, or `dbg!`), and must not assume a particular front-end's output, logging, or progress conventions. Any user-facing rendering and any caller-specific dependencies belong in `dvs-cli` or `dvs-rpkg`.
+The Rust library must not contain anything specific to the CLI or the R package: no `miniextendr-*` or other R FFI dependency, no `println!`/`eprintln!`/`dbg!`. It may depend on the `log` facade but must not pull in a `log` implementer; logger setup belongs in `dvs-cli` and `dvs-rpkg`.
 
 ## Glossary
 
