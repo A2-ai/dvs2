@@ -137,8 +137,8 @@ impl DvsPaths {
     pub fn validate_for_add(&self, paths: &[PathBuf]) -> Vec<(PathBuf, AddPathStatus)> {
         let mut found = Vec::new();
         for path in paths {
-            let file_path = self.file_path(path);
-            let status = match file_path.canonicalize() {
+            let repo_rel = self.user_path_to_repo_relative(path);
+            let status = match self.file_path(&repo_rel).canonicalize() {
                 Ok(canonical) => {
                     if !canonical.starts_with(&self.repo_root) {
                         AddPathStatus::OutsideProject
@@ -152,7 +152,7 @@ impl DvsPaths {
                 }
                 Err(_) => AddPathStatus::NotFound,
             };
-            found.push((path.clone(), status));
+            found.push((repo_rel, status));
         }
         found
     }
@@ -160,17 +160,34 @@ impl DvsPaths {
     pub fn validate_for_get(&self, paths: &[PathBuf]) -> Vec<(PathBuf, GetPathStatus)> {
         let mut found = Vec::new();
         for path in paths {
-            let metadata_path = self.metadata_path(path);
-            let validation = if metadata_path.is_file() {
+            let repo_rel = self.user_path_to_repo_relative(path);
+            let validation = if self.metadata_path(&repo_rel).is_file() {
                 GetPathStatus::Tracked
-            } else if self.file_path(path).is_file() {
+            } else if self.file_path(&repo_rel).is_file() {
                 GetPathStatus::NotTracked
             } else {
                 GetPathStatus::NotFound
             };
-            found.push((path.clone(), validation));
+            found.push((repo_rel, validation));
         }
         found
+    }
+
+    /// Convert a user-supplied path (cwd-relative or absolute) to the
+    /// repo-relative form used internally by `file_path` / `metadata_path`.
+    /// Absolute paths outside the repo are returned unchanged so the
+    /// canonicalize-then-starts_with check in `validate_for_add` can flag
+    /// them as `OutsideProject`.
+    fn user_path_to_repo_relative(&self, path: &Path) -> PathBuf {
+        if path.is_absolute() {
+            path.strip_prefix(&self.repo_root)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|_| path.to_path_buf())
+        } else if let Some(prefix) = self.cwd_relative_to_root() {
+            prefix.join(path)
+        } else {
+            path.to_path_buf()
+        }
     }
 }
 
