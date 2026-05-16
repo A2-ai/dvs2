@@ -60,8 +60,8 @@ init attempts best-effort cleanup of local artifacts (`dvs.toml` and, if it didn
 
 #### CLI
 
-```
- dvs init --help
+```shell
+❯ dvs init --help
 Starts a new dvs project. This will create a `dvs.toml` file in the current folder of where the user is calling the CLI from
 
 Usage: dvs init [OPTIONS] <PATH>
@@ -76,6 +76,8 @@ Options:
           If you want to use a root folder other than the current directory
       --metadata-folder-name <METADATA_FOLDER_NAME>
           If you want to use a folder name other than `.dvs` for storing the metadata files
+      --threads <THREADS>
+          Number of threads for parallel operations (0 = auto-detect)
       --group <GROUP>
           Unix group to set on storage directory and files
       --no-compression
@@ -126,7 +128,8 @@ without actually doing them.
 
 #### CLI
 
-```
+```shell
+❯ dvs add --help
 Adds the given files to dvs. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided
 
 Usage: dvs add [OPTIONS] [PATHS]...
@@ -138,6 +141,7 @@ Options:
       --glob <GLOB>        
       --json               Output results as JSON
   -m, --message <MESSAGE>  An optional message to add
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
       --dry-run            Show what would be added without making any actual changes
   -h, --help               Print help
 ```
@@ -185,8 +189,8 @@ without actually doing them.
 
 #### CLI
 
-```
- dvs get --help
+```shell
+❯ dvs get --help
 Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided
 
 Usage: dvs get [OPTIONS] [PATHS]...
@@ -195,10 +199,11 @@ Arguments:
   [PATHS]...  
 
 Options:
-  -g, --glob <GLOB>  
-      --json         Output results as JSON
-      --dry-run      Show what would be retrieved without making any actual changes
-  -h, --help         Print help
+  -g, --glob <GLOB>        
+      --json               Output results as JSON
+      --dry-run            Show what would be retrieved without making any actual changes
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+  -h, --help               Print help
 ```
 
 This will exit with `1` if one or more files could not be retrieved.
@@ -225,19 +230,24 @@ This returns the status (mentioned in the high level overview above) of the trac
 
 #### CLI
 
-```
- dvs status --help
-Gets the status of each tracked file in the current repository.
-By default shows all tracked files; use the flags below to filter.
+```shell
+❯ dvs status --help
+Gets the status of each files in the current repository
 
-Usage: dvs status [OPTIONS]
+Usage: dvs status [OPTIONS] [PATHS]...
+
+Arguments:
+  [PATHS]...  Paths (files or directories) to check status for
 
 Options:
-      --current   Include the files that are current
-      --json      Output results as JSON
-      --absent    Include the files that are absent
-      --unsynced  Include the files that are unsynced
-  -h, --help      Print help
+      --json               Output results as JSON
+  -r, --recursive          Recursively include files in subdirectories for given directories
+      --current            Include the files that are current
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+      --absent             Include the files that are absent
+      --unsynced           Include the files that are unsynced
+      --with-metadata      Show all metadata columns in the table output
+  -h, --help               Print help
 ```
 
 By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`, and
