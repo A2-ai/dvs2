@@ -26,14 +26,14 @@ The Rust library must not contain anything specific to the CLI or the R package:
 
 There are 4 main actions: `init`, `add`, `get` and  `status`. We will see them more in details later
 
-`init` will create the `dvs.toml`. 
+`init` will create the `dvs.toml`.
 You can pass some arguments to it or edit the toml file manually.
 
 `add` will add and update files to the storage. In practice this will:
 
 1. hash the files (currently blake3 only)
 2. save a metadata file for each files in the metadata folder
-3. add each file to a `.gitignore`
+3. add each metadata file to `.gitignore` that are adjacent to the files
 
 `get` will retrieve the files thanks to the metadata folder and pull them from the storage to their location in the project.
 
@@ -46,7 +46,6 @@ A file in a `dvs` project can be in 4 states:
 - `current`: tracked in `dvs` and we have the same version as in the metadata folder checked out
 - `absent`: metadata exists in the folder but the local file is not present
 - `unsynced`: local file and metadata exists but the local file differs from the metadata
-
 
 ## In-depth spec
 
@@ -152,7 +151,7 @@ This will exit with `1` if one or more files could not be added to the storage (
 The library automatically sets up parallelism and the only error it can return is if it couldn't set up the threadpool.
 It otherwise returns a list of results sorted alphabetically by path, letting users decide what to do with each.
 
-#### R Package
+#### R package
 
 ```r
 dvs_add(files = character(0), message, glob = NULL, dry_run = FALSE)
@@ -348,7 +347,7 @@ the `add` operation to fail.
 
 ### Globbing
 
-`add` and `get` both accept a `--glob` flag. The resolution works the following way:
+`add`, `status`, `get` accept a `--glob` flag. The resolution works the following way:
 
 - Explicit files: added/retrieved directly (glob ignored)
 - Explicit directories with a glob: walked and filtered by glob
