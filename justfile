@@ -184,7 +184,7 @@ ci: fmt-check clippy check-std-fs test
 
 # Names correspond to ui/main_<NAME>.sh (and ui/main.sh for "main").
 # Each name has matching ui/output/ui-<NAME>.html and alx topic ui-<NAME>.
-ui_names := "main status progress parallel log"
+ui_names := "main status progress parallel log cli_help"
 
 # Run all ui/main*.sh scripts and capture each log into /tmp/ui-<NAME>.log
 ui-run:
@@ -226,7 +226,9 @@ ui-publish-only:
         out="ui/output/ui-${name}.html"
         if [[ ! -f "$out" ]]; then echo "skipping ${name} (no ${out})"; continue; fi
         echo "--- alx publish ui-${name} ---"
-        alx publish "$out" -S "$script" -S ui/helpers.sh -t "ui-${name}" \
+        sources=(-S "$script")
+        if grep -q 'helpers\.sh' "$script"; then sources+=(-S ui/helpers.sh); fi
+        alx publish "$out" "${sources[@]}" -t "ui-${name}" \
             --overwrite --skip-warnings --no-prompt 2>&1 | tail -8
     done
 
