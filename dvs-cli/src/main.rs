@@ -78,13 +78,17 @@ pub enum Command {
     },
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
-    /// At least one path or --glob must be provided
+    /// At least one path or --glob must be provided.
     #[command(next_display_order = 100)]
     Get {
-        #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
         #[clap(long, short)]
         glob: Option<String>,
+        /// Recursively include files in subdirectories for directory inputs.
+        /// Without this flag, directories return only their direct children.
+        /// Has no effect when no explicit paths are given.
+        #[clap(long, short)]
+        recursive: bool,
         /// Show what would be retrieved without making any actual changes
         #[clap(long)]
         dry_run: bool,
@@ -396,14 +400,22 @@ fn try_main() -> Result<()> {
         Command::Get {
             paths,
             glob,
+            recursive,
             dry_run,
         } => {
+            if paths.is_empty() && glob.is_none() {
+                bail!(
+                    "dvs get with no path or --glob would restore every tracked file. \
+                     If that's the intent, use `dvs get --glob '**/*'`."
+                );
+            }
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let all_paths: Vec<_> = resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths)?
-                .into_iter()
-                .collect();
+            let all_paths: Vec<_> =
+                resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?
+                    .into_iter()
+                    .collect();
             if all_paths.is_empty() {
                 return Err(anyhow!("No files to get"));
             }
