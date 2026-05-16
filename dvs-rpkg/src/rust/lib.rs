@@ -270,7 +270,11 @@ impl From<StatusChoice> for Status {
 /// of status names (e.g. `c("current", "absent")`) to restrict output.
 ///
 /// @param paths Character vector of file or directory paths to check status for.
-/// @param recursive If `TRUE`, recursively include files in subdirectories.
+/// @param recursive If `TRUE`, directory inputs include all descendants;
+///   if `FALSE` or `NULL` (default), only direct children of the directory
+///   are returned. The flag only constrains descendants of paths passed
+///   explicitly — when `paths` is empty, every tracked file is returned
+///   regardless of nesting depth, and `recursive` has no effect.
 /// @param status Character vector of statuses to include. Valid values are
 ///   `"current"`, `"absent"`, and `"unsynced"`. When empty (default), all
 ///   statuses are shown.
@@ -407,13 +411,20 @@ impl<'a> From<&'a FileMetadata> for FileMetadataView<'a> {
 /// Retrieve files from DVS storage into the working directory.
 ///
 /// Fetches the specified files from DVS storage and writes them
-/// to their original paths in the working directory.
+/// to their original paths in the working directory. Calling
+/// `dvs_get()` with no arguments restores every tracked file in
+/// the repository.
 ///
 /// @param paths Character vector of file paths to retrieve from DVS storage.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 ///   Globs use a literal path separator: `*.csv` only matches files in the
 ///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
 ///   match recursively across subdirectories.
+/// @param recursive If `TRUE`, directory inputs include all descendants;
+///   if `FALSE` or `NULL` (default), only direct children of the directory
+///   are returned. The flag only constrains descendants of paths passed
+///   explicitly — when `paths` is empty, every tracked file is returned
+///   regardless of nesting depth, and `recursive` has no effect.
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
@@ -421,6 +432,7 @@ impl<'a> From<&'a FileMetadata> for FileMetadataView<'a> {
 pub(crate) fn dvs_get(
     #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
+    #[miniextendr(default = "NULL")] recursive: Option<bool>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
@@ -429,9 +441,14 @@ pub(crate) fn dvs_get(
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let all_paths: Vec<_> = resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths)?
-        .into_iter()
-        .collect();
+    let all_paths: Vec<_> = resolve_paths_for_get(
+        paths,
+        glob.as_deref(),
+        &dvs_paths,
+        recursive.unwrap_or(false),
+    )?
+    .into_iter()
+    .collect();
     if all_paths.is_empty() {
         return Err(anyhow!("No files to get"));
     }

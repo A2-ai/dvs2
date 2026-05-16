@@ -4,7 +4,7 @@
 \alias{dvs_get}
 \title{Retrieve files from DVS storage into the working directory}
 \usage{
-dvs_get(paths = character(0), glob = NULL, dry_run = NULL)
+dvs_get(paths = character(0), glob = NULL, recursive = NULL, dry_run = NULL)
 }
 \arguments{
 \item{paths}{Character vector of file paths to retrieve from DVS storage.}
@@ -14,8 +14,14 @@ Globs use a literal path separator: \verb{*.csv} only matches files in the
 target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} to
 match recursively across subdirectories.}
 
+\item{recursive}{If \code{TRUE}, directory inputs include all descendants;
+if \code{FALSE} or \code{NULL} (default), only direct children of the directory
+are returned. The flag only constrains descendants of paths passed
+explicitly — when \code{paths} is empty, every tracked file is returned
+regardless of nesting depth, and \code{recursive} has no effect.}
+
 \item{dry_run}{If \code{TRUE}, report what would be retrieved without writing files.}
 }
 \description{
-Fetches the specified files from DVS storage and writes them to their original paths in the working directory.
+Fetches the specified files from DVS storage and writes them to their original paths in the working directory. Calling \code{dvs_get()} with no arguments restores every tracked file in the repository.
 }
