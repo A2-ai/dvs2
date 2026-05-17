@@ -40,9 +40,8 @@ You can pass some arguments to it or edit the toml file manually.
 `status` is a way to check whether everything is checked out or if you have files different from what's in the metadata and
 that you might want to add again.
 
-A file in a `dvs` project can be in 4 states:
+A file in a `dvs` project can be in 3 states:
 
-- `untracked`: not added in `dvs`
 - `current`: tracked in `dvs` and we have the same version as in the metadata folder checked out
 - `absent`: metadata exists in the folder but the local file is not present
 - `unsynced`: local file and metadata exists but the local file differs from the metadata
