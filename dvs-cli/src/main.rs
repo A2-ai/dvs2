@@ -23,6 +23,7 @@ pub enum Command {
     /// Starts a new dvs project.
     /// This will create a `dvs.toml` file in the current folder of where the user is calling the CLI
     /// from.
+    #[command(next_display_order = 100)]
     Init {
         /// Where the data will be stored
         path: PathBuf,
@@ -42,6 +43,7 @@ pub enum Command {
     /// Adds the given files to dvs. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
     /// At least one path or --glob must be provided
+    #[command(next_display_order = 100)]
     Add {
         #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
@@ -55,6 +57,7 @@ pub enum Command {
         dry_run: bool,
     },
     /// Gets the status of each files in the current repository
+    #[command(next_display_order = 100)]
     Status {
         /// Paths (files or directories) to check status for
         paths: Vec<PathBuf>,
@@ -77,6 +80,7 @@ pub enum Command {
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
     /// At least one path or --glob must be provided
+    #[command(next_display_order = 100)]
     Get {
         #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
@@ -92,11 +96,11 @@ pub enum Command {
 #[clap(version, author, about, subcommand_negates_reqs = true)]
 pub struct Cli {
     /// Output results as JSON
-    #[clap(long, global = true)]
+    #[clap(long, global = true, display_order = 0)]
     pub json: bool,
 
     /// Number of threads for parallel operations (0 = auto-detect)
-    #[clap(long, global = true)]
+    #[clap(long, global = true, display_order = 1)]
     pub threads: Option<usize>,
 
     #[clap(subcommand)]
