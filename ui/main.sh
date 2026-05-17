@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 
-# note: the -x shows the script command in output
-set -euox pipefail
+set -eu
 # prints the line in script that errors
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
-
-echo "NOTE: \`just install-all\` should have been called prior to this so the dvs CLI binary on PATH and the installed dvs R package both reflect the current branch."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # shellcheck source=ui/helpers.sh
 source "${SCRIPT_DIR}/helpers.sh"
+set -xo pipefail
+
+say "NOTE: \`just install-all\` should have been called prior to this so the dvs CLI binary on PATH and the installed dvs R package both reflect the current branch."
 
 DVS_REPO_CLI="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
 RUN_SUFFIX="${DVS_REPO_CLI##*_}"
