@@ -112,6 +112,55 @@ pub fn get_status(
     Ok(results)
 }
 
+/// `get_status` plus invalid-argument reporting, shared by the CLI and the R
+/// package so both behave the same.
+///
+/// Builds the path filter from the raw user paths, runs `get_status`, then
+/// appends a `StatusDetail::Error` row for each explicitly listed path that
+/// matched no tracked file. This mirrors `get`, where `get_files` reports an
+/// explicit untracked path via `validate_for_get`. An empty `user_paths` (whole
+/// repo or glob-only) adds nothing, so a glob matching nothing still exits `0`.
+pub fn get_status_checked(
+    paths: &DvsPaths,
+    user_paths: &[PathBuf],
+    recursive: bool,
+    glob_pattern: Option<&str>,
+) -> Result<Vec<FileStatus>> {
+    let filter = if user_paths.is_empty() {
+        None
+    } else {
+        Some(PathFilter::from_user_paths(
+            user_paths.to_vec(),
+            recursive,
+            paths,
+        ))
+    };
+    let mut statuses = get_status(paths, filter.as_ref(), glob_pattern)?;
+
+    if !user_paths.is_empty() {
+        let glob = crate::globbing::build_glob_matcher(glob_pattern)?;
+        let tracked = paths.tracked_paths();
+        for p in user_paths {
+            let per_arg = PathFilter::from_user_paths(vec![p.clone()], recursive, paths);
+            let matched = tracked.iter().any(|t| per_arg.matches(t, glob.as_ref()));
+            if !matched {
+                let path = per_arg
+                    .paths
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| p.clone());
+                statuses.push(FileStatus {
+                    path,
+                    detail: StatusDetail::Error {
+                        error: "not tracked by DVS".to_string(),
+                    },
+                });
+            }
+        }
+    }
+    Ok(statuses)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +317,47 @@ mod tests {
         let paths = make_paths(&root, &config);
 
         let statuses = get_status(&paths, None, None).unwrap();
+        assert!(statuses.is_empty());
+    }
+
+    #[test]
+    fn get_status_checked_flags_untracked_explicit_path() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+
+        // a.txt is tracked; b.txt exists on disk but is not tracked.
+        let a = create_file(&root, "a.txt", b"a");
+        FileMetadata::from_file(&a, Compression::Zstd, None)
+            .unwrap()
+            .save(Uuid::new_v4(), &a, backend, &paths, "a.txt", None)
+            .unwrap();
+        create_file(&root, "b.txt", b"b");
+
+        let statuses = get_status_checked(
+            &paths,
+            &[PathBuf::from("a.txt"), PathBuf::from("b.txt")],
+            false,
+            None,
+        )
+        .unwrap();
+
+        // a.txt reported Current, b.txt reported as an invalid argument.
+        assert!(statuses.iter().any(|s| s.path == Path::new("a.txt")
+            && matches!(s.detail, StatusDetail::Success { .. })));
+        assert!(statuses.iter().any(|s| s.path == Path::new("b.txt")
+            && matches!(s.detail, StatusDetail::Error { .. })));
+    }
+
+    #[test]
+    fn get_status_checked_glob_only_no_match_is_not_an_error() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let paths = make_paths(&root, &config);
+
+        // No explicit path, glob matches nothing: empty result, no error row.
+        let statuses = get_status_checked(&paths, &[], false, Some("*.zzz")).unwrap();
         assert!(statuses.is_empty());
     }
 

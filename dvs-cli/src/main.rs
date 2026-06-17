@@ -13,8 +13,8 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddDetail, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter, Status,
-    StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
+    AddDetail, Compression, FileMetadata, FileProgress, GetDetail, Outcome, Status, StatusDetail,
+    add_files, format_size, get_files, get_status_checked, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -313,14 +313,8 @@ fn try_main() -> Result<()> {
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !unsynced;
 
-            let filter = if user_paths.is_empty() {
-                None
-            } else {
-                Some(PathFilter::from_user_paths(
-                    user_paths, recursive, &dvs_paths,
-                ))
-            };
-            let mut statuses = get_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
+            let mut statuses =
+                get_status_checked(&dvs_paths, &user_paths, recursive, glob.as_deref())?;
             if !show_all {
                 statuses.retain(|x| match &x.detail {
                     StatusDetail::Success { status, .. } => {

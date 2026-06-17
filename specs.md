@@ -297,7 +297,10 @@ Options:
 By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`, and
 `--unsynced` flags are filters: when one or more are provided, only files matching those states are shown.
 
-This will exit with `1` if one or more files could not be inspected.
+This will exit with `1` if one or more files could not be inspected. An explicitly listed path that matches no tracked
+file is also an error and causes a non-zero exit. Such a path is reported per path while the tracked files in the same
+command are still shown. A glob given without an explicit path that matches nothing is not an error for `status`. It
+prints an empty result and exits `0`, because a read-only pattern scan with zero matches is a valid outcome.
 
 #### Rust library
 
