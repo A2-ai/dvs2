@@ -361,12 +361,13 @@ EOF
 say "--- R 2.C.R tree (expect every tracked file restored at every depth) ---"
 tree --noreport
 
-# ── 2.D  No paths AND no glob — CLI suggests, R restores everything ──
-# Asymmetric on purpose: `dvs get` (CLI) refuses with a suggestion to use
-# `--glob '**/*'`, since restoring everything by accident is a footgun on
-# the command line. `dvs_get()` (R) is for interactive use — defaults to
-# the everything case, deferring to `resolve_paths_for_get`'s empty-paths
-# semantics (no filter, every tracked metadata entry passes, all depths).
+# ── 2.D  No paths AND no glob — CLI suggests, R scopes to cwd ──
+# `dvs get` (CLI) refuses with a suggestion to use `--glob '**/*'`, since
+# restoring everything by accident is a footgun on the command line.
+# `dvs_get()` (R) defers to `resolve_paths_for_get`'s empty-paths semantics:
+# the paths default to cwd (repo root here), and `recursive` still applies.
+# So `dvs_get()` restores only the files DIRECTLY under cwd (top_a.bin); to
+# reach deeper files with no explicit path, pass `recursive = TRUE`.
 
 say
 say "=== CLI 2.D: dvs get (no args — should refuse with a suggestion) ==="
@@ -374,7 +375,7 @@ cd "$DVS_REPO_CLI"
 dvs get || echo "(exit nonzero as expected)"
 
 say
-say "=== R 2.D.R: dvs_get() (no args — restore everything, including 2-level-deep files) ==="
+say "=== R 2.D.R: dvs_get() (no args, non-recursive — restores ONLY top_a.bin, the file directly under cwd) ==="
 cd "$DVS_REPO_RPKG"
 rm -f data/shallow_1.bin data/shallow_2.bin data/raw/deep_1.bin data/raw/deep_2.bin data/derived/deep_3.bin top_a.bin models/v1/model_1.bin models/v1/model_2.bin
 
@@ -383,7 +384,17 @@ library(dvs)
 dvs_get()
 EOF
 
-say "--- R 2.D.R tree (expect every tracked file restored at every depth) ---"
+say "--- R 2.D.R tree (expect ONLY top_a.bin restored; data/ and models/ still empty) ---"
+tree --noreport
+
+say
+say "=== R 2.D.R2: dvs_get(recursive = TRUE) (no path + recursive — restores everything at every depth) ==="
+print_eval_rscript <<EOF
+library(dvs)
+dvs_get(recursive = TRUE)
+EOF
+
+say "--- R 2.D.R2 tree (expect every tracked file restored at every depth) ---"
 tree --noreport
 
 # ── 2.F  dvs get --glob '**/*' — extension-agnostic "get everything" ──
@@ -547,5 +558,51 @@ print_eval_rscript <<EOF
 library(dvs)
 dvs_status(recursive = TRUE)
 EOF
+
+# ── 3.G  dvs status --glob — glob filtering on status (parity with add/get) ──
+# `status` gained `--glob` in the globbing/recursive unification. Same literal
+# separator as add/get: `data/*.bin` is shallow-only (2 rows), `data/**/*.bin`
+# recurses (5 rows). `--glob` and `--recursive` are mutually exclusive (see 4).
+
+say
+say "=== CLI 3.G: dvs status --glob 'data/*.bin' (literal separator — shallow only, expect 2 rows) ==="
+cd "$DVS_REPO_CLI"
+dvs status --glob 'data/*.bin'
+
+say
+say "=== CLI 3.G: dvs status --glob 'data/**/*.bin' (recursive glob — all under data/, expect 5 rows) ==="
+dvs status --glob 'data/**/*.bin'
+
+say
+say "=== R 3.G.R: dvs_status(glob = 'data/*.bin') (shallow only, expect 2 rows) ==="
+cd "$DVS_REPO_RPKG"
+print_eval_rscript <<EOF
+library(dvs)
+dvs_status(glob = "data/*.bin")
+EOF
+
+say
+say "=== R 3.G.R: dvs_status(glob = 'data/**/*.bin') (recursive glob, expect 5 rows) ==="
+print_eval_rscript <<EOF
+library(dvs)
+dvs_status(glob = "data/**/*.bin")
+EOF
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── 4. MUTUAL EXCLUSION ──
+# `--glob` and `--recursive` answer the same question two ways, so the unified
+# globbing layer makes them conflict on both `get` and `status` (clap
+# `conflicts_with`). Passing both is a usage error, not a silent precedence.
+# The clap errors below are the demo (the script absorbs the failures).
+# ══════════════════════════════════════════════════════════════════════════════
+
+say
+say "=== CLI 4.A: dvs get data/ --recursive --glob '*.bin' (mutually exclusive → clap error) ==="
+cd "$DVS_REPO_CLI"
+dvs get data/ --recursive --glob '*.bin' || echo "(confirmed: --recursive cannot be used with --glob)"
+
+say
+say "=== CLI 4.B: dvs status data/ --recursive --glob '*.bin' (mutually exclusive → clap error) ==="
+dvs status data/ --recursive --glob '*.bin' || echo "(confirmed: --recursive cannot be used with --glob)"
 
 printf '\nCleanup: bash %s/cleanup.sh\n' "$SCRIPT_DIR"
