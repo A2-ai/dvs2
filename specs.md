@@ -422,13 +422,9 @@ The threadpool size set directly by the R package takes precedence over the
 
 ### Gitignore
 
-After a successful `add`, `dvs` updates per-directory `.gitignore` files so the data files stay out of Git while
-the `.dvs` metadata stays tracked. Each added data file gets a `/<filename>` entry (the basename, anchored with a
-leading `/`) in the `.gitignore` of that file's own directory, so the file's path selects which `.gitignore` is
-used. For example, `data/input.csv` adds `/input.csv` to `data/.gitignore`, and a file at the project root uses the
-root `.gitignore`. Entries already present are not duplicated. If the repository has no `.git` folder, gitignore
-updates are skipped entirely. A failure to update a `.gitignore` is logged as a warning but does not cause the `add`
-operation to fail.
+After a successful `add`, each data file gets a `/<filename>` entry in its own directory's `.gitignore`, keeping the
+data out of Git while the `.dvs` metadata stays tracked. Existing entries are not duplicated. If there is no `.git`
+folder the update is skipped, and a failed `.gitignore` update is logged as a warning without failing the `add`.
 
 ### Globbing
 
