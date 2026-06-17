@@ -166,7 +166,7 @@ Options:
 ```
 
 You can run `dvs add *.csv` and it will be expanded by your shell before calling `dvs`.
-To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library.
+To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library. The glob string must be quoted (for example `--glob '*.csv'`) so the shell does not expand it before `dvs` sees it.
 
 This will exit with `1` if one or more files could not be added to the storage (file does not exist, no permissions, etc).
 
