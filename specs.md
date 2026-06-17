@@ -287,6 +287,7 @@ Options:
       --json               Output results as JSON
       --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
   -r, --recursive          Recursively include files in subdirectories for given directories
+  -g, --glob <GLOB>        
       --current            Include the files that are current
       --absent             Include the files that are absent
       --unsynced           Include the files that are unsynced
