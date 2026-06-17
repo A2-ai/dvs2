@@ -357,6 +357,29 @@ pub(crate) fn dvs_status(
         .with_column("add_time", add_time_sexp))
 }
 
+/// Materialize the audit log as a data frame.
+///
+/// Reads the full audit log of the DVS repository containing the working
+/// directory and returns one row per entry. The column structure is inherited
+/// directly from `dvs::audit::AuditEntry`'s serde representation, so the rpkg
+/// never reaches into the dvs crate's internal types. The `action` enum
+/// currently surfaces as a nested list-column; flattening it without
+/// re-encoding dvs internals needs a non-rayon dataframe builder
+/// (miniextendr#1055).
+///
+/// @keywords internal
+#[miniextendr(r_name = "dvs_audit_log_impl")]
+pub(crate) fn dvs_audit_log() -> Result<DataFrame> {
+    let current_dir = std::env::current_dir()?;
+    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+
+    // Empty slice = the whole audit log, deserialized off the JSONL via the
+    // dvs crate's own serde impls; hand straight to the dataframe serializer so
+    // the structure is inherited through serde.
+    let entries = config.backend().read_audit_file(&[])?;
+    Ok(miniextendr_api::serde::vec_to_dataframe(&entries)?)
+}
+
 // region: FileStatus serde view (skips add_time)
 
 /// Serialize-only mirror of [`FileStatus`] whose [`FileMetadata`] view
