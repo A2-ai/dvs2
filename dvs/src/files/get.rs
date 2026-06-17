@@ -436,6 +436,8 @@ mod tests {
 
         // Corrupt the storage file (must remove read-only first)
         let storage_path = root
+            .parent()
+            .unwrap()
             .join(".storage")
             .join(&metadata.hashes.blake3[..2])
             .join(&metadata.hashes.blake3[2..]);
