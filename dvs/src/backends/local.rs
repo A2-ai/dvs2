@@ -223,6 +223,21 @@ impl Backend for LocalBackend {
             self.ensure_group_and_mode(&self.path, self.dir_mode())?;
             self.ensure_group_and_mode(parent, self.dir_mode())?;
         }
+        // Serialize writers targeting the same blob with an exclusive lock on a
+        // per-hash lockfile. Two parallel writes of identical content hash to the
+        // same final path; without this they share `<hash>.tmp` and race on the
+        // rename (one wins, the loser's tmp is already gone -> #216). Distinct
+        // content uses a different lockfile, so unrelated writes still run in
+        // parallel. The lock covers in-process threads and concurrent dvs
+        // processes (advisory flock; best-effort on NFS).
+        let lock = std::fs::File::create(path.with_extension("lock"))?;
+        lock.lock()?;
+
+        // Another writer may have already stored this exact blob while we waited.
+        if path.is_file() {
+            return Ok(fs::metadata(&path)?.len());
+        }
+
         let tmp_path = path.with_extension("tmp");
         let stored_size = compression.compress(source, &tmp_path, on_bytes)?;
 
@@ -361,6 +376,42 @@ mod tests {
         let stored = storage.join("d4").join("1d8cd98f00b204e9800998ecf8427e");
         assert!(stored.is_file());
         assert_eq!(fs::read(&stored).unwrap(), b"test content");
+    }
+
+    #[test]
+    fn concurrent_store_of_identical_content_does_not_race() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("storage");
+        let backend = Arc::new(LocalBackend::new(&storage, None).unwrap());
+        backend.init().unwrap();
+
+        // Identical content => identical hash => same final blob path for every
+        // writer. Pre-fix, parallel writers shared `<hash>.tmp` and the losers
+        // failed the rename (#216).
+        let hash = test_hash("d41d8cd98f00b204e9800998ecf8427e");
+
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let backend = Arc::clone(&backend);
+                let src = tmp.path().join(format!("src{i}.bin"));
+                fs::write(&src, b"identical content").unwrap();
+                let hash = hash.clone();
+                thread::spawn(move || backend.store(&hash, &src, Compression::None, None))
+            })
+            .collect();
+
+        for h in handles {
+            h.join()
+                .unwrap()
+                .expect("every concurrent store must succeed");
+        }
+
+        let stored = storage.join("d4").join("1d8cd98f00b204e9800998ecf8427e");
+        assert!(stored.is_file());
+        assert_eq!(fs::read(&stored).unwrap(), b"identical content");
     }
 
     #[test]

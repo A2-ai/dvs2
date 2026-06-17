@@ -17,7 +17,7 @@ authors = [
 description = 'This package allows users to version large or sensitive files under Git without tracking the file directly.'
 license = 'MIT'
 edition = '2024'
-rust-version = '1.85'
+rust-version = '1.89'
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
