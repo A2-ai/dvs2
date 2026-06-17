@@ -472,7 +472,7 @@ mod tests {
 
         let entry1 = AuditEntry {
             operation_id: "op-1".to_string(),
-            timestamp: 1000000000,
+            timestamp: jiff::Timestamp::from_second(1000000000).unwrap(),
             user: "alice".to_string(),
             action: Action::Add {
                 file: AuditFile {
@@ -485,7 +485,7 @@ mod tests {
 
         let entry2 = AuditEntry {
             operation_id: "op-2".to_string(),
-            timestamp: 2000000000,
+            timestamp: jiff::Timestamp::from_second(2000000000).unwrap(),
             user: "bob".to_string(),
             action: Action::Add {
                 file: AuditFile {
@@ -507,11 +507,12 @@ mod tests {
         assert_eq!(entries.len(), 2);
 
         assert_eq!(entries[0].operation_id, "op-1");
-        assert_eq!(entries[0].timestamp, 1000000000);
+        // i64-seconds wire format still deserializes into a typed Timestamp
+        assert_eq!(entries[0].timestamp.as_second(), 1000000000);
         assert_eq!(entries[0].user, "alice");
 
         assert_eq!(entries[1].operation_id, "op-2");
-        assert_eq!(entries[1].timestamp, 2000000000);
+        assert_eq!(entries[1].timestamp.as_second(), 2000000000);
         assert_eq!(entries[1].user, "bob");
     }
 
@@ -534,7 +535,10 @@ mod tests {
                     for idx in 0..entries_per_worker {
                         let entry = AuditEntry {
                             operation_id: format!("op-{worker}-{idx}"),
-                            timestamp: (worker * entries_per_worker + idx) as i64,
+                            timestamp: jiff::Timestamp::from_second(
+                                (worker * entries_per_worker + idx) as i64,
+                            )
+                            .unwrap(),
                             user: format!("user-{worker}"),
                             action: Action::Add {
                                 file: AuditFile {
@@ -560,7 +564,7 @@ mod tests {
     fn test_audit_entry() -> AuditEntry {
         AuditEntry {
             operation_id: "op-1".to_string(),
-            timestamp: 1000000000,
+            timestamp: jiff::Timestamp::from_second(1000000000).unwrap(),
             user: "alice".to_string(),
             action: Action::Add {
                 file: AuditFile {
