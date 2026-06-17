@@ -133,6 +133,11 @@ message that will be recorded in the metadata file. Similarly, `add` must not ha
 This method follows a best-effort approach: even if some files failed to be added, it will still try to add everything
 and not stop.
 
+Each added file produces a metadata sidecar in the metadata folder (by default `.dvs`), mirroring the file path with a
+`.dvs` suffix. For example, adding `data/input.csv` writes `.dvs/data/input.csv.dvs`. These sidecar files are small and
+must be committed to version control, since they are what lets collaborators run `get` to retrieve the data. The data
+file itself is added to `.gitignore` instead. See the Metadata file format section for the full schema.
+
 Each file in an `add` result reports an outcome:
 
 - `copied`: the file was new or had changed and was copied to storage
