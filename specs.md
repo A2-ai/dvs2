@@ -48,6 +48,16 @@ A file in a `dvs` project can be in 3 states:
 - `absent`: metadata exists in the folder but the local file is not present
 - `unsynced`: local file and metadata exists but the local file differs from the metadata
 
+### Relative paths vs. absolute paths
+
+All `dvs` commands must accept absolute paths, and whether they need to be within a project scope, or symlinked, or otherwise should be handled by the library. Similarly, relative paths are supported.
+
+### R package
+
+Use `NULL` in `dvs_*` functions, when we want to defer to the default value
+by the library.
+
+
 ## In-depth spec
 
 ### Errors / failures
