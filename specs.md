@@ -85,12 +85,12 @@ Arguments:
 Options:
       --json
           Output results as JSON
+      --threads <THREADS>
+          Number of threads for parallel operations (0 = auto-detect)
       --root-dir <ROOT_DIR>
           If you want to use a root folder other than the current directory
       --metadata-folder-name <METADATA_FOLDER_NAME>
           If you want to use a folder name other than `.dvs` for storing the metadata files
-      --threads <THREADS>
-          Number of threads for parallel operations (0 = auto-detect)
       --group <GROUP>
           Unix group to set on storage directory and files
       --no-compression
@@ -157,10 +157,10 @@ Arguments:
   [PATHS]...  
 
 Options:
-      --glob <GLOB>        
       --json               Output results as JSON
-  -m, --message <MESSAGE>  An optional message to add
       --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+      --glob <GLOB>        
+  -m, --message <MESSAGE>  An optional message to add
       --dry-run            Show what would be added without making any actual changes
   -h, --help               Print help
 ```
@@ -221,10 +221,10 @@ Arguments:
   [PATHS]...  
 
 Options:
-  -g, --glob <GLOB>        
       --json               Output results as JSON
-      --dry-run            Show what would be retrieved without making any actual changes
       --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+  -g, --glob <GLOB>        
+      --dry-run            Show what would be retrieved without making any actual changes
   -h, --help               Print help
 ```
 
@@ -268,9 +268,9 @@ Arguments:
 
 Options:
       --json               Output results as JSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
   -r, --recursive          Recursively include files in subdirectories for given directories
       --current            Include the files that are current
-      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
       --absent             Include the files that are absent
       --unsynced           Include the files that are unsynced
       --with-metadata      Show all metadata columns in the table output
@@ -297,6 +297,7 @@ dvs_status(
 ```
 
 - `paths` optional vector of paths files to retrieve status of
+- `recursive` if `TRUE`, recursively include files in subdirectories for any directory paths
 - `status` represent the filter flags `current`, `absent`, `unsynced`
   When omitted, all three states are present in the returned data-frame, otherwise serval filtering status can be provided
 
