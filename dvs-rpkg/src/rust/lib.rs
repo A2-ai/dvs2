@@ -487,7 +487,10 @@ pub fn format_byte_size(size_bytes: u64) -> String {
     dvs::format_size(size_bytes)
 }
 
-/// Version of the bundled DVS Rust core crate.
+/// Version of the bundled DVS Rust core crate
+///
+/// @return The version of the `dvs` Rust crate compiled into this package, as a
+///   string (e.g. `"0.3.0"`).
 #[miniextendr]
 pub fn dvs_version() -> String {
     dvs::VERSION.to_string()
