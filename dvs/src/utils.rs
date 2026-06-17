@@ -6,7 +6,7 @@ const DEFAULT_THREADS_PER_CPU: usize = 4;
 /// Maximum thread count threshold when `DVS_NUM_THREADS` is unset
 const DEFAULT_MAX_THREADS: usize = 16;
 /// Maximum thread count threshold if `DVS_NUM_THREADS` is set
-const ENVIRONMENT_MAX_THREADS: usize = 32;
+const ENV_MAX_THREADS: usize = 32;
 
 /// Global thread count override. 0 = unset (use environment variable or default).
 static NUM_THREADS: AtomicUsize = AtomicUsize::new(0);
@@ -102,9 +102,9 @@ pub fn parse_size(size: &str) -> Result<u64> {
 /// Creates a rayon thread pool with a thread count resolved from a 3-tier
 /// priority chain, each clamped to `work_items`:
 ///
-/// 1. **Override** — `set_num_threads(n)` (capped at `ENVIRONMENT_MAX_THREADS`)
+/// 1. **Override** — `set_num_threads(n)` (capped at `ENV_MAX_THREADS`)
 /// 2. **Environment** — `DVS_NUM_THREADS` environment variable, must parse to
-///    `usize > 0` (capped at `ENVIRONMENT_MAX_THREADS`)
+///    `usize > 0` (capped at `ENV_MAX_THREADS`)
 /// 3. **Default** — `available_cpus * DEFAULT_THREADS_PER_CPU`
 ///    (capped at `DEFAULT_MAX_THREADS`)
 pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
@@ -125,7 +125,7 @@ pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
         .filter(|&n| n > 0);
 
     let num_threads = match (override_threads, environment_threads) {
-        (Some(n), _) | (None, Some(n)) => n.min(ENVIRONMENT_MAX_THREADS).min(work_limit),
+        (Some(n), _) | (None, Some(n)) => n.min(ENV_MAX_THREADS).min(work_limit),
         (None, None) => available_cpus
             .saturating_mul(DEFAULT_THREADS_PER_CPU)
             .min(DEFAULT_MAX_THREADS)
