@@ -160,7 +160,7 @@ dependencies = [
 [[package]]
 name = "dvs"
 version = "0.3.0"
-source = "git+https://github.com/A2-ai/dvs2?branch=main#ea5e6901de6838406ff3595704598d61d3a44aa2"
+source = "git+https://github.com/A2-ai/dvs2?branch=main#040aa3193eb38f9152a922f7b3ec4db3ba5218aa"
 dependencies = [
  "anyhow",
  "blake3",
@@ -505,7 +505,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "miniextendr-api"
 version = "0.1.0"
-source = "git+https://github.com/A2-ai/miniextendr#68b6b207ea5040eeb60654093785c4e58757dec3"
+source = "git+https://github.com/A2-ai/miniextendr#8b892f696eed634847e932075db5a8670a0e4c45"
 dependencies = [
  "ahash",
  "linkme",
@@ -518,7 +518,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-lint"
 version = "0.1.0"
-source = "git+https://github.com/A2-ai/miniextendr#68b6b207ea5040eeb60654093785c4e58757dec3"
+source = "git+https://github.com/A2-ai/miniextendr#8b892f696eed634847e932075db5a8670a0e4c45"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -528,7 +528,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-macros"
 version = "0.1.0"
-source = "git+https://github.com/A2-ai/miniextendr#68b6b207ea5040eeb60654093785c4e58757dec3"
+source = "git+https://github.com/A2-ai/miniextendr#8b892f696eed634847e932075db5a8670a0e4c45"
 dependencies = [
  "proc-macro2",
  "quote",
