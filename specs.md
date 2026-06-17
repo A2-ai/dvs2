@@ -432,3 +432,6 @@ the `add` operation to fail.
 
 Globs use a literal path separator, meaning `*.csv` only matches files in the target directory and
 will not match `subdir/file.csv`. Use `**/*.csv` to match recursively across subdirectories.
+
+On the CLI, the glob string passed to `--glob` must be quoted (for example `--glob '**/*.csv'`) so the shell does not
+expand it before `dvs` sees it.
