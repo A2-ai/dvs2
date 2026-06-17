@@ -123,34 +123,32 @@ pub fn resolve_paths_for_get(
     let mut out = HashSet::new();
     let glob_matcher = build_glob_matcher(glob_pattern)?;
 
-    // No explicit paths: scope to cwd. A glob matching nothing here stays the
-    // zero-match case (the caller turns an empty set into "No files to get").
-    if paths.is_empty() {
-        let filter = PathFilter::cwd_scoped(recursive, dvs_paths);
-        for tracked_path in dvs_paths.tracked_paths() {
-            if filter.matches(&tracked_path, glob_matcher.as_ref()) {
-                out.insert(tracked_path);
-            }
-        }
-        return Ok(out);
-    }
+    let filter = if paths.is_empty() {
+        PathFilter::cwd_scoped(recursive, dvs_paths)
+    } else {
+        PathFilter::from_user_paths(paths.clone(), recursive, dvs_paths)
+    };
 
     let tracked = dvs_paths.tracked_paths();
-    for path in paths {
-        let filter = PathFilter::from_user_paths(vec![path.clone()], recursive, dvs_paths);
-        let before = out.len();
-        for tracked_path in &tracked {
-            if filter.matches(tracked_path, glob_matcher.as_ref()) {
-                out.insert(tracked_path.clone());
-            }
+    for tracked_path in &tracked {
+        if filter.matches(tracked_path, glob_matcher.as_ref()) {
+            out.insert(tracked_path.clone());
         }
-        if out.len() == before {
-            // This explicit arg matched no tracked file: carry it forward
-            // (repo-root-relative) so validate_for_get reports it.
-            if filter.paths.is_empty() {
+    }
+
+    // Explicit args that matched no tracked file are carried forward (like `add`)
+    // so get_files reports them per-path via validate_for_get. Empty `paths`
+    // (cwd default / glob-only) carries nothing, keeping the zero-match case.
+    for path in paths {
+        let per_arg = PathFilter::from_user_paths(vec![path.clone()], recursive, dvs_paths);
+        if !tracked
+            .iter()
+            .any(|t| per_arg.matches(t, glob_matcher.as_ref()))
+        {
+            if per_arg.paths.is_empty() {
                 out.insert(path);
             } else {
-                out.extend(filter.paths);
+                out.extend(per_arg.paths);
             }
         }
     }
