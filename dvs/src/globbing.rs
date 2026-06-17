@@ -110,6 +110,10 @@ fn carry_forward_path(path: &Path, dvs_paths: &DvsPaths) -> PathBuf {
 /// - Explicit files or directories: filtered to tracked files under them
 /// - Glob: matched relative to each path argument, or relative to cwd when no paths are given
 /// - No paths + no glob: returns all tracked files directly under cwd
+///
+/// An explicitly provided path that matches no tracked file is carried forward
+/// (like `add`) so `get_files` reports it per-path (NotTracked / NotFound) and
+/// the command exits non-zero. The tracked matches are still returned.
 pub fn resolve_paths_for_get(
     paths: Vec<PathBuf>,
     glob_pattern: Option<&str>,
@@ -119,59 +123,38 @@ pub fn resolve_paths_for_get(
     let mut out = HashSet::new();
     let glob_matcher = build_glob_matcher(glob_pattern)?;
 
-    // Explicit args that match no tracked file are invalid: carry them forward so
-    // get_files reports them per-path (NotTracked / NotFound) and the exit is
-    // non-zero. Computed before `paths` is moved into the filter.
-    let unmatched = unmatched_tracked_args(&paths, glob_pattern, recursive, dvs_paths)?;
-
-    let filter = if paths.is_empty() {
-        PathFilter::cwd_scoped(recursive, dvs_paths)
-    } else {
-        PathFilter::from_user_paths(paths, recursive, dvs_paths)
-    };
-
-    for tracked_path in dvs_paths.tracked_paths() {
-        if filter.matches(&tracked_path, glob_matcher.as_ref()) {
-            out.insert(tracked_path);
+    // No explicit paths: scope to cwd. A glob matching nothing here stays the
+    // zero-match case (the caller turns an empty set into "No files to get").
+    if paths.is_empty() {
+        let filter = PathFilter::cwd_scoped(recursive, dvs_paths);
+        for tracked_path in dvs_paths.tracked_paths() {
+            if filter.matches(&tracked_path, glob_matcher.as_ref()) {
+                out.insert(tracked_path);
+            }
         }
+        return Ok(out);
     }
 
-    out.extend(unmatched);
-    Ok(out)
-}
-
-/// For each explicitly provided user path, return the ones that match no tracked
-/// file (after glob/recursive filtering), normalized to repo-root-relative form.
-/// Empty `user_paths` (no explicit args, e.g. glob-only or cwd default) returns
-/// empty. Shared by `get` (carried forward) and `status` (reported as errors) so
-/// an invalid argument yields a non-zero exit without aborting the valid work.
-pub fn unmatched_tracked_args(
-    user_paths: &[PathBuf],
-    glob_pattern: Option<&str>,
-    recursive: bool,
-    dvs_paths: &DvsPaths,
-) -> Result<Vec<PathBuf>> {
-    if user_paths.is_empty() {
-        return Ok(Vec::new());
-    }
-    let glob_matcher = build_glob_matcher(glob_pattern)?;
     let tracked = dvs_paths.tracked_paths();
-
-    let mut unmatched = Vec::new();
-    for path in user_paths {
+    for path in paths {
         let filter = PathFilter::from_user_paths(vec![path.clone()], recursive, dvs_paths);
-        let matched = tracked
-            .iter()
-            .any(|t| filter.matches(t, glob_matcher.as_ref()));
-        if !matched {
+        let before = out.len();
+        for tracked_path in &tracked {
+            if filter.matches(tracked_path, glob_matcher.as_ref()) {
+                out.insert(tracked_path.clone());
+            }
+        }
+        if out.len() == before {
+            // This explicit arg matched no tracked file: carry it forward
+            // (repo-root-relative) so validate_for_get reports it.
             if filter.paths.is_empty() {
-                unmatched.push(path.clone());
+                out.insert(path);
             } else {
-                unmatched.extend(filter.paths);
+                out.extend(filter.paths);
             }
         }
     }
-    Ok(unmatched)
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -306,24 +289,12 @@ mod tests {
     }
 
     #[test]
-    fn unmatched_args_flags_only_unmatched() {
+    fn get_glob_only_no_match_returns_empty() {
         let (_temp, dvs_paths) = setup_test_repo();
-        let unmatched = unmatched_tracked_args(
-            &[PathBuf::from("foo.txt"), PathBuf::from("bar.csv")],
-            None,
-            false,
-            &dvs_paths,
-        )
-        .unwrap();
-        // foo.txt is tracked (not flagged); bar.csv is untracked (flagged).
-        assert_eq!(unmatched, vec![PathBuf::from("bar.csv")]);
-    }
-
-    #[test]
-    fn unmatched_args_empty_for_no_explicit_paths() {
-        let (_temp, dvs_paths) = setup_test_repo();
-        let unmatched = unmatched_tracked_args(&[], Some("*.zzz"), false, &dvs_paths).unwrap();
-        assert!(unmatched.is_empty());
+        // A glob with no explicit path that matches nothing stays the zero-match
+        // case (empty set), not a carried-forward error.
+        let result = resolve_paths_for_get(vec![], Some("*.zzz"), &dvs_paths, false).unwrap();
+        assert!(result.is_empty());
     }
 
     #[test]

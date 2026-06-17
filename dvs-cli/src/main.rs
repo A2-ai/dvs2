@@ -9,12 +9,12 @@ use tabled::Tabled;
 use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
 
 use dvs::config::Config;
-use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get, unmatched_tracked_args};
+use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddDetail, Compression, FileMetadata, FileProgress, FileStatus, GetDetail, Outcome, PathFilter,
-    Status, StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
+    AddDetail, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter, Status,
+    StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -313,10 +313,6 @@ fn try_main() -> Result<()> {
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !unsynced;
 
-            // An explicitly listed path matching no tracked file is an invalid
-            // argument: report it and exit non-zero, but still show the rest.
-            let unmatched =
-                unmatched_tracked_args(&user_paths, glob.as_deref(), recursive, &dvs_paths)?;
             let filter = if user_paths.is_empty() {
                 None
             } else {
@@ -325,12 +321,6 @@ fn try_main() -> Result<()> {
                 ))
             };
             let mut statuses = get_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
-            statuses.extend(unmatched.into_iter().map(|path| FileStatus {
-                path,
-                detail: StatusDetail::Error {
-                    error: "not tracked by DVS".to_string(),
-                },
-            }));
             if !show_all {
                 statuses.retain(|x| match &x.detail {
                     StatusDetail::Success { status, .. } => {
