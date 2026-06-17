@@ -151,10 +151,12 @@ All defined in `src/rust/lib.rs` with `#[miniextendr]`:
 
 | Function | Purpose | Returns |
 |----------|---------|---------|
-| `dvs_init(storage_path, root_dir?, group?, metadata_folder_name?, no_compression?)` | Initialize a DVS repository | List |
-| `dvs_add(files?, message?, glob?, dry_run?)` | Add files to content-addressable storage | DataFrame |
-| `dvs_status(current?, absent?, unsynced?)` | Report sync status of managed files | DataFrame |
-| `dvs_get(files?, glob?, dry_run?)` | Retrieve files from storage | DataFrame |
+| `dvs_init` | Initialize a DVS repository | List |
+| `dvs_add` | Add files to content-addressable storage | DataFrame |
+| `dvs_status` | Report sync status of managed files | DataFrame |
+| `dvs_get` | Retrieve files from storage | DataFrame |
+
+This table is a high-level index only. The authoritative parameter signatures live in the `#[miniextendr]` definitions in `src/rust/lib.rs` and the R help pages (`?dvs_get` and `man/*.Rd`).
 
 Results are returned as DataFrames using miniextendr's `AsSerializeRow` trait. Errors propagate as `anyhow::Result<T>` converted to R error objects.
 
