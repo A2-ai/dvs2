@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::paths::{DvsPaths, PathFilter};
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use globset::{GlobBuilder, GlobMatcher};
 use walkdir::WalkDir;
 
@@ -42,11 +42,25 @@ pub fn resolve_paths_for_add(
     };
 
     for path in paths {
-        let full_path = dvs_paths
-            .cwd()
-            .join(&path)
-            .canonicalize()
-            .map_err(|_| anyhow!("Path not found: {}", path.display()))?;
+        // Best-effort (specs.md L133): an unresolvable path must not abort the
+        // whole add. Carry the path forward so validate_for_add reports it
+        // per-file (NotFound) while resolvable siblings are still added.
+        let Ok(full_path) = dvs_paths.cwd().join(&path).canonicalize() else {
+            // The path does not exist, so it cannot be canonicalized; anchor it
+            // to repo_root lexically. This is required: validate_for_add joins
+            // the carried path onto repo_root, so a raw cwd-relative path would
+            // let a same-named file at repo_root be added by mistake when
+            // cwd != repo_root. The file is missing, so NotFound results either
+            // way; anchoring just makes the reported path correct and avoids
+            // resolving to the wrong existing file.
+            let intended = dvs_paths.cwd().join(&path);
+            let rel = intended
+                .strip_prefix(&repo_root)
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|_| path.clone());
+            out.insert(rel);
+            continue;
+        };
 
         // Explicit file: we ignore the glob and add it to the file
         if full_path.is_file() {
@@ -81,7 +95,14 @@ pub fn resolve_paths_for_add(
                 }
             }
         } else {
-            bail!("Path is not a file or directory: {}", path.display());
+            // Neither file nor dir (e.g. a special file): best-effort, let
+            // validate_for_add report it per-file rather than aborting. full_path
+            // is canonical here, so anchor it to repo_root like the is_file arm.
+            let relative_to_root = match full_path.strip_prefix(&repo_root) {
+                Ok(p) => p.to_path_buf(),
+                Err(_) => path.clone(),
+            };
+            out.insert(relative_to_root);
         }
     }
 
@@ -205,12 +226,46 @@ mod tests {
     }
 
     #[test]
-    fn add_path_not_found_errors() {
+    fn add_path_not_found_is_carried_forward_not_aborted() {
+        // Best-effort (specs.md L133): a missing path is not an error here; it is
+        // carried forward as the original path so add_files/validate_for_add can
+        // report it per-file while resolvable siblings still get added.
         let (_temp, dvs_paths) = setup_test_repo();
-        let result = resolve_paths_for_add(vec![PathBuf::from("nonexistent")], None, &dvs_paths);
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("nonexistent")], None, &dvs_paths).unwrap();
 
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Path not found"));
+        assert!(result.contains(&PathBuf::from("nonexistent")));
+    }
+
+    #[test]
+    fn add_missing_path_in_subdir_anchors_to_repo_relative_not_root_namesake() {
+        // Regression: from a subdir, a missing "bar.csv" must be carried forward
+        // as "data/bar.csv" (the intended, nonexistent path), NOT the bare
+        // "bar.csv" — otherwise validate_for_add would re-join it onto repo_root
+        // and add the unrelated repo-root bar.csv by mistake.
+        let (temp, _) = setup_test_repo();
+        let croot = fs::canonicalize(temp.path()).unwrap();
+        let dvs_paths = DvsPaths::new(croot.join("data"), croot.clone(), ".dvs").unwrap();
+
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("bar.csv")], None, &dvs_paths).unwrap();
+
+        assert!(result.contains(&PathBuf::from("data/bar.csv")));
+        assert!(!result.contains(&PathBuf::from("bar.csv")));
+    }
+
+    #[test]
+    fn add_missing_path_does_not_drop_valid_sibling() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let result = resolve_paths_for_add(
+            vec![PathBuf::from("foo.txt"), PathBuf::from("nonexistent")],
+            None,
+            &dvs_paths,
+        )
+        .unwrap();
+
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+        assert!(result.contains(&PathBuf::from("nonexistent")));
     }
 
     #[test]
