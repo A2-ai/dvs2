@@ -244,7 +244,10 @@ Options:
 Passing `-r, --recursive` with an explicit directory walks its subdirectories. It only constrains paths given
 explicitly, so an empty path list still returns every tracked file.
 
-This will exit with `1` if one or more files could not be retrieved.
+This exits with `1` when a matched file fails to retrieve (its storage blob is missing or fails the
+hash check) or when nothing matches at all ("No files to get"). Paths are resolved against the metadata
+folder, so an explicitly listed path that is not tracked produces no result and is silently skipped. It
+does not on its own cause a non-zero exit.
 
 #### Rust library
 
