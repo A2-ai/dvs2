@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::Result;
@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
-use crate::paths::DvsPaths;
+use crate::paths::{DvsPaths, normalize_path};
 use crate::utils::get_threadpool;
 use crate::{Status, cache};
 
@@ -40,24 +40,6 @@ pub enum StatusDetail {
 pub struct StatusFilter {
     paths: Vec<PathBuf>,
     recursive: bool,
-}
-
-/// We need to handle `.`, `./` etc but we can't canonicalize because
-/// the path might not exist and we want the path relative to the directory so no symlink resolution
-pub(crate) fn normalize_path(p: PathBuf) -> Option<PathBuf> {
-    let mut out = PathBuf::new();
-    for c in p.components() {
-        match c {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !out.pop() {
-                    return None;
-                }
-            }
-            _ => out.push(c),
-        }
-    }
-    Some(out)
 }
 
 impl StatusFilter {

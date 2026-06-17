@@ -78,9 +78,11 @@ pub enum Command {
     },
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
-    /// At least one path or --glob must be provided.
+    /// At least one path or --glob must be provided; to restore every tracked file,
+    /// pass `--glob '**/*'`.
     #[command(next_display_order = 100)]
     Get {
+        #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
         #[clap(long, short)]
         glob: Option<String>,
@@ -403,12 +405,6 @@ fn try_main() -> Result<()> {
             recursive,
             dry_run,
         } => {
-            if paths.is_empty() && glob.is_none() {
-                bail!(
-                    "dvs get with no path or --glob would restore every tracked file. \
-                     If that's the intent, use `dvs get --glob '**/*'`."
-                );
-            }
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
             let dvs_paths = DvsPaths::from_cwd(&config)?;

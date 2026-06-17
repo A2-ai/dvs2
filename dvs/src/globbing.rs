@@ -104,33 +104,30 @@ pub fn resolve_paths_for_get(
     let metadata_root = dvs_paths.metadata_folder().canonicalize()?;
     let cwd_prefix = dvs_paths.cwd_relative_to_root();
 
-    // None means no path restriction — all tracked files under cwd are candidates.
-    // The `recursive` flag only applies when explicit paths are given.
-    let dir_filters: Option<Vec<PathBuf>> = if paths.is_empty() {
-        None
-    } else {
-        Some(
-            paths
-                .into_iter()
-                .filter_map(|p| {
-                    let raw = if p.is_absolute() {
-                        match p.strip_prefix(dvs_paths.repo_root()) {
-                            Ok(r) => r.to_path_buf(),
-                            Err(_) => p,
-                        }
-                    } else if let Some(prefix) = cwd_prefix {
-                        prefix.join(&p)
-                    } else {
-                        p
-                    };
-                    // Strip `Component::CurDir` (`.`) so e.g. `dvs get .` becomes
-                    // an empty PathBuf, which `Path::starts_with` treats as a
-                    // prefix of every tracked path.
-                    crate::files::status::normalize_path(raw)
-                })
-                .collect(),
-        )
-    };
+    // `dir_filters` restricts which tracked files qualify when the user passes
+    // explicit paths. With no explicit paths there is no restriction here — cwd
+    // scoping is applied separately below via `cwd_relative`. The `recursive`
+    // flag only matters when explicit paths are given.
+    let had_explicit_paths = !paths.is_empty();
+    let dir_filters: Vec<PathBuf> = paths
+        .into_iter()
+        .filter_map(|p| {
+            let raw = if p.is_absolute() {
+                match p.strip_prefix(dvs_paths.repo_root()) {
+                    Ok(r) => r.to_path_buf(),
+                    Err(_) => p,
+                }
+            } else if let Some(prefix) = cwd_prefix {
+                prefix.join(&p)
+            } else {
+                p
+            };
+            // Strip `Component::CurDir` (`.`) so e.g. `dvs get .` becomes
+            // an empty PathBuf, which `Path::starts_with` treats as a
+            // prefix of every tracked path.
+            crate::paths::normalize_path(raw)
+        })
+        .collect();
 
     // Walk all metadata files
     for entry in WalkDir::new(&metadata_root)
@@ -150,9 +147,11 @@ pub fn resolve_paths_for_get(
         };
         let tracked_path = relative_to_metadata.with_extension("");
 
-        // When explicit paths were given, the tracked file must be under one of them
-        if let Some(filters) = &dir_filters {
-            let under_filter = filters.iter().any(|filter_path| {
+        // When explicit paths were given, the tracked file must be under one of
+        // them. If they were given but all normalized away (e.g. they escaped the
+        // repo root), `dir_filters` is empty and nothing matches — which is correct.
+        if had_explicit_paths {
+            let under_filter = dir_filters.iter().any(|filter_path| {
                 // Exact match (user passed a file path)
                 tracked_path == filter_path.as_path()
                     // Recursive: any descendant

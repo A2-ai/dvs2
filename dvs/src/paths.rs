@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::config::Config;
 use anyhow::Result;
@@ -53,6 +53,26 @@ pub fn find_repo_root(start_dir: impl AsRef<Path>) -> PathBuf {
     }
 
     start_dir.as_ref().to_path_buf()
+}
+
+/// Normalize a path by resolving `.` and `..` components lexically (no
+/// canonicalization — the path may not exist and we want it relative to the
+/// directory, with no symlink resolution). Returns `None` if `..` escapes the
+/// base (pops past the root). Shared by `globbing` and `status` path filtering.
+pub(crate) fn normalize_path(p: PathBuf) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    Some(out)
 }
 
 /// We always need to figure out where the user is in a project,
