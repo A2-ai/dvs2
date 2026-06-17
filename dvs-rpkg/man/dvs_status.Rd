@@ -7,13 +7,23 @@
 dvs_status(
   paths = character(0),
   recursive = NULL,
+  glob = NULL,
   status = c("current", "absent", "unsynced")
 )
 }
 \arguments{
 \item{paths}{Character vector of file or directory paths to check status for.}
 
-\item{recursive}{If \code{TRUE}, recursively include files in subdirectories.}
+\item{recursive}{If \code{TRUE}, directory inputs include all descendants;
+if \code{FALSE} or \code{NULL} (default), only direct children of the directory
+are returned. The flag only constrains descendants of paths passed
+explicitly — when \code{paths} is empty, every tracked file is returned
+regardless of nesting depth, and \code{recursive} has no effect.}
+
+\item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).
+Globs use a literal path separator: \verb{*.csv} only matches files in the
+target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} to
+match recursively across subdirectories. Mutually exclusive with \code{recursive}.}
 
 \item{status}{Character vector of statuses to include. Valid values are
 \code{"current"}, \code{"absent"}, and \code{"unsynced"}. When empty (default), all

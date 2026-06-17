@@ -160,7 +160,7 @@ dependencies = [
 [[package]]
 name = "dvs"
 version = "0.3.0"
-source = "git+https://github.com/A2-ai/dvs2?branch=main#c6e8988288979fd29141f3a2019f782f399c5d7c"
+source = "git+https://github.com/A2-ai/dvs2?branch=main#ea5e6901de6838406ff3595704598d61d3a44aa2"
 dependencies = [
  "anyhow",
  "blake3",

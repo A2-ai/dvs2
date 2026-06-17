@@ -62,6 +62,7 @@ dvs_add <- function(
 dvs_status <- function(
   paths = character(0),
   recursive = NULL,
+  glob = NULL,
   status = c("current", "absent", "unsynced")
 ) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
@@ -69,6 +70,7 @@ dvs_status <- function(
     dvs_status_impl(
       paths = paths,
       recursive = recursive,
+      glob = glob,
       status = status
     )
 
@@ -82,7 +84,7 @@ dvs_status <- function(
 #' @inherit dvs_get_impl title description params
 #' @rdname dvs_get
 #' @export
-dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
+dvs_get <- function(paths = character(0), glob = NULL, recursive = NULL, dry_run = NULL) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   progress_callback <- NULL
   # Only show a progress bar in interactive sessions; non-interactive callers
@@ -94,6 +96,7 @@ dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
   get_data_frame <- dvs_get_impl(
     paths = paths,
     glob = glob,
+    recursive = recursive,
     dry_run = dry_run,
     progress_callback = progress_callback
   )
