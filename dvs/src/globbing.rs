@@ -252,6 +252,22 @@ mod tests {
     }
 
     #[test]
+    fn add_missing_path_in_subdir_anchors_to_repo_relative_not_root_namesake() {
+        // Regression (#219): from a subdir, a missing "bar.csv" must be carried
+        // forward as "data/bar.csv" (the intended, nonexistent path), NOT the bare
+        // "bar.csv" - otherwise validate_for_add re-joins it onto repo_root and
+        // would add the unrelated repo-root bar.csv by mistake.
+        let (temp, _) = setup_test_repo();
+        let croot = fs::canonicalize(temp.path()).unwrap();
+        let dvs_paths = DvsPaths::new(croot.join("data"), croot.clone(), ".dvs").unwrap();
+
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("bar.csv")], None, &dvs_paths).unwrap();
+        assert!(result.contains(&PathBuf::from("data/bar.csv")));
+        assert!(!result.contains(&PathBuf::from("bar.csv")));
+    }
+
+    #[test]
     fn add_valid_plus_missing_keeps_valid_and_carries_missing() {
         let (_temp, dvs_paths) = setup_test_repo();
         let result = resolve_paths_for_add(
