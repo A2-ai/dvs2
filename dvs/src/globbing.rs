@@ -79,6 +79,15 @@ pub fn resolve_paths_for_add(
                         out.insert(relative_to_root);
                     }
                 }
+            } else {
+                // Bare directory with no glob: carry it forward so validate_for_add
+                // flags it as IsDirectory and add_files refuses the whole batch,
+                // instead of silently dropping it.
+                let relative_to_root = match full_path.strip_prefix(&repo_root) {
+                    Ok(p) => p.to_path_buf(),
+                    Err(_) => path.clone(),
+                };
+                out.insert(relative_to_root);
             }
         } else {
             bail!("Path is not a file or directory: {}", path.display());
@@ -202,6 +211,33 @@ mod tests {
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
         assert!(!result.contains(&PathBuf::from("data/b.txt")));
+    }
+
+    #[test]
+    fn add_bare_directory_without_glob_is_carried_forward() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        // A directory with no glob must not be silently dropped. It is carried
+        // forward so validate_for_add flags it as IsDirectory and add_files
+        // refuses the whole batch (see issue #225).
+        let result = resolve_paths_for_add(vec![PathBuf::from("data")], None, &dvs_paths).unwrap();
+
+        assert!(result.contains(&PathBuf::from("data")));
+    }
+
+    #[test]
+    fn add_file_and_bare_directory_keeps_both() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        // Mixing a resolvable file with a bare directory must keep both so the
+        // directory still surfaces and add_files refuses the batch (issue #225).
+        let result = resolve_paths_for_add(
+            vec![PathBuf::from("foo.txt"), PathBuf::from("data")],
+            None,
+            &dvs_paths,
+        )
+        .unwrap();
+
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+        assert!(result.contains(&PathBuf::from("data")));
     }
 
     #[test]
