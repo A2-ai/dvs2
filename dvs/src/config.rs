@@ -183,12 +183,28 @@ impl Config {
                 Err(e) => return Some(Err(e.into())),
             };
             Some(
-                toml::from_str(&content)
+                toml::from_str::<Config>(&content)
+                    .map(|mut config| {
+                        config.resolve_backend_path(&repo_root);
+                        config
+                    })
                     .with_context(|| format!("Failed to parse {}", config_path.display())),
             )
         } else {
             log::debug!("No config file found at {}", config_path.display());
             None
+        }
+    }
+
+    /// Resolve a relative backend storage path against the repo root (the
+    /// directory holding `dvs.toml`) so it points at the same place regardless
+    /// of the current working directory. Without this a relative `path` was
+    /// resolved against the cwd, so `dvs` worked from the repo root but failed
+    /// to find storage from any subdirectory.
+    fn resolve_backend_path(&mut self, repo_root: &Path) {
+        let Backend::Local(backend) = &mut self.backend;
+        if backend.path.is_relative() {
+            backend.path = repo_root.join(&backend.path);
         }
     }
 
@@ -241,6 +257,25 @@ mod tests {
 
         let loaded = Config::find(&root).unwrap().unwrap();
         assert_eq!(original, loaded);
+    }
+
+    #[test]
+    fn config_find_resolves_relative_storage_against_repo_root() {
+        let (_tmp, root) = create_temp_git_repo();
+        // Storage recorded with a relative path in dvs.toml.
+        let config = Config::new_local("../store", None).unwrap();
+        config.save(&root).unwrap();
+
+        // Find from a subdirectory: the storage path must resolve against the
+        // repo root (dvs.toml dir), not the cwd.
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let loaded = Config::find(&sub).unwrap().unwrap();
+
+        assert_eq!(
+            loaded.backend().local_path(),
+            Some(root.join("../store").as_path())
+        );
     }
 
     #[test]
