@@ -37,6 +37,8 @@ You can pass some arguments to it or edit the toml file manually.
 
 `get` will retrieve the files thanks to the metadata folder and pull them from the storage to their location in the project.
 
+Both `add` and `get` support a dry run from the CLI, the library, or the R package, returning the outcome that would have happened for each file without actually doing it.
+
 `status` is a way to check whether everything is checked out or if you have files different from what's in the metadata and
 that you might want to add again.
 
@@ -85,12 +87,12 @@ Arguments:
 Options:
       --json
           Output results as JSON
+      --threads <THREADS>
+          Number of threads for parallel operations (0 = auto-detect)
       --root-dir <ROOT_DIR>
           If you want to use a root folder other than the current directory
       --metadata-folder-name <METADATA_FOLDER_NAME>
           If you want to use a folder name other than `.dvs` for storing the metadata files
-      --threads <THREADS>
-          Number of threads for parallel operations (0 = auto-detect)
       --group <GROUP>
           Unix group to set on storage directory and files
       --no-compression
@@ -131,6 +133,9 @@ message that will be recorded in the metadata file. Similarly, `add` must not ha
 This method follows a best-effort approach: even if some files failed to be added, it will still try to add everything
 and not stop.
 
+Each added file gets a metadata sidecar at `<metadata folder>/<path to file>.dvs` (metadata folder defaults to
+`.dvs`), mirroring the added file. The sidecar must be committed to version control (e.g. `git`). The data file itself is gitignored.
+
 Each file in an `add` result reports an outcome:
 
 - `copied`: the file was new or had changed and was copied to storage
@@ -141,9 +146,6 @@ Symlinks are resolved before adding. If a symlink target resolves to a path outs
 
 Each `add` operation is atomic: the storage write and metadata update either both succeed or both roll back. A
 failure writing to storage will not leave behind a partial metadata file, and vice versa.
-
-You can also do a dry run from the CLI,the library, or R package that will return the outcome that would have happened for each file but
-without actually doing them.
 
 #### CLI
 
@@ -157,16 +159,16 @@ Arguments:
   [PATHS]...  
 
 Options:
-      --glob <GLOB>        
       --json               Output results as JSON
-  -m, --message <MESSAGE>  An optional message to add
       --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+      --glob <GLOB>        
+  -m, --message <MESSAGE>  An optional message to add
       --dry-run            Show what would be added without making any actual changes
   -h, --help               Print help
 ```
 
 You can run `dvs add *.csv` and it will be expanded by your shell before calling `dvs`.
-To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library.
+To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library. The glob string must be quoted (for example `--glob '*.csv'`) so the shell does not expand it before `dvs` sees it.
 
 This will exit with `1` if one or more files could not be added to the storage (file does not exist, no permissions, etc).
 
@@ -206,9 +208,6 @@ is deleted and the operation fails for that file.
 Users can use `get` with specific paths or globs. In practice those will be ran on the metadata folder rather
 than the actual project, to know what to pull but the resolution works the same way as `add`.
 
-You can also do a dry run from the CLI, R package or the library that will return the outcome that would have happened for each file but
-without actually doing them.
-
 #### CLI
 
 ```shell
@@ -221,10 +220,10 @@ Arguments:
   [PATHS]...  
 
 Options:
-  -g, --glob <GLOB>        
       --json               Output results as JSON
-      --dry-run            Show what would be retrieved without making any actual changes
       --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+  -g, --glob <GLOB>        
+      --dry-run            Show what would be retrieved without making any actual changes
   -h, --help               Print help
 ```
 
@@ -268,9 +267,9 @@ Arguments:
 
 Options:
       --json               Output results as JSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
   -r, --recursive          Recursively include files in subdirectories for given directories
       --current            Include the files that are current
-      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
       --absent             Include the files that are absent
       --unsynced           Include the files that are unsynced
       --with-metadata      Show all metadata columns in the table output
@@ -279,6 +278,8 @@ Options:
 
 By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`, and
 `--unsynced` flags are filters: when one or more are provided, only files matching those states are shown.
+
+This will exit with `1` if one or more files could not be inspected.
 
 #### Rust library
 
@@ -297,6 +298,7 @@ dvs_status(
 ```
 
 - `paths` optional vector of paths files to retrieve status of
+- `recursive` if `TRUE`, recursively include files in subdirectories for any directory paths
 - `status` represent the filter flags `current`, `absent`, `unsynced`
   When omitted, all three states are present in the returned data-frame, otherwise serval filtering status can be provided
 
@@ -356,18 +358,23 @@ affect previously added files.
 
 ### Audit trail
 
-Every `add` operation is logged to an append-only audit file (`audit.log.jsonl`) in the storage directory. Each
-entry records:
+Every `add` and `init` operation is logged to an append-only audit file (`audit.log.jsonl`) in the storage directory.
+Each entry records:
 
-- `operation_id`: a UUID grouping all files from one `add` invocation
+- `operation_id`: a UUID grouping all files from one operation
 - `timestamp`: unix seconds
 - `user`: the system username of whoever ran the command
-- `action`: currently only `add`
+- `action`: either `add` or `init`
 
-`add` is an object that contains
+The `add` action is an object that contains
 
 - `file`: path and hashes of the added file
 - `compression`: `"zstd"` or `"none"`, see the Compression section
+
+The `init` action is an object that contains
+
+- `settings`: the project configuration written to `dvs.toml`
+- `project_path`: the absolute path of the initialized project
 
 The audit log is protected by a mutex so a single `dvs` process cannot corrupt it but there is no protection against
 multiple processes appending logs.
@@ -415,10 +422,9 @@ The threadpool size set directly by the R package takes precedence over the
 
 ### Gitignore
 
-After a successful `add`, each added file is appended to a `.gitignore` in the file's parent directory
-using the format `/<filename>` unless it's already present. If the repository has no `.git` folder, gitignore
-updates are skipped entirely. A failure to update `.gitignore` is logged as a warning but does not cause
-the `add` operation to fail.
+After a successful `add`, each data file gets a `/<filename>` entry in its own directory's `.gitignore`, keeping the
+data out of Git while the `.dvs` metadata stays tracked. Existing entries are not duplicated. If there is no `.git`
+folder the update is skipped, and a failed `.gitignore` update is logged as a warning without failing the `add`.
 
 ### Globbing
 
@@ -429,4 +435,4 @@ the `add` operation to fail.
 - No given paths with a glob: walks current directory filtered by glob
 
 Globs use a literal path separator, meaning `*.csv` only matches files in the target directory and
-will not match `subdir/file.csv`. Use `**/*.csv` to match recursively across subdirectories.
+will not match `subdir/file.csv`. Use `'**/*.csv'` (quoted, to avoid shell expansion) to match recursively across subdirectories.
