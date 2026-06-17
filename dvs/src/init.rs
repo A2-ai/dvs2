@@ -151,7 +151,10 @@ mod tests {
             "init should reject storage inside the repository"
         );
         assert!(
-            result.unwrap_err().to_string().contains("within the repository"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("within the repository"),
             "error should explain the storage path is inside the repo"
         );
         // Nothing should have been created.
