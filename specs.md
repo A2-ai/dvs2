@@ -136,7 +136,7 @@ dvs_init(
 - `metadata_folder_name`: custom name for the metadata folder (default `.dvs`)
 - `compression`: desired compression for the stored data (default `zstd`)
 
-Returns a list with `status = "initialized"`, invisibly.
+Returns a single-row data frame describing the resulting configuration.
 
 ### add
 
