@@ -50,8 +50,7 @@ A file in a `dvs` project can be in 3 states:
 
 ### Errors / failures
 
-All input must be evaluated, and errors as well as successes must be collected
-are then reported back to the user.
+All input must be evaluated, and errors as well as successes must be collected and then reported back to the user.
 
 #### CLI
 
@@ -71,10 +70,6 @@ This check is local: a `dvs.toml` in a parent directory does not prevent initial
 
 On partial failure (e.g., metadata folder or storage creation fails after `dvs.toml` is written),
 init attempts best-effort cleanup of local artifacts (`dvs.toml` and, if it didn't exist beforehand, the metadata folder) so that a retry is possible.
-
-A storage directory or backend is bound to one dvs repository.
-
-`metadata_folder_name` is omitted from `dvs.toml` if not specified.
 
 #### CLI
 
@@ -124,7 +119,7 @@ dvs_init(
 - `root_dir`: project root where `dvs.toml` is created (defaults to working directory)
 - `group`: Unix group to set on storage directory and files
 - `metadata_folder_name`: custom name for the metadata folder (default `.dvs`)
-- `compression`: desired compression for the stored date (default `zstd`)
+- `compression`: desired compression for the stored data (default `zstd`)
 
 Returns a list with `status = "initialized"`, invisibly.
 
@@ -246,7 +241,7 @@ It otherwise returns a list of results sorted alphabetically by path, letting us
 dvs_get(paths = character(0), glob = NULL, dry_run = NULL)
 ```
 
-- `files`: character vector of file paths to retrieve (can be empty if `glob` is provided)
+- `paths`: character vector of file paths to retrieve (can be empty if `glob` is provided)
 - `glob`: pattern to match files in the metadata folder (same resolution rules as CLI `--glob`)
 - `dry_run`: if `TRUE`, returns what would be retrieved without making changes
 
@@ -346,16 +341,23 @@ and the remaining characters as the filename.
 For example, a file with blake3 hash `af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262` is stored at
 `<storage-path>/af/1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262`.
 
-Files in storage are compressed with zstd by default. The two compression modes are `zstd` and `none`
-(set at `init` time via `--no-compression`, or by editing `dvs.toml`). The compression method is recorded
-per-file in the metadata, so changing the project's compression setting does not affect retrieval of
-previously added files — `get` always reads the compression from the file's metadata.
-
 Writes to storage are atomic: data is first written to a temporary file (with a `.tmp` extension) in the
 same directory, then renamed into place. Since rename is atomic on POSIX within the same filesystem, this
 prevents partial blobs from appearing in storage mapping to an expected file.
 
 Stored files are set read-only after writing.
+
+### Compression
+
+Stored files are compressed with `zstd` by default. The two available compression modes are:
+
+- `zstd`: the default
+- `none`: no compression
+
+The mode is set at `init` time (via `--no-compression` on the CLI, or `compression` in the R
+package) or by editing `dvs.toml`. The compression method is recorded per-file in the metadata, so
+changing the project's compression setting does not affect retrieval of previously added files —
+`get` always reads the compression from the file's metadata.
 
 ### Audit trail
 
@@ -370,7 +372,7 @@ entry records:
 `add` is an object that contains
 
 - `file`: path and hashes of the added file
-- `compression`: `"zstd"` or `"none"`, see add section above
+- `compression`: `"zstd"` or `"none"`, see the Compression section
 
 The audit log is protected by a mutex so a single `dvs` process cannot corrupt it but there is no protection against
 multiple processes appending logs.
@@ -414,8 +416,8 @@ clamped to the number of files being processed.
 
 #### R package
 
-The environment variable `DVS_NUM_THREADS` takes precedence over the threadpool
-size set by the R package.
+The threadpool size set directly by the R package takes precedence over the
+`DVS_NUM_THREADS` environment variable.
 
 ### Gitignore
 
