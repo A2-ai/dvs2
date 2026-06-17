@@ -171,7 +171,6 @@ pub(crate) fn dvs_init(
         config.set_metadata_folder_name(m);
     }
 
-    // The storage-inside-repo guard now lives in dvs::init::init().
     init(&root_dir, config)?;
 
     r_println!("DVS Initialized");
