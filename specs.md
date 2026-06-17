@@ -134,7 +134,7 @@ This method follows a best-effort approach: even if some files failed to be adde
 and not stop.
 
 Each added file gets a metadata sidecar at `<metadata folder>/<path to file>.dvs` (metadata folder defaults to
-`.dvs`), mirroring the added file. The sidecar must be committed to version control. The data file itself is gitignored.
+`.dvs`), mirroring the added file. The sidecar must be committed to version control (e.g. `git`). The data file itself is gitignored.
 
 Each file in an `add` result reports an outcome:
 
@@ -279,6 +279,8 @@ Options:
 By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`, and
 `--unsynced` flags are filters: when one or more are provided, only files matching those states are shown.
 
+This will exit with `1` if one or more files could not be inspected.
+
 #### Rust library
 
 The library scans all metadata files in the project and returns a result for each one. Like `add` and `get`,
@@ -356,18 +358,23 @@ affect previously added files.
 
 ### Audit trail
 
-Every `add` operation is logged to an append-only audit file (`audit.log.jsonl`) in the storage directory. Each
-entry records:
+Every `add` and `init` operation is logged to an append-only audit file (`audit.log.jsonl`) in the storage directory.
+Each entry records:
 
-- `operation_id`: a UUID grouping all files from one `add` invocation
+- `operation_id`: a UUID grouping all files from one operation
 - `timestamp`: unix seconds
 - `user`: the system username of whoever ran the command
-- `action`: currently only `add`
+- `action`: either `add` or `init`
 
-`add` is an object that contains
+The `add` action is an object that contains
 
 - `file`: path and hashes of the added file
 - `compression`: `"zstd"` or `"none"`, see the Compression section
+
+The `init` action is an object that contains
+
+- `settings`: the project configuration written to `dvs.toml`
+- `project_path`: the absolute path of the initialized project
 
 The audit log is protected by a mutex so a single `dvs` process cannot corrupt it but there is no protection against
 multiple processes appending logs.
