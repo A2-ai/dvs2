@@ -296,7 +296,9 @@ Options:
 By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`, and
 `--unsynced` flags are filters: when one or more are provided, only files matching those states are shown.
 
-This will exit with `1` if one or more files could not be inspected.
+This will exit with `1` if one or more files could not be inspected. A path set or glob that matches no
+tracked files is not an error: `status` prints an empty result and exits `0`. This differs from `add` and
+`get`, which treat a zero-match invocation as an error and exit `1`, because `status` is read-only.
 
 #### Rust library
 
@@ -455,3 +457,6 @@ Globs use a literal path separator, meaning `*.csv` only matches files in the ta
 will not match `subdir/file.csv`. Use `'**/*.csv'` (quoted, to avoid shell expansion) to match recursively across subdirectories.
 
 `status` and `get` also accept `-r/--recursive`, which walks the given directories instead of matching a glob pattern. `--recursive` and `--glob` are mutually exclusive. `add` accepts `--glob` but has no `--recursive` flag.
+
+A trailing slash on a file path argument (for example `data/x.bin/`) is normalized away and the path is
+treated as the file `data/x.bin`.
