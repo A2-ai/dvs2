@@ -12,7 +12,7 @@ All configuration is handled in a `dvs.toml` config file.
 
 All CLI commands take a `--json` flag if you want to get JSON output.
 
-The Rust library must not contain anything specific to the CLI or the R package: no `miniextendr-*` dependency, no `println!`/`eprintln!`/`dbg!`. It may depend on the `log` facade but must not pull in a `log` implementer; logger setup belongs in `dvs-cli` and `dvs-rpkg`.
+The Rust library must not contain anything specific to the CLI or the R package: no `miniextendr-*` dependency, no `println!`/`eprintln!`/`dbg!`. It may depend on the `log` facade but must not pull in a `log` implementer. Logger setup belongs in `dvs-cli` and `dvs-rpkg`.
 
 ## Glossary
 
@@ -126,7 +126,7 @@ Returns a list with `status = "initialized"`, invisibly.
 ### add
 
 It only takes files as input, directories will not work unless combined with a glob. It can also take an optional
-message that will be recorded in the metadata file. Similarly, `add` must not have a recursive option; The glob mechanism is sufficient, and intentional when used.
+message that will be recorded in the metadata file. Similarly, `add` must not have a recursive option. The glob mechanism is sufficient, and intentional when used.
 
 This method follows a best-effort approach: even if some files failed to be added, it will still try to add everything
 and not stop.
@@ -187,7 +187,7 @@ dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 - `dry_run`: if `TRUE`, returns what would be added without making changes
 
 Returns a data frame with one row per file. Errors if no files match.
-Glob resolution uses the same rules as the CLI — see the Globbing section.
+Glob resolution uses the same rules as the CLI. See the Globbing section.
 
 Partial completion leads to a return value as a list containing two elements named `result`
 and `error`, each containing data-frames describing the failures and successes.
@@ -283,7 +283,7 @@ By default (no flags), `dvs status` shows all tracked files regardless of state.
 #### Rust library
 
 The library scans all metadata files in the project and returns a result for each one. Like `add` and `get`,
-it never errors as a whole — individual files that cannot be inspected (e.g. permission errors) are reported
+it never errors as a whole. Individual files that cannot be inspected (e.g. permission errors) are reported
 as per-file errors in the result list.
 
 #### R package
@@ -328,7 +328,7 @@ The sidecar is a JSON file with the following fields:
 - `size`: file size in bytes
 - `created_by`: system username at the time of `add`, `unknown` if it can't be found
 - `add_time`: ISO 8601 timestamp
-- `compression`: `"zstd"` or `"none"` — records how this file is stored in the backend
+- `compression`: records how this file is stored in the backend (`"zstd"` or `"none"`)
 - `message`: omitted from JSON when not provided
 
 Two metadata files are considered equal if their `hashes` and `size` match (other fields are informational).
@@ -351,8 +351,8 @@ Stored files are set read-only after writing.
 
 The two compression modes are `zstd` (default) and `none`, set at `init` time (CLI
 `--no-compression`, R `compression`) or in `dvs.toml`. The mode is recorded per-file in the
-metadata, so `get` always reads it from there — changing the project setting never affects
-previously added files.
+metadata, so `get` always reads it from there. Changing the project setting (`dvs.toml`) must not
+affect previously added files.
 
 ### Audit trail
 
@@ -398,8 +398,7 @@ Example:
 `dvs` maintains a SQLite cache at `{metadata_folder}/.cache/dvs.db` to avoid re-hashing files that haven't
 changed. Both `add` and `get` populate the cache after a successful operation, so a subsequent `status`
 check benefits from cache hits. A cache hit is determined by matching the file's `mtime` and `size`. The cache directory is
-automatically added to `.gitignore` on creation. The cache is entirely optional — if it can't be opened (e.g. corruption), `dvs` deletes it and retries once,
-and operations proceed without it if that also fails.
+automatically added to `.gitignore` on creation. The cache is optional.
 
 ### Parallelism
 
