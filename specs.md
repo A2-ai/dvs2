@@ -37,6 +37,8 @@ You can pass some arguments to it or edit the toml file manually.
 
 `get` will retrieve the files thanks to the metadata folder and pull them from the storage to their location in the project.
 
+Both `add` and `get` support a dry run from the CLI, the library, or the R package, returning the outcome that would have happened for each file without actually doing it.
+
 `status` is a way to check whether everything is checked out or if you have files different from what's in the metadata and
 that you might want to add again.
 
@@ -142,9 +144,6 @@ Symlinks are resolved before adding. If a symlink target resolves to a path outs
 Each `add` operation is atomic: the storage write and metadata update either both succeed or both roll back. A
 failure writing to storage will not leave behind a partial metadata file, and vice versa.
 
-You can also do a dry run from the CLI,the library, or R package that will return the outcome that would have happened for each file but
-without actually doing them.
-
 #### CLI
 
 ```shell
@@ -205,9 +204,6 @@ is deleted and the operation fails for that file.
 
 Users can use `get` with specific paths or globs. In practice those will be ran on the metadata folder rather
 than the actual project, to know what to pull but the resolution works the same way as `add`.
-
-You can also do a dry run from the CLI, R package or the library that will return the outcome that would have happened for each file but
-without actually doing them.
 
 #### CLI
 
