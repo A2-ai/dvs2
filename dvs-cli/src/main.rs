@@ -13,8 +13,8 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddDetail, Compression, FileMetadata, FileProgress, GetDetail, Outcome, Status, StatusDetail,
-    StatusFilter, add_files, format_size, get_files, get_status, set_num_threads,
+    AddDetail, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter, Status,
+    StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -61,8 +61,11 @@ pub enum Command {
         /// Paths (files or directories) to check status for
         paths: Vec<PathBuf>,
         /// Recursively include files in subdirectories for given directories
-        #[clap(long, short)]
+        /// Without this flag, directories return only their direct children.
+        #[clap(long, short, conflicts_with = "glob")]
         recursive: bool,
+        #[clap(long, short, conflicts_with = "recursive")]
+        glob: Option<String>,
         /// Include the files that are current
         #[clap(long)]
         current: bool,
@@ -84,12 +87,11 @@ pub enum Command {
     Get {
         #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
-        #[clap(long, short)]
+        #[clap(long, short, conflicts_with = "recursive")]
         glob: Option<String>,
         /// Recursively include files in subdirectories for directory inputs.
         /// Without this flag, directories return only their direct children.
-        /// Has no effect when no explicit paths are given.
-        #[clap(long, short)]
+        #[clap(long, short, conflicts_with = "glob")]
         recursive: bool,
         /// Show what would be retrieved without making any actual changes
         #[clap(long)]
@@ -304,6 +306,7 @@ fn try_main() -> Result<()> {
             absent,
             unsynced,
             with_metadata,
+            glob,
         } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -313,11 +316,11 @@ fn try_main() -> Result<()> {
             let filter = if user_paths.is_empty() {
                 None
             } else {
-                Some(StatusFilter::from_user_paths(
+                Some(PathFilter::from_user_paths(
                     user_paths, recursive, &dvs_paths,
                 ))
             };
-            let mut statuses = get_status(&dvs_paths, filter.as_ref())?;
+            let mut statuses = get_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
             if !show_all {
                 statuses.retain(|x| match &x.detail {
                     StatusDetail::Success { status, .. } => {

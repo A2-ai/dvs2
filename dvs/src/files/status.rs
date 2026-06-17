@@ -5,11 +5,10 @@ use anyhow::Result;
 use fs_err as fs;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use walkdir::WalkDir;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
-use crate::paths::{DvsPaths, normalize_path};
+use crate::paths::{DvsPaths, PathFilter};
 use crate::utils::get_threadpool;
 use crate::{Status, cache};
 
@@ -31,58 +30,6 @@ pub enum StatusDetail {
     Error {
         error: String,
     },
-}
-
-/// Which paths to get status for
-/// eg you can pass dir1/ dir2/ and it will expand to dir1/* dir2/*
-/// If `recursive` is `true`, then it will expand to dir1/**/* dir2/**/*
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StatusFilter {
-    paths: Vec<PathBuf>,
-    recursive: bool,
-}
-
-impl StatusFilter {
-    /// Create a filter from user-provided paths (relative to cwd) and a recursive flag.
-    /// Translates cwd-relative paths to repo-root-relative using `dvs_paths.cwd_relative_to_root()`.
-    pub fn from_user_paths(
-        user_paths: Vec<PathBuf>,
-        recursive: bool,
-        dvs_paths: &DvsPaths,
-    ) -> Self {
-        let cwd_prefix = dvs_paths.cwd_relative_to_root();
-        let repo_root = dvs_paths.repo_root();
-        let paths = user_paths
-            .into_iter()
-            .filter_map(|p| {
-                if p.is_absolute() {
-                    p.strip_prefix(repo_root)
-                        .ok()
-                        .map(|r| r.to_path_buf())
-                        .and_then(normalize_path)
-                } else {
-                    let joined = if let Some(prefix) = cwd_prefix {
-                        prefix.join(&p)
-                    } else {
-                        p
-                    };
-                    normalize_path(joined)
-                }
-            })
-            .collect();
-        StatusFilter { paths, recursive }
-    }
-
-    fn matches(&self, tracked_path: &Path) -> bool {
-        self.paths.iter().any(|filter_path| {
-            // Exact match (user passed a file path)
-            tracked_path == filter_path
-                // Recursive: any descendant
-                || (self.recursive && tracked_path.starts_with(filter_path))
-                // Non-recursive: direct child
-                || (!self.recursive && tracked_path.parent() == Some(filter_path.as_path()))
-        })
-    }
 }
 
 fn get_file_status(
@@ -110,24 +57,17 @@ fn get_file_status(
     }
 }
 
-pub fn get_status(paths: &DvsPaths, filter: Option<&StatusFilter>) -> Result<Vec<FileStatus>> {
+pub fn get_status(
+    paths: &DvsPaths,
+    filter: Option<&PathFilter>,
+    glob_pattern: Option<&str>,
+) -> Result<Vec<FileStatus>> {
     let dvs_directory = paths.metadata_folder();
     log::debug!("Scanning metadata folder: {}", dvs_directory.display());
     let cache = try_open_cache(paths);
+    let glob = crate::globbing::build_glob_matcher(glob_pattern)?;
 
-    // Collect entries first so we can process in parallel
-    let entries: Vec<PathBuf> = WalkDir::new(&dvs_directory)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext == "dvs")
-                .unwrap_or(false)
-        })
-        .map(|e| e.into_path())
-        .collect();
+    let entries = paths.tracked_paths();
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -138,22 +78,17 @@ pub fn get_status(paths: &DvsPaths, filter: Option<&StatusFilter>) -> Result<Vec
     let mut results: Vec<FileStatus> = pool.install(|| {
         entries
             .into_par_iter()
-            .filter_map(|dvs_path| {
-                let relative = match dvs_path.strip_prefix(&dvs_directory) {
-                    Ok(r) => r.with_extension(""),
-                    Err(e) => {
-                        return Some(FileStatus {
-                            path: dvs_path,
-                            detail: StatusDetail::Error {
-                                error: format!("failed to determine relative path: {e}"),
-                            },
-                        });
-                    }
+            .filter_map(|relative| {
+                // With a filter, the glob is anchored to the matched path; with
+                // no filter (whole repo) the glob still applies, matched against
+                // the full repo-relative path. This keeps a glob from being
+                // silently ignored when `filter` is `None`.
+                let keep = match filter {
+                    Some(f) => f.matches(&relative, glob.as_ref()),
+                    None => glob.as_ref().is_none_or(|g| g.is_match(&relative)),
                 };
-                if let Some(f) = filter {
-                    if !f.matches(&relative) {
-                        return None;
-                    }
+                if !keep {
+                    return None;
                 }
                 let detail = match get_file_status(paths, &relative, cache.as_ref()) {
                     Ok((status, file_metadata)) => StatusDetail::Success {
@@ -165,7 +100,7 @@ pub fn get_status(paths: &DvsPaths, filter: Option<&StatusFilter>) -> Result<Vec
                     },
                 };
                 Some(FileStatus {
-                    path: relative.to_path_buf(),
+                    path: relative,
                     detail,
                 })
             })
@@ -181,6 +116,7 @@ pub fn get_status(paths: &DvsPaths, filter: Option<&StatusFilter>) -> Result<Vec
 mod tests {
     use super::*;
     use crate::Compression;
+    use crate::paths::normalize_path;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
     use uuid::Uuid;
 
@@ -310,7 +246,7 @@ mod tests {
                 .unwrap();
         }
 
-        let statuses = get_status(&paths, None).unwrap();
+        let statuses = get_status(&paths, None, None).unwrap();
         assert_eq!(statuses.len(), 3);
 
         // All should be Current
@@ -331,7 +267,7 @@ mod tests {
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let paths = make_paths(&root, &config);
 
-        let statuses = get_status(&paths, None).unwrap();
+        let statuses = get_status(&paths, None, None).unwrap();
         assert!(statuses.is_empty());
     }
 
@@ -411,7 +347,7 @@ mod tests {
 
     fn run_filter_cases(cases: Vec<(&[&str], &str, bool)>, recursive: bool) {
         for (filter_paths, test_path, expected) in cases {
-            let filter = StatusFilter {
+            let filter = PathFilter {
                 paths: filter_paths
                     .iter()
                     .filter_map(|p| normalize_path(PathBuf::from(p)))
@@ -419,7 +355,7 @@ mod tests {
                 recursive,
             };
             assert_eq!(
-                filter.matches(Path::new(test_path)),
+                filter.matches(Path::new(test_path), None),
                 expected,
                 "filter={filter_paths:?} recursive={recursive} path={test_path:?}"
             );
@@ -481,20 +417,36 @@ mod tests {
         let (_tmp, paths) = setup_filtered_repo();
 
         // Relative path filter
-        let filter = StatusFilter {
+        let filter = PathFilter {
             paths: vec![PathBuf::from("dir1")],
             recursive: false,
         };
-        let statuses = get_status(&paths, Some(&filter)).unwrap();
+        let statuses = get_status(&paths, Some(&filter), None).unwrap();
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
 
         // Absolute path filter via from_user_paths
         let abs_path = paths.repo_root().join("dir1/b.txt");
-        let filter = StatusFilter::from_user_paths(vec![abs_path], false, &paths);
-        let statuses = get_status(&paths, Some(&filter)).unwrap();
+        let filter = PathFilter::from_user_paths(vec![abs_path], false, &paths);
+        let statuses = get_status(&paths, Some(&filter), None).unwrap();
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
+    }
+
+    #[test]
+    fn get_status_whole_repo_applies_glob() {
+        let (_tmp, paths) = setup_filtered_repo();
+
+        // No filter (whole repo) + glob: the glob still applies, matched against
+        // the full repo-relative path. `*.txt` (literal separator) hits only
+        // root-level files.
+        let statuses = get_status(&paths, None, Some("*.txt")).unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].path, PathBuf::from("a.txt"));
+
+        // `**/*.txt` reaches every tracked file.
+        let statuses = get_status(&paths, None, Some("**/*.txt")).unwrap();
+        assert_eq!(statuses.len(), 4);
     }
 
     #[test]
@@ -513,11 +465,11 @@ mod tests {
             ".dvs",
         )
         .unwrap();
-        let filter = StatusFilter::from_user_paths(vec![PathBuf::from("../foo")], false, &paths);
+        let filter = PathFilter::from_user_paths(vec![PathBuf::from("../foo")], false, &paths);
         assert_eq!(filter.paths, vec![PathBuf::from("foo")]);
 
         // From subdir/: ../../foo → escapes root → dropped (empty)
-        let filter = StatusFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths);
+        let filter = PathFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths);
         assert!(
             filter.paths.is_empty(),
             "../../foo should escape root and be dropped"
@@ -531,17 +483,17 @@ mod tests {
         )
         .unwrap();
         let filter =
-            StatusFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths_deep);
+            PathFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths_deep);
         assert_eq!(filter.paths, vec![PathBuf::from("foo")]);
 
         // From subdir/: ../dir2/file.txt → resolves to "dir2/file.txt"
         let filter =
-            StatusFilter::from_user_paths(vec![PathBuf::from("../dir2/file.txt")], false, &paths);
+            PathFilter::from_user_paths(vec![PathBuf::from("../dir2/file.txt")], false, &paths);
         assert_eq!(filter.paths, vec![PathBuf::from("dir2/file.txt")]);
 
         // From subdir/: absolute path with .. like <root>/subdir/../a.txt → normalizes to "a.txt"
         let abs_with_dotdot = root.join("subdir/../a.txt");
-        let filter = StatusFilter::from_user_paths(vec![abs_with_dotdot], false, &paths);
+        let filter = PathFilter::from_user_paths(vec![abs_with_dotdot], false, &paths);
         assert_eq!(filter.paths, vec![PathBuf::from("a.txt")]);
     }
 }

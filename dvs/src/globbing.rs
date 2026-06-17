@@ -1,15 +1,14 @@
 use std::collections::HashSet;
-use std::ffi::OsStr;
 use std::path::PathBuf;
 
-use crate::paths::DvsPaths;
+use crate::paths::{DvsPaths, PathFilter};
 use anyhow::{Result, anyhow, bail};
 use globset::{GlobBuilder, GlobMatcher};
 use walkdir::WalkDir;
 
 /// Builds the glob matching the rg behaviour
 /// eg "*.csv" will not match `some/dir/test.csv`
-fn build_glob_matcher(pattern: Option<&str>) -> Result<Option<GlobMatcher>> {
+pub(crate) fn build_glob_matcher(pattern: Option<&str>) -> Result<Option<GlobMatcher>> {
     pattern
         .map(|p| {
             GlobBuilder::new(p)
@@ -92,7 +91,7 @@ pub fn resolve_paths_for_add(
 /// Resolve paths for `get` command by scanning tracked metadata:
 /// - Explicit files or directories: filtered to tracked files under them
 /// - Glob: applied to cwd-relative paths within matched files
-/// - No paths + no glob: returns all tracked files under cwd
+/// - No paths + no glob: returns all tracked files directly under cwd
 pub fn resolve_paths_for_get(
     paths: Vec<PathBuf>,
     glob_pattern: Option<&str>,
@@ -101,84 +100,15 @@ pub fn resolve_paths_for_get(
 ) -> Result<HashSet<PathBuf>> {
     let mut out = HashSet::new();
     let glob_matcher = build_glob_matcher(glob_pattern)?;
-    let metadata_root = dvs_paths.metadata_folder().canonicalize()?;
-    let cwd_prefix = dvs_paths.cwd_relative_to_root();
 
-    // `dir_filters` restricts which tracked files qualify when the user passes
-    // explicit paths. With no explicit paths there is no restriction here — cwd
-    // scoping is applied separately below via `cwd_relative`. The `recursive`
-    // flag only matters when explicit paths are given.
-    let had_explicit_paths = !paths.is_empty();
-    let dir_filters: Vec<PathBuf> = paths
-        .into_iter()
-        .filter_map(|p| {
-            let raw = if p.is_absolute() {
-                match p.strip_prefix(dvs_paths.repo_root()) {
-                    Ok(r) => r.to_path_buf(),
-                    Err(_) => p,
-                }
-            } else if let Some(prefix) = cwd_prefix {
-                prefix.join(&p)
-            } else {
-                p
-            };
-            // Strip `Component::CurDir` (`.`) so e.g. `dvs get .` becomes
-            // an empty PathBuf, which `Path::starts_with` treats as a
-            // prefix of every tracked path.
-            crate::paths::normalize_path(raw)
-        })
-        .collect();
+    let filter = if paths.is_empty() {
+        PathFilter::cwd_scoped(recursive, dvs_paths)
+    } else {
+        PathFilter::from_user_paths(paths, recursive, dvs_paths)
+    };
 
-    // Walk all metadata files
-    for entry in WalkDir::new(&metadata_root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let entry_path = entry.path();
-
-        // Skip directories and non .dvs files
-        if !entry_path.is_file() || entry_path.extension() != Some(OsStr::new("dvs")) {
-            continue;
-        }
-        // Get repo-relative tracked path (strip metadata folder and .dvs extension)
-        let relative_to_metadata = match entry_path.strip_prefix(&metadata_root) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        let tracked_path = relative_to_metadata.with_extension("");
-
-        // When explicit paths were given, the tracked file must be under one of
-        // them. If they were given but all normalized away (e.g. they escaped the
-        // repo root), `dir_filters` is empty and nothing matches — which is correct.
-        if had_explicit_paths {
-            let under_filter = dir_filters.iter().any(|filter_path| {
-                // Exact match (user passed a file path)
-                tracked_path == filter_path.as_path()
-                    // Recursive: any descendant
-                    || (recursive && tracked_path.starts_with(filter_path))
-                    // Non-recursive: direct child only
-                    || (!recursive && tracked_path.parent() == Some(filter_path.as_path()))
-            });
-            if !under_filter {
-                continue;
-            }
-        }
-
-        // Get cwd-relative path for glob matching
-        let cwd_relative = if let Some(prefix) = cwd_prefix {
-            match tracked_path.strip_prefix(prefix) {
-                Ok(p) => p.to_path_buf(),
-                Err(_) => continue, // File not under cwd
-            }
-        } else {
-            tracked_path.clone()
-        };
-
-        // Apply glob if present, otherwise match all
-        if glob_matcher
-            .as_ref()
-            .is_none_or(|g| g.is_match(&cwd_relative))
-        {
+    for tracked_path in dvs_paths.tracked_paths() {
+        if filter.matches(&tracked_path, glob_matcher.as_ref()) {
             out.insert(tracked_path);
         }
     }
@@ -273,6 +203,21 @@ mod tests {
     }
 
     #[test]
+    fn get_explicit_file_ignores_glob() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let result = resolve_paths_for_get(
+            vec![PathBuf::from("foo.txt")],
+            Some("*.csv"),
+            &dvs_paths,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+    }
+
+    #[test]
     fn get_directory_recursive_returns_all_tracked() {
         let (_temp, dvs_paths) = setup_test_repo();
         let result =
@@ -306,11 +251,20 @@ mod tests {
     }
 
     #[test]
-    fn get_no_paths_returns_all_under_cwd() {
+    fn get_no_paths_non_recursive_returns_direct_children() {
         let (_temp, dvs_paths) = setup_test_repo();
-        // Without explicit paths the recursive flag has no target to restrict;
-        // all tracked files under cwd are returned regardless of its value.
+        // No explicit paths scopes to cwd (the repo root here). Without
+        // `recursive`, only files directly under cwd are returned.
         let result = resolve_paths_for_get(vec![], None, &dvs_paths, false).unwrap();
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+        assert!(!result.contains(&PathBuf::from("data/a.csv")));
+        assert!(!result.contains(&PathBuf::from("data/subdir/c.csv")));
+    }
+
+    #[test]
+    fn get_no_paths_recursive_returns_all_under_cwd() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let result = resolve_paths_for_get(vec![], None, &dvs_paths, true).unwrap();
         assert!(result.contains(&PathBuf::from("foo.txt")));
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
@@ -362,32 +316,11 @@ mod tests {
     }
 
     #[test]
-    fn get_directory_recursive_with_glob() {
-        // Recursive directory + glob: glob is evaluated cwd-relative on
-        // descendants. With cwd at repo root and dir filter `data`, the glob
-        // pattern must include the `data/` prefix to match anything.
+    fn get_directory_glob_is_dir_relative() {
         let (_temp, dvs_paths) = setup_test_repo();
         let result = resolve_paths_for_get(
             vec![PathBuf::from("data")],
-            Some("data/**/*.csv"),
-            &dvs_paths,
-            true,
-        )
-        .unwrap();
-
-        assert!(result.contains(&PathBuf::from("data/a.csv")));
-        assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
-        assert!(!result.contains(&PathBuf::from("foo.txt")));
-    }
-
-    #[test]
-    fn get_directory_non_recursive_with_glob_excludes_subdirs() {
-        // Non-recursive + glob: even a recursive-style glob shouldn't reach
-        // subdirectories because the dir filter rejects them first.
-        let (_temp, dvs_paths) = setup_test_repo();
-        let result = resolve_paths_for_get(
-            vec![PathBuf::from("data")],
-            Some("data/**/*.csv"),
+            Some("*.csv"),
             &dvs_paths,
             false,
         )
@@ -395,6 +328,23 @@ mod tests {
 
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(!result.contains(&PathBuf::from("data/subdir/c.csv")));
+        assert!(!result.contains(&PathBuf::from("foo.txt")));
+    }
+
+    #[test]
+    fn get_directory_recursive_glob_reaches_subdirs() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let result = resolve_paths_for_get(
+            vec![PathBuf::from("data")],
+            Some("**/*.csv"),
+            &dvs_paths,
+            false,
+        )
+        .unwrap();
+
+        assert!(result.contains(&PathBuf::from("data/a.csv")));
+        assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
+        assert!(!result.contains(&PathBuf::from("foo.txt")));
     }
 
     #[test]
