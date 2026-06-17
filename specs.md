@@ -140,7 +140,8 @@ Returns a list with `status = "initialized"`, invisibly.
 
 ### add
 
-It only takes files as input, directories will not work unless combined with a glob. It can also take an optional
+It only takes files as input, directories will not work unless combined with a glob. A directory passed without a glob
+is reported as an error rather than silently skipped. It can also take an optional
 message that will be recorded in the metadata file. Similarly, `add` must not have a recursive option. The glob mechanism is sufficient, and intentional when used.
 
 This method follows a best-effort approach: even if some files failed to be added, it will still try to add everything
@@ -184,6 +185,9 @@ You can run `dvs add *.csv` and it will be expanded by your shell before calling
 To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library. The glob string must be quoted (for example `--glob '*.csv'`) so the shell does not expand it before `dvs` sees it.
 
 This will exit with `1` if one or more files could not be added to the storage (file does not exist, no permissions, etc).
+An explicitly listed path that resolves to no file is also an error and causes a non-zero exit. This covers a path that
+does not exist on disk and a directory passed without a glob. Such a path is reported per path (for example `path is a
+directory`) while the valid files in the same command are still added.
 
 #### Rust library
 
@@ -244,7 +248,11 @@ Options:
 Passing `-r, --recursive` with an explicit directory walks its subdirectories. It only constrains paths given
 explicitly, so an empty path list still returns every tracked file.
 
-This will exit with `1` if one or more files could not be retrieved.
+This will exit with `1` if one or more files could not be retrieved. A retrieval fails when a matched file's storage
+blob is missing or fails its hash check. An explicitly listed path that matches no tracked file (untracked or missing
+on disk) is also an error and causes a non-zero exit. Such a path is reported per path while the tracked files in the
+same command are still retrieved. A glob given without an explicit path that matches nothing is the zero-match case and
+exits `1` with `No files to get`.
 
 #### Rust library
 
@@ -297,7 +305,10 @@ Options:
 By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`, and
 `--unsynced` flags are filters: when one or more are provided, only files matching those states are shown.
 
-This will exit with `1` if one or more files could not be inspected.
+This will exit with `1` if one or more files could not be inspected. An explicitly listed path that matches no tracked
+file is also an error and causes a non-zero exit. Such a path is reported per path while the tracked files in the same
+command are still shown. A glob given without an explicit path that matches nothing is not an error for `status`. It
+prints an empty result and exits `0`, because a read-only pattern scan with zero matches is a valid outcome.
 
 #### Rust library
 

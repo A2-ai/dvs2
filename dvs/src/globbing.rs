@@ -1,8 +1,8 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::paths::{DvsPaths, PathFilter};
-use anyhow::{Result, anyhow, bail};
+use crate::paths::{DvsPaths, PathFilter, normalize_path};
+use anyhow::Result;
 use globset::{GlobBuilder, GlobMatcher};
 use walkdir::WalkDir;
 
@@ -24,6 +24,11 @@ pub(crate) fn build_glob_matcher(pattern: Option<&str>) -> Result<Option<GlobMat
 /// - Explicit files: added directly (glob ignored)
 /// - Explicit directories: walked and filtered by glob
 /// - No paths + glob: walks cwd filtered by glob
+///
+/// An explicitly provided path that resolves to no files (missing on disk, a
+/// bare directory, or a directory whose glob matches nothing) is carried forward
+/// as a repo-root-relative path so `add_files` reports it per-path (NotFound /
+/// IsDirectory) and the command exits non-zero. The valid paths are still added.
 pub fn resolve_paths_for_add(
     paths: Vec<PathBuf>,
     glob_pattern: Option<&str>,
@@ -34,7 +39,8 @@ pub fn resolve_paths_for_add(
     let repo_root = dvs_paths.repo_root().canonicalize()?;
     let metadata_root = dvs_paths.metadata_folder().canonicalize()?;
 
-    // If no paths given, default to cwd
+    // No paths given defaults to cwd; that synthesized path is not carried forward.
+    let explicit = !paths.is_empty();
     let paths = if paths.is_empty() {
         vec![PathBuf::from(".")]
     } else {
@@ -42,50 +48,62 @@ pub fn resolve_paths_for_add(
     };
 
     for path in paths {
-        let full_path = dvs_paths
-            .cwd()
-            .join(&path)
-            .canonicalize()
-            .map_err(|_| anyhow!("Path not found: {}", path.display()))?;
+        let before = out.len();
 
-        // Explicit file: we ignore the glob and add it to the file
-        if full_path.is_file() {
-            let relative_to_root = match full_path.strip_prefix(&repo_root) {
-                Ok(p) => p.to_path_buf(),
-                // Outside repo: insert original user path; validate_for_add will catch it
-                Err(_) => path.clone(),
-            };
-            out.insert(relative_to_root);
-        } else if full_path.is_dir() {
-            if let Some(matcher) = &glob_matcher {
-                for entry in WalkDir::new(&full_path).into_iter().filter_map(|e| e.ok()) {
-                    let entry_path = entry.path().canonicalize()?;
-                    // Skip directories and metadata root folder
-                    if !entry_path.is_file() || entry_path.starts_with(&metadata_root) {
-                        continue;
-                    }
+        if let Ok(full_path) = dvs_paths.cwd().join(&path).canonicalize() {
+            // Explicit file: we ignore the glob and add it to the file
+            if full_path.is_file() {
+                let relative_to_root = match full_path.strip_prefix(&repo_root) {
+                    Ok(p) => p.to_path_buf(),
+                    // Outside repo: insert original user path; validate_for_add will catch it
+                    Err(_) => path.clone(),
+                };
+                out.insert(relative_to_root);
+            } else if full_path.is_dir() {
+                if let Some(matcher) = &glob_matcher {
+                    for entry in WalkDir::new(&full_path).into_iter().filter_map(|e| e.ok()) {
+                        let Ok(entry_path) = entry.path().canonicalize() else {
+                            continue;
+                        };
+                        // Skip directories and metadata root folder
+                        if !entry_path.is_file() || entry_path.starts_with(&metadata_root) {
+                            continue;
+                        }
 
-                    // Get path relative to the walked directory for matching
-                    let relative_to_dir = match entry_path.strip_prefix(&full_path) {
-                        Ok(p) => p,
-                        Err(_) => continue,
-                    };
-                    if matcher.is_match(relative_to_dir) {
-                        // Return path relative to repo root
-                        let relative_to_root = match entry_path.strip_prefix(&repo_root) {
-                            Ok(p) => p.to_path_buf(),
+                        // Get path relative to the walked directory for matching
+                        let relative_to_dir = match entry_path.strip_prefix(&full_path) {
+                            Ok(p) => p,
                             Err(_) => continue,
                         };
-                        out.insert(relative_to_root);
+                        if matcher.is_match(relative_to_dir) {
+                            // Return path relative to repo root
+                            let relative_to_root = match entry_path.strip_prefix(&repo_root) {
+                                Ok(p) => p.to_path_buf(),
+                                Err(_) => continue,
+                            };
+                            out.insert(relative_to_root);
+                        }
                     }
                 }
             }
-        } else {
-            bail!("Path is not a file or directory: {}", path.display());
+        }
+
+        if explicit && out.len() == before {
+            out.insert(carry_forward_path(&path, dvs_paths));
         }
     }
 
     Ok(out)
+}
+
+/// Translate a cwd-relative user path to a normalized repo-root-relative path so
+/// it can be carried into `validate_for_add` / `validate_for_get` for reporting.
+fn carry_forward_path(path: &Path, dvs_paths: &DvsPaths) -> PathBuf {
+    let joined = match dvs_paths.cwd_relative_to_root() {
+        Some(prefix) => prefix.join(path),
+        None => path.to_path_buf(),
+    };
+    normalize_path(joined).unwrap_or_else(|| path.to_path_buf())
 }
 
 /// Resolve paths for `get` command by scanning tracked metadata:
@@ -101,6 +119,11 @@ pub fn resolve_paths_for_get(
     let mut out = HashSet::new();
     let glob_matcher = build_glob_matcher(glob_pattern)?;
 
+    // Explicit args that match no tracked file are invalid: carry them forward so
+    // get_files reports them per-path (NotTracked / NotFound) and the exit is
+    // non-zero. Computed before `paths` is moved into the filter.
+    let unmatched = unmatched_tracked_args(&paths, glob_pattern, recursive, dvs_paths)?;
+
     let filter = if paths.is_empty() {
         PathFilter::cwd_scoped(recursive, dvs_paths)
     } else {
@@ -113,7 +136,42 @@ pub fn resolve_paths_for_get(
         }
     }
 
+    out.extend(unmatched);
     Ok(out)
+}
+
+/// For each explicitly provided user path, return the ones that match no tracked
+/// file (after glob/recursive filtering), normalized to repo-root-relative form.
+/// Empty `user_paths` (no explicit args, e.g. glob-only or cwd default) returns
+/// empty. Shared by `get` (carried forward) and `status` (reported as errors) so
+/// an invalid argument yields a non-zero exit without aborting the valid work.
+pub fn unmatched_tracked_args(
+    user_paths: &[PathBuf],
+    glob_pattern: Option<&str>,
+    recursive: bool,
+    dvs_paths: &DvsPaths,
+) -> Result<Vec<PathBuf>> {
+    if user_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let glob_matcher = build_glob_matcher(glob_pattern)?;
+    let tracked = dvs_paths.tracked_paths();
+
+    let mut unmatched = Vec::new();
+    for path in user_paths {
+        let filter = PathFilter::from_user_paths(vec![path.clone()], recursive, dvs_paths);
+        let matched = tracked
+            .iter()
+            .any(|t| filter.matches(t, glob_matcher.as_ref()));
+        if !matched {
+            if filter.paths.is_empty() {
+                unmatched.push(path.clone());
+            } else {
+                unmatched.extend(filter.paths);
+            }
+        }
+    }
+    Ok(unmatched)
 }
 
 #[cfg(test)]
@@ -184,12 +242,72 @@ mod tests {
     }
 
     #[test]
-    fn add_path_not_found_errors() {
+    fn add_missing_path_is_carried_forward() {
         let (_temp, dvs_paths) = setup_test_repo();
-        let result = resolve_paths_for_add(vec![PathBuf::from("nonexistent")], None, &dvs_paths);
+        // A missing path is no longer a hard error: it is carried forward so
+        // add_files reports it per-path (NotFound) and the command exits non-zero.
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("nonexistent")], None, &dvs_paths).unwrap();
+        assert!(result.contains(&PathBuf::from("nonexistent")));
+    }
 
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Path not found"));
+    #[test]
+    fn add_valid_plus_missing_keeps_valid_and_carries_missing() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let result = resolve_paths_for_add(
+            vec![PathBuf::from("foo.txt"), PathBuf::from("nonexistent")],
+            None,
+            &dvs_paths,
+        )
+        .unwrap();
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+        assert!(result.contains(&PathBuf::from("nonexistent")));
+    }
+
+    #[test]
+    fn add_bare_directory_is_carried_forward() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        // Bare directory (no glob) resolves to no files; carried forward so
+        // add_files reports it as IsDirectory rather than silently dropping it.
+        let result = resolve_paths_for_add(vec![PathBuf::from("data")], None, &dvs_paths).unwrap();
+        assert!(result.contains(&PathBuf::from("data")));
+    }
+
+    #[test]
+    fn get_untracked_explicit_path_is_carried_forward() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        // bar.csv exists on disk but is not tracked; an explicit untracked path
+        // is carried forward so get_files reports it (NotTracked) and exits 1.
+        let result = resolve_paths_for_get(
+            vec![PathBuf::from("foo.txt"), PathBuf::from("bar.csv")],
+            None,
+            &dvs_paths,
+            false,
+        )
+        .unwrap();
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+        assert!(result.contains(&PathBuf::from("bar.csv")));
+    }
+
+    #[test]
+    fn unmatched_args_flags_only_unmatched() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let unmatched = unmatched_tracked_args(
+            &[PathBuf::from("foo.txt"), PathBuf::from("bar.csv")],
+            None,
+            false,
+            &dvs_paths,
+        )
+        .unwrap();
+        // foo.txt is tracked (not flagged); bar.csv is untracked (flagged).
+        assert_eq!(unmatched, vec![PathBuf::from("bar.csv")]);
+    }
+
+    #[test]
+    fn unmatched_args_empty_for_no_explicit_paths() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let unmatched = unmatched_tracked_args(&[], Some("*.zzz"), false, &dvs_paths).unwrap();
+        assert!(unmatched.is_empty());
     }
 
     #[test]
