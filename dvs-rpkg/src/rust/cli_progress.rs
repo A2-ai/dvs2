@@ -4,7 +4,8 @@
 //! static inline functions. The shim is compiled by R's build system
 //! and linked into the final shared object.
 
-use miniextendr_api::ffi::{R_PreserveObject, R_ReleaseObject, SEXP};
+use miniextendr_api::SEXP;
+use miniextendr_api::sys::{R_PreserveObject, R_ReleaseObject};
 
 #[cfg(not(test))]
 unsafe extern "C" {
