@@ -140,7 +140,7 @@ Returns a list with `status = "initialized"`, invisibly.
 
 ### add
 
-It only takes files as input, directories will not work unless combined with a glob. It can also take an optional
+It only takes files as input, directories will not work unless combined with a glob. An explicit directory passed without a glob is flagged as a directory error and refuses the whole batch, rather than being silently dropped. It can also take an optional
 message that will be recorded in the metadata file. Similarly, `add` must not have a recursive option. The glob mechanism is sufficient, and intentional when used.
 
 Input paths are validated before any data is written. If any path cannot be resolved to a file to add (it does not exist, it is a directory passed without a glob, or it resolves outside the project root) the whole batch is refused and nothing is added.
@@ -449,6 +449,7 @@ folder the update is skipped, and a failed `.gitignore` update is logged as a wa
 
 - Explicit files: added/retrieved directly (glob ignored)
 - Explicit directories with a glob: walked and filtered by glob
+- Explicit directories without a glob, for `add`: flagged as a directory error, refusing the whole batch
 - No given paths with a glob: walks current directory filtered by glob
 
 Globs use a literal path separator, meaning `*.csv` only matches files in the target directory and

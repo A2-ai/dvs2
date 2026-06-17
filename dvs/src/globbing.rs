@@ -22,7 +22,9 @@ pub(crate) fn build_glob_matcher(pattern: Option<&str>) -> Result<Option<GlobMat
 
 /// Resolve paths for `add` command following ripgrep-style behavior:
 /// - Explicit files: added directly (glob ignored)
-/// - Explicit directories: walked and filtered by glob
+/// - Explicit directories with a glob: walked and filtered by glob
+/// - Explicit directories without a glob: carried forward so `add_files` flags
+///   them as a directory error and refuses the whole batch
 /// - No paths + glob: walks cwd filtered by glob
 pub fn resolve_paths_for_add(
     paths: Vec<PathBuf>,
@@ -34,11 +36,14 @@ pub fn resolve_paths_for_add(
     let repo_root = dvs_paths.repo_root().canonicalize()?;
     let metadata_root = dvs_paths.metadata_folder().canonicalize()?;
 
-    // If no paths given, default to cwd
-    let paths = if paths.is_empty() {
-        vec![PathBuf::from(".")]
+    // If no paths given, default to cwd. Track whether the directory came from
+    // the user: an explicit bare directory is carried forward so add_files
+    // refuses the whole batch, while the implicit cwd default with no glob just
+    // resolves to nothing ("No files to add").
+    let (paths, explicit) = if paths.is_empty() {
+        (vec![PathBuf::from(".")], false)
     } else {
-        paths
+        (paths, true)
     };
 
     for path in paths {
@@ -57,28 +62,42 @@ pub fn resolve_paths_for_add(
             };
             out.insert(relative_to_root);
         } else if full_path.is_dir() {
-            if let Some(matcher) = &glob_matcher {
-                for entry in WalkDir::new(&full_path).into_iter().filter_map(|e| e.ok()) {
-                    let entry_path = entry.path().canonicalize()?;
-                    // Skip directories and metadata root folder
-                    if !entry_path.is_file() || entry_path.starts_with(&metadata_root) {
-                        continue;
-                    }
+            match &glob_matcher {
+                Some(matcher) => {
+                    for entry in WalkDir::new(&full_path).into_iter().filter_map(|e| e.ok()) {
+                        let entry_path = entry.path().canonicalize()?;
+                        // Skip directories and metadata root folder
+                        if !entry_path.is_file() || entry_path.starts_with(&metadata_root) {
+                            continue;
+                        }
 
-                    // Get path relative to the walked directory for matching
-                    let relative_to_dir = match entry_path.strip_prefix(&full_path) {
-                        Ok(p) => p,
-                        Err(_) => continue,
-                    };
-                    if matcher.is_match(relative_to_dir) {
-                        // Return path relative to repo root
-                        let relative_to_root = match entry_path.strip_prefix(&repo_root) {
-                            Ok(p) => p.to_path_buf(),
+                        // Get path relative to the walked directory for matching
+                        let relative_to_dir = match entry_path.strip_prefix(&full_path) {
+                            Ok(p) => p,
                             Err(_) => continue,
                         };
-                        out.insert(relative_to_root);
+                        if matcher.is_match(relative_to_dir) {
+                            // Return path relative to repo root
+                            let relative_to_root = match entry_path.strip_prefix(&repo_root) {
+                                Ok(p) => p.to_path_buf(),
+                                Err(_) => continue,
+                            };
+                            out.insert(relative_to_root);
+                        }
                     }
                 }
+                // Explicit bare directory with no glob: carry the repo-relative
+                // path forward so validate_for_add classifies it IsDirectory and
+                // add_files refuses the whole batch.
+                None if explicit => {
+                    let relative_to_root = match full_path.strip_prefix(&repo_root) {
+                        Ok(p) => p.to_path_buf(),
+                        Err(_) => path.clone(),
+                    };
+                    out.insert(relative_to_root);
+                }
+                // Implicit cwd default with no glob: nothing to add.
+                None => {}
             }
         } else {
             bail!("Path is not a file or directory: {}", path.display());
@@ -211,6 +230,44 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Path not found"));
+    }
+
+    #[test]
+    fn add_bare_directory_without_glob_is_carried_forward() {
+        // A bare directory with no glob must reach add_files (not be dropped) so
+        // it surfaces as a directory error and the whole batch is refused.
+        let (_temp, dvs_paths) = setup_test_repo();
+        let result = resolve_paths_for_add(vec![PathBuf::from("data")], None, &dvs_paths).unwrap();
+
+        assert!(result.contains(&PathBuf::from("data")));
+    }
+
+    #[test]
+    fn add_file_mixed_with_bare_directory_keeps_both() {
+        // The issue scenario: `dvs add good.bin mydir`. Both are carried forward;
+        // the bare directory then makes add_files refuse the whole batch, rather
+        // than being silently dropped.
+        let (_temp, dvs_paths) = setup_test_repo();
+        let result = resolve_paths_for_add(
+            vec![PathBuf::from("foo.txt"), PathBuf::from("data")],
+            None,
+            &dvs_paths,
+        )
+        .unwrap();
+
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+        assert!(result.contains(&PathBuf::from("data")));
+    }
+
+    #[test]
+    fn add_no_paths_no_glob_returns_empty() {
+        // The implicit cwd default with no glob is not an explicit directory
+        // argument, so it resolves to nothing rather than erroring. The caller
+        // turns the empty set into "No files to add".
+        let (_temp, dvs_paths) = setup_test_repo();
+        let result = resolve_paths_for_add(vec![], None, &dvs_paths).unwrap();
+
+        assert!(result.is_empty());
     }
 
     #[test]
