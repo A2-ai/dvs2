@@ -21,19 +21,18 @@ dvs_get_impl(
 \item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).
 Globs use a literal path separator: \verb{*.csv} only matches files in the
 target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} to
-match recursively across subdirectories.}
+match recursively across subdirectories. Mutually exclusive with \code{recursive}.}
 
 \item{recursive}{If \code{TRUE}, directory inputs include all descendants;
 if \code{FALSE} or \code{NULL} (default), only direct children of the directory
-are returned. The flag only constrains descendants of paths passed
-explicitly — when \code{paths} is empty, every tracked file is returned
-regardless of nesting depth, and \code{recursive} has no effect.}
+are returned. With no explicit \code{paths} the directory is the working
+directory. Mutually exclusive with \code{glob}.}
 
 \item{dry_run}{If \code{TRUE}, report what would be retrieved without writing files.}
 
 \item{progress_callback}{Optional handle to enable progress bar display.}
 }
 \description{
-Fetches the specified files from DVS storage and writes them to their original paths in the working directory. Calling \code{dvs_get()} with no arguments restores every tracked file in the repository.
+Fetches the specified files from DVS storage and writes them to their original paths in the working directory. With no \code{paths} or \code{glob}, \code{dvs_get()} scopes to the working directory: it restores the files directly under it, and \code{dvs_get(recursive = TRUE)} restores every tracked file beneath it at any depth.
 }
 \keyword{internal}
