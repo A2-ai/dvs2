@@ -363,9 +363,9 @@ pub(crate) fn dvs_status(
 /// directory and returns one row per entry. The column structure is inherited
 /// directly from `dvs::audit::AuditEntry`'s serde representation, so the rpkg
 /// never reaches into the dvs crate's internal types. The `action` enum
-/// currently surfaces as a nested list-column; flattening it without
-/// re-encoding dvs internals needs a non-rayon dataframe builder
-/// (miniextendr#1055).
+/// currently surfaces as a nested list-column. Flattening it through serde
+/// without re-encoding dvs internals is tracked as miniextendr#1056, with a
+/// builder-based alternative in miniextendr#1055.
 ///
 /// @keywords internal
 #[miniextendr(r_name = "dvs_audit_log_impl")]
