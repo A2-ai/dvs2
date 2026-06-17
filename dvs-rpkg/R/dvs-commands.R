@@ -30,7 +30,9 @@ dvs_add <- function(
 ) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   progress_callback <- NULL
-  if (!isTRUE(dry_run)) {
+  # Only show a progress bar in interactive sessions; non-interactive callers
+  # should prefer dvs-cli (see #118).
+  if (!isTRUE(dry_run) && interactive()) {
     progress_callback <- ProgressBarCallback$new()
   }
 
@@ -83,7 +85,9 @@ dvs_status <- function(
 dvs_get <- function(paths = character(0), glob = NULL, dry_run = NULL) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   progress_callback <- NULL
-  if (!isTRUE(dry_run)) {
+  # Only show a progress bar in interactive sessions; non-interactive callers
+  # should prefer dvs-cli (see #118).
+  if (!isTRUE(dry_run) && interactive()) {
     progress_callback <- ProgressBarCallback$new()
   }
 
