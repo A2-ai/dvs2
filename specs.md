@@ -225,7 +225,7 @@ than the actual project, to know what to pull but the resolution works the same 
 
 ```shell
 ❯ dvs get --help
-Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided
+Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided; to restore every tracked file, pass `--glob '**/*'`
 
 Usage: dvs get [OPTIONS] [PATHS]...
 
@@ -236,9 +236,13 @@ Options:
       --json               Output results as JSON
       --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
   -g, --glob <GLOB>        
+  -r, --recursive          Recursively include files in subdirectories for directory inputs. Without this flag, directories return only their direct children. Has no effect when no explicit paths are given
       --dry-run            Show what would be retrieved without making any actual changes
   -h, --help               Print help
 ```
+
+Passing `-r, --recursive` with an explicit directory walks its subdirectories. It only constrains paths given
+explicitly, so an empty path list still returns every tracked file.
 
 This will exit with `1` if one or more files could not be retrieved.
 

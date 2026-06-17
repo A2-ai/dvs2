@@ -1,8 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
 
-use crate::config::Config;
 use anyhow::Result;
 use fs_err as fs;
+use globset::GlobMatcher;
+use serde::{Deserialize, Serialize};
+use walkdir::WalkDir;
+
+use crate::config::Config;
 
 pub const CONFIG_FILE_NAME: &str = "dvs.toml";
 pub const DEFAULT_FOLDER_NAME: &str = ".dvs";
@@ -53,6 +58,26 @@ pub fn find_repo_root(start_dir: impl AsRef<Path>) -> PathBuf {
     }
 
     start_dir.as_ref().to_path_buf()
+}
+
+/// Normalize a path by resolving `.` and `..` components lexically (no
+/// canonicalization — the path may not exist and we want it relative to the
+/// directory, with no symlink resolution). Returns `None` if `..` escapes the
+/// base (pops past the root). Shared by `globbing` and `status` path filtering.
+pub(crate) fn normalize_path(p: PathBuf) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    Some(out)
 }
 
 /// We always need to figure out where the user is in a project,
@@ -113,6 +138,27 @@ impl DvsPaths {
         PathBuf::from(s)
     }
 
+    /// Repo-root-relative paths of every tracked file: one per `.dvs` entry in
+    /// the metadata folder, with the `.dvs` extension stripped.
+    /// Shared by `get` and `status`
+    pub(crate) fn tracked_paths(&self) -> Vec<PathBuf> {
+        let metadata_root = self.metadata_folder();
+        WalkDir::new(&metadata_root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter_map(|entry| {
+                let entry_path = entry.path();
+                if !entry_path.is_file() || entry_path.extension() != Some(OsStr::new("dvs")) {
+                    return None;
+                }
+                entry_path
+                    .strip_prefix(&metadata_root)
+                    .ok()
+                    .map(|rel| rel.with_extension(""))
+            })
+            .collect()
+    }
+
     pub fn repo_root(&self) -> &Path {
         &self.repo_root
     }
@@ -171,6 +217,78 @@ impl DvsPaths {
             found.push((path.clone(), validation));
         }
         found
+    }
+}
+
+/// Which paths to get use for status/get
+/// eg you can pass dir1/ dir2/ and it will expand to dir1/* dir2/*
+/// If `recursive` is `true`, then it will expand to dir1/**/* dir2/**/*
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PathFilter {
+    pub(crate) paths: Vec<PathBuf>,
+    pub(crate) recursive: bool,
+}
+
+impl PathFilter {
+    /// When a user doesn't provide a path, we default to the cwd relative to the root
+    pub fn cwd_scoped(recursive: bool, dvs_paths: &DvsPaths) -> Self {
+        let cwd = dvs_paths
+            .cwd_relative_to_root()
+            .map(Path::to_path_buf)
+            .unwrap_or_default(); // "" when at repo root
+        Self {
+            paths: vec![cwd],
+            recursive,
+        }
+    }
+
+    /// Create a filter from user-provided paths (relative to cwd) and a recursive flag.
+    /// Translates cwd-relative paths to repo-root-relative using `dvs_paths.cwd_relative_to_root()`.
+    pub fn from_user_paths(
+        user_paths: Vec<PathBuf>,
+        recursive: bool,
+        dvs_paths: &DvsPaths,
+    ) -> Self {
+        let cwd_prefix = dvs_paths.cwd_relative_to_root();
+        let repo_root = dvs_paths.repo_root();
+        let paths = user_paths
+            .into_iter()
+            .filter_map(|p| {
+                if p.is_absolute() {
+                    p.strip_prefix(repo_root)
+                        .ok()
+                        .map(|r| r.to_path_buf())
+                        .and_then(normalize_path)
+                } else {
+                    let joined = if let Some(prefix) = cwd_prefix {
+                        prefix.join(&p)
+                    } else {
+                        p
+                    };
+                    normalize_path(joined)
+                }
+            })
+            .collect();
+        Self { paths, recursive }
+    }
+
+    pub(crate) fn matches(&self, tracked_path: &Path, glob: Option<&GlobMatcher>) -> bool {
+        self.paths.iter().any(|filter_path| {
+            if tracked_path == filter_path {
+                return true;
+            }
+            // it needs to be a parent
+            let Ok(rel) = tracked_path.strip_prefix(filter_path) else {
+                return false;
+            };
+            match glob {
+                Some(g) => g.is_match(rel),
+                None => {
+                    // Recursive: any descendant or non-recursive: direct child
+                    self.recursive || tracked_path.parent() == Some(filter_path.as_path())
+                }
+            }
+        })
     }
 }
 

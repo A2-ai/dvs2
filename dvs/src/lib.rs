@@ -16,10 +16,10 @@ pub use config::Compression;
 pub use files::add::{AddDetail, AddResult, add_files};
 pub use files::get::{GetDetail, GetResult, get_files};
 pub use files::metadata::FileMetadata;
-pub use files::status::{FileStatus, StatusDetail, StatusFilter, get_status};
+pub use files::status::{FileStatus, StatusDetail, get_status};
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
-pub use paths::{AddPathStatus, DvsPaths, find_repo_root};
+pub use paths::{AddPathStatus, DvsPaths, PathFilter, find_repo_root};
 pub use progress::FileProgress;
 pub use utils::{format_size, set_num_threads};
 
