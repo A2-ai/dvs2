@@ -254,11 +254,12 @@ It otherwise returns a list of results sorted alphabetically by path, letting us
 #### R package
 
 ```r
-dvs_get(paths = character(0), glob = NULL, dry_run = NULL)
+dvs_get(paths = character(0), glob = NULL, recursive = NULL, dry_run = NULL)
 ```
 
 - `paths`: character vector of file paths to retrieve (can be empty if `glob` is provided)
 - `glob`: pattern to match files in the metadata folder (same resolution rules as CLI `--glob`)
+- `recursive`: if `TRUE`, walk explicit directory paths recursively (same as the CLI `-r, --recursive`)
 - `dry_run`: if `TRUE`, returns what would be retrieved without making changes
 
 Returns a data frame with one row per file. Errors if no files match.
