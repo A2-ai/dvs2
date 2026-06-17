@@ -46,4 +46,12 @@ pub trait Backend: Send + Sync {
     /// Read the whole audit file, filtered by the given file paths.
     /// If `files` is empty, return the full audit log
     fn read_audit_file(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>>;
+
+    /// For backends backed by a local filesystem directory, the storage path.
+    /// `None` for backends where "inside the repository" is not meaningful
+    /// (e.g. a future remote backend). Used by `init` to reject storage that
+    /// lives inside the repo root.
+    fn local_path(&self) -> Option<&Path> {
+        None
+    }
 }

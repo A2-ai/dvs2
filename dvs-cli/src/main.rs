@@ -1,7 +1,6 @@
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use anyhow::bail;
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -213,18 +212,6 @@ fn try_main() -> Result<()> {
             } else {
                 current_dir
             };
-
-            let abs_storage = if storage_path.exists() {
-                std::fs::canonicalize(&storage_path)?
-            } else if let Some(parent) = storage_path.parent().filter(|p| p.exists()) {
-                std::fs::canonicalize(parent)?.join(storage_path.file_name().unwrap())
-            } else {
-                std::path::absolute(&storage_path)?
-            };
-            let abs_root = std::fs::canonicalize(&root)?;
-            if abs_storage.starts_with(&abs_root) {
-                bail!("The given storage path is within the repository.")
-            }
 
             let repo_root = init(&root, config)?;
             if cli.json {

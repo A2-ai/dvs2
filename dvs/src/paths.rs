@@ -196,16 +196,9 @@ mod tests {
         // Valid: existing file inside repo
         fs_err::write(root.join("test.txt"), b"content").unwrap();
 
-        // OutsideProject: file in a sibling temp dir
-        let outside_tmp = tempfile::tempdir().unwrap();
-        let outside_path = fs::canonicalize(outside_tmp.path()).unwrap();
-        fs_err::write(outside_path.join("outside.txt"), b"outside").unwrap();
-        let outside_relative = PathBuf::from("..").join(
-            outside_path
-                .join("outside.txt")
-                .strip_prefix(root.parent().unwrap())
-                .unwrap(),
-        );
+        // OutsideProject: a sibling of the repo, outside its root.
+        fs_err::write(root.parent().unwrap().join("outside.txt"), b"outside").unwrap();
+        let outside_relative = PathBuf::from("..").join("outside.txt");
 
         // IsDirectory: a subdirectory inside the repo
         fs_err::create_dir(root.join("subdir")).unwrap();

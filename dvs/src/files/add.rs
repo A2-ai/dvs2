@@ -267,14 +267,10 @@ mod tests {
         // Valid file
         create_file(&root, "a.txt", b"a");
 
-        // Outside-project file
-        let outside_tmp = tempfile::tempdir().unwrap();
-        let outside_file = fs::canonicalize(outside_tmp.path())
-            .unwrap()
-            .join("outside.txt");
+        // Outside-project file: a sibling of the repo, outside its root.
+        let outside_file = root.parent().unwrap().join("outside.txt");
         fs::write(&outside_file, b"outside").unwrap();
-        let outside_relative =
-            PathBuf::from("..").join(outside_file.strip_prefix(root.parent().unwrap()).unwrap());
+        let outside_relative = PathBuf::from("..").join("outside.txt");
 
         // Directory inside the repo
         fs::create_dir(root.join("subdir")).unwrap();
