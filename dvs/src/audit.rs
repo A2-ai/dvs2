@@ -31,8 +31,6 @@ pub struct AuditFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub operation_id: String,
-    /// Stored as a JSON number of whole seconds since the epoch (wire format
-    /// unchanged); typed as `jiff::Timestamp` so consumers don't reconstruct it.
     #[serde(with = "jiff::fmt::serde::timestamp::second::required")]
     pub timestamp: Timestamp,
     pub user: String,
