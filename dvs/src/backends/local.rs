@@ -198,6 +198,10 @@ impl Backend for LocalBackend {
         Ok(self.path.join(AUDIT_LOG_FILENAME).exists())
     }
 
+    fn local_path(&self) -> Option<&Path> {
+        Some(&self.path)
+    }
+
     fn init(&self) -> Result<()> {
         log::debug!("Creating storage directory: {}", self.path.display());
         fs::create_dir_all(&self.path)?;

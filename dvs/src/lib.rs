@@ -40,7 +40,11 @@ pub mod testutil {
     /// otherwise the directory gets deleted.
     pub fn create_temp_git_repo() -> (TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
-        let repo_root = fs::canonicalize(tmp.path()).unwrap();
+        // The repo lives in a subdirectory of the tempdir so that storage can
+        // be placed as a sibling (outside the repo), matching real usage and
+        // the storage-inside-repo guard in `init`.
+        let repo_root = fs::canonicalize(tmp.path()).unwrap().join("repo");
+        fs::create_dir(&repo_root).unwrap();
         fs::create_dir(repo_root.join(".git")).unwrap();
         (tmp, repo_root)
     }
@@ -58,10 +62,11 @@ pub mod testutil {
     }
 
     /// Initializes a DVS repository in the given directory.
-    /// Creates storage at `{repo_root}/.storage` and metadata at `{repo_root}/.dvs`.
+    /// Creates storage at `{repo_root}/../.storage` (a sibling, outside the
+    /// repo) and metadata at `{repo_root}/.dvs`.
     /// Returns (config, dvs_metadata_dir).
     pub fn init_dvs_repo(repo_root: &Path) -> (Config, PathBuf) {
-        let storage_dir = repo_root.join(".storage");
+        let storage_dir = repo_root.parent().unwrap().join(".storage");
         let config = Config::new_local(&storage_dir, None).unwrap();
         init(repo_root, config.clone()).unwrap();
         let dvs_dir = repo_root.join(".dvs");

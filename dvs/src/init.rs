@@ -12,6 +12,24 @@ use crate::paths;
 /// We need a ready to use Config object + the current directory the user is in
 pub fn init(root_dir: impl AsRef<Path>, config: Config) -> Result<PathBuf> {
     let root_dir = root_dir.as_ref();
+
+    // The storage directory must not live inside the repository, otherwise it
+    // would be tracked alongside the user's files. Only meaningful for local
+    // backends; remote backends report `None` and skip the check.
+    if let Some(storage_path) = config.backend().local_path() {
+        let abs_storage = if storage_path.exists() {
+            fs::canonicalize(storage_path)?
+        } else if let Some(parent) = storage_path.parent().filter(|p| p.exists()) {
+            fs::canonicalize(parent)?.join(storage_path.file_name().unwrap())
+        } else {
+            std::path::absolute(storage_path)?
+        };
+        let abs_root = fs::canonicalize(root_dir)?;
+        if abs_storage.starts_with(&abs_root) {
+            bail!("The given storage path is within the repository.");
+        }
+    }
+
     if root_dir.join(paths::CONFIG_FILE_NAME).exists() {
         bail!("dvs is already initialized (dvs.toml exists)");
     }
@@ -57,7 +75,7 @@ mod tests {
     #[test]
     fn init_creates_config_and_directories() {
         let (_tmp, root) = create_temp_git_repo();
-        let storage = root.join(".storage");
+        let storage = root.parent().unwrap().join(".storage");
 
         let config = Config::new_local(&storage, None).unwrap();
         init(&root, config).unwrap();
@@ -73,7 +91,7 @@ mod tests {
     #[test]
     fn init_logs_audit_entry() {
         let (_tmp, root) = create_temp_git_repo();
-        let storage = root.join(".storage");
+        let storage = root.parent().unwrap().join(".storage");
 
         let config = Config::new_local(&storage, None).unwrap();
         init(&root, config.clone()).unwrap();
@@ -89,7 +107,7 @@ mod tests {
     #[test]
     fn init_fails_if_already_initialized() {
         let (_tmp, root) = create_temp_git_repo();
-        let storage = root.join(".storage");
+        let storage = root.parent().unwrap().join(".storage");
 
         let config = Config::new_local(&storage, None).unwrap();
         init(&root, config.clone()).unwrap();
@@ -102,7 +120,7 @@ mod tests {
     #[test]
     fn init_fails_if_backend_already_initialized() {
         let (_tmp, root) = create_temp_git_repo();
-        let storage = root.join(".storage");
+        let storage = root.parent().unwrap().join(".storage");
 
         let config = Config::new_local(&storage, None).unwrap();
         assert!(!config.backend().is_initialized().unwrap());
@@ -121,9 +139,29 @@ mod tests {
     }
 
     #[test]
+    fn init_rejects_storage_inside_repo() {
+        let (_tmp, root) = create_temp_git_repo();
+        // Storage directory nested inside the repository root.
+        let storage = root.join("inside").join(".storage");
+
+        let config = Config::new_local(&storage, None).unwrap();
+        let result = init(&root, config);
+        assert!(
+            result.is_err(),
+            "init should reject storage inside the repository"
+        );
+        assert!(
+            result.unwrap_err().to_string().contains("within the repository"),
+            "error should explain the storage path is inside the repo"
+        );
+        // Nothing should have been created.
+        assert!(!root.join("dvs.toml").exists());
+    }
+
+    #[test]
     fn init_succeeds_in_subdirectory_of_initialized_project() {
         let (_tmp, root) = create_temp_git_repo();
-        let storage = root.join(".storage");
+        let storage = root.parent().unwrap().join(".storage");
 
         // Initialize the parent project
         let config = Config::new_local(&storage, None).unwrap();
@@ -132,7 +170,7 @@ mod tests {
         // Create a subdirectory and initialize a nested project there
         let subdir = root.join("nested");
         fs::create_dir(&subdir).unwrap();
-        let nested_storage = subdir.join(".storage");
+        let nested_storage = root.parent().unwrap().join(".nested-storage");
         let nested_config = Config::new_local(&nested_storage, None).unwrap();
         let result = init(&subdir, nested_config);
         assert!(
@@ -162,7 +200,7 @@ mod tests {
         assert!(!root.join(".dvs").exists(), ".dvs should be cleaned up");
 
         // A retry with a valid storage path should now succeed
-        let valid_storage = root.join(".storage");
+        let valid_storage = root.parent().unwrap().join(".storage");
         let config = Config::new_local(&valid_storage, None).unwrap();
         init(&root, config).unwrap();
         assert!(root.join("dvs.toml").is_file());

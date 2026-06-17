@@ -171,19 +171,7 @@ pub(crate) fn dvs_init(
         config.set_metadata_folder_name(m);
     }
 
-    // Mirrors the CLI guard: refuse to store data inside the repo it's versioning.
-    let abs_storage = if storage_path.exists() {
-        std::fs::canonicalize(&storage_path)?
-    } else if let Some(parent) = storage_path.parent().filter(|p| p.exists()) {
-        std::fs::canonicalize(parent)?.join(storage_path.file_name().unwrap())
-    } else {
-        std::path::absolute(&storage_path)?
-    };
-    let abs_root = std::fs::canonicalize(&root_dir)?;
-    if abs_storage.starts_with(&abs_root) {
-        return Err(anyhow!("The given storage path is within the repository."));
-    }
-
+    // The storage-inside-repo guard now lives in dvs::init::init().
     init(&root_dir, config)?;
 
     r_println!("DVS Initialized");
