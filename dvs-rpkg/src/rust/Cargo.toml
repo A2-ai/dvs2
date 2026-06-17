@@ -34,7 +34,7 @@ connections = ["miniextendr-api/connections"]
 # block, or rely on `just` recipes that vendor from the local checkout.
 [dependencies]
 miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", features = ["serde", "time", "log"] }
-dvs = { git = "https://github.com/A2-ai/dvs2", branch = "feat/dvs-get-recursive-core", package = "dvs" }
+dvs = { git = "https://github.com/A2-ai/dvs2", branch = "main", package = "dvs" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
