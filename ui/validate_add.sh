@@ -128,15 +128,18 @@ rc=0; OUT="$(dvs add definitely_missing.bin 2>&1)" || rc=$?
 say "$OUT"
 check "1" "$rc" "exit code 1 when a path is missing"
 
-# NOTE on best-effort vs missing path (spec L133): a *missing* path aborts the
-# whole add during resolution (no valid files processed), whereas a *processing*
-# failure (unreadable) is best-effort. Documented in the return table.
+# =====================================================================
+# best-effort also covers UNRESOLVABLE input paths (#219): a missing path is
+# reported per-file (NotFound) and does NOT abort the add of valid siblings.
 say
-say "--- probe: does a MISSING path abort sibling valid files? (informational) ---"
+say "=== CLAIM: best-effort, valid+missing path -> valid added, missing reported, exit 1 (L133,L173,#219) ==="
 mkrandfile sibling.bin 256
-rc=0; dvs add sibling.bin gone.bin >/dev/null 2>&1 || rc=$?
-ABORTED="$([ -e .dvs/sibling.bin.dvs ] && echo NO || echo YES)"
-say "missing-path aborts valid sibling? $ABORTED (exit=$rc)"
+rc=0; OUT="$(dvs add --json sibling.bin gone.bin 2>&1)" || rc=$?
+say "$OUT"
+check "YES" "$([ -e .dvs/sibling.bin.dvs ] && echo YES || echo NO)" "best-effort: valid sibling.bin added despite a missing sibling path"
+REPORTED_MISS="$(printf '%s' "$OUT" | grep -qiE 'gone.bin' && echo yes || echo no)"
+check "yes" "$REPORTED_MISS" "best-effort: missing gone.bin reported per-file in output"
+check "1" "$rc" "exit code 1 when a path is missing but valid siblings still added"
 
 # =====================================================================
 say

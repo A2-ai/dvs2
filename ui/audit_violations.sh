@@ -4,9 +4,9 @@
 # Re-run this later to check whether each known divergence still holds.
 #
 # Each case asserts the SPEC-CORRECT behavior.
-#   Section A — clear CLI bugs (#216, #217): FATAL. Flip to PASS once the CLI is
-#               fixed; the script's exit code = number of Section A failures.
-#   Section B — spec/CLI divergences (#218, #219, #220): INFORMATIONAL. These are
+#   Section A — clear CLI bugs (#216, #217, #219): FATAL. Flip to PASS once the
+#               CLI is fixed; the script's exit code = number of Section A failures.
+#   Section B — spec/CLI divergences (#218, #220): INFORMATIONAL. These are
 #               likely resolved by editing specs.md, which this script cannot
 #               observe — update the case (or delete it) once the spec is settled.
 #
@@ -60,6 +60,17 @@ ok=1
 [ "$rc" -eq 0 ] && [ -f data/d1.bin ] && [ -f data/d2.bin ] && ok=0
 verdict "$ok" "#217 'get data --glob \"*.bin\"' retrieves the files (like 'add')"
 
+# ── #219 — add best-effort vs an unresolvable (missing) path ──
+note "#219 add valid + missing path (best-effort, specs.md L133/L173)"
+fresh_project
+head -c 1024 /dev/urandom > ok.bin
+rc=0; out="$(dvs add ok.bin missing.bin --json 2>/dev/null)" || rc=$?
+ok=1
+[ -f .dvs/ok.bin.dvs ] \
+  && printf '%s' "$out" | grep -q 'missing.bin' \
+  && [ "$rc" -eq 1 ] && ok=0
+verdict "$ok" "#219 best-effort: ok.bin added, missing.bin reported per-file, exit 1"
+
 echo
 echo "######## Section B: spec divergences (informational) ########"
 
@@ -71,17 +82,6 @@ if printf '%s' "$out" | grep -q 'unexpected argument'; then
   echo "DIVERGES: #218 'status' rejects --glob, but specs.md L431 lists it (likely fix: edit spec)"
 else
   echo "ALIGNED:  #218 'status' accepts --glob"
-fi
-
-# ── #219 — add best-effort vs a missing path ──
-note "#219 add valid + missing path"
-fresh_project
-head -c 1024 /dev/urandom > ok.bin
-dvs add ok.bin missing.bin --json >/dev/null 2>&1 || true
-if [ -f .dvs/ok.bin.dvs ]; then
-  echo "ALIGNED:  #219 best-effort added ok.bin despite the missing sibling"
-else
-  echo "DIVERGES: #219 missing path aborted the add; ok.bin not added (specs.md L133 says best-effort)"
 fi
 
 # ── #220 — get exit code on an explicitly-requested unknown path ──
