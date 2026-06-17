@@ -446,7 +446,7 @@ folder the update is skipped, and a failed `.gitignore` update is logged as a wa
 
 ### Globbing
 
-`add`, `status`, `get` accept a `--glob` flag. The resolution works the following way:
+`add`, `status`, and `get` accept a `--glob` flag. The resolution works the following way:
 
 - Explicit files: added/retrieved directly (glob ignored)
 - Explicit directories with a glob: walked and filtered by glob
@@ -454,3 +454,5 @@ folder the update is skipped, and a failed `.gitignore` update is logged as a wa
 
 Globs use a literal path separator, meaning `*.csv` only matches files in the target directory and
 will not match `subdir/file.csv`. Use `'**/*.csv'` (quoted, to avoid shell expansion) to match recursively across subdirectories.
+
+`status` and `get` also accept `-r/--recursive`, which walks the given directories instead of matching a glob pattern. `--recursive` and `--glob` are mutually exclusive. `add` accepts `--glob` but has no `--recursive` flag.
