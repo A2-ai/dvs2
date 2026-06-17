@@ -370,7 +370,7 @@ mod tests {
         }
 
         // Verify correct files are tracked
-        let statuses = get_status(&paths, None).unwrap();
+        let statuses = get_status(&paths, None, None).unwrap();
         assert_eq!(statuses.len(), expected_files.len());
         let tracked_names: Vec<_> = statuses.iter().map(|s| s.path.to_str().unwrap()).collect();
         for expected in expected_files {
