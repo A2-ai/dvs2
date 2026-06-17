@@ -26,8 +26,8 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileMetadata, FileProgress, FileStatus, GetResult, Hashes, Status, StatusDetail,
-    StatusFilter, add_files, get_files, get_status, set_num_threads,
+    Compression, FileMetadata, FileProgress, FileStatus, GetResult, Hashes, PathFilter, Status,
+    StatusDetail, add_files, get_files, get_status, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -275,6 +275,10 @@ impl From<StatusChoice> for Status {
 ///   are returned. The flag only constrains descendants of paths passed
 ///   explicitly — when `paths` is empty, every tracked file is returned
 ///   regardless of nesting depth, and `recursive` has no effect.
+/// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
+///   Globs use a literal path separator: `*.csv` only matches files in the
+///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
+///   match recursively across subdirectories. Mutually exclusive with `recursive`.
 /// @param status Character vector of statuses to include. Valid values are
 ///   `"current"`, `"absent"`, and `"unsynced"`. When empty (default), all
 ///   statuses are shown.
@@ -283,6 +287,7 @@ impl From<StatusChoice> for Status {
 pub(crate) fn dvs_status(
     #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
+    #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
 ) -> Result<ColumnarDataFrame> {
     let current_dir = std::env::current_dir()?;
@@ -290,18 +295,22 @@ pub(crate) fn dvs_status(
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
+    if glob.is_some() && recursive.unwrap_or(false) {
+        return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
+    }
+
     let show_all = status.is_empty() || status.len() == StatusChoice::CHOICES.len();
 
     let filter = if paths.is_empty() {
         None
     } else {
-        Some(StatusFilter::from_user_paths(
+        Some(PathFilter::from_user_paths(
             paths,
             recursive.unwrap_or(false),
             &dvs_paths,
         ))
     };
-    let mut statuses = get_status(&dvs_paths, filter.as_ref())?;
+    let mut statuses = get_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
     if !show_all {
         statuses.retain(|x| match &x.detail {
             StatusDetail::Success { status: s, .. } => {
@@ -411,20 +420,20 @@ impl<'a> From<&'a FileMetadata> for FileMetadataView<'a> {
 /// Retrieve files from DVS storage into the working directory.
 ///
 /// Fetches the specified files from DVS storage and writes them
-/// to their original paths in the working directory. Calling
-/// `dvs_get()` with no arguments restores every tracked file in
-/// the repository.
+/// to their original paths in the working directory. With no `paths`
+/// or `glob`, `dvs_get()` scopes to the working directory: it restores
+/// the files directly under it, and `dvs_get(recursive = TRUE)` restores
+/// every tracked file beneath it at any depth.
 ///
 /// @param paths Character vector of file paths to retrieve from DVS storage.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 ///   Globs use a literal path separator: `*.csv` only matches files in the
 ///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
-///   match recursively across subdirectories.
+///   match recursively across subdirectories. Mutually exclusive with `recursive`.
 /// @param recursive If `TRUE`, directory inputs include all descendants;
 ///   if `FALSE` or `NULL` (default), only direct children of the directory
-///   are returned. The flag only constrains descendants of paths passed
-///   explicitly — when `paths` is empty, every tracked file is returned
-///   regardless of nesting depth, and `recursive` has no effect.
+///   are returned. With no explicit `paths` the directory is the working
+///   directory. Mutually exclusive with `glob`.
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
@@ -440,6 +449,10 @@ pub(crate) fn dvs_get(
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
+
+    if glob.is_some() && recursive.unwrap_or(false) {
+        return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
+    }
 
     let all_paths: Vec<_> = resolve_paths_for_get(
         paths,
