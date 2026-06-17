@@ -31,14 +31,15 @@ pub struct AuditFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub operation_id: String,
-    pub timestamp: i64,
+    #[serde(with = "jiff::fmt::serde::timestamp::second::required")]
+    pub timestamp: Timestamp,
     pub user: String,
     pub action: Action,
 }
 
 impl AuditEntry {
     pub fn new_add(operation_id: Uuid, file: AuditFile, compression: Compression) -> Self {
-        let timestamp = Timestamp::now().as_second();
+        let timestamp = Timestamp::now();
         let user = whoami::username().unwrap_or_else(|_| "unknown".to_string());
 
         Self {
@@ -50,7 +51,7 @@ impl AuditEntry {
     }
 
     pub fn new_init(operation_id: Uuid, config: Config, project_path: PathBuf) -> Self {
-        let timestamp = Timestamp::now().as_second();
+        let timestamp = Timestamp::now();
         let user = whoami::username().unwrap_or_else(|_| "unknown".to_string());
         let project_path = project_path.canonicalize().unwrap_or(project_path);
 
