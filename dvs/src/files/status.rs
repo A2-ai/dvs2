@@ -73,19 +73,27 @@ pub fn get_status(
         return Ok(Vec::new());
     }
 
+    // A bare glob with no explicit paths anchors to the cwd, matching `add` and
+    // `get` (specs.md Globbing section). Without this the glob matched against
+    // the full repo-relative path, so from a subdirectory `status --glob` globbed
+    // the repo root while `get --glob` globbed the cwd.
+    let cwd_filter = match (filter, glob_pattern) {
+        (None, Some(_)) => Some(PathFilter::cwd_scoped(false, paths)),
+        _ => None,
+    };
+    let filter = filter.or(cwd_filter.as_ref());
+
     let pool = get_threadpool(entries.len())?;
 
     let mut results: Vec<FileStatus> = pool.install(|| {
         entries
             .into_par_iter()
             .filter_map(|relative| {
-                // With a filter, the glob is anchored to the matched path; with
-                // no filter (whole repo) the glob still applies, matched against
-                // the full repo-relative path. This keeps a glob from being
-                // silently ignored when `filter` is `None`.
+                // With a filter the glob is anchored to the matched path. With no
+                // filter and no glob, every tracked file is kept.
                 let keep = match filter {
                     Some(f) => f.matches(&relative, glob.as_ref()),
-                    None => glob.as_ref().is_none_or(|g| g.is_match(&relative)),
+                    None => true,
                 };
                 if !keep {
                     return None;
@@ -447,6 +455,35 @@ mod tests {
         // `**/*.txt` reaches every tracked file.
         let statuses = get_status(&paths, None, Some("**/*.txt")).unwrap();
         assert_eq!(statuses.len(), 4);
+    }
+
+    #[test]
+    fn status_bare_glob_anchors_to_cwd_subdir() {
+        let (_tmp, paths) = setup_filtered_repo();
+        let root = paths.repo_root().to_path_buf();
+        // cwd = dir1: a bare glob must scope to the cwd (like add/get), not the
+        // repo root. Pre-fix it globbed the whole repo from any directory.
+        let sub =
+            DvsPaths::new(fs::canonicalize(root.join("dir1")).unwrap(), root, ".dvs").unwrap();
+
+        // Literal separator: only the direct child dir1/b.txt, not a.txt/dir2.
+        let got: Vec<_> = get_status(&sub, None, Some("*.txt"))
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert_eq!(got, vec![PathBuf::from("dir1/b.txt")]);
+
+        // Recursive glob reaches dir1/sub/c.txt, still scoped under dir1.
+        let got: Vec<_> = get_status(&sub, None, Some("**/*.txt"))
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert_eq!(
+            got,
+            vec![PathBuf::from("dir1/b.txt"), PathBuf::from("dir1/sub/c.txt")]
+        );
     }
 
     #[test]
