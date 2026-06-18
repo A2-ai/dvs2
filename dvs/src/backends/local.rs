@@ -286,6 +286,8 @@ impl Backend for LocalBackend {
         Ok(())
     }
 
+    /// An empty `files` slice returns the full audit log. See
+    /// [`parse_audit_log`] for the filtering rules.
     fn read_audit_file(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>> {
         let files_to_include: HashSet<_> = HashSet::from_iter(files.iter().cloned());
         let audit_path = self.path.join(AUDIT_LOG_FILENAME);

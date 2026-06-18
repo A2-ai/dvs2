@@ -67,6 +67,11 @@ impl AuditEntry {
     }
 }
 
+/// Parse an audit log into entries, optionally filtered to specific files.
+///
+/// An empty `only_files` set returns every entry, that is the whole log. A
+/// non-empty set keeps only `Add` entries whose path is in the set and drops
+/// all `Init` entries.
 pub fn parse_audit_log(
     reader: impl BufRead,
     only_files: &HashSet<PathBuf>,
