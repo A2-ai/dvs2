@@ -3,7 +3,6 @@ use std::sync::Mutex;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
-use crate::paths::GetPathStatus;
 use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
 use crate::{Backend, Compression, DvsPaths, Outcome, cache};
@@ -123,32 +122,35 @@ pub fn get_files(
     if matched_paths.is_empty() {
         return Ok(Vec::new());
     }
-    let pool = get_threadpool(matched_paths.len())?;
+
+    // Validate every path up front, we bail if any is invalid
+    let invalid = matched_paths
+        .iter()
+        .filter_map(|(path, status)| {
+            status
+                .reason()
+                .map(|reason| format!("  {}: {reason}", path.display()))
+        })
+        .collect::<Vec<_>>();
+    if !invalid.is_empty() {
+        bail!(
+            "Refusing to get, the following paths cannot be retrieved:\n{}",
+            invalid.join("\n")
+        );
+    }
+
+    let tracked_paths = matched_paths
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect::<Vec<_>>();
+
+    let pool = get_threadpool(tracked_paths.len())?;
     let cache = try_open_cache(paths);
 
     let mut results: Vec<GetResult> = pool.install(|| {
-        matched_paths
+        tracked_paths
             .into_par_iter()
-            .map(|(relative_path, validation)| {
-                match validation {
-                    GetPathStatus::NotFound => {
-                        return GetResult {
-                            path: relative_path,
-                            detail: GetDetail::Error {
-                                error: "file not found".to_string(),
-                            },
-                        };
-                    }
-                    GetPathStatus::NotTracked => {
-                        return GetResult {
-                            path: relative_path,
-                            detail: GetDetail::Error {
-                                error: "not tracked by DVS".to_string(),
-                            },
-                        };
-                    }
-                    GetPathStatus::Tracked => {}
-                }
+            .map(|relative_path| {
                 let file_size = {
                     let meta_path = paths.metadata_path(&relative_path);
                     std::fs::File::open(&meta_path)
@@ -293,12 +295,14 @@ mod tests {
     }
 
     #[test]
-    fn get_files_reports_not_found_per_file() {
+    fn get_files_aborts_batch_when_any_path_not_tracked() {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
         let paths = make_paths(&root, &config);
 
+        // Track a.txt, then drop its local copy so a successful get would
+        // restore it.
         create_file(&root, "a.txt", b"a");
         add_files(
             vec!["a.txt".into()],
@@ -310,30 +314,27 @@ mod tests {
             None,
         )
         .unwrap();
+        fs::remove_file(root.join("a.txt")).unwrap();
 
-        let results =
-            get_files(vec!["nonexistent.csv".into()], &paths, backend, false, None).unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(
-            matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not found"))
-        );
-    }
-
-    #[test]
-    fn get_files_reports_not_tracked_for_untracked_file() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-
-        // Create a file on disk but don't dvs add it
+        // A file that exists on disk but is not tracked by DVS.
         create_file(&root, "untracked.txt", b"hello");
 
-        let results =
-            get_files(vec!["untracked.txt".into()], &paths, backend, false, None).unwrap();
-        assert_eq!(results.len(), 1);
+        let err = get_files(
+            vec!["a.txt".into(), "untracked.txt".into()],
+            &paths,
+            backend,
+            false,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("not tracked"), "unexpected error: {err}");
+        assert!(err.contains("untracked.txt"), "unexpected error: {err}");
+
+        // No partial success: the tracked file must not have been restored.
         assert!(
-            matches!(&results[0].detail, GetDetail::Error { error } if error.contains("not tracked"))
+            !root.join("a.txt").exists(),
+            "no files should be retrieved when one is not tracked"
         );
     }
 

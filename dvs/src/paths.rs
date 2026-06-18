@@ -47,6 +47,16 @@ pub enum GetPathStatus {
     NotTracked,
 }
 
+impl GetPathStatus {
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            GetPathStatus::Tracked => None,
+            GetPathStatus::NotFound => Some("file not found"),
+            GetPathStatus::NotTracked => Some("not tracked by DVS"),
+        }
+    }
+}
+
 /// Finds the root of a project by walking up from the given directory
 /// until a `dvs.toml` is found
 ///

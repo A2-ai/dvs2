@@ -105,11 +105,9 @@ pub fn add_files(
     let invalid = matched_paths
         .iter()
         .filter_map(|(path, status)| {
-            if let Some(reason) = status.reason() {
-                Some(format!("  {}: {reason}", path.display()))
-            } else {
-                None
-            }
+            status
+                .reason()
+                .map(|reason| format!("  {}: {reason}", path.display()))
         })
         .collect::<Vec<_>>();
     if !invalid.is_empty() {
@@ -119,8 +117,6 @@ pub fn add_files(
         );
     }
 
-    // Every remaining path is valid; only operation-time failures (hashing,
-    // storage I/O) are still reported per file below.
     let valid_paths = matched_paths
         .into_iter()
         .map(|(path, _)| path)
