@@ -25,6 +25,17 @@ pub enum AddPathStatus {
     OutsideProject,
 }
 
+impl AddPathStatus {
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            AddPathStatus::Valid => None,
+            AddPathStatus::NotFound => Some("file not found"),
+            AddPathStatus::OutsideProject => Some("path is outside project"),
+            AddPathStatus::IsDirectory => Some("path is a directory"),
+        }
+    }
+}
+
 /// Result of validating a file path for `get`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GetPathStatus {
