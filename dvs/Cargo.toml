@@ -22,7 +22,7 @@ anyhow.workspace = true
 whoami.workspace = true
 zstd.workspace = true
 rusqlite.workspace = true
-uuid = { version = "1.20.0", features = ["v4"] }
+uuid.workspace = true
 globset.workspace = true
 rayon.workspace = true
 
