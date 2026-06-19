@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -11,7 +11,7 @@ use crate::cache::{HashCache, try_open_cache};
 use crate::config::Compression;
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
-use crate::paths::{AddPathStatus, DvsPaths};
+use crate::paths::DvsPaths;
 use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
 use crate::{Outcome, cache};
@@ -100,62 +100,37 @@ pub fn add_files(
     if matched_paths.is_empty() {
         return Ok(Vec::new());
     }
-    let pool = get_threadpool(matched_paths.len())?;
+
+    // If any input is invalid we just bail instead of doing partial execution
+    let invalid = matched_paths
+        .iter()
+        .filter_map(|(path, status)| {
+            status
+                .reason()
+                .map(|reason| format!("  {}: {reason}", path.display()))
+        })
+        .collect::<Vec<_>>();
+    if !invalid.is_empty() {
+        bail!(
+            "Refusing to add, the following paths are invalid:\n{}",
+            invalid.join("\n")
+        );
+    }
+
+    let valid_paths = matched_paths
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect::<Vec<_>>();
+
+    let pool = get_threadpool(valid_paths.len())?;
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
 
     let mut results: Vec<AddResult> = pool.install(|| {
-        matched_paths
+        valid_paths
             .into_par_iter()
-            .map(|(relative_path, status)| {
-                match status {
-                    AddPathStatus::NotFound => {
-                        return AddResult {
-                            path: relative_path,
-                            detail: AddDetail::Error {
-                                error: "file not found".to_string(),
-                            },
-                        };
-                    }
-                    AddPathStatus::OutsideProject => {
-                        return AddResult {
-                            path: relative_path,
-                            detail: AddDetail::Error {
-                                error: "path is outside project".to_string(),
-                            },
-                        };
-                    }
-                    AddPathStatus::IsDirectory => {
-                        return AddResult {
-                            path: relative_path,
-                            detail: AddDetail::Error {
-                                error: "path is a directory".to_string(),
-                            },
-                        };
-                    }
-                    AddPathStatus::Valid => {}
-                }
-
+            .map(|relative_path| {
                 let full_path = paths.file_path(&relative_path);
-                match full_path.canonicalize() {
-                    Ok(canonical) if !canonical.starts_with(paths.repo_root()) => {
-                        return AddResult {
-                            path: relative_path,
-                            detail: AddDetail::Error {
-                                error: "path is outside the dvs repository".to_string(),
-                            },
-                        };
-                    }
-                    Err(e) => {
-                        return AddResult {
-                            path: relative_path,
-                            detail: AddDetail::Error {
-                                error: format!("failed to resolve path: {e}"),
-                            },
-                        };
-                    }
-                    _ => {} // ok
-                }
                 let file_size = std::fs::metadata(&full_path).map(|m| m.len()).unwrap_or(0);
                 let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
                 let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
@@ -233,16 +208,17 @@ mod tests {
     }
 
     #[test]
-    fn add_files_reports_not_found_per_file() {
+    fn add_files_aborts_batch_when_any_file_missing() {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
         let paths = make_paths(&root, &config);
 
+        // One valid file alongside a missing one.
         create_file(&root, "a.txt", b"a");
 
-        let results = add_files(
-            vec!["nonexistent.csv".into()],
+        let err = add_files(
+            vec!["a.txt".into(), "missing.csv".into()],
             &paths,
             backend,
             None,
@@ -250,15 +226,19 @@ mod tests {
             false,
             None,
         )
-        .unwrap();
-        assert_eq!(results.len(), 1);
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("missing.csv"), "unexpected error: {err}");
+
+        // No partial success: the valid file must not have been added.
         assert!(
-            matches!(&results[0].detail, AddDetail::Error { error } if error.contains("not found"))
+            !paths.metadata_path(Path::new("a.txt")).exists(),
+            "no files should be added when one is missing"
         );
     }
 
     #[test]
-    fn add_files_mixed_statuses() {
+    fn add_files_aborts_when_path_outside_or_directory() {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
@@ -275,13 +255,10 @@ mod tests {
         // Directory inside the repo
         fs::create_dir(root.join("subdir")).unwrap();
 
-        let results = add_files(
-            vec![
-                "a.txt".into(),
-                "missing.csv".into(),
-                outside_relative,
-                "subdir".into(),
-            ],
+        // An outside-project path or a directory is invalid up front, so the
+        // whole batch is refused rather than partially added.
+        let err = add_files(
+            vec!["a.txt".into(), outside_relative, "subdir".into()],
             &paths,
             backend,
             None,
@@ -289,27 +266,15 @@ mod tests {
             false,
             None,
         )
-        .unwrap();
-        assert_eq!(results.len(), 4);
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("outside project"), "unexpected error: {err}");
+        assert!(err.contains("directory"), "unexpected error: {err}");
 
-        let valid = results.iter().find(|r| *r.path == *"a.txt").unwrap();
-        assert!(matches!(
-            &valid.detail,
-            AddDetail::Success { outcome: Outcome::Copied, hash, size, .. }
-            if !hash.is_empty() && *size > 0
-        ));
-
-        let missing = results.iter().find(|r| *r.path == *"missing.csv").unwrap();
+        // No partial success: the valid file must not have been added.
         assert!(
-            matches!(&missing.detail, AddDetail::Error { error } if error.contains("not found"))
+            !paths.metadata_path(Path::new("a.txt")).exists(),
+            "no files should be added when any path is invalid"
         );
-
-        let outside = results.iter().find(|r| {
-            matches!(&r.detail, AddDetail::Error { error } if error.contains("outside project"))
-        });
-        assert!(outside.is_some());
-
-        let dir = results.iter().find(|r| *r.path == *"subdir").unwrap();
-        assert!(matches!(&dir.detail, AddDetail::Error { error } if error.contains("directory")));
     }
 }
