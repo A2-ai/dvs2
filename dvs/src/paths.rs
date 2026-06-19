@@ -25,6 +25,17 @@ pub enum AddPathStatus {
     OutsideProject,
 }
 
+impl AddPathStatus {
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            AddPathStatus::Valid => None,
+            AddPathStatus::NotFound => Some("file not found"),
+            AddPathStatus::OutsideProject => Some("path is outside project"),
+            AddPathStatus::IsDirectory => Some("path is a directory"),
+        }
+    }
+}
+
 /// Result of validating a file path for `get`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GetPathStatus {
@@ -34,6 +45,16 @@ pub enum GetPathStatus {
     NotFound,
     /// File exists on disk but is not tracked by DVS
     NotTracked,
+}
+
+impl GetPathStatus {
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            GetPathStatus::Tracked => None,
+            GetPathStatus::NotFound => Some("file not found"),
+            GetPathStatus::NotTracked => Some("not tracked by DVS"),
+        }
+    }
 }
 
 /// Finds the root of a project by walking up from the given directory

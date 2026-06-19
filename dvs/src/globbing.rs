@@ -98,19 +98,40 @@ pub fn resolve_paths_for_get(
     dvs_paths: &DvsPaths,
     recursive: bool,
 ) -> Result<HashSet<PathBuf>> {
-    let mut out = HashSet::new();
     let glob_matcher = build_glob_matcher(glob_pattern)?;
+    let tracked = dvs_paths.tracked_paths();
 
-    let filter = if paths.is_empty() {
-        PathFilter::cwd_scoped(recursive, dvs_paths)
-    } else {
-        PathFilter::from_user_paths(paths, recursive, dvs_paths)
-    };
+    // No explicit paths: scope to cwd and return whatever matches.
+    if paths.is_empty() {
+        let filter = PathFilter::cwd_scoped(recursive, dvs_paths);
+        return Ok(tracked
+            .into_iter()
+            .filter(|t| filter.matches(t, glob_matcher.as_ref()))
+            .collect());
+    }
 
-    for tracked_path in dvs_paths.tracked_paths() {
-        if filter.matches(&tracked_path, glob_matcher.as_ref()) {
-            out.insert(tracked_path);
+    // Explicit paths: every one must resolve to at least one tracked file,
+    // otherwise we refuse the whole batch rather than silently skipping it.
+    let mut out = HashSet::new();
+    let mut missing = Vec::new();
+    for path in paths {
+        let filter = PathFilter::from_user_paths(vec![path.clone()], recursive, dvs_paths);
+        let mut matched_any = false;
+        for tracked_path in &tracked {
+            if filter.matches(tracked_path, glob_matcher.as_ref()) {
+                out.insert(tracked_path.clone());
+                matched_any = true;
+            }
         }
+        if !matched_any {
+            missing.push(format!("  {}", path.display()));
+        }
+    }
+    if !missing.is_empty() {
+        bail!(
+            "The following paths are not tracked by DVS:\n{}",
+            missing.join("\n")
+        );
     }
 
     Ok(out)
@@ -200,6 +221,24 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert!(result.contains(&PathBuf::from("foo.txt")));
+    }
+
+    #[test]
+    fn get_untracked_explicit_path_errors() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        // bar.csv exists on disk but is not tracked; an explicit untracked path
+        // must error rather than be silently dropped.
+        let result = resolve_paths_for_get(
+            vec![PathBuf::from("foo.txt"), PathBuf::from("bar.csv")],
+            None,
+            &dvs_paths,
+            false,
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not tracked"), "unexpected error: {err}");
+        assert!(err.contains("bar.csv"), "unexpected error: {err}");
     }
 
     #[test]
