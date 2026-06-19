@@ -129,17 +129,17 @@ say "$OUT"
 check "1" "$rc" "exit code 1 when a path is missing"
 
 # =====================================================================
-# best-effort also covers UNRESOLVABLE input paths (#219): a missing path is
-# reported per-file (NotFound) and does NOT abort the add of valid siblings.
+# An unresolvable input path now refuses the WHOLE batch (#240): no valid
+# sibling is added, the missing path is named, and the command exits 1.
 say
-say "=== CLAIM: best-effort, valid+missing path -> valid added, missing reported, exit 1 (L133,L173,#219) ==="
+say "=== CLAIM: all-or-nothing, any invalid input path refuses the whole batch, exit 1 (L146,L186,#240) ==="
 mkrandfile sibling.bin 256
 rc=0; OUT="$(dvs add --json sibling.bin gone.bin 2>&1)" || rc=$?
 say "$OUT"
-check "YES" "$([ -e .dvs/sibling.bin.dvs ] && echo YES || echo NO)" "best-effort: valid sibling.bin added despite a missing sibling path"
+check "NO" "$([ -e .dvs/sibling.bin.dvs ] && echo YES || echo NO)" "all-or-nothing: valid sibling.bin NOT added when a sibling path is missing"
 REPORTED_MISS="$(printf '%s' "$OUT" | grep -qiE 'gone.bin' && echo yes || echo no)"
-check "yes" "$REPORTED_MISS" "best-effort: missing gone.bin reported per-file in output"
-check "1" "$rc" "exit code 1 when a path is missing but valid siblings still added"
+check "yes" "$REPORTED_MISS" "the missing gone.bin is named in the refusal message"
+check "1" "$rc" "exit code 1 when any input path is missing"
 
 # =====================================================================
 say

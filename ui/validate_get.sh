@@ -148,13 +148,13 @@ say "=== Claim: exit code 1 if one or more files could not be retrieved (L230) =
 # (a) requested path has no metadata at all -> nothing matches -> exit 1.
 rc=0; dvs get does/not/exist.bin >/dev/null 2>&1 || rc=$?
 check "1" "$rc" "exit 1 when requested path has no metadata (L230)"
-# FINDING: a path with no metadata mixed with a valid one does NOT cause exit 1.
-# Paths resolve against the metadata folder (L208); an unknown path simply is
-# not in the resolution set, so it is silently dropped and the valid file is
-# retrieved with exit 0.  Documented, not asserted as failure.
+# A path with no metadata mixed with a valid one now refuses the WHOLE batch
+# (#240): each explicit path must resolve to a tracked file, otherwise the
+# request is refused, nothing is retrieved, and the command exits 1.
 rm -f data/raw/file_1.bin
 rc=0; dvs get data/raw/file_1.bin no/such.bin >/dev/null 2>&1 || rc=$?
-check "0" "$rc" "missing-metadata path silently dropped; valid file still retrieved, exit 0 (L208/L230 finding)"
+check "1" "$rc" "untracked path mixed with a valid one refuses the whole batch, exit 1 (#240)"
+check "no" "$([ -f data/raw/file_1.bin ] && echo yes || echo no)" "all-or-nothing: valid file NOT retrieved when a sibling path is untracked (#240)"
 # The genuine partial-failure -> exit 1 case (one matched file that FAILS to
 # retrieve) is exercised in the hash-mismatch section below.
 
