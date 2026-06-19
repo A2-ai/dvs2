@@ -235,13 +235,12 @@ Options:
       --json               Output results as JSON
       --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
   -g, --glob <GLOB>        
-  -r, --recursive          Recursively include files in subdirectories for directory inputs. Without this flag, directories return only their direct children. Has no effect when no explicit paths are given
+  -r, --recursive          Recursively include files in subdirectories for directory inputs. Without this flag, directories return only their direct children.
       --dry-run            Show what would be retrieved without making any actual changes
   -h, --help               Print help
 ```
 
-Passing `-r, --recursive` with an explicit directory walks its subdirectories. It only constrains paths given
-explicitly, so an empty path list still returns every tracked file.
+Passing `-r, --recursive` with an explicit directory walks its subdirectories. Without it, a directory returns only its direct children. `recursive` only affects directories named on the command line. The CLI always requires at least one path or `--glob`, so there is no bare `dvs get`. To retrieve every tracked file regardless of depth, pass `--glob '**/*'`.
 
 A request that names a path with no tracked file (never added, or misspelled) is refused as a whole, retrieves nothing, and exits with `1`. A request that resolves but has one or more files fail on retrieval (for example a hash mismatch) retrieves the rest and also exits with `1`.
 
@@ -256,9 +255,9 @@ Otherwise it returns a list of results sorted alphabetically by path, letting us
 dvs_get(paths = character(0), glob = NULL, recursive = NULL, dry_run = NULL)
 ```
 
-- `paths`: character vector of file paths to retrieve (can be empty if `glob` is provided)
+- `paths`: character vector of file paths to retrieve. If empty with no `glob`, `dvs_get()` scopes to the working directory and restores the files directly under it
 - `glob`: pattern to match files in the metadata folder (same resolution rules as CLI `--glob`)
-- `recursive`: if `TRUE`, walk explicit directory paths recursively (same as the CLI `-r, --recursive`)
+- `recursive`: if `TRUE`, walk explicit directory paths recursively (same as the CLI `-r, --recursive`). With empty `paths`, `recursive = TRUE` restores every tracked file under the working directory at any depth
 - `dry_run`: if `TRUE`, returns what would be retrieved without making changes
 
 Returns a data frame with one row per file.
