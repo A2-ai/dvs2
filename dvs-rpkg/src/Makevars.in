@@ -7,6 +7,7 @@ CARGO_TARGET_DIR      = @CARGO_TARGET_DIR@
 CARGO_PROFILE         = @CARGO_PROFILE@
 CARGO_STATICLIB_NAME  = @CARGO_STATICLIB_NAME@
 ENV_RUSTFLAGS         = @ENV_RUSTFLAGS@
+CARGO_HOME            = @CARGO_HOME@
 CARGO_BUILD_TARGET    = @CARGO_BUILD_TARGET@
 ABS_RPKG_SRC_CARGO    = @ABS_RPKG_SRC_CARGO@
 CARGO_LIBDIR          = @CARGO_LIBDIR@
@@ -18,20 +19,28 @@ CDYLIB_PREFIX         = @CDYLIB_PREFIX@
 CDYLIB_EXT            = @CDYLIB_EXT@
 TAR_FORCE_LOCAL       = @TAR_FORCE_LOCAL@
 NATIVE_PKG_CPPFLAGS   = @NATIVE_PKG_CPPFLAGS@
+IS_WASM_INSTALL       = @IS_WASM_INSTALL@
+CARGO_BUILD_STD_FLAG  = @CARGO_BUILD_STD_FLAG@
 
 CARGO_AR = $(CARGO_LIBDIR)/lib$(CARGO_STATICLIB_NAME).a
-# codegen-units = 1 in Cargo.toml ensures the user crate compiles into a single .o
-# inside the staticlib archive. The linker pulls it in (via R_init_<pkg>), which
-# brings all linkme distributed_slice entries along — no force_load needed.
+# codegen-units = 1 in Cargo.toml forces the user crate into a single .o (NATIVE path).
+# On wasm32-*, registration goes via wasm_registry.rs (ordinary symbol refs), not linkme,
+# so the setting is inert there.
 PKG_LIBS = $(CARGO_AR)
 PKG_CPPFLAGS = $(NATIVE_PKG_CPPFLAGS)
 
 CARGO_TOML = $(ABS_RPKG_SRCDIR)/rust/Cargo.toml
 WRAPPERS_R = $(ABS_TOP_SRCDIR)/R/@PACKAGE_NAME@-wrappers.R
+# wasm32 snapshot — generated alongside WRAPPERS_R from the same cdylib pass.
+# Lives in the user crate's source tree (not target/) because miniextendr_init!
+# expects it at `<crate>/src/rust/wasm_registry.rs` for `mod __miniextendr_wasm_registry;`
+# to resolve when cross-compiling for `wasm32-*`.
+WASM_REGISTRY_RS = $(ABS_RPKG_SRCDIR)/rust/wasm_registry.rs
 
 # cdylib for R wrapper generation (platform-specific extension)
 CARGO_CDYLIB = $(CARGO_LIBDIR)/$(CDYLIB_PREFIX)$(CARGO_STATICLIB_NAME).$(CDYLIB_EXT)
 ## ----------------------------------------------------------------------
+export CARGO_HOME
 
 # FORCE_CARGO: phony target to ensure Cargo is invoked every time make runs,
 # letting Cargo's own incremental compilation decide what to rebuild.
@@ -40,8 +49,10 @@ CARGO_CDYLIB = $(CARGO_LIBDIR)/$(CDYLIB_PREFIX)$(CARGO_STATICLIB_NAME).$(CDYLIB_
 # all must be defined FIRST to be the default target.
 # Depend on both $(SHLIB) and $(WRAPPERS_R) so that:
 #   1. Staticlib builds first ($(SHLIB) needs $(CARGO_AR)), warming the incremental cache
-#   2. Cdylib builds second ($(WRAPPERS_R) needs $(CARGO_CDYLIB)), fast from warm cache
+#   2. cdylib builds second ($(WRAPPERS_R) needs $(CARGO_CDYLIB)), fast from warm cache
 #   3. R wrappers are generated from the cdylib
+#   On wasm32/tarball: the cdylib prereq's recipe is a no-op, so the committed
+#   wrappers are reused without building (or loading) a cdylib.
 all: $(SHLIB) $(WRAPPERS_R)
 	@# Source install: touch Cargo.toml so pkgbuild always thinks sources changed
 	@# (dev iteration with devtools::load_all() / install() relies on this).
@@ -73,6 +84,13 @@ $(SHLIB): $(OBJECTS) $(CARGO_AR)
 #
 # OBJECTS are passed to cargo as link-args so the Rust crate can reference
 # symbols from C shim files (bindgen-generated static inline wrappers).
+#
+# Note: configure.ac emits an [env] block in src/rust/.cargo/config.toml with
+# platform-derived MACOSX_DEPLOYMENT_TARGET (macOS), CARGO_TARGET_*_LINKER
+# (Windows rtools), and AR_<target> overrides. Cargo inherits these on every
+# invocation below; they ensure the Rust staticlib's ABI matches R's build.
+# To override, set the variable in your shell — shell env wins over [env].
+# See `bash ./configure` output for the values actually emitted.
 $(CARGO_AR): FORCE_CARGO $(OBJECTS)
 	@set -e; \
 	TARGET_OPT=""; \
@@ -81,7 +99,7 @@ $(CARGO_AR): FORCE_CARGO $(OBJECTS)
 	if [ -n "$(CARGO_BUILD_TARGET)" ]; then TARGET_OPT="--target $(CARGO_BUILD_TARGET)"; fi; \
 	cd "$(ABS_RPKG_SRCDIR)/rust"; \
 	RUSTFLAGS="$(ENV_RUSTFLAGS) $$LINK_ARGS" \
-	$(CARGO) $(RUST_TOOLCHAIN) build $(CARGO_OFFLINE_FLAG) $(CARGO_FEATURES_FLAG) $$TARGET_OPT \
+	$(CARGO) $(RUST_TOOLCHAIN) build $(CARGO_OFFLINE_FLAG) $(CARGO_FEATURES_FLAG) $(CARGO_BUILD_STD_FLAG) $$TARGET_OPT \
 	  --lib --profile $(CARGO_PROFILE) \
 	  --manifest-path $(CARGO_TOML) \
 	  --target-dir $(CARGO_TARGET_DIR); \
@@ -89,28 +107,78 @@ $(CARGO_AR): FORCE_CARGO $(OBJECTS)
 	@# On Windows, remove cdylib .dll.a import lib so MinGW linker uses the staticlib.
 	@rm -f '$(CARGO_LIBDIR)/lib$(CARGO_STATICLIB_NAME).dll.a'
 
-# Automatic R wrapper generation.
+# Automatic R wrapper + wasm32 snapshot generation.
 # Builds a cdylib (shared library) containing all linkme distributed_slice
-# entries, loads it in R, and calls miniextendr_write_wrappers() which
-# writes R/*-wrappers.R. The Rust code diffs old vs new and only overwrites
-# when content changes (printing a devtools::document() reminder).
+# entries, loads it in R, and calls (a) miniextendr_write_wrappers() which
+# writes R/*-wrappers.R and (b) miniextendr_write_wasm_registry() which
+# writes src/rust/wasm_registry.rs. Both writers diff old vs new and only
+# overwrite when content changes (the Rust wasm_registry.rs is read by
+# `miniextendr_init!()` macro expansion when cross-compiling for wasm32 —
+# host edits to `#[miniextendr]` items must be matched by a regenerated
+# wasm_registry.rs or the wasm32 build registers stale routines).
 # NAMESPACE is NOT generated here — use devtools::document() for that.
+#
+# Three-way split on build mode, branched at the shell level (not with GNU make
+# ifeq/ifndef conditionals) so this Makevars stays portable POSIX make and the
+# package needs no "SystemRequirements: GNU make". $(CARGO_CDYLIB) is always a
+# prerequisite, but its recipe is a no-op in the wasm32 / tarball-without-FORCE
+# modes (see below), so the cdylib is built only when this recipe loads it.
+#   wasm32  : cdylib is a .wasm SIDE_MODULE that host R cannot dyn.load;
+#             expects pre-generated files from the host devtools::document() pass.
+#   tarball : R/<pkg>-wrappers.R is already committed and ships in the tarball;
+#             the cdylib regeneration would be a no-op (write-if-changed), so
+#             skip the 10-30 s cdylib build entirely (#1022). The pre-commit hook
+#             guarantees the shipped wrappers match the Rust code in the tarball,
+#             so the committed file is exactly what regeneration would produce.
+#             LOAD-BEARING GUARD: skip only when R/<pkg>-wrappers.R exists AND is
+#             non-empty ([ -s ]). If it is absent or empty (a tarball stripped of
+#             its wrappers, a truncated download, etc.), FALL BACK to the full
+#             cdylib wrapper-gen path rather than installing a wrapper-less,
+#             silently-broken package. The same condition gates $(CARGO_CDYLIB)
+#             below, so the cdylib is built exactly when this recipe needs to load
+#             it. Set MINIEXTENDR_FORCE_WRAPPER_GEN to force regeneration even when
+#             the shipped wrappers are valid (debugging only).
+#   dev     : full cdylib build + wrapper generation (normal dev/CI flow).
 $(WRAPPERS_R): $(CARGO_CDYLIB)
-	@echo "Generating R wrappers..."
-	@_cdylib='$(CARGO_CDYLIB)'; \
-	_wrappers='$(WRAPPERS_R)'; \
-	if command -v cygpath >/dev/null 2>&1; then \
-	  _cdylib=$$(cygpath -m "$$_cdylib"); \
-	  _wrappers=$$(cygpath -m "$$_wrappers"); \
-	fi; \
-	MINIEXTENDR_CDYLIB_WRAPPERS=1 "$(R_HOME)/bin$(R_ARCH)/Rscript" -e "invisible(local({ lib <- dyn.load('$$_cdylib'); .Call(getNativeSymbolInfo('miniextendr_write_wrappers', lib), '$$_wrappers'); dyn.unload('$$_cdylib') }))"
-	@echo "Removing cdylib to prevent linker collision with staticlib..."
-	@rm -f '$(CARGO_CDYLIB)'
+	@set -e; \
+	if [ "$(IS_WASM_INSTALL)" = "true" ]; then \
+	  echo "wasm32 install: skipping wrapper-gen (pre-generated R/$(PACKAGE_NAME)-wrappers.R + src/rust/wasm_registry.rs expected)"; \
+	  touch '$(WRAPPERS_R)'; \
+	elif [ "$(IS_TARBALL_INSTALL)" = "true" ] && [ -z "$$MINIEXTENDR_FORCE_WRAPPER_GEN" ] && [ -s '$(WRAPPERS_R)' ]; then \
+	  echo "tarball install: using pre-shipped R/$(PACKAGE_NAME)-wrappers.R (skipping cdylib wrapper-gen, #1022)"; \
+	  touch '$(WRAPPERS_R)'; \
+	else \
+	  if [ "$(IS_TARBALL_INSTALL)" = "true" ] && [ -n "$$MINIEXTENDR_FORCE_WRAPPER_GEN" ]; then \
+	    echo "MINIEXTENDR_FORCE_WRAPPER_GEN set: regenerating wrappers from cdylib (tarball mode override)..."; \
+	  elif [ "$(IS_TARBALL_INSTALL)" = "true" ]; then \
+	    echo "tarball install: pre-shipped R/$(PACKAGE_NAME)-wrappers.R absent or empty — falling back to full cdylib wrapper-gen (#1022 guard)..." >&2; \
+	  else \
+	    echo "Generating R wrappers + wasm_registry.rs..."; \
+	  fi; \
+	  _cdylib='$(CARGO_CDYLIB)'; \
+	  _wrappers='$(WRAPPERS_R)'; \
+	  _wasm_registry='$(WASM_REGISTRY_RS)'; \
+	  if command -v cygpath >/dev/null 2>&1; then \
+	    _cdylib=$$(cygpath -m "$$_cdylib"); \
+	    _wrappers=$$(cygpath -m "$$_wrappers"); \
+	    _wasm_registry=$$(cygpath -m "$$_wasm_registry"); \
+	  fi; \
+	  MINIEXTENDR_CDYLIB_WRAPPERS=1 "$(R_HOME)/bin$(R_ARCH)/Rscript" -e "invisible(local({ lib <- dyn.load('$$_cdylib'); .Call(getNativeSymbolInfo('miniextendr_write_wrappers', lib), '$$_wrappers'); .Call(getNativeSymbolInfo('miniextendr_write_wasm_registry', lib), '$$_wasm_registry'); dyn.unload('$$_cdylib') }))"; \
+	  echo "Removing cdylib to prevent linker collision with staticlib..."; \
+	  rm -f '$(CARGO_CDYLIB)'; \
+	fi
 
 # Build cdylib for wrapper generation.
 # Runs after staticlib (via `all` ordering), so the incremental cache is warm.
-$(CARGO_CDYLIB): FORCE_CARGO $(OBJECTS) | $(CARGO_AR)
+# No-op in wasm32 / tarball installs that reuse the committed wrappers (the guard
+# exits early): those modes never need a cdylib. The tarball-skip condition here
+# MUST match the $(WRAPPERS_R) recipe above — skip only when tarball mode, no
+# MINIEXTENDR_FORCE_WRAPPER_GEN, AND R/<pkg>-wrappers.R is present and non-empty
+# ([ -s ]). If the shipped wrappers are missing/empty, this recipe builds the
+# cdylib so the wrapper-gen fallback (#1022 guard) has something to load.
+$(CARGO_CDYLIB): FORCE_CARGO $(OBJECTS) $(CARGO_AR)
 	@set -e; \
+	if [ "$(IS_WASM_INSTALL)" = "true" ] || { [ "$(IS_TARBALL_INSTALL)" = "true" ] && [ -z "$$MINIEXTENDR_FORCE_WRAPPER_GEN" ] && [ -s '$(WRAPPERS_R)' ]; }; then exit 0; fi; \
 	TARGET_OPT=""; \
 	CDYLIB_LINK_ARGS=""; \
 	for obj in $(OBJECTS); do CDYLIB_LINK_ARGS="$$CDYLIB_LINK_ARGS -C link-arg=$(ABS_RPKG_SRCDIR)/$$obj"; done; \
