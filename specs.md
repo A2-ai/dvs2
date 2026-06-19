@@ -143,8 +143,9 @@ Returns a list with `status = "initialized"`, invisibly.
 It only takes files as input, directories will not work unless combined with a glob. It can also take an optional
 message that will be recorded in the metadata file. Similarly, `add` must not have a recursive option. The glob mechanism is sufficient, and intentional when used.
 
-This method follows a best-effort approach: even if some files failed to be added, it will still try to add everything
-and not stop.
+Input paths are validated before any data is written. If any path cannot be resolved to a file to add (it does not exist, it is a directory passed without a glob, or it resolves outside the project root) the whole batch is refused and nothing is added.
+
+Once every input resolves, the add is best-effort. A file that fails during the read or the storage write (for example a permission error) does not stop the others. That file is reported and the rest are still added.
 
 Each added file gets a metadata sidecar at `<metadata folder>/<path to file>.dvs` (metadata folder defaults to
 `.dvs`), mirroring the added file. The sidecar must be committed to version control (e.g. `git`). The data file itself is gitignored.
@@ -183,12 +184,12 @@ Options:
 You can run `dvs add *.csv` and it will be expanded by your shell before calling `dvs`.
 To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library. The glob string must be quoted (for example `--glob '*.csv'`) so the shell does not expand it before `dvs` sees it.
 
-This will exit with `1` if one or more files could not be added to the storage (file does not exist, no permissions, etc).
+A batch refused for an invalid input path exits with `1` and adds nothing. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`.
 
 #### Rust library
 
-The library automatically sets up parallelism and the only error it can return is if it couldn't set up the threadpool.
-It otherwise returns a list of results sorted alphabetically by path, letting users decide what to do with each.
+The library validates every input path first and returns an error, refusing the whole batch, if any path is invalid. It also returns an error if it cannot set up the threadpool.
+Otherwise it returns a list of results sorted alphabetically by path, letting users decide what to do with each per-file runtime failure.
 
 #### R package
 
@@ -201,11 +202,9 @@ dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 - `glob`: pattern to match files (same resolution rules as CLI `--glob`)
 - `dry_run`: if `TRUE`, returns what would be added without making changes
 
-Returns a data frame with one row per file. Errors if no files match.
-Glob resolution uses the same rules as the CLI. See the Globbing section.
+Returns a data frame with one row per file. Glob resolution uses the same rules as the CLI. See the Globbing section.
 
-Partial completion leads to a return value as a list containing two elements named `result`
-and `error`, each containing data-frames describing the failures and successes.
+It raises an error if no files match, or if any input path is invalid (the whole batch is refused and nothing is written). A file that fails after a valid batch starts (for example a permission error during the copy) does not raise. That file is one row with its `error` column set and the success columns `NA`, next to the rows that succeeded.
 
 ### get
 
@@ -244,12 +243,12 @@ Options:
 Passing `-r, --recursive` with an explicit directory walks its subdirectories. It only constrains paths given
 explicitly, so an empty path list still returns every tracked file.
 
-This will exit with `1` if one or more files could not be retrieved.
+A request that names a path with no tracked file (never added, or misspelled) is refused as a whole, retrieves nothing, and exits with `1`. A request that resolves but has one or more files fail on retrieval (for example a hash mismatch) retrieves the rest and also exits with `1`.
 
 #### Rust library
 
-The library automatically sets up parallelism and the only error it can return is if it couldn't set up the threadpool.
-It otherwise returns a list of results sorted alphabetically by path, letting users decide what to do with each.
+The library validates every requested path against the metadata first and returns an error, refusing the whole batch, if any path is not tracked. It also returns an error if it cannot set up the threadpool.
+Otherwise it returns a list of results sorted alphabetically by path, letting users decide what to do with each per-file runtime failure.
 
 #### R package
 
@@ -262,10 +261,9 @@ dvs_get(paths = character(0), glob = NULL, recursive = NULL, dry_run = NULL)
 - `recursive`: if `TRUE`, walk explicit directory paths recursively (same as the CLI `-r, --recursive`)
 - `dry_run`: if `TRUE`, returns what would be retrieved without making changes
 
-Returns a data frame with one row per file. Errors if no files match.
+Returns a data frame with one row per file.
 
-Partial completion leads to a return value as a list containing two elements named `result`
-and `error`, each containing data-frames describing the failures and successes.
+It raises an error if no files match, or if any requested path is not tracked (the whole batch is refused and nothing is retrieved). A file that fails after a valid batch starts (for example a post-retrieval hash mismatch) does not raise. That file is one row with its `error` column set and the success columns `NA`, next to the rows that succeeded.
 
 ### status
 
