@@ -50,14 +50,14 @@ test_that("dvs_get on never-added path errors", {
   expect_error(dvs_get(paths = "never-added.csv"))
 })
 
-test_that("dvs_get() with no args restores every tracked file at every depth", {
+test_that("dvs_get(recursive = TRUE) with no paths restores every tracked file at every depth", {
   new_dvs_test_repo()
   write_theoph("top.csv")
   write_theoph_shuffled("data/raw/deep.csv", seed = 1)
   dvs_add(paths = file.path(getwd(), c("top.csv", "data/raw/deep.csv")))
   file.remove(c("top.csv", "data/raw/deep.csv"))
 
-  result <- dvs_get()
+  result <- dvs_get(recursive = TRUE)
   expect_s3_class(result, "tbl_df")
   expect_setequal(result$path, c("top.csv", "data/raw/deep.csv"))
   expect_true(all(file.exists(c("top.csv", "data/raw/deep.csv"))))
