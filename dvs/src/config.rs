@@ -198,9 +198,7 @@ impl Config {
 
     /// Resolve a relative backend storage path against the repo root (the
     /// directory holding `dvs.toml`) so it points at the same place regardless
-    /// of the current working directory. Without this a relative `path` was
-    /// resolved against the cwd, so `dvs` worked from the repo root but failed
-    /// to find storage from any subdirectory.
+    /// of the current working directory.
     fn resolve_backend_path(&mut self, repo_root: &Path) {
         let Backend::Local(backend) = &mut self.backend;
         if backend.path.is_relative() {
