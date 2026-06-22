@@ -149,7 +149,7 @@ pub struct Config {
     /// at the root of the repository
     /// If this option is set, dvs will use that folder name instead of `.dvs`
     metadata_folder_name: Option<String>,
-    backend: Backend,
+    pub(crate) backend: Backend,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cli: Option<CliConfig>,
 }
