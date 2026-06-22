@@ -5,28 +5,31 @@ use fs_err as fs;
 use uuid::Uuid;
 
 use crate::audit::AuditEntry;
-use crate::config::Config;
+use crate::config::{Backend, Config};
 use crate::paths;
 
 /// Starts a new dvs project.
 /// We need a ready to use Config object + the current directory the user is in
-pub fn init(root_dir: impl AsRef<Path>, config: Config) -> Result<PathBuf> {
+pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
     let root_dir = root_dir.as_ref();
 
     // The storage directory must not live inside the repository, otherwise it
-    // would be tracked alongside the user's files. Only meaningful for local
-    // backends; remote backends report `None` and skip the check.
-    if let Some(storage_path) = config.backend().local_path() {
-        let abs_storage = if storage_path.exists() {
-            fs::canonicalize(storage_path)?
-        } else if let Some(parent) = storage_path.parent().filter(|p| p.exists()) {
-            fs::canonicalize(parent)?.join(storage_path.file_name().unwrap())
-        } else {
-            std::path::absolute(storage_path)?
-        };
-        let abs_root = fs::canonicalize(root_dir)?;
-        if abs_storage.starts_with(&abs_root) {
-            bail!("The given storage path is within the repository.");
+    // would be tracked alongside the user's files.
+    match &mut config.backend {
+        Backend::Local(b) => {
+            let storage_path = &b.path;
+            let abs_storage = if storage_path.exists() {
+                fs::canonicalize(storage_path)?
+            } else if let Some(parent) = storage_path.parent().filter(|p| p.exists()) {
+                fs::canonicalize(parent)?.join(storage_path.file_name().unwrap())
+            } else {
+                std::path::absolute(storage_path)?
+            };
+            let abs_root = fs::canonicalize(root_dir)?;
+            if abs_storage.starts_with(&abs_root) {
+                bail!("The given storage path is within the repository.");
+            }
+            b.path = abs_storage;
         }
     }
 
