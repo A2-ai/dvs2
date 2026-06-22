@@ -298,6 +298,10 @@ By default (no flags), `dvs status` shows all tracked files regardless of state.
 
 This will exit with `1` if one or more files could not be inspected.
 
+Each named path filters independently. A path that matches no tracked file is dropped silently rather than
+failing the command, so a partly misspelled invocation such as `dvs status good.bin bogus.bin` still exits
+`0` and shows only the paths that matched.
+
 #### Rust library
 
 The library scans all metadata files in the project and returns a result for each one. Like `add` and `get`,
