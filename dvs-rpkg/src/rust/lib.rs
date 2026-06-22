@@ -14,9 +14,8 @@ use miniextendr_api::externalptr::ExternalPtr;
 use miniextendr_api::into_r::IntoR;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
-use miniextendr_api::serde::ColumnarDataFrame;
 use miniextendr_api::time::OffsetDateTime;
-use miniextendr_api::{AsSerializeRow, DataFrame, List, MatchArg, list, miniextendr, r_println};
+use miniextendr_api::{DataFrame, List, MatchArg, list, miniextendr, r_println};
 
 use anyhow::{Result, anyhow};
 use serde::Serialize;
@@ -26,8 +25,8 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileMetadata, FileProgress, FileStatus, GetResult, Hashes, PathFilter, Status,
-    StatusDetail, add_files, get_files, get_status, set_num_threads,
+    Compression, FileMetadata, FileProgress, FileStatus, Hashes, PathFilter, Status, StatusDetail,
+    add_files, get_files, get_status, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -197,7 +196,7 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<ColumnarDataFrame> {
+) -> Result<DataFrame> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
@@ -289,7 +288,7 @@ pub(crate) fn dvs_status(
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
-) -> Result<ColumnarDataFrame> {
+) -> Result<DataFrame> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -444,7 +443,7 @@ pub(crate) fn dvs_get(
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<DataFrame<AsSerializeRow<GetResult>>> {
+) -> Result<DataFrame> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -481,7 +480,7 @@ pub(crate) fn dvs_get(
     } else {
         get_files(all_paths, &dvs_paths, config.backend(), dry_run, None)?
     };
-    Ok(DataFrame::from_iter(results.into_iter().map(|x| x.into())))
+    Ok(miniextendr_api::serde::vec_to_dataframe(&results)?)
 }
 
 /// Set the number of threads used by DVS parallel operations.
