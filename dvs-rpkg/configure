@@ -601,10 +601,13 @@ TAR_FORCE_LOCAL
 CARGO_STATICLIB_NAME
 CARGO_LIBDIR
 CARGO_BUILD_TARGET
+CARGO_HOME
 ENV_RUSTFLAGS
 CARGO_PROFILE
 CARGO_TARGET_DIR_CARGO
 CARGO_TARGET_DIR
+CARGO_BUILD_STD_FLAG
+IS_WASM_INSTALL
 RUST_TOOLCHAIN
 ABS_RPKG_SRC_CARGO
 CYGPATH
@@ -676,6 +679,7 @@ RUST_TOOLCHAIN
 CARGO_TARGET_DIR
 CARGO_PROFILE
 ENV_RUSTFLAGS
+CARGO_HOME
 CARGO_BUILD_TARGET'
 
 
@@ -1306,6 +1310,8 @@ Some influential environment variables:
               Cargo build profile (dev or release)
   ENV_RUSTFLAGS
               Rust compiler flags passed as RUSTFLAGS
+  CARGO_HOME  cargo registry/cache directory (defaults to ~/.cargo; useful in
+              restricted environments where HOME is read-only)
   CARGO_BUILD_TARGET
               Cargo build target triple (e.g. aarch64-apple-darwin)
 
@@ -1897,13 +1903,20 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
 
-if test ! -f "DESCRIPTION" || test ! -f "NAMESPACE"; then
+if test ! -f "DESCRIPTION"; then
   as_fn_error $? "configure must be run from the rpkg directory (where DESCRIPTION exists).
 
   If you're in the monorepo root, run:
     cd rpkg && ./configure
   Or use:
     just configure" "$LINENO" 5
+fi
+if test ! -f "NAMESPACE"; then
+  as_fn_error $? "NAMESPACE not found (DESCRIPTION is present, so the working directory is correct).
+
+  Generate it before configuring:
+    Rscript -e 'devtools::document()'
+  Or add a stub NAMESPACE if you have no roxygen tags yet." "$LINENO" 5
 fi
 
 
@@ -2002,6 +2015,59 @@ abs_rpkg_src="$abs_top_srcdir/src"
 ABS_RPKG_SRCDIR="$abs_rpkg_src"
 
 RUST_SRC_DIR="$abs_rpkg_src/rust"
+
+SOURCE_IS_GIT=false
+_walk_dir="$abs_top_srcdir"
+while test -n "$_walk_dir" && test "$_walk_dir" != "/"; do
+  if test -e "$_walk_dir/.git"; then
+    SOURCE_IS_GIT=true
+    break
+  fi
+  _walk_dir=`dirname "$_walk_dir"`
+done
+
+SOURCE_IS_BUILT=false
+if grep -Eq '^(Packaged|Built):' "$abs_top_srcdir/DESCRIPTION" 2>/dev/null; then
+  SOURCE_IS_BUILT=true
+fi
+
+if test -f "$abs_top_srcdir/inst/vendor.tar.xz" \
+   && test "$SOURCE_IS_GIT" = "true" \
+   && test "$SOURCE_IS_BUILT" = "false" \
+   && test -z "${MINIEXTENDR_BOOTSTRAP+x}"; then
+  as_fn_error $? "leaked vendor tarball detected in a git-tracked source tree.
+
+  inst/vendor.tar.xz is present AND this is a git working tree, so configure
+  would silently enter tarball mode and build against frozen vendored sources,
+  ignoring any local source edits. This is almost always a leftover from an
+  interrupted build.
+
+  Remove it before building from source:
+    rm -f inst/vendor.tar.xz
+
+  Or run miniextendr_clean_vendor_leak, or minirextendr::miniextendr_doctor
+  to diagnose." "$LINENO" 5
+fi
+
+if test ! -f "$abs_top_srcdir/inst/vendor.tar.xz" \
+   && test "$SOURCE_IS_GIT" = "false" \
+   && command -v cargo-revendor >/dev/null 2>&1; then
+  { printf '%s\n' "$as_me:${as_lineno-$LINENO}: auto-vendor: inst/vendor.tar.xz absent, running cargo-revendor" >&5
+printf '%s\n' "$as_me: auto-vendor: inst/vendor.tar.xz absent, running cargo-revendor" >&6;}
+  mkdir -p "$abs_top_srcdir/inst"
+  if (cd "$abs_top_srcdir" && cargo revendor \
+        --manifest-path src/rust/Cargo.toml \
+        --output vendor \
+        --compress inst/vendor.tar.xz \
+        --blank-md --source-marker --force) >&2; then
+    { printf '%s\n' "$as_me:${as_lineno-$LINENO}: auto-vendor: produced inst/vendor.tar.xz" >&5
+printf '%s\n' "$as_me: auto-vendor: produced inst/vendor.tar.xz" >&6;}
+  else
+    { printf '%s\n' "$as_me:${as_lineno-$LINENO}: WARNING: auto-vendor: cargo-revendor failed; falling through to source mode" >&5
+printf '%s\n' "$as_me: WARNING: auto-vendor: cargo-revendor failed; falling through to source mode" >&2;}
+    rm -f "$abs_top_srcdir/inst/vendor.tar.xz"
+  fi
+fi
 
 if test -f "$abs_top_srcdir/inst/vendor.tar.xz"; then
   IS_TARBALL_INSTALL=true
@@ -2405,6 +2471,37 @@ fi
 : ${RUST_TOOLCHAIN=""}
 
 
+{ printf '%s\n' "$as_me:${as_lineno-$LINENO}: checking whether CC is emscripten (webR/wasm32 install)" >&5
+printf %s "checking whether CC is emscripten (webR/wasm32 install)... " >&6; }
+case "${CC}" in
+  *emcc*|*em++*)
+    is_wasm_install=true
+    CARGO_BUILD_TARGET=wasm32-unknown-emscripten
+    if test -z "$RUST_TOOLCHAIN"; then
+      RUST_TOOLCHAIN="+nightly"
+    fi
+    CARGO_BUILD_STD_FLAG="-Z build-std=std,panic_abort"
+    { printf '%s\n' "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+printf '%s\n' "yes" >&6; }
+    ;;
+  *)
+    is_wasm_install=false
+    CARGO_BUILD_STD_FLAG=
+    { printf '%s\n' "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf '%s\n' "no" >&6; }
+    ;;
+esac
+if test "$is_wasm_install" = true; then
+  if test ! -f "$srcdir/src/rust/wasm_registry.rs"; then
+    as_fn_error $? "wasm32 install requires src/rust/wasm_registry.rs.
+Run 'R CMD INSTALL' (or 'just rcmdinstall') on the host first to regenerate
+it from the cdylib slice contents, then ship the source tree to the wasm builder." "$LINENO" 5
+  fi
+fi
+IS_WASM_INSTALL=$is_wasm_install
+
+
+
 CARGO_CMD="$CARGO $RUST_TOOLCHAIN"
 
 
@@ -2432,7 +2529,19 @@ fi
 
 
 : ${ENV_RUSTFLAGS="$RUSTFLAGS"}
+if test "$is_wasm_install" = true; then
+  ENV_RUSTFLAGS="$ENV_RUSTFLAGS -Zdefault-visibility=hidden"
+fi
 
+
+
+: ${CARGO_HOME=""}
+
+if test -n "$CARGO_HOME"
+then :
+  { printf '%s\n' "$as_me:${as_lineno-$LINENO}: CARGO_HOME           = $CARGO_HOME" >&5
+printf '%s\n' "$as_me: CARGO_HOME           = $CARGO_HOME" >&6;}
+fi
 
 
 if test -z "$CARGO_BUILD_TARGET"; then
@@ -2484,6 +2593,16 @@ then :
   { printf '%s\n' "$as_me:${as_lineno-$LINENO}: CARGO_FEATURES  = $CARGO_FEATURES" >&5
 printf '%s\n' "$as_me: CARGO_FEATURES  = $CARGO_FEATURES" >&6;}
 fi
+if test "$IS_WASM_INSTALL" = "true"
+then :
+  { printf '%s\n' "$as_me:${as_lineno-$LINENO}: IS_WASM_INSTALL      = true (CC=emcc detected)" >&5
+printf '%s\n' "$as_me: IS_WASM_INSTALL      = true (CC=emcc detected)" >&6;}
+fi
+if test -n "$CARGO_BUILD_STD_FLAG"
+then :
+  { printf '%s\n' "$as_me:${as_lineno-$LINENO}: CARGO_BUILD_STD_FLAG = $CARGO_BUILD_STD_FLAG" >&5
+printf '%s\n' "$as_me: CARGO_BUILD_STD_FLAG = $CARGO_BUILD_STD_FLAG" >&6;}
+fi
 
 CARGO_STATICLIB_NAME="$(echo "$PACKAGE_NAME" | $SED 's/-/_/g; s/\./_/g')"
 
@@ -2515,7 +2634,20 @@ VENDOR_OUT_CARGO="$abs_top_srcdir_cargo/vendor"
 
 
 
+
 MONOREPO_ROOT=""
+if test -f "$abs_top_srcdir/.miniextendr-local"; then
+  _local_mx=$(head -n 1 "$abs_top_srcdir/.miniextendr-local")
+  if test -n "$_local_mx" && test -f "$_local_mx/miniextendr-api/Cargo.toml"; then
+    MONOREPO_ROOT="$_local_mx"
+    { printf '%s\n' "$as_me:${as_lineno-$LINENO}: local miniextendr    = $_local_mx (.miniextendr-local)" >&5
+printf '%s\n' "$as_me: local miniextendr    = $_local_mx (.miniextendr-local)" >&6;}
+  else
+    { printf '%s\n' "$as_me:${as_lineno-$LINENO}: WARNING: .miniextendr-local ignored: miniextendr-api/Cargo.toml not found under '$_local_mx'" >&5
+printf '%s\n' "$as_me: WARNING: .miniextendr-local ignored: miniextendr-api/Cargo.toml not found under '$_local_mx'" >&2;}
+  fi
+fi
+if test -z "$MONOREPO_ROOT"; then
 _probe="$abs_top_srcdir"
 for _i in 1 2 3 4 5; do
   _probe="$(dirname "$_probe")"
@@ -2525,6 +2657,7 @@ for _i in 1 2 3 4 5; do
     break
   fi
 done
+fi
 
 MONOREPO_ROOT_CARGO="$MONOREPO_ROOT"
 case "$host_os" in
@@ -2545,6 +2678,141 @@ printf '%s\n' "$as_me: monorepo siblings    = $MONOREPO_ROOT (source-mode patch 
   fi
 fi
 
+
+CARGO_ENV_RUST_TARGET="$CARGO_BUILD_TARGET"
+if test -z "$CARGO_ENV_RUST_TARGET"; then
+  CARGO_ENV_RUST_TARGET=`"$RUSTC" -vV 2>/dev/null | $SED -n 's/^host: //p'`
+fi
+
+CARGO_ENV_RUST_TARGET_UPPER=`echo "$CARGO_ENV_RUST_TARGET" | tr 'a-z-' 'A-Z_'`
+
+CARGO_ENV_MACOS_DEPLOY_TARGET=""
+CARGO_ENV_MACOS_DEPLOY_SOURCE=""
+case "$host_os" in
+  darwin*)
+                if test -n "${MACOSX_DEPLOYMENT_TARGET}"; then
+      CARGO_ENV_MACOS_DEPLOY_TARGET="$MACOSX_DEPLOYMENT_TARGET"
+      CARGO_ENV_MACOS_DEPLOY_SOURCE="shell env"
+    fi
+
+            if test -z "$CARGO_ENV_MACOS_DEPLOY_TARGET"; then
+      for _cfg_key in CC CXX FC; do
+        _flag_val=`"${R_HOME}/bin/R" CMD config "$_cfg_key" 2>/dev/null \
+          | $SED -n 's/.*-mmacox*-version-min=\([0-9]*\.[0-9]*\).*/\1/p' \
+          | head -n1`
+        if test -n "$_flag_val"; then
+          CARGO_ENV_MACOS_DEPLOY_TARGET="$_flag_val"
+          CARGO_ENV_MACOS_DEPLOY_SOURCE="R CMD config $_cfg_key"
+          break
+        fi
+      done
+    fi
+
+            if test -z "$CARGO_ENV_MACOS_DEPLOY_TARGET"; then
+      if command -v otool >/dev/null 2>&1; then
+        _otool_val=`otool -l "${R_HOME}/bin/exec/R" 2>/dev/null \
+          | awk '/LC_BUILD_VERSION/ {found=1} found && /minos/ {print $2; exit}'`
+        if test -n "$_otool_val"; then
+          CARGO_ENV_MACOS_DEPLOY_TARGET="$_otool_val"
+          CARGO_ENV_MACOS_DEPLOY_SOURCE="otool LC_BUILD_VERSION"
+        fi
+      fi
+    fi
+
+            if test -z "$CARGO_ENV_MACOS_DEPLOY_TARGET"; then
+      case "$host_cpu" in
+        arm64|aarch64) CARGO_ENV_MACOS_DEPLOY_TARGET="14.0" ;;
+        *)             CARGO_ENV_MACOS_DEPLOY_TARGET="11.0" ;;
+      esac
+      CARGO_ENV_MACOS_DEPLOY_SOURCE="arch default ($host_cpu)"
+    fi
+
+    { printf '%s\n' "$as_me:${as_lineno-$LINENO}: MACOSX_DEPLOYMENT_TARGET = $CARGO_ENV_MACOS_DEPLOY_TARGET (source: $CARGO_ENV_MACOS_DEPLOY_SOURCE)" >&5
+printf '%s\n' "$as_me: MACOSX_DEPLOYMENT_TARGET = $CARGO_ENV_MACOS_DEPLOY_TARGET (source: $CARGO_ENV_MACOS_DEPLOY_SOURCE)" >&6;}
+    ;;
+esac
+
+CARGO_ENV_WIN_LINKER=""
+case "$host_os" in
+  *msys*|*cygwin*|*mingw*)
+    _r_cc=`"${R_HOME}/bin/R" CMD config CC 2>/dev/null | awk '{print $1}'`
+    if test -n "$_r_cc"; then
+      _r_cc_bindir=`dirname "$_r_cc"`
+      for _gcc_cand in "$_r_cc_bindir/gcc.exe" "$_r_cc_bindir/gcc"; do
+        if test -x "$_gcc_cand"; then
+                                        _gcc_native="$_gcc_cand"
+          if test "x$CYGPATH" != "xno"; then
+            _gcc_native=`"$CYGPATH" -m "$_gcc_cand" 2>/dev/null || echo "$_gcc_cand"`
+          fi
+          CARGO_ENV_WIN_LINKER="$_gcc_native"
+          break
+        fi
+      done
+    fi
+    if test -n "$CARGO_ENV_WIN_LINKER"; then
+      { printf '%s\n' "$as_me:${as_lineno-$LINENO}: rtools linker        = $CARGO_ENV_WIN_LINKER" >&5
+printf '%s\n' "$as_me: rtools linker        = $CARGO_ENV_WIN_LINKER" >&6;}
+    else
+      { printf '%s\n' "$as_me:${as_lineno-$LINENO}: rtools linker        = (not detected — cargo will use default gcc on PATH)" >&5
+printf '%s\n' "$as_me: rtools linker        = (not detected — cargo will use default gcc on PATH)" >&6;}
+    fi
+    ;;
+esac
+
+CARGO_ENV_R_AR=`"${R_HOME}/bin/R" CMD config AR 2>/dev/null`
+CARGO_ENV_R_RANLIB=`"${R_HOME}/bin/R" CMD config RANLIB 2>/dev/null`
+
+CARGO_ENV_PROFILE_LTO=""
+_r_lto=`"${R_HOME}/bin/R" CMD config LTO 2>/dev/null`
+case "$_r_lto" in
+  *-flto=thin*)              CARGO_ENV_PROFILE_LTO="thin" ;;
+  *-flto=fat*|*-flto=full*)  CARGO_ENV_PROFILE_LTO="fat"  ;;
+  *-flto*)                   CARGO_ENV_PROFILE_LTO="thin" ;;
+  *)                         CARGO_ENV_PROFILE_LTO=""     ;;
+esac
+if test -n "$CARGO_ENV_PROFILE_LTO"; then
+  { printf '%s\n' "$as_me:${as_lineno-$LINENO}: R LTO flag           = $_r_lto (cargo profile lto: $CARGO_ENV_PROFILE_LTO)" >&5
+printf '%s\n' "$as_me: R LTO flag           = $_r_lto (cargo profile lto: $CARGO_ENV_PROFILE_LTO)" >&6;}
+fi
+
+CARGO_ENV_ABI_CFLAGS=""
+CARGO_ENV_ABI_CXXFLAGS=""
+
+_r_cflags=`"${R_HOME}/bin/R" CMD config CFLAGS 2>/dev/null`
+_r_cxxflags=`"${R_HOME}/bin/R" CMD config CXXFLAGS 2>/dev/null`
+
+_abi_allow_re='^-march=|^-mtune=|^-mfpmath=|^-mfpu=|^-mfloat-abi=|^-mabi=|^-msse|^-mavx|^-mssse|^-mpclmul|^-maes|^-pthread$|^-D_REENTRANT$|^-fopenmp'
+
+if test -n "$_r_cflags"; then
+  CARGO_ENV_ABI_CFLAGS=`echo "$_r_cflags" | tr ' ' '\n' | grep -E "$_abi_allow_re" | tr '\n' ' ' | $SED 's/ *$//'`
+fi
+if test -n "$_r_cxxflags"; then
+  CARGO_ENV_ABI_CXXFLAGS=`echo "$_r_cxxflags" | tr ' ' '\n' | grep -E "$_abi_allow_re" | tr '\n' ' ' | $SED 's/ *$//'`
+fi
+
+if test "$is_wasm_install" = true; then
+  if test -n "$CARGO_ENV_ABI_CFLAGS"; then
+    CARGO_ENV_ABI_CFLAGS="$CARGO_ENV_ABI_CFLAGS -fPIC"
+  else
+    CARGO_ENV_ABI_CFLAGS="-fPIC"
+  fi
+  if test -n "$CARGO_ENV_ABI_CXXFLAGS"; then
+    CARGO_ENV_ABI_CXXFLAGS="$CARGO_ENV_ABI_CXXFLAGS -fPIC"
+  else
+    CARGO_ENV_ABI_CXXFLAGS="-fPIC"
+  fi
+fi
+
+if test -n "$CARGO_ENV_ABI_CFLAGS"; then
+  { printf '%s\n' "$as_me:${as_lineno-$LINENO}: cargo CFLAGS_<target>  = $CARGO_ENV_ABI_CFLAGS" >&5
+printf '%s\n' "$as_me: cargo CFLAGS_<target>  = $CARGO_ENV_ABI_CFLAGS" >&6;}
+fi
+if test -n "$CARGO_ENV_ABI_CXXFLAGS"; then
+  { printf '%s\n' "$as_me:${as_lineno-$LINENO}: cargo CXXFLAGS_<target>= $CARGO_ENV_ABI_CXXFLAGS" >&5
+printf '%s\n' "$as_me: cargo CXXFLAGS_<target>= $CARGO_ENV_ABI_CXXFLAGS" >&6;}
+fi
+
+
 as_dir=src/rust/.cargo; as_fn_mkdir_p
 
 ac_config_files="$ac_config_files src/Makevars:src/Makevars.in src/$PACKAGE_NAME-win.def:src/win.def.in"
@@ -2554,6 +2822,9 @@ ac_config_commands="$ac_config_commands unpack-vendor-tarball"
 
 
 ac_config_commands="$ac_config_commands cargo-config"
+
+
+ac_config_commands="$ac_config_commands lock-shape-check"
 
 
 ac_config_commands="$ac_config_commands cargo-lockfile-compat"
@@ -3226,7 +3497,19 @@ IS_TARBALL_INSTALL="$IS_TARBALL_INSTALL"
  MONOREPO_ROOT_CARGO="$MONOREPO_ROOT_CARGO"
  VENDOR_OUT_CARGO="$VENDOR_OUT_CARGO"
  CARGO_TARGET_DIR_CARGO="$CARGO_TARGET_DIR_CARGO"
+ CARGO_ENV_MACOS_DEPLOY_TARGET="$CARGO_ENV_MACOS_DEPLOY_TARGET"
+ CARGO_ENV_WIN_LINKER="$CARGO_ENV_WIN_LINKER"
+ CARGO_ENV_RUST_TARGET="$CARGO_ENV_RUST_TARGET"
+ CARGO_ENV_RUST_TARGET_UPPER="$CARGO_ENV_RUST_TARGET_UPPER"
+ CARGO_ENV_R_AR="$CARGO_ENV_R_AR"
+ CARGO_ENV_R_RANLIB="$CARGO_ENV_R_RANLIB"
+ CARGO_ENV_PROFILE_LTO="$CARGO_ENV_PROFILE_LTO"
+ CARGO_PROFILE="$CARGO_PROFILE"
+ CARGO_ENV_ABI_CFLAGS="$CARGO_ENV_ABI_CFLAGS"
+ CARGO_ENV_ABI_CXXFLAGS="$CARGO_ENV_ABI_CXXFLAGS"
  SED="$SED"
+IS_TARBALL_INSTALL="$IS_TARBALL_INSTALL"
+ R_HOME="$R_HOME"
 CARGO_CMD="$CARGO_CMD" CARGO_OFFLINE_FLAG="$CARGO_OFFLINE_FLAG" SED="$SED"
 ABS_RPKG_SRC="$abs_rpkg_src" CARGO_CMD="$CARGO_CMD" CARGO_OFFLINE_FLAG="$CARGO_OFFLINE_FLAG"
 
@@ -3242,6 +3525,7 @@ do
     "src/$PACKAGE_NAME-win.def") CONFIG_FILES="$CONFIG_FILES src/$PACKAGE_NAME-win.def:src/win.def.in" ;;
     "unpack-vendor-tarball") CONFIG_COMMANDS="$CONFIG_COMMANDS unpack-vendor-tarball" ;;
     "cargo-config") CONFIG_COMMANDS="$CONFIG_COMMANDS cargo-config" ;;
+    "lock-shape-check") CONFIG_COMMANDS="$CONFIG_COMMANDS lock-shape-check" ;;
     "cargo-lockfile-compat") CONFIG_COMMANDS="$CONFIG_COMMANDS cargo-lockfile-compat" ;;
     "post-config") CONFIG_COMMANDS="$CONFIG_COMMANDS post-config" ;;
 
@@ -3674,15 +3958,46 @@ printf '%s\n' "$as_me: executing $ac_file commands" >&6;}
     else
       echo "configure: tarball install — vendor/ already populated"
     fi
-                                    if test -f "$abs_rpkg_src/rust/Cargo.lock"; then
-      $SED -i.bak '/^checksum = /d' "$abs_rpkg_src/rust/Cargo.lock" && \
-        rm -f "$abs_rpkg_src/rust/Cargo.lock.bak"
-    fi
-  fi
+                          fi
  ;;
     "cargo-config":C)
   RPKG_CFG="src/rust/.cargo/config.toml"
   rm -f "$RPKG_CFG"
+
+                  emit_env_block() {
+    echo "[env]"
+    if test -n "$CARGO_ENV_MACOS_DEPLOY_TARGET"; then
+      echo "MACOSX_DEPLOYMENT_TARGET = \"$CARGO_ENV_MACOS_DEPLOY_TARGET\""
+    fi
+    if test -n "$CARGO_ENV_WIN_LINKER"; then
+      case "$CARGO_ENV_RUST_TARGET_UPPER" in
+        *AARCH64*WINDOWS*)
+          echo "CARGO_TARGET_AARCH64_PC_WINDOWS_GNU_LINKER = \"$CARGO_ENV_WIN_LINKER\""
+          ;;
+        *)
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = \"$CARGO_ENV_WIN_LINKER\""
+          ;;
+      esac
+    fi
+    echo 'CARGO_NET_GIT_FETCH_WITH_CLI = "true"'
+    if test -n "$CARGO_ENV_R_AR" && test "$CARGO_ENV_R_AR" != "ar"; then
+      echo "AR_$CARGO_ENV_RUST_TARGET = \"$CARGO_ENV_R_AR\""
+    fi
+    if test -n "$CARGO_ENV_R_RANLIB" && test "$CARGO_ENV_R_RANLIB" != "ranlib"; then
+      echo "RANLIB_$CARGO_ENV_RUST_TARGET = \"$CARGO_ENV_R_RANLIB\""
+    fi
+    if test -n "$CARGO_ENV_PROFILE_LTO"; then
+      CARGO_ENV_PROFILE_UPPER=`echo "$CARGO_PROFILE" | tr 'a-z' 'A-Z'`
+      echo "CARGO_PROFILE_${CARGO_ENV_PROFILE_UPPER}_LTO = \"$CARGO_ENV_PROFILE_LTO\""
+    fi
+    if test -n "$CARGO_ENV_ABI_CFLAGS"; then
+      echo "CFLAGS_$CARGO_ENV_RUST_TARGET = \"$CARGO_ENV_ABI_CFLAGS\""
+    fi
+    if test -n "$CARGO_ENV_ABI_CXXFLAGS"; then
+      echo "CXXFLAGS_$CARGO_ENV_RUST_TARGET = \"$CARGO_ENV_ABI_CXXFLAGS\""
+    fi
+    echo ""
+  }
 
   if test "$IS_TARBALL_INSTALL" = "true"; then
     {
@@ -3690,6 +4005,7 @@ printf '%s\n' "$as_me: executing $ac_file commands" >&6;}
       echo "# Tarball install: redirect crates.io and the miniextendr git source"
       echo "# to the unpacked inst/vendor.tar.xz."
       echo ""
+      emit_env_block
       echo "[source.crates-io]"
       echo 'replace-with = "vendored-sources"'
       echo ""
@@ -3713,6 +4029,7 @@ printf '%s\n' "$as_me: executing $ac_file commands" >&6;}
       echo "# Source install (monorepo): patch the miniextendr git source to"
       echo "# resolve against local workspace crates."
       echo ""
+      emit_env_block
       echo '[patch."https://github.com/A2-ai/miniextendr"]'
       echo "miniextendr-api    = { path = \"$MONOREPO_ROOT_CARGO/miniextendr-api\" }"
       echo "miniextendr-lint   = { path = \"$MONOREPO_ROOT_CARGO/miniextendr-lint\" }"
@@ -3721,7 +4038,7 @@ printf '%s\n' "$as_me: executing $ac_file commands" >&6;}
       echo "[build]"
       echo "target-dir = \"$CARGO_TARGET_DIR_CARGO\""
     } > "$RPKG_CFG"
-    echo "configure: wrote $RPKG_CFG (source mode, monorepo override)"
+    echo "configure: wrote $RPKG_CFG (from-source mode, monorepo override)"
 
   else
     {
@@ -3730,10 +4047,20 @@ printf '%s\n' "$as_me: executing $ac_file commands" >&6;}
       echo "# declared in Cargo.toml. First build downloads, subsequent"
       echo "# builds use cargo's git cache."
       echo ""
+      emit_env_block
       echo "[build]"
       echo "target-dir = \"$CARGO_TARGET_DIR_CARGO\""
     } > "$RPKG_CFG"
-    echo "configure: wrote $RPKG_CFG (source mode, no monorepo siblings)"
+    echo "configure: wrote $RPKG_CFG (from-source mode, no monorepo siblings)"
+  fi
+ ;;
+    "lock-shape-check":C)
+  if test "$IS_TARBALL_INSTALL" = "true"; then
+    if "${R_HOME}/bin/Rscript" tools/lock-shape-check.R "tarball" "src/rust/Cargo.lock"; then
+      echo "configure: lock-shape OK"
+    else
+      as_fn_error $? "Cargo.lock shape drift detected in tarball mode; see message above" "$LINENO" 5
+    fi
   fi
  ;;
     "cargo-lockfile-compat":C)

@@ -6,13 +6,21 @@ AC_CONFIG_AUX_DIR([tools])
 
 dnl Verify we're running from the R package directory (not the monorepo root)
 dnl This prevents accidental creation of src/, config.log, etc. in the wrong place
-if test ! -f "DESCRIPTION" || test ! -f "NAMESPACE"; then
+dnl Branch the diagnostic so it names the file that is actually missing.
+if test ! -f "DESCRIPTION"; then
   AC_MSG_ERROR([configure must be run from the rpkg directory (where DESCRIPTION exists).
 
   If you're in the monorepo root, run:
     cd rpkg && ./configure
   Or use:
     just configure])
+fi
+if test ! -f "NAMESPACE"; then
+  AC_MSG_ERROR([NAMESPACE not found (DESCRIPTION is present, so the working directory is correct).
+
+  Generate it before configuring:
+    Rscript -e 'devtools::document()'
+  Or add a stub NAMESPACE if you have no roxygen tags yet.])
 fi
 
 dnl Canonicalize build/host triples for cross-compilation support
@@ -36,15 +44,112 @@ abs_rpkg_src="$abs_top_srcdir/src"
 AC_SUBST([ABS_RPKG_SRCDIR], ["$abs_rpkg_src"])
 RUST_SRC_DIR="$abs_rpkg_src/rust"
 
+dnl ---- install-mode self-repair ----
+dnl Goal: a tarball that arrives missing inst/vendor.tar.xz becomes self-repairing
+dnl at install time, so end users (who don't have `just`) get an offline-mode
+dnl build automatically without manual vendoring.
+dnl
+dnl Triggers cargo-revendor when ALL of these hold:
+dnl   1. inst/vendor.tar.xz is absent (nothing to install offline from)
+dnl   2. cargo-revendor is on PATH (end user has the toolchain to do it)
+dnl   3. we are NOT in a developer source tree (no .git ancestor)
+dnl
+dnl Skipping in git-tracked source trees keeps `bash ./configure` from devsource
+dnl fast: the dev workflow uses explicit `miniextendr_vendor()` to produce the
+dnl tarball when needed, and dev iteration runs in source-mode against
+dnl whichever path overrides the .cargo/config.toml provides.
+dnl
+dnl Failure mode: if cargo-revendor itself fails, fall through to source mode
+dnl rather than aborting — installs without network or without a working cargo
+dnl-revendor still proceed via cargo's network resolution at compile time.
+dnl
+dnl On CRAN's offline build farm the auto-vendor branch is never taken
+dnl (cargo-revendor isn't installed there), so a maintainer who ships a tarball
+dnl missing inst/vendor.tar.xz fails CRAN's offline check loudly. That is the
+dnl intended canary.
+SOURCE_IS_GIT=false
+_walk_dir="$abs_top_srcdir"
+while test -n "$_walk_dir" && test "$_walk_dir" != "/"; do
+  if test -e "$_walk_dir/.git"; then
+    SOURCE_IS_GIT=true
+    break
+  fi
+  _walk_dir=`dirname "$_walk_dir"`
+done
+
+dnl Distinguish a checked-out source tree from a package produced by
+dnl `R CMD build` / installed by `R CMD INSTALL`. R stamps a `Packaged:` field
+dnl into the DESCRIPTION it seals (tools:::.build_packages, unconditional) and
+dnl `R CMD INSTALL` adds `Built:`. A git working tree's DESCRIPTION has neither.
+dnl Used by the leaked-tarball guard below to avoid misfiring on a legitimate
+dnl built-tarball install that happens to be extracted into a dir nested under
+dnl the repo .git (e.g. <pkg>.Rcheck/<pkg>/ during `R CMD check`).
+SOURCE_IS_BUILT=false
+if grep -Eq '^(Packaged|Built):' "$abs_top_srcdir/DESCRIPTION" 2>/dev/null; then
+  SOURCE_IS_BUILT=true
+fi
+
+dnl ---- leaked-tarball guard (#1029) ----
+dnl A vendor tarball sitting in a git-tracked source tree is almost always a
+dnl LEAK: a previous build that produced inst/vendor.tar.xz was interrupted
+dnl before its cleanup ran. configure would silently flip to tarball mode and
+dnl build against the frozen vendored sources, ignoring local source edits.
+dnl Fail loud instead. The guard fires only for a real source tree: the
+dnl SOURCE_IS_BUILT gate (no `Packaged:`/`Built:` in DESCRIPTION) suppresses it
+dnl on a legitimate built-tarball install — e.g. `R CMD check` extracts the
+dnl built tarball into <pkg>.Rcheck/<pkg>/, which is nested under the repo .git
+dnl (SOURCE_IS_GIT=true) yet ships the bundled tarball on purpose. bootstrap.R
+dnl also exports MINIEXTENDR_BOOTSTRAP=1 when it invokes configure (after
+dnl deliberately producing the tarball for the build, in a not-yet-built source
+dnl tree), so this guard stays silent on that legitimate produce-then-consume
+dnl path too. End-user tarball installs extract to a dir with no .git, so the
+dnl guard never fires for them either (SOURCE_IS_GIT=false).
+if test -f "$abs_top_srcdir/inst/vendor.tar.xz" \
+   && test "$SOURCE_IS_GIT" = "true" \
+   && test "$SOURCE_IS_BUILT" = "false" \
+   && test -z "${MINIEXTENDR_BOOTSTRAP+x}"; then
+  AC_MSG_ERROR([leaked vendor tarball detected in a git-tracked source tree.
+
+  inst/vendor.tar.xz is present AND this is a git working tree, so configure
+  would silently enter tarball mode and build against frozen vendored sources,
+  ignoring any local source edits. This is almost always a leftover from an
+  interrupted build.
+
+  Remove it before building from source:
+    rm -f inst/vendor.tar.xz
+
+  Or run miniextendr_clean_vendor_leak, or minirextendr::miniextendr_doctor
+  to diagnose.])
+fi
+
+if test ! -f "$abs_top_srcdir/inst/vendor.tar.xz" \
+   && test "$SOURCE_IS_GIT" = "false" \
+   && command -v cargo-revendor >/dev/null 2>&1; then
+  AC_MSG_NOTICE([auto-vendor: inst/vendor.tar.xz absent, running cargo-revendor])
+  mkdir -p "$abs_top_srcdir/inst"
+  if (cd "$abs_top_srcdir" && cargo revendor \
+        --manifest-path src/rust/Cargo.toml \
+        --output vendor \
+        --compress inst/vendor.tar.xz \
+        --blank-md --source-marker --force) >&2; then
+    AC_MSG_NOTICE([auto-vendor: produced inst/vendor.tar.xz])
+  else
+    AC_MSG_WARN([auto-vendor: cargo-revendor failed; falling through to source mode])
+    rm -f "$abs_top_srcdir/inst/vendor.tar.xz"
+  fi
+fi
+
 dnl ---- install-mode detection ----
-dnl Single signal: presence of inst/vendor.tar.xz.
-dnl   Tarball install (R CMD INSTALL <built-tarball>): tarball is shipped inside
-dnl     the build artifact by `just vendor` (called from `just r-cmd-build`).
-dnl     configure unpacks it, writes a vendored cargo source replacement, and
-dnl     builds offline.
-dnl   Source install (R CMD INSTALL ., devtools::install, install_github, etc.):
-dnl     no tarball. configure leaves vendoring alone and lets cargo resolve
-dnl     deps over the network (or via monorepo path overrides — see below).
+dnl Single signal: presence of inst/vendor.tar.xz (possibly produced by the
+dnl self-repair block above, by bootstrap.R at build time, or by an explicit
+dnl `miniextendr_vendor()` call).
+dnl   Tarball install (R CMD INSTALL <built-tarball>): tarball is in the
+dnl     artifact. configure unpacks it, writes a vendored cargo source
+dnl     replacement, and builds offline.
+dnl   Source install (R CMD INSTALL ., devtools::install, install_github, etc.,
+dnl     in a git-tracked source tree): no tarball, no auto-vendor. configure
+dnl     leaves vendoring alone and lets cargo resolve deps over the network
+dnl     (or via monorepo path overrides — see below).
 dnl
 dnl See docs/CRAN_COMPATIBILITY.md for the full decision table.
 if test -f "$abs_top_srcdir/inst/vendor.tar.xz"; then
@@ -142,6 +247,39 @@ AC_ARG_VAR([RUST_TOOLCHAIN],[Rust toolchain selector like '+stable' or '+nightly
 : ${RUST_TOOLCHAIN=""}
 AC_SUBST([RUST_TOOLCHAIN])
 
+dnl ---- wasm32 / webR install detection ----
+dnl When R CMD INSTALL passes CC=emcc (webR's Makevars injects this), we're
+dnl cross-compiling for wasm32. Override the Cargo target, force nightly only
+dnl if the user hasn't pinned RUST_TOOLCHAIN, and validate that the
+dnl pre-generated wasm_registry.rs is present.
+AC_MSG_CHECKING([whether CC is emscripten (webR/wasm32 install)])
+case "${CC}" in
+  *emcc*|*em++*)
+    is_wasm_install=true
+    CARGO_BUILD_TARGET=wasm32-unknown-emscripten
+    if test -z "$RUST_TOOLCHAIN"; then
+      RUST_TOOLCHAIN="+nightly"
+    fi
+    CARGO_BUILD_STD_FLAG="-Z build-std=std,panic_abort"
+    AC_MSG_RESULT([yes])
+    ;;
+  *)
+    is_wasm_install=false
+    CARGO_BUILD_STD_FLAG=
+    AC_MSG_RESULT([no])
+    ;;
+esac
+if test "$is_wasm_install" = true; then
+  if test ! -f "$srcdir/src/rust/wasm_registry.rs"; then
+    AC_MSG_ERROR([wasm32 install requires src/rust/wasm_registry.rs.
+Run 'R CMD INSTALL' (or 'just rcmdinstall') on the host first to regenerate
+it from the cdylib slice contents, then ship the source tree to the wasm builder.])
+  fi
+fi
+AC_SUBST([IS_WASM_INSTALL], [$is_wasm_install])
+AC_SUBST([CARGO_BUILD_STD_FLAG])
+dnl CARGO_BUILD_TARGET is AC_SUBST'd later in the Cargo target/profile section.
+
 dnl Convenience: cargo command that includes optional toolchain selector
 CARGO_CMD="$CARGO $RUST_TOOLCHAIN"
 
@@ -180,7 +318,28 @@ dnl It equals the Rust crate name (hyphens/dots → underscores)
 
 AC_ARG_VAR([ENV_RUSTFLAGS], [Rust compiler flags passed as RUSTFLAGS])
 : ${ENV_RUSTFLAGS="$RUSTFLAGS"}
+dnl wasm32/webR side-modules need one RUSTFLAGS adjustment.
+dnl
+dnl -Zdefault-visibility=hidden
+dnl    Without it, the Rust staticlib drags thousands of mangled stdlib/dep
+dnl    symbols into the side-module's EXPORT table and webR's dyn.load fails.
+dnl    Hiding all symbols by default leaves only your `#[no_mangle] extern "C"`
+dnl    entry points exported. This is a nightly -Z flag, but the wasm target
+dnl    already requires nightly via -Z build-std, so it adds no new constraint.
+dnl    (savvy's approach; endorsed by webR's maintainer, r-wasm/webr#532.)
+dnl
+dnl (`-C relocation-model=pic` was dropped — wasm32-unknown-emscripten is
+dnl position-independent by default, so it was a no-op. See miniextendr #745.)
+if test "$is_wasm_install" = true; then
+  ENV_RUSTFLAGS="$ENV_RUSTFLAGS -Zdefault-visibility=hidden"
+fi
 AC_SUBST([ENV_RUSTFLAGS])
+
+AC_ARG_VAR([CARGO_HOME], [cargo registry/cache directory (defaults to ~/.cargo; \
+  useful in restricted environments where HOME is read-only)])
+: ${CARGO_HOME=""}
+AC_SUBST([CARGO_HOME])
+AS_IF([test -n "$CARGO_HOME"], [AC_MSG_NOTICE([CARGO_HOME           = $CARGO_HOME])])
 
 AC_ARG_VAR([CARGO_BUILD_TARGET], [Cargo build target triple (e.g. aarch64-apple-darwin)])
 if test -z "$CARGO_BUILD_TARGET"; then
@@ -219,6 +378,8 @@ AS_IF([test -n "$CARGO_BUILD_TARGET"],
       [AC_MSG_NOTICE([CARGO_BUILD_TARGET    = $CARGO_BUILD_TARGET])])
 AS_IF([test -n "$CARGO_FEATURES"],
       [AC_MSG_NOTICE([CARGO_FEATURES  = $CARGO_FEATURES])])
+AS_IF([test "$IS_WASM_INSTALL" = "true"],  [AC_MSG_NOTICE([IS_WASM_INSTALL      = true (CC=emcc detected)])])
+AS_IF([test -n "$CARGO_BUILD_STD_FLAG"],   [AC_MSG_NOTICE([CARGO_BUILD_STD_FLAG = $CARGO_BUILD_STD_FLAG])])
 
 dnl ---- package name → Rust-safe variants ----
 dnl Use PACKAGE_NAME (case-preserving) not PACKAGE_TARNAME (lowercased)
@@ -273,7 +434,22 @@ dnl When found, configure writes a [patch."<git-url>"] block into
 dnl .cargo/config.toml so cargo resolves the three workspace crates against
 dnl local sources instead of fetching the git URL. Edits to
 dnl miniextendr-{api,lint,macros} propagate immediately on the next build.
+
+dnl ---- explicit local framework checkout (minirextendr::use_local_miniextendr) ----
+dnl A one-line .miniextendr-local file at the package root records an absolute
+dnl path to a local miniextendr checkout. Dev-only: the file is gitignored and
+dnl Rbuildignored, and tarball mode (inst/vendor.tar.xz) always wins below.
 MONOREPO_ROOT=""
+if test -f "$abs_top_srcdir/.miniextendr-local"; then
+  _local_mx=$(head -n 1 "$abs_top_srcdir/.miniextendr-local")
+  if test -n "$_local_mx" && test -f "$_local_mx/miniextendr-api/Cargo.toml"; then
+    MONOREPO_ROOT="$_local_mx"
+    AC_MSG_NOTICE([local miniextendr    = $_local_mx (.miniextendr-local)])
+  else
+    AC_MSG_WARN([.miniextendr-local ignored: miniextendr-api/Cargo.toml not found under '$_local_mx'])
+  fi
+fi
+if test -z "$MONOREPO_ROOT"; then
 _probe="$abs_top_srcdir"
 for _i in 1 2 3 4 5; do
   _probe="$(dirname "$_probe")"
@@ -283,6 +459,7 @@ for _i in 1 2 3 4 5; do
     break
   fi
 done
+fi
 
 dnl Cargo path version (Windows-native if MSYS2)
 MONOREPO_ROOT_CARGO="$MONOREPO_ROOT"
@@ -301,6 +478,218 @@ if test -n "$MONOREPO_ROOT"; then
     AC_MSG_NOTICE([monorepo siblings    = $MONOREPO_ROOT (source-mode patch override active)])
   fi
 fi
+
+dnl ---- derive Cargo [env] block (R-ABI matching) ----
+dnl Goal: every cargo invocation (local dev, CI, end-user R CMD INSTALL) inherits
+dnl R-compatible toolchain settings so the Rust staticlib's ABI matches R's build.
+dnl
+dnl Shell env wins over `[env]` (no `force = true`) — users can still override
+dnl via `MACOSX_DEPLOYMENT_TARGET=12.0 R CMD INSTALL .` etc.
+dnl
+dnl Per-platform derivations:
+dnl   macOS   : MACOSX_DEPLOYMENT_TARGET (4-step fallback: env → R config → otool → arch default).
+dnl   Windows : CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER (and aarch64) from rtools gcc when detected.
+dnl   Linux   : conservative — only AR_<target>/RANLIB_<target> overrides if R's are non-default.
+dnl   All     : CARGO_NET_GIT_FETCH_WITH_CLI = "true" (works around in-tree rustls/CA issues).
+dnl
+dnl We pre-compute derivation variables here so AC_CONFIG_COMMANDS just writes
+dnl the lines out. The block is emitted as the FIRST table in each install-mode
+dnl branch of .cargo/config.toml (TOML table-scoping requires it).
+
+dnl Rust target triple for *_<target> environment variables. Prefer the user's
+dnl explicit CARGO_BUILD_TARGET; otherwise ask rustc for its default host.
+CARGO_ENV_RUST_TARGET="$CARGO_BUILD_TARGET"
+if test -z "$CARGO_ENV_RUST_TARGET"; then
+  CARGO_ENV_RUST_TARGET=`"$RUSTC" -vV 2>/dev/null | $SED -n 's/^host: //p'`
+fi
+
+dnl Uppercase + s/-/_/g, e.g. aarch64-apple-darwin -> AARCH64_APPLE_DARWIN.
+CARGO_ENV_RUST_TARGET_UPPER=`echo "$CARGO_ENV_RUST_TARGET" | tr 'a-z-' 'A-Z_'`
+
+dnl --- macOS: derive MACOSX_DEPLOYMENT_TARGET ----
+dnl Derivation order (first match wins, logged via AC_MSG_NOTICE):
+dnl   1. Shell env MACOSX_DEPLOYMENT_TARGET (caller's value)
+dnl   2. -mmac(os|osx)-version-min=X.Y in R CMD config {CC,CXX,FC}
+dnl   3. otool -l "$R_HOME/bin/exec/R" → LC_BUILD_VERSION minos
+dnl   4. Arch default: aarch64 → 14.0, x86_64 → 11.0 (per R-admin §macOS).
+CARGO_ENV_MACOS_DEPLOY_TARGET=""
+CARGO_ENV_MACOS_DEPLOY_SOURCE=""
+case "$host_os" in
+  darwin*)
+    dnl Step 1: shell env wins (cargo [env] no-force semantics mean we could
+    dnl emit it and shell would still win, but skipping emission keeps the
+    dnl config.toml output stable across invocations with different env vars).
+    if test -n "${MACOSX_DEPLOYMENT_TARGET}"; then
+      CARGO_ENV_MACOS_DEPLOY_TARGET="$MACOSX_DEPLOYMENT_TARGET"
+      CARGO_ENV_MACOS_DEPLOY_SOURCE="shell env"
+    fi
+
+    dnl Step 2: parse R CMD config CC / CXX / FC. clang spells it
+    dnl `-mmacos-version-min`; legacy gfortran / older clang use `-mmacosx-version-min`.
+    if test -z "$CARGO_ENV_MACOS_DEPLOY_TARGET"; then
+      for _cfg_key in CC CXX FC; do
+        _flag_val=`"${R_HOME}/bin/R" CMD config "$_cfg_key" 2>/dev/null \
+          | $SED -n 's/.*-mmac[ox]*-version-min=\(@<:@0-9@:>@*\.@<:@0-9@:>@*\).*/\1/p' \
+          | head -n1`
+        if test -n "$_flag_val"; then
+          CARGO_ENV_MACOS_DEPLOY_TARGET="$_flag_val"
+          CARGO_ENV_MACOS_DEPLOY_SOURCE="R CMD config $_cfg_key"
+          break
+        fi
+      done
+    fi
+
+    dnl Step 3: otool -l on R binary. LC_BUILD_VERSION's `minos` field is
+    dnl the authoritative target R was linked against.
+    if test -z "$CARGO_ENV_MACOS_DEPLOY_TARGET"; then
+      if command -v otool >/dev/null 2>&1; then
+        _otool_val=`otool -l "${R_HOME}/bin/exec/R" 2>/dev/null \
+          | awk '/LC_BUILD_VERSION/ {found=1} found && /minos/ {print $2; exit}'`
+        if test -n "$_otool_val"; then
+          CARGO_ENV_MACOS_DEPLOY_TARGET="$_otool_val"
+          CARGO_ENV_MACOS_DEPLOY_SOURCE="otool LC_BUILD_VERSION"
+        fi
+      fi
+    fi
+
+    dnl Step 4: arch default. R-admin (Sec. "macOS") states current CRAN
+    dnl targets are macOS 14.0 (arm64) and 11.0 (Intel).
+    if test -z "$CARGO_ENV_MACOS_DEPLOY_TARGET"; then
+      case "$host_cpu" in
+        arm64|aarch64) CARGO_ENV_MACOS_DEPLOY_TARGET="14.0" ;;
+        *)             CARGO_ENV_MACOS_DEPLOY_TARGET="11.0" ;;
+      esac
+      CARGO_ENV_MACOS_DEPLOY_SOURCE="arch default ($host_cpu)"
+    fi
+
+    AC_MSG_NOTICE([MACOSX_DEPLOYMENT_TARGET = $CARGO_ENV_MACOS_DEPLOY_TARGET (source: $CARGO_ENV_MACOS_DEPLOY_SOURCE)])
+    ;;
+esac
+
+dnl --- Windows: derive rtools gcc linker path ----
+dnl Strategy: R CMD config CC's first token is the C compiler path. If its
+dnl sibling `gcc` (or `gcc.exe`) exists, use that as the cargo linker for
+dnl x86_64-pc-windows-gnu / aarch64-pc-windows-gnu. This pins cargo to rtools'
+dnl gcc rather than whichever gcc happens to be on PATH (MSYS2's, etc).
+CARGO_ENV_WIN_LINKER=""
+case "$host_os" in
+  *msys*|*cygwin*|*mingw*)
+    _r_cc=`"${R_HOME}/bin/R" CMD config CC 2>/dev/null | awk '{print $1}'`
+    if test -n "$_r_cc"; then
+      _r_cc_bindir=`dirname "$_r_cc"`
+      for _gcc_cand in "$_r_cc_bindir/gcc.exe" "$_r_cc_bindir/gcc"; do
+        if test -x "$_gcc_cand"; then
+          dnl Cargo's [env] consumes the path raw; TOML needs forward slashes.
+          dnl `cygpath -m` produces a Windows-native path with forward slashes,
+          dnl which is exactly what cargo's TOML parser wants.
+          _gcc_native="$_gcc_cand"
+          if test "x$CYGPATH" != "xno"; then
+            _gcc_native=`"$CYGPATH" -m "$_gcc_cand" 2>/dev/null || echo "$_gcc_cand"`
+          fi
+          CARGO_ENV_WIN_LINKER="$_gcc_native"
+          break
+        fi
+      done
+    fi
+    if test -n "$CARGO_ENV_WIN_LINKER"; then
+      AC_MSG_NOTICE([rtools linker        = $CARGO_ENV_WIN_LINKER])
+    else
+      AC_MSG_NOTICE([rtools linker        = (not detected — cargo will use default gcc on PATH)])
+    fi
+    ;;
+esac
+
+dnl --- AR / RANLIB overrides (all platforms, only if non-default) ----
+dnl R may be configured with a non-default AR/RANLIB (e.g. a cross-toolchain
+dnl prefix). Cargo's default is `ar` / `ranlib`, so we only emit overrides
+dnl when R's values differ — otherwise we'd just add noise to the config.
+CARGO_ENV_R_AR=`"${R_HOME}/bin/R" CMD config AR 2>/dev/null`
+CARGO_ENV_R_RANLIB=`"${R_HOME}/bin/R" CMD config RANLIB 2>/dev/null`
+
+dnl --- LTO: mirror R's --enable-lto into cargo profile LTO ----
+dnl R's `--enable-lto` substitutes a value into the LTO make variable
+dnl (typically `-flto`, but users can pass `LTO=-flto=thin` etc).
+dnl We map the flag space onto cargo's profile.lto values:
+dnl   -flto=thin              -> "thin"
+dnl   -flto=fat | -flto=full  -> "fat"
+dnl   -flto* (anything else)  -> "thin"  (conservative)
+dnl   empty                   -> ""      (no emission)
+CARGO_ENV_PROFILE_LTO=""
+_r_lto=`"${R_HOME}/bin/R" CMD config LTO 2>/dev/null`
+case "$_r_lto" in
+  *-flto=thin*)              CARGO_ENV_PROFILE_LTO="thin" ;;
+  *-flto=fat*|*-flto=full*)  CARGO_ENV_PROFILE_LTO="fat"  ;;
+  *-flto*)                   CARGO_ENV_PROFILE_LTO="thin" ;;
+  *)                         CARGO_ENV_PROFILE_LTO=""     ;;
+esac
+if test -n "$CARGO_ENV_PROFILE_LTO"; then
+  AC_MSG_NOTICE([R LTO flag           = $_r_lto (cargo profile lto: $CARGO_ENV_PROFILE_LTO)])
+fi
+
+dnl --- CFLAGS / CXXFLAGS: ABI-only allowlist from R config ----
+dnl Cargo applies CFLAGS_<target> and CXXFLAGS_<target> to *every* transitive
+dnl C/C++ build script (cc, cmake, etc.). R's raw CFLAGS contain R-specific
+dnl -I paths, R-private defines, and warning flags that have no business in
+dnl cargo deps. We allowlist a small set of ABI-affecting flags; everything
+dnl else is stripped. See issue #598 for the full rationale table.
+CARGO_ENV_ABI_CFLAGS=""
+CARGO_ENV_ABI_CXXFLAGS=""
+
+_r_cflags=`"${R_HOME}/bin/R" CMD config CFLAGS 2>/dev/null`
+_r_cxxflags=`"${R_HOME}/bin/R" CMD config CXXFLAGS 2>/dev/null`
+
+dnl Allowlist regex. Keep ABI-affecting flags only:
+dnl   -march=, -mtune=, -mfpmath=, -mfpu=, -mfloat-abi=, -mabi=, -m{sse,avx,ssse,pclmul,aes},
+dnl   -pthread, -D_REENTRANT, -fopenmp[=…]
+dnl No character classes are used (no `[...]`), so no m4 bracket escaping needed.
+_abi_allow_re='^-march=|^-mtune=|^-mfpmath=|^-mfpu=|^-mfloat-abi=|^-mabi=|^-msse|^-mavx|^-mssse|^-mpclmul|^-maes|^-pthread$|^-D_REENTRANT$|^-fopenmp'
+
+if test -n "$_r_cflags"; then
+  CARGO_ENV_ABI_CFLAGS=`echo "$_r_cflags" | tr ' ' '\n' | grep -E "$_abi_allow_re" | tr '\n' ' ' | $SED 's/ *$//'`
+fi
+if test -n "$_r_cxxflags"; then
+  CARGO_ENV_ABI_CXXFLAGS=`echo "$_r_cxxflags" | tr ' ' '\n' | grep -E "$_abi_allow_re" | tr '\n' ' ' | $SED 's/ *$//'`
+fi
+
+dnl wasm32/webR: force -fPIC into the cargo C/C++ build-script flags.
+dnl
+dnl cc-rs hard-excludes the wasm32/wasm64 arch from its default `-fPIC` logic
+dnl (cc 1.2 src/lib.rs: the PIC default is `... && target.arch != "wasm32" &&
+dnl target.arch != "wasm64"`), and `-C relocation-model=pic` does NOT change
+dnl this — cc keys off the arch, not CARGO_CFG_RELOCATION_MODEL. Pure-Rust deps
+dnl are fine (the emscripten target emits PIC by default), but any cc-built C
+dnl dependency (e.g. zstd-sys's bundled libzstd) then produces non-PIC objects.
+dnl emscripten SIDE_MODULE links demand position-independent objects, so the
+dnl link fails: `relocation R_WASM_MEMORY_ADDR_SLEB cannot be used against
+dnl symbol .L.str.N; recompile with -fPIC`. cc reads CFLAGS_<target> (form #1,
+dnl literal dashed triple) and appends it verbatim, so this reaches every
+dnl transitive C/C++ build script. Native builds are untouched (gated on
+dnl is_wasm_install). Surfaced by the zstd optional integration (#1005).
+if test "$is_wasm_install" = true; then
+  if test -n "$CARGO_ENV_ABI_CFLAGS"; then
+    CARGO_ENV_ABI_CFLAGS="$CARGO_ENV_ABI_CFLAGS -fPIC"
+  else
+    CARGO_ENV_ABI_CFLAGS="-fPIC"
+  fi
+  if test -n "$CARGO_ENV_ABI_CXXFLAGS"; then
+    CARGO_ENV_ABI_CXXFLAGS="$CARGO_ENV_ABI_CXXFLAGS -fPIC"
+  else
+    CARGO_ENV_ABI_CXXFLAGS="-fPIC"
+  fi
+fi
+
+if test -n "$CARGO_ENV_ABI_CFLAGS"; then
+  AC_MSG_NOTICE([cargo CFLAGS_<target>  = $CARGO_ENV_ABI_CFLAGS])
+fi
+if test -n "$CARGO_ENV_ABI_CXXFLAGS"; then
+  AC_MSG_NOTICE([cargo CXXFLAGS_<target>= $CARGO_ENV_ABI_CXXFLAGS])
+fi
+
+dnl Individual env-derivation variables are propagated to AC_CONFIG_COMMANDS
+dnl via the trailing variable-pass list, and the [env] block body is composed
+dnl inline inside that shell context. Pre-composing here and passing a single
+dnl newline-separated string trips on AC_CONFIG_COMMANDS' heredoc-style
+dnl variable propagation (embedded `"` breaks the outer assignment quoting).
 
 dnl ---- output files ----
 dnl Create .cargo directory (it's a hidden dir not included in tarball)
@@ -331,18 +720,12 @@ AC_CONFIG_COMMANDS([unpack-vendor-tarball],
     else
       echo "configure: tarball install — vendor/ already populated"
     fi
-    dnl Strip checksum lines from Cargo.lock unconditionally in tarball mode.
-    dnl Vendored sources carry no registry checksums, but Cargo.lock can
-    dnl re-acquire them after a cargo update, a fresh git checkout, or any
-    dnl workspace edit that regenerates the lockfile. Cargo 1.95+ refuses to
-    dnl verify checksums against a vendored-sources tree, producing errors like:
-    dnl   error: checksum for `<crate>` could not be calculated, but a checksum
-    dnl          is listed in the existing lock file
-    dnl The sed invocation is idempotent (no-op when no checksum lines exist).
-    if test -f "$abs_rpkg_src/rust/Cargo.lock"; then
-      $SED -i.bak '/^checksum = /d' "$abs_rpkg_src/rust/Cargo.lock" && \
-        rm -f "$abs_rpkg_src/rust/Cargo.lock.bak"
-    fi
+    dnl AUDIT-427: checksum strip removed. PR #408 rewrote cargo-revendor to
+    dnl preserve the original `package` field in each .cargo-checksum.json
+    dnl (matching the lockfile's `checksum = "..."` line). Cargo can therefore
+    dnl verify checksums end-to-end; stripping them discards a valid integrity
+    dnl check. See issue #427 and tools/lock-shape-check.R which explicitly
+    dnl documents that checksum lines are allowed in tarball-shape locks.
   fi
 ],
 [IS_TARBALL_INSTALL="$IS_TARBALL_INSTALL"
@@ -371,10 +754,62 @@ dnl
 dnl Source install + no monorepo:
 dnl   [build]                                 target-dir = "<rust-target>"
 dnl   (cargo follows the git URL declared in Cargo.toml)
+dnl
+dnl WARNING: stale inst/vendor.tar.xz hazard.
+dnl   `just r-cmd-build` and `just r-cmd-check` create inst/vendor.tar.xz
+dnl   transiently and remove it via a `trap ... EXIT` handler; if the process is killed
+dnl   before the trap fires, the file is left behind.  Configure then detects
+dnl   it and sets IS_TARBALL_INSTALL=true, which (a) writes a tarball-mode
+dnl   config.toml here and (b) makes Makevars.in's post-build cleanup delete
+dnl   src/rust/.cargo/ from the SOURCE TREE on the next `R CMD INSTALL .`.
+dnl   Recovery: rm inst/vendor.tar.xz && bash ./configure
 AC_CONFIG_COMMANDS([cargo-config],
 [
   RPKG_CFG="src/rust/.cargo/config.toml"
   rm -f "$RPKG_CFG"
+
+  dnl `[env]` is emitted as the FIRST table in every branch. TOML table-scoping
+  dnl makes any later `[…]` heading end the previous table — so `[env]` must
+  dnl precede `[source.*]` / `[patch.*]` / `[build]` to stay independent.
+  dnl Cargo applies these to every cargo invocation in this package. Shell env
+  dnl wins (no `force = true`), so users can override case-by-case.
+  dnl
+  dnl Derivation variables are passed individually via the variable-pass list
+  dnl (see second arg) — composing the body here keeps quoting predictable.
+  emit_env_block() {
+    echo "@<:@env@:>@"
+    if test -n "$CARGO_ENV_MACOS_DEPLOY_TARGET"; then
+      echo "MACOSX_DEPLOYMENT_TARGET = \"$CARGO_ENV_MACOS_DEPLOY_TARGET\""
+    fi
+    if test -n "$CARGO_ENV_WIN_LINKER"; then
+      case "$CARGO_ENV_RUST_TARGET_UPPER" in
+        *AARCH64*WINDOWS*)
+          echo "CARGO_TARGET_AARCH64_PC_WINDOWS_GNU_LINKER = \"$CARGO_ENV_WIN_LINKER\""
+          ;;
+        *)
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = \"$CARGO_ENV_WIN_LINKER\""
+          ;;
+      esac
+    fi
+    echo 'CARGO_NET_GIT_FETCH_WITH_CLI = "true"'
+    if test -n "$CARGO_ENV_R_AR" && test "$CARGO_ENV_R_AR" != "ar"; then
+      echo "AR_$CARGO_ENV_RUST_TARGET = \"$CARGO_ENV_R_AR\""
+    fi
+    if test -n "$CARGO_ENV_R_RANLIB" && test "$CARGO_ENV_R_RANLIB" != "ranlib"; then
+      echo "RANLIB_$CARGO_ENV_RUST_TARGET = \"$CARGO_ENV_R_RANLIB\""
+    fi
+    if test -n "$CARGO_ENV_PROFILE_LTO"; then
+      CARGO_ENV_PROFILE_UPPER=`echo "$CARGO_PROFILE" | tr 'a-z' 'A-Z'`
+      echo "CARGO_PROFILE_${CARGO_ENV_PROFILE_UPPER}_LTO = \"$CARGO_ENV_PROFILE_LTO\""
+    fi
+    if test -n "$CARGO_ENV_ABI_CFLAGS"; then
+      echo "CFLAGS_$CARGO_ENV_RUST_TARGET = \"$CARGO_ENV_ABI_CFLAGS\""
+    fi
+    if test -n "$CARGO_ENV_ABI_CXXFLAGS"; then
+      echo "CXXFLAGS_$CARGO_ENV_RUST_TARGET = \"$CARGO_ENV_ABI_CXXFLAGS\""
+    fi
+    echo ""
+  }
 
   if test "$IS_TARBALL_INSTALL" = "true"; then
     {
@@ -382,6 +817,7 @@ AC_CONFIG_COMMANDS([cargo-config],
       echo "# Tarball install: redirect crates.io and the miniextendr git source"
       echo "# to the unpacked inst/vendor.tar.xz."
       echo ""
+      emit_env_block
       echo "@<:@source.crates-io@:>@"
       echo 'replace-with = "vendored-sources"'
       echo ""
@@ -408,6 +844,7 @@ AC_CONFIG_COMMANDS([cargo-config],
       echo "# Source install (monorepo): patch the miniextendr git source to"
       echo "# resolve against local workspace crates."
       echo ""
+      emit_env_block
       echo '@<:@patch."https://github.com/A2-ai/miniextendr"@:>@'
       echo "miniextendr-api    = { path = \"$MONOREPO_ROOT_CARGO/miniextendr-api\" }"
       echo "miniextendr-lint   = { path = \"$MONOREPO_ROOT_CARGO/miniextendr-lint\" }"
@@ -416,7 +853,7 @@ AC_CONFIG_COMMANDS([cargo-config],
       echo "@<:@build@:>@"
       echo "target-dir = \"$CARGO_TARGET_DIR_CARGO\""
     } > "$RPKG_CFG"
-    echo "configure: wrote $RPKG_CFG (source mode, monorepo override)"
+    echo "configure: wrote $RPKG_CFG (from-source mode, monorepo override)"
 
   else
     {
@@ -425,10 +862,11 @@ AC_CONFIG_COMMANDS([cargo-config],
       echo "# declared in Cargo.toml. First build downloads, subsequent"
       echo "# builds use cargo's git cache."
       echo ""
+      emit_env_block
       echo "@<:@build@:>@"
       echo "target-dir = \"$CARGO_TARGET_DIR_CARGO\""
     } > "$RPKG_CFG"
-    echo "configure: wrote $RPKG_CFG (source mode, no monorepo siblings)"
+    echo "configure: wrote $RPKG_CFG (from-source mode, no monorepo siblings)"
   fi
 ],
 [IS_TARBALL_INSTALL="$IS_TARBALL_INSTALL"
@@ -436,9 +874,37 @@ AC_CONFIG_COMMANDS([cargo-config],
  MONOREPO_ROOT_CARGO="$MONOREPO_ROOT_CARGO"
  VENDOR_OUT_CARGO="$VENDOR_OUT_CARGO"
  CARGO_TARGET_DIR_CARGO="$CARGO_TARGET_DIR_CARGO"
+ CARGO_ENV_MACOS_DEPLOY_TARGET="$CARGO_ENV_MACOS_DEPLOY_TARGET"
+ CARGO_ENV_WIN_LINKER="$CARGO_ENV_WIN_LINKER"
+ CARGO_ENV_RUST_TARGET="$CARGO_ENV_RUST_TARGET"
+ CARGO_ENV_RUST_TARGET_UPPER="$CARGO_ENV_RUST_TARGET_UPPER"
+ CARGO_ENV_R_AR="$CARGO_ENV_R_AR"
+ CARGO_ENV_R_RANLIB="$CARGO_ENV_R_RANLIB"
+ CARGO_ENV_PROFILE_LTO="$CARGO_ENV_PROFILE_LTO"
+ CARGO_PROFILE="$CARGO_PROFILE"
+ CARGO_ENV_ABI_CFLAGS="$CARGO_ENV_ABI_CFLAGS"
+ CARGO_ENV_ABI_CXXFLAGS="$CARGO_ENV_ABI_CXXFLAGS"
  SED="$SED"])
 
-dnl ---- 3) Cargo.lock compatibility ----
+dnl ---- 3) Cargo.lock shape check (tarball mode only) ----
+dnl In tarball mode, the lock must be in tarball-shape: no checksum = lines and
+dnl no path+... sources for framework crates. Drift is fatal at offline install
+dnl time; we catch it here before cargo starts building.
+dnl In source mode, cargo silently rewrites the lock; drift is tolerated.
+AC_CONFIG_COMMANDS([lock-shape-check],
+[
+  if test "$IS_TARBALL_INSTALL" = "true"; then
+    if "${R_HOME}/bin/Rscript" tools/lock-shape-check.R "tarball" "src/rust/Cargo.lock"; then
+      echo "configure: lock-shape OK"
+    else
+      AC_MSG_ERROR([Cargo.lock shape drift detected in tarball mode; see message above])
+    fi
+  fi
+],
+[IS_TARBALL_INSTALL="$IS_TARBALL_INSTALL"
+ R_HOME="$R_HOME"])
+
+dnl ---- 4) Cargo.lock compatibility ----
 dnl Older cargo releases (<1.78) cannot read lockfile version 4. Regenerate
 dnl in-place if the toolchain on this machine can't read what's committed.
 AC_CONFIG_COMMANDS([cargo-lockfile-compat],
@@ -470,7 +936,7 @@ AC_CONFIG_COMMANDS([cargo-lockfile-compat],
 ],
 [CARGO_CMD="$CARGO_CMD" CARGO_OFFLINE_FLAG="$CARGO_OFFLINE_FLAG" SED="$SED"])
 
-dnl ---- 4) Ensure Cargo.lock exists; touch Cargo.toml to force rebuild ----
+dnl ---- 5) Ensure Cargo.lock exists; touch Cargo.toml to force rebuild ----
 AC_CONFIG_COMMANDS([post-config],
 [
   dnl Ensure Cargo.lock exists (needed by cargo for reproducible builds)
