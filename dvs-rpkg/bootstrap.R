@@ -67,10 +67,18 @@ if (!file.exists("inst/vendor.tar.xz")) {
 
   message("bootstrap.R: generating inst/vendor.tar.xz via cargo-revendor")
   dir.create("inst", showWarnings = FALSE)
+  # --freeze rewrites the dvs path-dependency sibling to point at vendor/, so the
+  # sealed tarball is self-contained: a path dep is NOT source-replaceable, so
+  # without --freeze the shipped Cargo.toml would still reference ../../../dvs,
+  # which does not travel inside the tarball, and offline install would fail to
+  # resolve it. Inert for the git framework deps (left as git, resolved via
+  # source replacement). cargo-revendor auto-detects the source root, so no
+  # --source-root is needed here.
   status <- system2("cargo", c(
     "revendor",
     "--manifest-path", "src/rust/Cargo.toml",
     "--output", "vendor",
+    "--freeze",
     "--compress", "inst/vendor.tar.xz",
     "--blank-md",
     "--source-marker",
