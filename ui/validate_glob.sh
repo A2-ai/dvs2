@@ -197,25 +197,15 @@ del_locals
 out="$(dvs get top1.bin top2.bin --glob '**/*.bin' --json)"
 check "$TOP_ONLY" "$(printf '%s' "$out" | json_paths)" "get explicit files ignores --glob, retrieves exact files"
 
-# ── Claim 2 (get): explicit dir + glob -> dir walked filtered ──
-# FINDING: get with an explicit directory ARG + glob does NOT walk that dir; it
-# returns "No files to get" (exit 1), unlike `add data --glob '*.bin'` which
-# works. Spec L208 says get glob resolution "works the same way as add" and
-# L434 says explicit dirs are walked+filtered -> CLI diverges from spec here.
-# A directory baked into the glob itself (--glob 'data/*.bin') DOES work; only
-# the directory-as-positional-arg form is broken for get.
+# ── Claim 2 (get): explicit dir + glob -> dir walked filtered (#217 fixed) ──
+# Spec L208: get glob resolution works the same way as add; L434: an explicit
+# directory arg is walked and filtered by the glob. (#217, which had get return
+# "No files to get" for the positional-dir form, is fixed.)
 say
 say "=== GET claim 2: explicit dir 'data' + --glob '*.bin' ==="
 del_locals
-rc=0
-out="$(dvs get data --glob '*.bin' --json 2>&1)" || rc=$?
-say "get data --glob '*.bin' exit=$rc output=$out"
-got="$(printf '%s' "$out" | json_paths)"
-if [ "$got" = "$DATA_DIR_BIN" ]; then
-  check "$DATA_DIR_BIN" "$got" "get data --glob '*.bin' walks data/ filtered by glob"
-else
-  check "$DATA_DIR_BIN" "<no files / exit $rc>" "get explicit-dir + glob BROKEN (CLI-WRONG vs L208/L434; add works, get does not)"
-fi
+out="$(dvs get data --glob '*.bin' --json)"
+check "$DATA_DIR_BIN" "$(printf '%s' "$out" | json_paths)" "get data --glob '*.bin' walks data/ filtered by glob (#217)"
 # Contrast: directory inside the glob string works for get.
 del_locals
 out="$(dvs get --glob 'data/*.bin' --json)"
@@ -235,27 +225,24 @@ dvs get -g '**/*.bin' --json >/dev/null
 # STATUS glob claims (spec L431 lists status among --glob commands)
 # ═══════════════════════════════════════════════════════════════════════════
 say
-say "=== STATUS: does it accept --glob at all? (spec L431 claims yes) ==="
+say "=== STATUS: accepts --glob and follows the literal-separator rule (spec L431, #218) ==="
 rc=0
 status_out="$(dvs status --glob '*.bin' --json 2>&1)" || rc=$?
 say "status --glob exit code: $rc"
 say "status --glob stderr/stdout: $status_out"
-# Spec L431 says add, status, get accept --glob. If status rejects it, the spec
-# is wrong about status. clap returns exit 2 for an unknown argument.
-if [ "$rc" = "2" ]; then
-  check "fail" "fail" "status --glob is REJECTED by CLI -> spec L431 OVERCLAIMS status (SPEC-WRONG)"
-else
-  # If it were accepted, verify it follows the literal-separator rule.
-  got="$(printf '%s' "$status_out" | json_paths)"
-  check "$TOP_ONLY" "$got" "status --glob '*.bin' follows literal-separator rule"
-fi
+# Spec L431: add, status, get all accept --glob. (#218, which had status reject
+# the flag, is fixed.) The literal `*` does not cross directory separators, so
+# '*.bin' matches only top-level .bin files.
+check "0" "$rc" "status --glob is accepted (exit 0), not rejected (#218)"
+got="$(printf '%s' "$status_out" | json_paths)"
+check "$TOP_ONLY" "$got" "status --glob '*.bin' follows literal-separator rule (top-level only)"
 
-# Confirm -g is also not accepted by status.
+# -g is the short form of --glob.
 say
-say "=== STATUS: -g flag check ==="
+say "=== STATUS: -g short flag is accepted ==="
 rc=0
 dvs status -g '*.bin' >/dev/null 2>&1 || rc=$?
-check "2" "$rc" "status -g also rejected (no glob flag on status)"
+check "0" "$rc" "status -g accepted (exit 0), short form of --glob (#218)"
 
 # ═══════════════════════════════════════════════════════════════════════════
 say
