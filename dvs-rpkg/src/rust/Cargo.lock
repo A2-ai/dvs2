@@ -490,7 +490,7 @@ checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 [[package]]
 name = "miniextendr-api"
 version = "0.1.0"
-source = "git+https://github.com/A2-ai/miniextendr#baf9ba86f9bf2a9cebc1b6e7d91df4f9c3b10118"
+source = "git+https://github.com/A2-ai/miniextendr#9ee482ca96ccb20f5ee64ea9d3b18c667430eb87"
 dependencies = [
  "linkme",
  "log",
@@ -502,7 +502,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-lint"
 version = "0.1.0"
-source = "git+https://github.com/A2-ai/miniextendr#baf9ba86f9bf2a9cebc1b6e7d91df4f9c3b10118"
+source = "git+https://github.com/A2-ai/miniextendr#9ee482ca96ccb20f5ee64ea9d3b18c667430eb87"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -512,7 +512,7 @@ dependencies = [
 [[package]]
 name = "miniextendr-macros"
 version = "0.1.0"
-source = "git+https://github.com/A2-ai/miniextendr#baf9ba86f9bf2a9cebc1b6e7d91df4f9c3b10118"
+source = "git+https://github.com/A2-ai/miniextendr#9ee482ca96ccb20f5ee64ea9d3b18c667430eb87"
 dependencies = [
  "proc-macro2",
  "quote",
