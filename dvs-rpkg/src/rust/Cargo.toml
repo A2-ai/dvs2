@@ -18,23 +18,29 @@ default = []
 nonapi = ["miniextendr-api/nonapi"]
 connections = ["miniextendr-api/connections"]
 
-# Source-of-truth deps: git for both miniextendr and dvs.
+# dvs is the in-repo core crate, depended on by path. Source and dev builds
+# (`just rpkg-install`, devtools, install_github) compile the live `../../../dvs`,
+# so the R package stays in sync with the core with no git pin to bump.
 #
-# Both use git so the crate is resolvable when R extracts `dvs-rpkg/`
-# alone into a tempdir (rv sync / install.packages() / remotes::install_github()),
-# which does NOT bring sibling monorepo crates along. A path dep to
-# `../../../dvs` fails `cargo metadata` in that context.
+# For a shippable, offline tarball, `cargo revendor --freeze` (run by
+# `just vendor` and by bootstrap.R before R CMD build) rewrites this path dep
+# to `vendor/dvs` so the sealed tarball carries the core source and resolves
+# without the monorepo. A path dep is not source-replaceable, which is why the
+# tarball path needs freeze. The frozen Cargo.toml is never committed: `just
+# vendor` consumers restore it after the build (see dvs-rpkg/tests/install-*).
 #
-# `cargo revendor --freeze` rewrites these to vendor/ paths when packaging
-# for CRAN. The frozen form is produced by `just vendor` and shipped in
-# inst/vendor.tar.xz; never commit the frozen Cargo.toml itself.
+# miniextendr stays a git dep. As an external framework crate it resolves
+# offline via source replacement (vendor/.cargo-config.toml's
+# `[source."git+<url>"]`), the form configure writes in tarball mode. freeze
+# leaves it as git.
 #
-# Monorepo dev iterating on local `dvs`: add an uncommitted
-# `[patch."https://github.com/A2-ai/dvs2"] dvs = { path = "../../../dvs" }`
-# block, or rely on `just` recipes that vendor from the local checkout.
+# Caveat: a consumer that extracts `dvs-rpkg/` alone with neither the `dvs`
+# sibling nor a bundled inst/vendor.tar.xz (e.g. `rv sync` or a bare
+# `install.packages()` of just the subdir) cannot source-build dvs.
+# install_github (whole-repo) and tarball installs are unaffected.
 [dependencies]
 miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", features = ["serde", "time", "log"] }
-dvs = { git = "https://github.com/A2-ai/dvs2", branch = "main", package = "dvs" }
+dvs = { path = "../../../dvs", package = "dvs" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.149"
 anyhow = "1.0.100"
