@@ -47,8 +47,16 @@ test_that("dvs_init returns a single-row tibble describing the config", {
   expect_s3_class(result, "tbl_df")
   expect_equal(nrow(result), 1L)
   expect_equal(result$compression, "none")
+  # A set Option<String> field is a plain character scalar, not a list-column.
+  expect_type(result$metadata_folder_name, "character")
+  expect_false(is.list(result$metadata_folder_name))
   expect_equal(result$metadata_folder_name, "custom_meta")
-  expect_equal(result$backend_path, storage)
+  # init canonicalizes the storage path before persisting it; the returned frame
+  # is re-read from dvs.toml, so backend_path is that absolute path.
+  expect_equal(
+    result$backend_path,
+    normalizePath(storage, winslash = "/", mustWork = FALSE)
+  )
   expect_setequal(
     names(result),
     c("compression", "metadata_folder_name", "backend_path", "backend_group")

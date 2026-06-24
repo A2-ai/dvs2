@@ -173,9 +173,19 @@ pub(crate) fn dvs_init(
         config.set_metadata_folder_name(m);
     }
 
-    // `init` enforces the in-repo storage guard and is all-or-nothing.
-    init(&root_dir, config.clone())?;
+    // Re-read the config from disk after init so the returned frame reflects
+    // exactly what was persisted to dvs.toml — notably the absolute
+    // `backend_path` that dvs core canonicalizes — rather than the pre-init
+    // input. Keeps this rpkg-only: core canonicalizes, we just read the result.
+    let repo_root = init(&root_dir, config)?;
+    let config = Config::find(&repo_root)
+        .ok_or_else(|| anyhow!("dvs.toml not found after init at {}", repo_root.display()))??;
 
+    // `metadata_folder_name` is an `Option<String>`: when set it comes back as a
+    // plain character scalar, when unset (None) as a scalar `NA` (logical)
+    // column. Neither is a list-column, so init rows stack with
+    // rbind()/bind_rows(). Relies on miniextendr#307 (fixed); the R tests in
+    // test-init.R guard both the set and unset cases.
     Ok(miniextendr_api::serde::vec_to_dataframe(&[config])?)
 }
 
