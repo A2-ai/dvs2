@@ -52,7 +52,7 @@ jobs:
 
       - name: Cache cargo-revendor
         id: revendor-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin/cargo-revendor
@@ -63,19 +63,21 @@ jobs:
         if: steps.revendor-cache.outputs.cache-hit != 'true'
         run: cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor
 
-      # Share the vendored output across the matrix. Key is OS-independent
-      # (depends only on the source Cargo.toml + Cargo.lock), so the first
-      # matrix job that finishes populates the cache for the others.
+      # Share the vendored output across the matrix. Key is OS-independent, so
+      # the first matrix job that finishes populates the cache for the others.
+      # The dvs core is a path dependency (../../../dvs), so changes to its
+      # source do not show up in Cargo.lock. Include the core tree in the key
+      # so a core change busts the stale vendor and re-vendors.
       - name: Cache rpkg vendor output
         id: rpkg-vendor-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             dvs-rpkg/vendor
             dvs-rpkg/src/rust/Cargo.toml
             dvs-rpkg/src/rust/Cargo.lock
             dvs-rpkg/inst/vendor.tar.xz
-          key: rpkg-vendor-${{ hashFiles('dvs-rpkg/src/rust/Cargo.toml', 'dvs-rpkg/src/rust/Cargo.lock') }}
+          key: rpkg-vendor-${{ hashFiles('dvs-rpkg/src/rust/Cargo.toml', 'dvs-rpkg/src/rust/Cargo.lock', 'dvs/**/*.rs', 'dvs/Cargo.toml') }}
 
       - name: Vendor rpkg deps
         if: steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
