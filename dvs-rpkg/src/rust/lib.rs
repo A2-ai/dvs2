@@ -152,6 +152,7 @@ impl From<CompressionChoice> for Compression {
 ///   (default) or `"none"`.
 /// @return A single-row data frame describing the resulting configuration:
 ///   `compression`, `metadata_folder_name`, `backend_path`, `backend_group`.
+///   An optional config field that was not set comes back as `NA`.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_init_impl")]
 pub(crate) fn dvs_init(
