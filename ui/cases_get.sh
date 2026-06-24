@@ -161,26 +161,27 @@ check "yes" "$([ -f data/raw/file_1.bin ] && [ -f data/raw/file_2.bin ] && echo 
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== get an unknown/untracked path -> #220 (silently dropped vs exit 1) ==="
-# A path with NO metadata, mixed with a valid one. Spec: paths resolve against
-# the metadata folder; an unknown path is simply not in the resolution set.
-# #220 questions whether that should still exit 1. Document the observed code.
+say "=== get an unknown/untracked path mixed with a tracked one -> all-or-nothing exit 1 (#220/#240) ==="
+# SPEC (L246,L250): if any requested path is not tracked, the whole batch is
+# refused, nothing is retrieved, and it exits 1. #240 made get fail-fast; the
+# old silent-drop / exit-0 behavior is gone.
 rm -f data/raw/file_1.bin
 rc=0; UNK_OUT="$(dvs get data/raw/file_1.bin no/such/unknown.bin 2>&1)" || rc=$?
 say "unknown-path mixed: rc=$rc"
 say "$UNK_OUT"
-check "yes" "$([ -f data/raw/file_1.bin ] && echo yes || echo no)" "valid file retrieved despite unknown sibling path (#220)"
-# Assertion reflects observed behavior: unknown path silently dropped, exit 0.
-# If this branch makes an explicitly-listed unknown path force exit 1 (the #220
-# fix), this line FAILs and flags that the behavior changed -> update the issue.
-check "0" "$rc" "#220: explicitly-listed unknown path silently dropped, exit 0 (tracked divergence)"
+check "no" "$([ -f data/raw/file_1.bin ] && echo yes || echo no)" "#220/#240 tracked file NOT retrieved when a sibling path is untracked"
+UNKREP="$(printf '%s' "$UNK_OUT" | grep -qiE 'not tracked|unknown.bin' && echo yes || echo no)"
+check "yes" "$UNKREP" "#220 untracked path named in the refusal message"
+check "1" "$rc" "#220/#240 explicitly-listed untracked path refuses the whole batch, exit 1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== get with NO local file AND no metadata -> exit 1 (No files to get) ==="
+say "=== get with NO local file AND no metadata -> exit 1 (not tracked by DVS) ==="
 rc=0; NOFILES_OUT="$(dvs get totally/untracked/nothing.bin 2>&1)" || rc=$?
 check "1" "$rc" "exit 1 when the only requested path has no metadata"
-check "1" "$(printf '%s' "$NOFILES_OUT" | grep -c 'No files to get' || true)" 'error message is "No files to get"'
+# #240 unified the wording: an untracked path is reported as "not tracked by DVS"
+# (was "No files to get"). specs.md does not mandate an exact string.
+check "1" "$(printf '%s' "$NOFILES_OUT" | grep -c 'not tracked by DVS' || true)" 'error names the untracked path ("not tracked by DVS")'
 
 # ─────────────────────────────────────────────────────────────────────────────
 say

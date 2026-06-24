@@ -98,21 +98,17 @@ check "yes" "$MISSREP" "missing path reported in output"
 
 # =====================================================================
 say
-say "=== several files, ONE missing -> best-effort: others added, missing reported, exit 1 (#219) ==="
-# SPEC (L146-147,186): best-effort. A missing path is reported per-file and must
-# NOT abort the add of valid siblings. We assert the spec-correct outcome.
+say "=== several files, ONE missing -> all-or-nothing: nothing added, missing reported, exit 1 (#219/#240) ==="
+# SPEC (L146,L186): when any input path is invalid the whole batch is refused and
+# nothing is added. #240 made add fail-fast; the old best-effort behavior is gone.
 mkrandfile sibling.bin 256
 rc=0; OUT="$(dvs add sibling.bin gone.bin 2>&1)" || rc=$?
 say "$OUT"
 SIBADDED="$([ -e .dvs/sibling.bin.dvs ] && echo YES || echo NO)"
-check "YES" "$SIBADDED" "#219 best-effort: valid sibling.bin added despite a missing sibling path"
+check "NO" "$SIBADDED" "#219/#240 all-or-nothing: valid sibling.bin NOT added when a sibling path is missing"
 MISSREP2="$(printf '%s' "$OUT" | grep -qiE 'gone.bin|not found' && echo yes || echo no)"
 check "yes" "$MISSREP2" "#219 missing gone.bin reported in output"
 check "1" "$rc" "#219 exit 1 when a path is missing"
-if [ "$SIBADDED" = "NO" ]; then
-  say "NOTE(#219): CLI aborted the whole invocation ('Path not found') instead of best-effort."
-  say "NOTE(#219): missing paths are validated up-front and hard-abort. This FAIL is the tracked bug."
-fi
 
 # =====================================================================
 say
