@@ -15,7 +15,7 @@ use miniextendr_api::into_r::IntoR;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
 use miniextendr_api::time::OffsetDateTime;
-use miniextendr_api::{DataFrame, List, MatchArg, list, miniextendr, r_println};
+use miniextendr_api::{DataFrame, MatchArg, miniextendr};
 
 use anyhow::{Result, anyhow};
 use serde::Serialize;
@@ -150,15 +150,18 @@ impl From<CompressionChoice> for Compression {
 /// @param metadata_folder_name Name of the metadata folder. Defaults to `.dvs`.
 /// @param compression Compression method for stored files. One of `"zstd"`
 ///   (default) or `"none"`.
+/// @return A single-row data frame describing the resulting configuration:
+///   `compression`, `metadata_folder_name`, `backend_path`, `backend_group`.
+///   An optional config field that was not set comes back as `NA`.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_init_impl", invisible)]
+#[miniextendr(r_name = "dvs_init_impl")]
 pub(crate) fn dvs_init(
     storage_path: PathBuf,
     #[miniextendr(default = "NULL")] root_dir: Option<PathBuf>,
     #[miniextendr(default = "NULL")] group: Option<String>,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
     #[miniextendr(match_arg, default = "\"zstd\"")] compression: CompressionChoice,
-) -> Result<List> {
+) -> Result<DataFrame> {
     let root_dir = match root_dir {
         Some(d) => d,
         None => std::env::current_dir()?,
@@ -170,10 +173,20 @@ pub(crate) fn dvs_init(
         config.set_metadata_folder_name(m);
     }
 
-    init(&root_dir, config)?;
+    // Re-read the config from disk after init so the returned frame reflects
+    // exactly what was persisted to dvs.toml — notably the absolute
+    // `backend_path` that dvs core canonicalizes — rather than the pre-init
+    // input. Keeps this rpkg-only: core canonicalizes, we just read the result.
+    let repo_root = init(&root_dir, config)?;
+    let config = Config::find(&repo_root)
+        .ok_or_else(|| anyhow!("dvs.toml not found after init at {}", repo_root.display()))??;
 
-    r_println!("DVS Initialized");
-    Ok(list!("status" = "initialized"))
+    // `metadata_folder_name` is an `Option<String>`: when set it comes back as a
+    // plain character scalar, when unset (None) as a scalar `NA` (logical)
+    // column. Neither is a list-column, so init rows stack with
+    // rbind()/bind_rows(). Relies on miniextendr#307 (fixed); the R tests in
+    // test-init.R guard both the set and unset cases.
+    Ok(miniextendr_api::serde::vec_to_dataframe(&[config])?)
 }
 
 /// Add files to DVS-managed storage.
