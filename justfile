@@ -52,16 +52,14 @@ install-cli *args:
 # R package (dvsR)
 # ============================================================================
 
-# rv resolves rproject.toml from the cwd, which lives in dvs-rpkg/, so run it
-# from there rather than the repo root.
-#
-# Sync the rv project library
+# Sync the rv project library (rv reads rproject.toml from the cwd, in dvs-rpkg/)
+[working-directory: 'dvs-rpkg']
 rpkg-sync *args:
-    cd {{quote(rpkg_dir)}} && rv sync {{args}}
+    rv sync {{args}}
 
+[working-directory: 'dvs-rpkg']
 rpkg-configure:
-    cd {{quote(rpkg_dir)}} && \
-    if command -v autoconf >/dev/null 2>&1; then autoconf; else echo "autoconf not found; using existing configure"; fi && \
+    if command -v autoconf >/dev/null 2>&1; then autoconf; else echo "autoconf not found; using existing configure"; fi
     bash ./configure
 
 rpkg-build *args:
