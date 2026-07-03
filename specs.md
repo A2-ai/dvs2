@@ -245,7 +245,7 @@ Passing `-r, --recursive` with an explicit directory walks its subdirectories. W
 directly under it, and with `-r` it restores every tracked file beneath it. (At the repo root, `-r` therefore
 restores every tracked file in the project.)
 
-A request that names a path with no tracked file (never added, or misspelled) is refused as a whole, retrieves nothing, and exits with `1`. A request that resolves but has one or more files fail on retrieval (for example a hash mismatch) retrieves the rest and also exits with `1`.
+A request that names a path with no tracked file (never added, or misspelled) is refused as a whole, retrieves nothing, and exits with `1`. If a path has tracked files but the glob excludes all of them, the request is still refused and the error names the glob instead. A request that resolves but has one or more files fail on retrieval (for example a hash mismatch) retrieves the rest and also exits with `1`.
 
 #### Rust library
 
@@ -456,6 +456,8 @@ folder the update is skipped, and a failed `.gitignore` update is logged as a wa
 - Explicit files: added/retrieved directly (glob ignored)
 - Explicit directories with a glob: walked and filtered by glob
 - No given paths with a glob: walks current directory filtered by glob
+
+An explicit file path bypasses the glob. This applies to `add`, `get`, and `status`.
 
 Globs use a literal path separator, meaning `*.csv` only matches files in the target directory and
 will not match `subdir/file.csv`. Use `'**/*.csv'` (quoted, to avoid shell expansion) to match recursively across subdirectories.

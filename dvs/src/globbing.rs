@@ -132,7 +132,8 @@ pub fn resolve_paths_for_get(
     // Explicit paths: every one must resolve to at least one tracked file,
     // otherwise we refuse the whole batch rather than silently skipping it.
     let mut out = HashSet::new();
-    let mut missing = Vec::new();
+    let mut untracked = Vec::new();
+    let mut glob_excluded = Vec::new();
     for path in paths {
         let filter = PathFilter::from_user_paths(vec![path.clone()], recursive, dvs_paths);
         let mut matched_any = false;
@@ -143,14 +144,32 @@ pub fn resolve_paths_for_get(
             }
         }
         if !matched_any {
-            missing.push(format!("  {}", path.display()));
+            let entry = format!("  {}", path.display());
+            // Distinguish "nothing tracked under this path" from "tracked files
+            // exist but the glob excluded all of them".
+            if glob_matcher.is_some() && tracked.iter().any(|t| filter.matches(t, None)) {
+                glob_excluded.push(entry);
+            } else {
+                untracked.push(entry);
+            }
         }
     }
-    if !missing.is_empty() {
-        bail!(
-            "The following paths are not tracked by DVS:\n{}",
-            missing.join("\n")
-        );
+    if !untracked.is_empty() || !glob_excluded.is_empty() {
+        let mut sections = Vec::new();
+        if !untracked.is_empty() {
+            sections.push(format!(
+                "The following paths are not tracked by DVS:\n{}",
+                untracked.join("\n")
+            ));
+        }
+        if !glob_excluded.is_empty() {
+            sections.push(format!(
+                "The following paths have no tracked files matching glob '{}':\n{}",
+                glob_pattern.unwrap_or_default(),
+                glob_excluded.join("\n")
+            ));
+        }
+        bail!("{}", sections.join("\n"));
     }
 
     Ok(out)
@@ -296,6 +315,77 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(err.contains("not tracked"), "unexpected error: {err}");
         assert!(err.contains("bar.csv"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn get_glob_excluding_all_tracked_files_reports_glob_error() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        // data/ has tracked files, but none match *.parquet: the error must
+        // blame the glob, not claim the path is untracked.
+        let result = resolve_paths_for_get(
+            vec![PathBuf::from("data")],
+            Some("*.parquet"),
+            &dvs_paths,
+            false,
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no tracked files matching glob '*.parquet'"),
+            "unexpected error: {err}"
+        );
+        assert!(err.contains("data"), "unexpected error: {err}");
+        assert!(
+            !err.contains("not tracked by DVS"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn get_untracked_path_with_glob_still_reports_not_tracked() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let result = resolve_paths_for_get(
+            vec![PathBuf::from("nonexistent")],
+            Some("*.parquet"),
+            &dvs_paths,
+            false,
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not tracked by DVS"),
+            "unexpected error: {err}"
+        );
+        assert!(err.contains("nonexistent"), "unexpected error: {err}");
+        assert!(!err.contains("matching glob"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn get_mixed_untracked_and_glob_excluded_lists_each_under_its_heading() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let result = resolve_paths_for_get(
+            vec![PathBuf::from("nonexistent"), PathBuf::from("data")],
+            Some("*.parquet"),
+            &dvs_paths,
+            false,
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        let untracked_heading = err.find("not tracked by DVS").unwrap();
+        let glob_heading = err.find("matching glob '*.parquet'").unwrap();
+        let nonexistent_entry = err.find("nonexistent").unwrap();
+        let data_entry = err.find("  data").unwrap();
+        // Untracked section comes first and holds "nonexistent"; the
+        // glob-excluded section follows and holds "data".
+        assert!(
+            untracked_heading < nonexistent_entry,
+            "unexpected error: {err}"
+        );
+        assert!(nonexistent_entry < glob_heading, "unexpected error: {err}");
+        assert!(glob_heading < data_entry, "unexpected error: {err}");
     }
 
     #[test]
