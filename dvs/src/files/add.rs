@@ -134,7 +134,7 @@ pub fn add_files(
                 let file_size = std::fs::metadata(&full_path).map(|m| m.len()).unwrap_or(0);
                 let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
                 let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
-                match add_file(
+                let result = match add_file(
                     &relative_path,
                     paths,
                     backend,
@@ -171,7 +171,11 @@ pub fn add_files(
                             },
                         }
                     }
+                };
+                if let Some(fp) = &file_progress {
+                    (fp.on_done)(matches!(result.detail, AddDetail::Success { .. }));
                 }
+                result
             })
             .collect()
     });
@@ -194,9 +198,12 @@ pub fn add_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress::FileProgress;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
     use std::fs;
     use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
         DvsPaths::new(
@@ -276,5 +283,57 @@ mod tests {
             !paths.metadata_path(Path::new("a.txt")).exists(),
             "no files should be added when any path is invalid"
         );
+    }
+
+    #[test]
+    fn add_files_invokes_on_done_for_each_file() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+
+        create_file(&root, "a.txt", b"a");
+        create_file(&root, "b.txt", b"b");
+        create_file(&root, "c.txt", b"c");
+
+        let done_calls = Arc::new(AtomicUsize::new(0));
+        let success_calls = Arc::new(AtomicUsize::new(0));
+        let on_file_start = {
+            let done_calls = Arc::clone(&done_calls);
+            let success_calls = Arc::clone(&success_calls);
+            move |_path: &Path, _size: u64| {
+                let done_calls = Arc::clone(&done_calls);
+                let success_calls = Arc::clone(&success_calls);
+                FileProgress {
+                    on_bytes: Box::new(|_| {}),
+                    on_done: Box::new(move |success| {
+                        done_calls.fetch_add(1, Ordering::SeqCst);
+                        if success {
+                            success_calls.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }),
+                }
+            }
+        };
+
+        let results = add_files(
+            vec!["a.txt".into(), "b.txt".into(), "c.txt".into()],
+            &paths,
+            backend,
+            None,
+            Compression::Zstd,
+            false,
+            Some(&on_file_start),
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert!(
+            results
+                .iter()
+                .all(|r| matches!(r.detail, AddDetail::Success { .. }))
+        );
+        assert_eq!(done_calls.load(Ordering::SeqCst), 3);
+        assert_eq!(success_calls.load(Ordering::SeqCst), 3);
     }
 }
