@@ -61,7 +61,9 @@ fn add_file(
         let outcome = if dvs_file_exists && storage_exists {
             let existing: FileMetadata =
                 serde_json::from_reader(fs_err::File::open(&dvs_file_path)?)?;
-            if existing == metadata {
+            // Mirrors `FileMetadata::save`: unchanged content is still
+            // re-added when the compression setting or the message changed.
+            if existing == metadata && !metadata.updates_settings_of(&existing) {
                 Outcome::Present
             } else {
                 Outcome::Copied
@@ -335,5 +337,58 @@ mod tests {
         );
         assert_eq!(done_calls.load(Ordering::SeqCst), 3);
         assert_eq!(success_calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn add_dry_run_predicts_outcome_for_compression_change() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+        create_file(&root, "a.txt", b"content");
+
+        let outcome_of = |results: Vec<AddResult>| match results[0].detail {
+            AddDetail::Success { outcome, .. } => outcome,
+            AddDetail::Error { ref error } => panic!("unexpected error: {error}"),
+        };
+
+        // Real add without compression.
+        let results = add_files(
+            vec!["a.txt".into()],
+            &paths,
+            backend,
+            None,
+            Compression::None,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(outcome_of(results), Outcome::Copied);
+
+        // Dry-run re-add with the same settings predicts Present.
+        let results = add_files(
+            vec!["a.txt".into()],
+            &paths,
+            backend,
+            None,
+            Compression::None,
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(outcome_of(results), Outcome::Present);
+
+        // Dry-run re-add with a different compression predicts Copied.
+        let results = add_files(
+            vec!["a.txt".into()],
+            &paths,
+            backend,
+            None,
+            Compression::Zstd,
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(outcome_of(results), Outcome::Copied);
     }
 }

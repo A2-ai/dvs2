@@ -152,9 +152,10 @@ Each added file gets a metadata sidecar at `<metadata folder>/<path to file>.dvs
 
 Each file in an `add` result reports an outcome:
 
-- `copied`: the file was new or had changed and was copied to storage
-- `present`: the file's hash and size match the existing metadata -> no-op. The metadata file is not
-  rewritten, so fields like `message` are not updated
+- `copied`: the file was new, had changed, or was unchanged but had a new compression setting or message applied
+- `present`: the file's hash, size, and settings match the existing metadata -> no-op. The metadata file is not rewritten
+
+Re-adding an unchanged file with a different compression setting re-stores the blob with the new compression and rewrites the metadata file. Re-adding an unchanged file with a new message rewrites the metadata file only. Both report `copied`. A re-add without a message keeps the existing message and reports `present` with no metadata churn.
 
 Symlinks are resolved before adding. If an explicitly named path resolves to a location outside the project root, it is rejected and the batch refused. When a directory is expanded by a glob, a matched file whose symlink target resolves outside the project root is skipped with a warning rather than aborting the batch.
 
