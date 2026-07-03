@@ -372,6 +372,14 @@ prevents partial blobs from appearing in storage mapping to an expected file.
 
 Stored files are set read-only after writing.
 
+### Storage permissions
+
+On Unix a group is configured at `init` through `--group` (R `group`). When no group is given the user's primary group is auto-detected. With a group set, storage directories are created with mode `2770`, blobs with mode `440`, and the audit log with mode `660`. The setgid bit on directories keeps new entries in the configured group. Without a group (non-Unix, or detection failure) blobs are made read-only and no modes are enforced.
+
+The backend table in `dvs.toml` also accepts an `open` flag. With `open = true`, storage directories are created with mode `2777` and the audit log with mode `666`, so every user on the machine can write to the storage. There is no CLI flag or R argument for it. It is enabled by hand-editing `dvs.toml`. Use it only for storage that is intentionally world-writable.
+
+These modes define a trust boundary, not tamper protection. Directory write permission lets any group member (or any user under `open`) delete or replace blobs and append to or truncate the audit log. The audit log is advisory and is not tamper-evident.
+
 ### Compression
 
 The two compression modes are `zstd` (default) and `none`, set at `init` time (CLI
