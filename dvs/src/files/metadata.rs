@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit::{AuditEntry, AuditFile};
+use crate::utils::atomic_write;
 use crate::{Backend, Compression, DvsPaths, Hashes, Outcome};
 
 /// The dvs metadata for a given file
@@ -125,9 +126,11 @@ impl FileMetadata {
         // 3. Then metadata
         let old_metadata_content = fs::read(&dvs_file_path).ok();
         log::debug!("Writing metadata to {}", dvs_file_path.display());
-        let metadata_res = fs::write(
+        let metadata_res = atomic_write(
             &dvs_file_path,
-            serde_json::to_string_pretty(self).expect("valid json"),
+            serde_json::to_string_pretty(self)
+                .expect("valid json")
+                .as_bytes(),
         );
 
         match (storage_res, metadata_res) {
@@ -151,7 +154,7 @@ impl FileMetadata {
                     relative_path.as_ref().display()
                 );
                 if let Some(old) = old_metadata_content {
-                    let _ = fs::write(&dvs_file_path, &old);
+                    let _ = atomic_write(&dvs_file_path, &old);
                 } else {
                     let _ = fs::remove_file(&dvs_file_path);
                 }
@@ -163,7 +166,7 @@ impl FileMetadata {
                     relative_path.as_ref().display()
                 );
                 if let Some(old) = old_metadata_content {
-                    let _ = fs::write(&dvs_file_path, &old);
+                    let _ = atomic_write(&dvs_file_path, &old);
                 } else {
                     let _ = fs::remove_file(&dvs_file_path);
                 }
@@ -179,7 +182,7 @@ impl FileMetadata {
                     relative_path.as_ref().display()
                 );
                 if let Some(old) = old_metadata_content {
-                    let _ = fs::write(&dvs_file_path, &old);
+                    let _ = atomic_write(&dvs_file_path, &old);
                 } else {
                     let _ = fs::remove_file(&dvs_file_path);
                 }

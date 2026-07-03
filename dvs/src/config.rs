@@ -10,7 +10,7 @@ use crate::backends::Backend as BackendTrait;
 use crate::backends::local::LocalBackend;
 use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, find_repo_root};
 use crate::progress::ProgressReader;
-use crate::utils::parse_size;
+use crate::utils::{atomic_write, parse_size};
 
 const DEFAULT_PROGRESS_BYTE_SIZE_THRESHOLD: u64 = 524_288_000;
 
@@ -171,7 +171,7 @@ impl Config {
     pub fn save(&self, directory: impl AsRef<Path>) -> Result<()> {
         let config_path = directory.as_ref().join(CONFIG_FILE_NAME);
         let content = toml::to_string_pretty(&self)?;
-        fs::write(&config_path, content)?;
+        atomic_write(&config_path, content.as_bytes())?;
         log::info!("Configuration saved to {}", config_path.display());
         Ok(())
     }

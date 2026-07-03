@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use fs_err as fs;
 
+use crate::utils::atomic_write;
+
 /// Adds entries to per-directory `.gitignore` files under `repo_root`.
 ///
 /// Each path should be relative to the repo_root already. Files are grouped by
@@ -63,7 +65,7 @@ pub(crate) fn add_to_gitignore(repo_root: &Path, paths: &[PathBuf]) -> Result<()
         if let Some(parent) = gitignore_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&gitignore_path, content)?;
+        atomic_write(&gitignore_path, content.as_bytes())?;
     }
 
     Ok(())

@@ -1,6 +1,8 @@
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Result, bail};
+use fs_err as fs;
 
 const DEFAULT_THREADS_PER_CPU: usize = 4;
 /// Maximum thread count threshold when `DVS_NUM_THREADS` is unset
@@ -41,6 +43,25 @@ impl std::fmt::Display for ThreadSource {
             Self::Default => "default",
         })
     }
+}
+
+/// Writes `contents` to a unique sibling temp file, then renames it onto `path`
+/// so readers never observe a torn file.
+/// Rename-over-existing replaces atomically on Unix. A rename failure with the
+/// destination present is not expected here (unlike blob storage, these
+/// destinations are owned by this process's flow), so errors just propagate
+/// after best-effort temp cleanup.
+pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    let tmp_path = path.with_file_name(format!("{file_name}.{}.tmp", uuid::Uuid::new_v4()));
+    let res = fs::write(&tmp_path, contents).and_then(|_| fs::rename(&tmp_path, path));
+    if res.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    Ok(res?)
 }
 
 const KB: u64 = 1_024;
@@ -165,5 +186,27 @@ mod tests {
         assert!(parse_size("").is_err());
         assert!(parse_size("MB").is_err());
         assert!(parse_size("500XB").is_err());
+    }
+
+    #[test]
+    fn atomic_write_creates_overwrites_and_leaves_no_tmp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("target.txt");
+
+        atomic_write(&path, b"first").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+
+        atomic_write(&path, b"second").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+
+        let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n.to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
     }
 }
