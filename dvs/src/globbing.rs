@@ -61,10 +61,30 @@ pub fn resolve_paths_for_add(
                 // A dir without a glob: it will be rejected later
                 out.insert(path.clone());
             } else if let Some(matcher) = &glob_matcher {
-                for entry in WalkDir::new(&full_path).into_iter().filter_map(|e| e.ok()) {
-                    let entry_path = entry.path().canonicalize()?;
+                for entry in WalkDir::new(&full_path)
+                    .into_iter()
+                    // Never descend into `.git` directories
+                    .filter_entry(|e| e.file_name() != ".git")
+                    .filter_map(|e| e.ok())
+                {
+                    // A broken symlink cannot be added: skip it with a warning
+                    // instead of failing the whole walk
+                    let entry_path = match entry.path().canonicalize() {
+                        Ok(p) => p,
+                        Err(e) => {
+                            log::warn!(
+                                "Skipping unresolvable path {}: {e}",
+                                entry.path().display()
+                            );
+                            continue;
+                        }
+                    };
                     // Skip directories and metadata root folder
                     if !entry_path.is_file() || entry_path.starts_with(&metadata_root) {
+                        continue;
+                    }
+                    // Skip `.gitignore` files and the `dvs.toml` config file
+                    if entry.file_name() == ".gitignore" || entry.file_name() == "dvs.toml" {
                         continue;
                     }
 
@@ -451,5 +471,68 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert!(result.contains(&PathBuf::from("foo.txt")));
+    }
+
+    #[test]
+    fn add_walk_skips_git_gitignore_and_config() {
+        let (temp, dvs_paths) = setup_test_repo();
+        let root = temp.path();
+
+        // .git internals (objects, refs, config)
+        fs::create_dir_all(root.join(".git/objects/ab")).unwrap();
+        fs::create_dir_all(root.join(".git/refs/heads")).unwrap();
+        File::create(root.join(".git/config")).unwrap();
+        File::create(root.join(".git/objects/ab/cdef0123")).unwrap();
+        File::create(root.join(".git/refs/heads/main")).unwrap();
+        // Repo config and .gitignore files
+        File::create(root.join("dvs.toml")).unwrap();
+        File::create(root.join(".gitignore")).unwrap();
+        File::create(root.join("data/.gitignore")).unwrap();
+
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from(".")], Some("**/*"), &dvs_paths).unwrap();
+
+        // Real data files are resolved
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+        assert!(result.contains(&PathBuf::from("bar.csv")));
+        assert!(result.contains(&PathBuf::from("data/a.csv")));
+        assert!(result.contains(&PathBuf::from("data/b.txt")));
+        assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
+        assert_eq!(result.len(), 5, "unexpected paths: {result:?}");
+
+        // Excluded: .git internals, metadata folder, dvs.toml, .gitignore files
+        assert!(!result.iter().any(|p| p.starts_with(".git")));
+        assert!(!result.iter().any(|p| p.starts_with(".dvs")));
+        assert!(!result.contains(&PathBuf::from("dvs.toml")));
+        assert!(!result.contains(&PathBuf::from(".gitignore")));
+        assert!(!result.contains(&PathBuf::from("data/.gitignore")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_walk_skips_broken_symlink() {
+        let (temp, dvs_paths) = setup_test_repo();
+        let root = temp.path();
+        std::os::unix::fs::symlink(root.join("nonexistent"), root.join("data/broken")).unwrap();
+
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("data")], Some("**/*"), &dvs_paths).unwrap();
+
+        assert!(result.contains(&PathBuf::from("data/a.csv")));
+        assert!(result.contains(&PathBuf::from("data/b.txt")));
+        assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
+        assert!(!result.iter().any(|p| p.ends_with("broken")));
+    }
+
+    #[test]
+    fn add_explicit_gitignore_bypasses_walk_exclusions() {
+        let (temp, dvs_paths) = setup_test_repo();
+        File::create(temp.path().join(".gitignore")).unwrap();
+
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from(".gitignore")], None, &dvs_paths).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&PathBuf::from(".gitignore")));
     }
 }
