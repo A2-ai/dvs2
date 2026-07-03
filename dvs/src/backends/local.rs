@@ -291,8 +291,11 @@ impl Backend for LocalBackend {
             .append(true)
             .open(&audit_path)?;
         self.ensure_group_and_mode(&audit_path, self.audit_mode())?;
-        let json = serde_json::to_string(entry)?;
-        writeln!(file, "{}", json)?;
+        let mut line = serde_json::to_string(entry)?;
+        line.push('\n');
+        // One write to an O_APPEND fd is atomic on local POSIX filesystems, so
+        // concurrent processes cannot tear the line. Not guaranteed on NFS.
+        file.write_all(line.as_bytes())?;
         Ok(())
     }
 
@@ -519,6 +522,10 @@ mod tests {
         assert!(audit_path.is_file());
 
         let content = fs::read(&audit_path).unwrap();
+        // Exactly one newline per entry, terminating the line
+        assert_eq!(content.iter().filter(|&&b| b == b'\n').count(), 2);
+        assert_eq!(content.last(), Some(&b'\n'));
+
         let entries = parse_audit_log(Cursor::new(content), &HashSet::new()).unwrap();
         assert_eq!(entries.len(), 2);
 

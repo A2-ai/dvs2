@@ -399,8 +399,9 @@ The `init` action is an object that contains
 - `settings`: the project configuration written to `dvs.toml`
 - `project_path`: the absolute path of the initialized project
 
-The audit log is protected by a mutex so a single `dvs` process cannot corrupt it but there is no protection against
-multiple processes appending logs.
+The audit log is protected by a mutex so a single `dvs` process cannot corrupt it. Each entry is appended with a
+single write to a file opened in append mode, so concurrent processes cannot tear a line on local POSIX filesystems.
+This guarantee does not hold on NFS.
 
 Example:
 
