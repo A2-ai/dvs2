@@ -53,7 +53,9 @@ impl FileMetadata {
         }
 
         let (hashes, size) = Hashes::compute_from_path(path.as_ref(), &[])?;
-        let created_by = whoami::username()?;
+        // Same fallback as from_hashes and the audit log: a username lookup
+        // failure must never fail the operation itself.
+        let created_by = whoami::username().unwrap_or_else(|_| "unknown".to_string());
         let add_time = jiff::Timestamp::now();
 
         Ok(Self {

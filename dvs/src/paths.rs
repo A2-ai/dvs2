@@ -121,8 +121,12 @@ impl DvsPaths {
         repo_root: PathBuf,
         metadata_folder_name: impl Into<String>,
     ) -> Result<Self> {
+        // Canonicalize cwd too, as the struct doc promises. A symlinked cwd
+        // (e.g. /tmp vs /private/tmp on macOS, issue #69) otherwise makes
+        // cwd_relative_to_root() silently return None and cwd-scoped
+        // operations behave as repo-root-scoped.
         Ok(Self {
-            cwd,
+            cwd: fs::canonicalize(&cwd)?,
             repo_root: fs::canonicalize(&repo_root)?,
             metadata_folder_name: metadata_folder_name.into(),
         })
@@ -166,7 +170,15 @@ impl DvsPaths {
         let metadata_root = self.metadata_folder();
         WalkDir::new(&metadata_root)
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(err) => {
+                    // Silently dropping unreadable entries would make a
+                    // permissions problem read as "file not tracked".
+                    log::warn!("Skipping unreadable entry in metadata folder: {err}");
+                    None
+                }
+            })
             .filter_map(|entry| {
                 let entry_path = entry.path();
                 if !entry_path.is_file() || entry_path.extension() != Some(OsStr::new("dvs")) {
@@ -353,5 +365,24 @@ mod tests {
         assert_eq!(result[1].1, AddPathStatus::NotFound);
         assert_eq!(result[2].1, AddPathStatus::OutsideProject);
         assert_eq!(result[3].1, AddPathStatus::IsDirectory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_canonicalizes_symlinked_cwd() {
+        let (_tmp, root) = create_temp_git_repo();
+        fs_err::create_dir(root.join("sub")).unwrap();
+        let link = root.parent().unwrap().join("sub-link");
+        std::os::unix::fs::symlink(root.join("sub"), &link).unwrap();
+
+        // A symlinked cwd must resolve to its canonical target, otherwise
+        // cwd_relative_to_root() returns None and cwd-scoped operations
+        // silently behave as repo-root-scoped (issue #69).
+        let paths = DvsPaths::new(link, root.clone(), ".dvs").unwrap();
+        assert_eq!(paths.cwd(), fs_err::canonicalize(root.join("sub")).unwrap());
+        assert_eq!(
+            paths.cwd_relative_to_root(),
+            Some(std::path::Path::new("sub"))
+        );
     }
 }
