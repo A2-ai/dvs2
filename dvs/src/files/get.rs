@@ -360,6 +360,29 @@ mod tests {
     }
 
     #[test]
+    fn get_files_rejects_path_escaping_repo_root() {
+        let repo = TestRepo::new();
+
+        // Decoy metadata where `../escape` would probe
+        // (`.dvs/../escape.dvs` resolves to `<root>/escape.dvs`).
+        fs::write(repo.root.join("escape.dvs"), b"{}").unwrap();
+
+        let err = get_files(
+            vec![PathBuf::from("../escape")],
+            &repo.paths,
+            repo.backend(),
+            false,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("outside project"), "unexpected error: {err}");
+
+        // Nothing was written outside the repo root.
+        assert!(!repo.root.parent().unwrap().join("escape").exists());
+    }
+
+    #[test]
     fn get_files_aborts_batch_when_any_path_not_tracked() {
         let repo = TestRepo::new();
 

@@ -45,6 +45,8 @@ pub enum GetPathStatus {
     NotFound,
     /// File exists on disk but is not tracked by DVS
     NotTracked,
+    /// Path resolves to outside the project root
+    OutsideProject,
 }
 
 impl GetPathStatus {
@@ -53,6 +55,7 @@ impl GetPathStatus {
             GetPathStatus::Tracked => None,
             GetPathStatus::NotFound => Some("file not found"),
             GetPathStatus::NotTracked => Some("not tracked by DVS"),
+            GetPathStatus::OutsideProject => Some("path is outside project"),
         }
     }
 }
@@ -227,13 +230,30 @@ impl DvsPaths {
     pub fn validate_for_get(&self, paths: &[PathBuf]) -> Vec<(PathBuf, GetPathStatus)> {
         let mut found = Vec::new();
         for path in paths {
-            let metadata_path = self.metadata_path(path);
-            let validation = if metadata_path.is_file() {
-                GetPathStatus::Tracked
-            } else if self.file_path(path).is_file() {
-                GetPathStatus::NotTracked
+            // `metadata_path`/`file_path` join the path naively, so `..` (or an
+            // absolute path) could probe for `.dvs` files outside the metadata
+            // folder and write outside the repo root. `add` rejects these via
+            // canonicalization; mirror that here by lexically resolving the
+            // path and refusing anything that escapes.
+            let normalized = if path.is_absolute() {
+                path.strip_prefix(&self.repo_root)
+                    .ok()
+                    .map(Path::to_path_buf)
+                    .and_then(normalize_path)
             } else {
-                GetPathStatus::NotFound
+                normalize_path(path.clone())
+            };
+            let validation = match normalized {
+                None => GetPathStatus::OutsideProject,
+                Some(normalized) => {
+                    if self.metadata_path(&normalized).is_file() {
+                        GetPathStatus::Tracked
+                    } else if self.file_path(&normalized).is_file() {
+                        GetPathStatus::NotTracked
+                    } else {
+                        GetPathStatus::NotFound
+                    }
+                }
             };
             found.push((path.clone(), validation));
         }
@@ -353,5 +373,35 @@ mod tests {
         assert_eq!(result[1].1, AddPathStatus::NotFound);
         assert_eq!(result[2].1, AddPathStatus::OutsideProject);
         assert_eq!(result[3].1, AddPathStatus::IsDirectory);
+    }
+
+    #[test]
+    fn validate_for_get_rejects_escaping_paths() {
+        let (_tmp, root) = create_temp_git_repo();
+        let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs").unwrap();
+
+        // Decoy metadata file where `../outside` would probe
+        // (`.dvs/../outside.dvs` resolves to `<root>/outside.dvs`). The escape
+        // must be refused before the probe can find it.
+        fs_err::write(root.join("outside.dvs"), b"{}").unwrap();
+        let result = paths.validate_for_get(&[PathBuf::from("../outside")]);
+        assert_eq!(result[0].1, GetPathStatus::OutsideProject);
+
+        // Absolute path outside the repo is refused, even if a decoy exists.
+        fs_err::write(root.parent().unwrap().join("abs.dvs"), b"{}").unwrap();
+        let abs = root.parent().unwrap().join("abs");
+        let result = paths.validate_for_get(&[abs]);
+        assert_eq!(result[0].1, GetPathStatus::OutsideProject);
+
+        // `..` that stays inside the repo still validates normally.
+        fs_err::create_dir_all(root.join(".dvs")).unwrap();
+        fs_err::write(root.join(".dvs/a.txt.dvs"), b"{}").unwrap();
+        fs_err::create_dir(root.join("dir1")).unwrap();
+        let result = paths.validate_for_get(&[PathBuf::from("dir1/../a.txt")]);
+        assert_eq!(result[0].1, GetPathStatus::Tracked);
+
+        // Absolute path inside the repo still validates normally.
+        let result = paths.validate_for_get(&[root.join("a.txt")]);
+        assert_eq!(result[0].1, GetPathStatus::Tracked);
     }
 }
