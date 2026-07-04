@@ -31,7 +31,9 @@ impl AddPathStatus {
             AddPathStatus::Valid => None,
             AddPathStatus::NotFound => Some("file not found"),
             AddPathStatus::OutsideProject => Some("path is outside project"),
-            AddPathStatus::IsDirectory => Some("path is a directory"),
+            AddPathStatus::IsDirectory => {
+                Some("path is a directory (add its contents with a glob)")
+            }
         }
     }
 }
