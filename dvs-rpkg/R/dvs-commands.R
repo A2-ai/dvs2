@@ -82,7 +82,7 @@ dvs_status <- function(
   tibble::as_tibble(status_data_frame)
 }
 
-#' @inherit dvs_audit_log_impl title description params
+#' @inherit dvs_audit_log_impl title description
 #' @rdname dvs_audit_log
 #' @export
 dvs_audit_log <- function() {
