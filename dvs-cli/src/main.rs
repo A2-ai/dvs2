@@ -8,6 +8,7 @@ use serde_json::json;
 use tabled::Tabled;
 use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
 
+use dvs::audit::{Action, AuditEntry};
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
@@ -79,6 +80,15 @@ pub enum Command {
         #[clap(long)]
         with_metadata: bool,
     },
+    /// Reads the audit log of the repository's storage.
+    /// Paths filter the log to `add` entries for those files, matched against
+    /// the repo-root-relative path recorded at add time. With no paths, the
+    /// whole log is shown, including `init` entries.
+    #[command(next_display_order = 100)]
+    Audit {
+        /// Recorded file paths to filter the log by
+        paths: Vec<PathBuf>,
+    },
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
     /// At least one path or --glob must be provided; to restore every tracked file,
@@ -143,6 +153,37 @@ impl<'a> From<&'a FileMetadata> for StatusRowFull<'a> {
             compression: m.compression.to_string(),
             message: m.message.as_deref().unwrap_or(""),
             ..Default::default()
+        }
+    }
+}
+
+#[derive(Tabled)]
+struct AuditRow {
+    time: String,
+    user: String,
+    action: String,
+    path: String,
+    hash: String,
+}
+
+impl From<&AuditEntry> for AuditRow {
+    fn from(e: &AuditEntry) -> Self {
+        let (action, path, hash) = match &e.action {
+            Action::Add { file, .. } => (
+                "add",
+                file.path.display().to_string(),
+                file.hashes.blake3.chars().take(12).collect(),
+            ),
+            Action::Init { project_path, .. } => {
+                ("init", project_path.display().to_string(), String::new())
+            }
+        };
+        Self {
+            time: e.timestamp.to_string(),
+            user: e.user.clone(),
+            action: action.to_string(),
+            path,
+            hash,
         }
     }
 }
@@ -400,6 +441,32 @@ fn try_main() -> Result<()> {
             }
             if has_errors {
                 return Err(anyhow!("Some files failed to get status"));
+            }
+        }
+        Command::Audit { paths } => {
+            let config =
+                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let entries = match config.backend().read_audit_file(&paths) {
+                Ok(entries) => entries,
+                // Storage without an audit log reads as an empty log.
+                Err(err)
+                    if err
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    Vec::new()
+                }
+                Err(err) => return Err(err),
+            };
+            if cli.json {
+                println!("{}", serde_json::to_string(&entries)?);
+            } else if entries.is_empty() {
+                println!("No audit entries found");
+            } else {
+                let rows: Vec<AuditRow> = entries.iter().map(AuditRow::from).collect();
+                let mut table = tabled::Table::new(rows);
+                table.with(Modify::new(Rows::first()).with(Alignment::left()));
+                println!("{table}");
             }
         }
         Command::Get {

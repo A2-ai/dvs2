@@ -327,6 +327,45 @@ dvs_status(
 
 Returns a data frame with one row per tracked file.
 
+### audit
+
+This reads the audit log of the storage backing the current repository. See the Audit trail section under
+Internals for the log format and what gets recorded.
+
+#### CLI
+
+```shell
+❯ dvs audit --help
+Reads the audit log of the repository's storage. Paths filter the log to `add` entries for those files, matched against the repo-root-relative path recorded at add time. With no paths, the whole log is shown, including `init` entries
+
+Usage: dvs audit [OPTIONS] [PATHS]...
+
+Arguments:
+  [PATHS]...  Recorded file paths to filter the log by
+
+Options:
+      --json               Output results as JSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+  -h, --help               Print help
+```
+
+By default it prints a table with one row per entry: time, user, action, path, and a truncated hash.
+For `add` entries the path is the recorded file path and the hash is the first 12 characters of the blake3
+hash. For `init` entries the path is the initialized project path and the hash column is empty.
+
+With `--json` it prints the entries as a JSON array in the audit log's own schema, untruncated.
+
+Path arguments must match the recorded repo-root-relative path exactly. They are not resolved against the
+current working directory. A filter drops `init` entries.
+
+Storage without an audit log is reported as an empty log, not an error. An empty result prints
+`No audit entries found` (or `[]` with `--json`) and exits `0`. Running outside a DVS repository exits `1`.
+
+#### Rust library
+
+`Backend::read_audit_file(files)` returns the parsed entries, filtered to the given files when the slice is
+non-empty. Parsing lives in `audit::parse_audit_log`. The CLI adds no new library surface.
+
 ## Internals
 
 ### Metadata file format
