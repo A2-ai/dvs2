@@ -82,11 +82,11 @@ dvs_status <- function(
   tibble::as_tibble(status_data_frame)
 }
 
-#' @inherit dvs_audit_log_impl title description
+#' @inherit dvs_audit_log_impl title description params
 #' @rdname dvs_audit_log
 #' @keywords internal
-dvs_audit_log <- function() {
-  tibble::as_tibble(dvs_audit_log_impl())
+dvs_audit_log <- function(paths = character(0)) {
+  tibble::as_tibble(dvs_audit_log_impl(paths = paths))
 }
 
 #' @inherit dvs_get_impl title description params
