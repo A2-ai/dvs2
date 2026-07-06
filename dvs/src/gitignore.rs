@@ -69,6 +69,63 @@ pub(crate) fn add_to_gitignore(repo_root: &Path, paths: &[PathBuf]) -> Result<()
     Ok(())
 }
 
+/// Removes entries from per-directory `.gitignore` files under `repo_root`.
+///
+/// This is the inverse of [`add_to_gitignore`]. Each path should be relative to
+/// the repo_root already. Files are grouped by parent directory and the
+/// `/filename` entry is dropped from the `.gitignore` in that directory. Other
+/// lines are left untouched. A `.gitignore` that becomes empty is deleted so no
+/// empty file is left behind. Entries that are not present are ignored. If no
+/// `.git` folder exists, this is a no-op.
+pub(crate) fn remove_from_gitignore(repo_root: &Path, paths: &[PathBuf]) -> Result<()> {
+    if !repo_root.join(".git").exists() {
+        return Ok(());
+    }
+
+    // Group paths by parent directory (empty path = repo root)
+    let mut by_dir: HashMap<PathBuf, Vec<&Path>> = HashMap::new();
+    for p in paths {
+        let dir = p.parent().unwrap_or(Path::new("")).to_path_buf();
+        by_dir.entry(dir).or_default().push(p);
+    }
+
+    for (dir, dir_paths) in &by_dir {
+        let gitignore_path = repo_root.join(dir).join(".gitignore");
+        if !gitignore_path.is_file() {
+            continue;
+        }
+
+        let existing = fs::read_to_string(&gitignore_path)?;
+
+        let to_remove: HashSet<String> = dir_paths
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|name| format!("/{}", name.to_string_lossy()))
+            .collect();
+
+        let original_line_count = existing.lines().count();
+        let kept: Vec<&str> = existing
+            .lines()
+            .filter(|line| !to_remove.contains(*line))
+            .collect();
+
+        // None of our entries were present: leave the file untouched.
+        if kept.len() == original_line_count {
+            continue;
+        }
+
+        if kept.is_empty() {
+            fs::remove_file(&gitignore_path)?;
+        } else {
+            let mut content = kept.join("\n");
+            content.push('\n');
+            fs::write(&gitignore_path, content)?;
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +161,45 @@ mod tests {
         let paths = vec![PathBuf::from("data.csv")];
         add_to_gitignore(root, &paths).unwrap();
         assert!(!root.join(".gitignore").exists());
+    }
+
+    #[test]
+    fn test_remove_from_gitignore() {
+        let (_tmp, root) = create_temp_git_repo();
+        fs::write(root.join(".gitignore"), "*.log").unwrap();
+        let paths = vec![PathBuf::from("data.csv"), PathBuf::from("models/big.bin")];
+        add_to_gitignore(&root, &paths).unwrap();
+
+        // Removing one entry keeps the unrelated line and drops only /data.csv.
+        remove_from_gitignore(&root, &[PathBuf::from("data.csv")]).unwrap();
+        let root_content = fs::read_to_string(root.join(".gitignore")).unwrap();
+        assert_eq!(root_content, "*.log\n");
+
+        // The nested .gitignore held only the dvs entry, so removing it deletes
+        // the now-empty file.
+        remove_from_gitignore(&root, &[PathBuf::from("models/big.bin")]).unwrap();
+        assert!(!root.join("models/.gitignore").exists());
+    }
+
+    #[test]
+    fn test_remove_missing_entry_is_noop() {
+        let (_tmp, root) = create_temp_git_repo();
+        fs::write(root.join(".gitignore"), "*.log\n/kept.csv\n").unwrap();
+
+        // A path never added leaves the file untouched.
+        remove_from_gitignore(&root, &[PathBuf::from("never.csv")]).unwrap();
+        let content = fs::read_to_string(root.join(".gitignore")).unwrap();
+        assert_eq!(content, "*.log\n/kept.csv\n");
+    }
+
+    #[test]
+    fn test_remove_no_op_without_git_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::write(root.join(".gitignore"), "/data.csv\n").unwrap();
+        remove_from_gitignore(root, &[PathBuf::from("data.csv")]).unwrap();
+        // Without a .git folder the update is skipped, so the entry stays.
+        let content = fs::read_to_string(root.join(".gitignore")).unwrap();
+        assert_eq!(content, "/data.csv\n");
     }
 }
