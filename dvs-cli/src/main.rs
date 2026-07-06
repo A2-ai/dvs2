@@ -13,8 +13,9 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    AddDetail, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter, Status,
-    StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
+    AddDetail, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter,
+    RemoveDetail, Status, StatusDetail, add_files, format_size, get_files, get_status,
+    remove_files, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -96,6 +97,20 @@ pub enum Command {
         /// Show what would be retrieved without making any actual changes
         #[clap(long)]
         dry_run: bool,
+    },
+    /// Stops tracking the given files. You can use a glob or paths.
+    /// The local file and its stored data are kept. Only the metadata sidecar and
+    /// the gitignore entry are removed. At least one path or --glob must be provided.
+    #[command(next_display_order = 100)]
+    Remove {
+        #[clap(required_unless_present = "glob")]
+        paths: Vec<PathBuf>,
+        #[clap(long, short, conflicts_with = "recursive")]
+        glob: Option<String>,
+        /// Recursively include files in subdirectories for directory inputs.
+        /// Without this flag, directories return only their direct children.
+        #[clap(long, short, conflicts_with = "glob")]
+        recursive: bool,
     },
 }
 
@@ -461,6 +476,44 @@ fn try_main() -> Result<()> {
             }
             if has_errors {
                 return Err(anyhow!("Some files failed to get"));
+            }
+        }
+        Command::Remove {
+            paths,
+            glob,
+            recursive,
+        } => {
+            let config =
+                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
+            let all_paths: Vec<_> =
+                resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?
+                    .into_iter()
+                    .collect();
+            if all_paths.is_empty() {
+                return Err(anyhow!("No files to remove"));
+            }
+
+            let results = remove_files(all_paths, &dvs_paths)?;
+            let has_errors = results
+                .iter()
+                .any(|r| matches!(r.detail, RemoveDetail::Error { .. }));
+            if cli.json {
+                println!("{}", serde_json::to_string(&results)?);
+            } else {
+                for result in &results {
+                    match &result.detail {
+                        RemoveDetail::Success {} => {
+                            println!("Removed: {}", result.path.display());
+                        }
+                        RemoveDetail::Error { error } => {
+                            eprintln!("Error removing {}: {error}", result.path.display());
+                        }
+                    }
+                }
+            }
+            if has_errors {
+                return Err(anyhow!("Some files failed to remove"));
             }
         }
     }
