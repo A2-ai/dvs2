@@ -496,6 +496,30 @@ pub(crate) fn dvs_get(
     Ok(miniextendr_api::serde::vec_to_dataframe(&results)?)
 }
 
+/// Parses `_R_CHECK_LIMIT_CORES_` into an optional cap on the dvs core thread
+/// pool. `None` means no cap.
+///
+/// R sets this variable during `R CMD check --as-cran` and a checked process
+/// must not use more than 2 cores. Unset, empty, or "false"/"FALSE" means no
+/// cap. A positive integer means that many cores. Any other non-empty value
+/// (for example "TRUE" or "warn") means the CRAN default of 2.
+fn parse_cran_core_cap(value: Option<&str>) -> Option<usize> {
+    let trimmed = value?.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("false") {
+        return None;
+    }
+    match trimmed.parse::<usize>() {
+        Ok(n) if n > 0 => Some(n),
+        _ => Some(2),
+    }
+}
+
+/// Reads the live `_R_CHECK_LIMIT_CORES_` environment variable and returns the
+/// cap it implies, if any.
+fn cran_core_cap() -> Option<usize> {
+    parse_cran_core_cap(std::env::var("_R_CHECK_LIMIT_CORES_").ok().as_deref())
+}
+
 /// Set the number of threads used by DVS parallel operations.
 ///
 /// Controls the thread pool size for add, get, and status operations.
@@ -505,7 +529,21 @@ pub(crate) fn dvs_get(
 /// @keywords internal
 #[miniextendr(r_name = "dvs_set_threads_impl")]
 pub(crate) fn dvs_set_threads(#[miniextendr(default = "NULL")] threads: Option<usize>) {
-    set_num_threads(threads.unwrap_or(0));
+    // dvs core builds its own rayon pool, separate from miniextendr's pools
+    // (capped by miniextendr #1131). Under `R CMD check --as-cran` R sets
+    // `_R_CHECK_LIMIT_CORES_` and the process must not exceed 2 cores, so fold
+    // that cap into whatever thread count core would otherwise use.
+    let n = match (threads, cran_core_cap()) {
+        // Explicit request: clamp it down to the cap.
+        (Some(requested), Some(cap)) => requested.min(cap),
+        (Some(requested), None) => requested,
+        // No explicit request but a cap applies: pass the cap as an override
+        // so core's automatic default cannot exceed it.
+        (None, Some(cap)) => cap,
+        // No cap: unchanged from before (0 clears any override).
+        (None, None) => 0,
+    };
+    set_num_threads(n);
 }
 
 /// Format a byte count as a human-readable size string.
@@ -555,3 +593,35 @@ pub fn set_dvs_log_level(#[miniextendr(match_arg)] level: log::LevelFilter) {
 }
 
 miniextendr_api::miniextendr_init!(dvs);
+
+#[cfg(test)]
+mod cran_cap_tests {
+    use super::parse_cran_core_cap;
+
+    #[test]
+    fn unset_or_disabled_means_no_cap() {
+        assert_eq!(parse_cran_core_cap(None), None);
+        assert_eq!(parse_cran_core_cap(Some("")), None);
+        assert_eq!(parse_cran_core_cap(Some("   ")), None);
+        assert_eq!(parse_cran_core_cap(Some("false")), None);
+        assert_eq!(parse_cran_core_cap(Some("FALSE")), None);
+        assert_eq!(parse_cran_core_cap(Some(" false ")), None);
+    }
+
+    #[test]
+    fn positive_integer_is_the_cap() {
+        assert_eq!(parse_cran_core_cap(Some("1")), Some(1));
+        assert_eq!(parse_cran_core_cap(Some("2")), Some(2));
+        assert_eq!(parse_cran_core_cap(Some("8")), Some(8));
+        assert_eq!(parse_cran_core_cap(Some(" 4 ")), Some(4));
+    }
+
+    #[test]
+    fn other_enabling_values_cap_at_two() {
+        assert_eq!(parse_cran_core_cap(Some("TRUE")), Some(2));
+        assert_eq!(parse_cran_core_cap(Some("true")), Some(2));
+        assert_eq!(parse_cran_core_cap(Some("warn")), Some(2));
+        assert_eq!(parse_cran_core_cap(Some("0")), Some(2));
+        assert_eq!(parse_cran_core_cap(Some("-1")), Some(2));
+    }
+}

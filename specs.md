@@ -443,6 +443,10 @@ clamped to the number of files being processed.
 The threadpool size set directly by the R package takes precedence over the
 `DVS_NUM_THREADS` environment variable.
 
+During `R CMD check` the R package caps its thread pool per the
+`_R_CHECK_LIMIT_CORES_` environment variable. R sets that variable under
+`--as-cran` so a checked process does not use more than 2 cores.
+
 ### Gitignore
 
 After a successful `add`, each data file gets a `/<filename>` entry in its own directory's `.gitignore`, keeping the
