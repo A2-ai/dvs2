@@ -327,6 +327,49 @@ dvs_status(
 
 Returns a data frame with one row per tracked file.
 
+### remove
+
+`remove` stops tracking files. For each file it deletes the metadata sidecar at `<metadata folder>/<path to file>.dvs` and removes the file's entry from its directory's `.gitignore`. The local data file is kept and the stored data is kept. `remove` never touches storage blobs, so the content stays retrievable by any project that still tracks it. `remove` is not recorded in the audit log.
+
+Input paths are validated before anything is deleted. A path is removable only if it is tracked, meaning its sidecar exists. If any path is not tracked the whole batch is refused and nothing is removed, mirroring `add` and `get`.
+
+Once every input resolves, the removal is best-effort. A file whose sidecar cannot be deleted (for example a permission error) does not stop the others. That file is reported and the rest are still removed.
+
+Blobs are never deleted, so a `remove` can leave a blob in storage that no sidecar points to. This is intentional. Reclaiming unused storage is out of scope for `remove`.
+
+A removed file can be added again. The local copy is still present, so a later `add` tracks it and restores its sidecar and gitignore entry.
+
+#### CLI
+
+```shell
+❯ dvs remove --help
+Stops tracking the given files. You can use a glob or paths. The local file and its stored data are kept. Only the metadata sidecar and the gitignore entry are removed. At least one path or --glob must be provided
+
+Usage: dvs remove [OPTIONS] [PATHS]...
+
+Arguments:
+  [PATHS]...  
+
+Options:
+      --json               Output results as JSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+  -g, --glob <GLOB>        
+  -r, --recursive          Recursively include files in subdirectories for directory inputs. Without this flag, directories return only their direct children
+  -h, --help               Print help
+```
+
+Paths and globs resolve the same way as `get`, matched against the tracked metadata rather than the working files. See the Globbing section. Passing `-r, --recursive` with an explicit directory walks its subdirectories.
+
+A request that names a path with no tracked file is refused as a whole, removes nothing, and exits with `1`. A request that resolves but has one or more files fail during deletion removes the rest and also exits with `1`.
+
+#### Rust library
+
+The library validates every requested path against the metadata first and returns an error, refusing the whole batch, if any path is not tracked. Otherwise it returns a list of results sorted alphabetically by path, letting users decide what to do with each per-file runtime failure. It reads no storage and takes no backend.
+
+#### R package
+
+Not yet available. The R binding for `remove` follows in a separate change after the open rpkg pull request queue lands.
+
 ## Internals
 
 ### Metadata file format
@@ -449,15 +492,19 @@ After a successful `add`, each data file gets a `/<filename>` entry in its own d
 data out of Git while the `.dvs` metadata stays tracked. Existing entries are not duplicated. If there is no `.git`
 folder the update is skipped, and a failed `.gitignore` update is logged as a warning without failing the `add`.
 
+`remove` reverses this. It deletes the `/<filename>` entry and deletes the `.gitignore` file when it becomes empty. Other lines are left untouched. A failed `.gitignore` update during `remove` is logged as a warning without failing the removal.
+
 ### Globbing
 
-`add`, `status`, and `get` accept a `--glob` flag. The resolution works the following way:
+`add`, `status`, `get`, and `remove` accept a `--glob` flag. The resolution works the following way:
 
-- Explicit files: added/retrieved directly (glob ignored)
+- Explicit files: added, retrieved, or removed directly (glob ignored)
 - Explicit directories with a glob: walked and filtered by glob
 - No given paths with a glob: walks current directory filtered by glob
 
 Globs use a literal path separator, meaning `*.csv` only matches files in the target directory and
 will not match `subdir/file.csv`. Use `'**/*.csv'` (quoted, to avoid shell expansion) to match recursively across subdirectories.
 
-`status` and `get` also accept `-r/--recursive`, which walks the given directories instead of matching a glob pattern. `--recursive` and `--glob` are mutually exclusive. `add` accepts `--glob` but has no `--recursive` flag.
+`status`, `get`, and `remove` also accept `-r/--recursive`, which walks the given directories instead of matching a glob pattern. `--recursive` and `--glob` are mutually exclusive. `add` accepts `--glob` but has no `--recursive` flag.
+
+`get` and `remove` resolve against the tracked metadata, so a glob or directory matches only files that are tracked.
