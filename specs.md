@@ -156,7 +156,7 @@ Each file in an `add` result reports an outcome:
 - `present`: the file's hash and size match the existing metadata -> no-op. The metadata file is not
   rewritten, so fields like `message` are not updated
 
-Symlinks are resolved before adding. If a symlink target resolves to a path outside the project root, the file is rejected.
+Symlinks are resolved before adding. If an explicitly named path resolves to a location outside the project root, it is rejected and the batch refused. When a directory is expanded by a glob, a matched file whose symlink target resolves outside the project root is skipped with a warning rather than aborting the batch.
 
 Each `add` operation is atomic: the storage write and metadata update either both succeed or both roll back. A
 failure writing to storage will not leave behind a partial metadata file, and vice versa.

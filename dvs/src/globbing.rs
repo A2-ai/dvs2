@@ -57,7 +57,10 @@ pub fn resolve_paths_for_add(
             };
             out.insert(relative_to_root);
         } else if full_path.is_dir() {
-            if let Some(matcher) = &glob_matcher {
+            if !full_path.starts_with(&repo_root) {
+                // A dir without a glob: it will be rejected later
+                out.insert(path.clone());
+            } else if let Some(matcher) = &glob_matcher {
                 for entry in WalkDir::new(&full_path).into_iter().filter_map(|e| e.ok()) {
                     let entry_path = entry.path().canonicalize()?;
                     // Skip directories and metadata root folder
@@ -68,7 +71,17 @@ pub fn resolve_paths_for_add(
                     // Get path relative to the walked directory for matching
                     let relative_to_dir = match entry_path.strip_prefix(&full_path) {
                         Ok(p) => p,
-                        Err(_) => continue,
+                        Err(_) => {
+                            // A symlink outside of the repo from a glob is a warning only
+                            if !entry_path.starts_with(&repo_root) {
+                                log::warn!(
+                                    "Skipping {}: symlink resolves outside the project root ({})",
+                                    entry.path().display(),
+                                    entry_path.display()
+                                );
+                            }
+                            continue;
+                        }
                     };
                     if matcher.is_match(relative_to_dir) {
                         // Return path relative to repo root
@@ -79,6 +92,12 @@ pub fn resolve_paths_for_add(
                         out.insert(relative_to_root);
                     }
                 }
+            } else {
+                let relative_to_root = match full_path.strip_prefix(&repo_root) {
+                    Ok(p) => p.to_path_buf(),
+                    Err(_) => path.clone(),
+                };
+                out.insert(relative_to_root);
             }
         } else {
             bail!("Path is not a file or directory: {}", path.display());
@@ -205,12 +224,50 @@ mod tests {
     }
 
     #[test]
+    fn add_directory_without_glob() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let result = resolve_paths_for_add(
+            vec![PathBuf::from("data"), PathBuf::from("foo.txt")],
+            None,
+            &dvs_paths,
+        )
+        .unwrap();
+
+        // We keep it, it will be rejected later down the line since it's a dir
+        assert!(result.contains(&PathBuf::from("data")));
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+    }
+
+    #[test]
     fn add_path_not_found_errors() {
         let (_temp, dvs_paths) = setup_test_repo();
         let result = resolve_paths_for_add(vec![PathBuf::from("nonexistent")], None, &dvs_paths);
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Path not found"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn add_walk_skips_symlink_resolving_outside_repo() {
+        use std::os::unix::fs::symlink;
+
+        let (_temp, dvs_paths) = setup_test_repo();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("secret.csv");
+        File::create(&outside_file).unwrap();
+        // A symlink inside data/ that points outside the repo.
+        symlink(&outside_file, dvs_paths.repo_root().join("data/link.csv")).unwrap();
+
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("data")], Some("*.csv"), &dvs_paths).unwrap();
+
+        assert!(result.contains(&PathBuf::from("data/a.csv")));
+        assert!(
+            !result
+                .iter()
+                .any(|p| p.ends_with("link.csv") || p.ends_with("secret.csv")),
+        );
     }
 
     #[test]
