@@ -151,9 +151,9 @@ impl FileMetadata {
                     relative_path.as_ref().display()
                 );
                 if let Some(old) = old_metadata_content {
-                    fs::write(&dvs_file_path, &old)?;
+                    let _ = fs::write(&dvs_file_path, &old);
                 } else {
-                    fs::remove_file(&dvs_file_path)?;
+                    let _ = fs::remove_file(&dvs_file_path);
                 }
                 Err(e)
             }
@@ -167,8 +167,9 @@ impl FileMetadata {
                 } else {
                     let _ = fs::remove_file(&dvs_file_path);
                 }
-                if !storage_exists {
-                    backend.remove(&self.hashes)?;
+                // Remove the blob only if this call actually stored it
+                if stored_size.is_some() {
+                    let _ = backend.remove(&self.hashes);
                 }
                 bail!("Failed to write metadata file: {dvs_file_path:?}")
             }
@@ -178,12 +179,9 @@ impl FileMetadata {
                     relative_path.as_ref().display()
                 );
                 if let Some(old) = old_metadata_content {
-                    fs::write(&dvs_file_path, &old)?;
+                    let _ = fs::write(&dvs_file_path, &old);
                 } else {
-                    fs::remove_file(&dvs_file_path)?;
-                }
-                if !storage_exists {
-                    backend.remove(&self.hashes)?;
+                    let _ = fs::remove_file(&dvs_file_path);
                 }
                 bail!("Failed to write metadata file: {dvs_file_path:?}: {e}")
             }
