@@ -9,10 +9,14 @@ use anyhow::{Result, bail};
 use fs_err as fs;
 use rusqlite::Connection;
 
-/// Filesystem stat used as cache key: mtime + size
+/// Bump whenever the cache schema changes; a mismatch drops and rebuilds the table.
+const SCHEMA_VERSION: i64 = 1;
+
+/// Filesystem stat used as cache key: mtime + ctime + size.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileStat {
     pub mtime_ns: i64,
+    pub ctime_ns: i64,
     pub size: u64,
 }
 
@@ -25,9 +29,23 @@ impl FileStat {
             .unwrap_or_default();
         Ok(Self {
             mtime_ns: mtime.as_nanos() as i64,
+            ctime_ns: ctime_ns(&meta),
             size: meta.len(),
         })
     }
+}
+
+#[cfg(unix)]
+fn ctime_ns(meta: &std::fs::Metadata) -> i64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.ctime()
+        .saturating_mul(1_000_000_000)
+        .saturating_add(meta.ctime_nsec())
+}
+
+#[cfg(not(unix))]
+fn ctime_ns(_meta: &std::fs::Metadata) -> i64 {
+    0
 }
 
 /// SQLite-backed hash cache.
@@ -44,25 +62,38 @@ impl HashCache {
         let conn = Connection::open(db_path)?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=NORMAL;
-             CREATE TABLE IF NOT EXISTS hash_cache (
+             PRAGMA synchronous=NORMAL;",
+        )?;
+
+        // The cache is disposable, so on a schema-version mismatch we drop and
+        // recreate the table rather than migrate it.
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version != SCHEMA_VERSION {
+            conn.execute_batch("DROP TABLE IF EXISTS hash_cache;")?;
+        }
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS hash_cache (
                  path      TEXT PRIMARY KEY,
                  mtime_ns  INTEGER NOT NULL,
+                 ctime_ns  INTEGER NOT NULL,
                  size      INTEGER NOT NULL,
                  blake3    TEXT NOT NULL,
                  md5       TEXT
              );",
         )?;
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
         Ok(Self { conn })
     }
 
     pub fn lookup(&self, relative_path: &str, stat: &FileStat) -> Result<Option<Hashes>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT blake3, md5 FROM hash_cache WHERE path = ?1 AND mtime_ns = ?2 AND size = ?3",
+            "SELECT blake3, md5 FROM hash_cache \
+             WHERE path = ?1 AND mtime_ns = ?2 AND ctime_ns = ?3 AND size = ?4",
         )?;
         let mut rows = stmt.query(rusqlite::params![
             relative_path,
             stat.mtime_ns,
+            stat.ctime_ns,
             stat.size as i64,
         ])?;
         match rows.next()? {
@@ -77,13 +108,14 @@ impl HashCache {
 
     pub fn insert(&self, relative_path: &str, stat: &FileStat, hashes: &Hashes) -> Result<()> {
         let mut stmt = self.conn.prepare_cached(
-            "INSERT INTO hash_cache (path, mtime_ns, size, blake3, md5)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(path) DO UPDATE SET mtime_ns=?2, size=?3, blake3=?4, md5=?5",
+            "INSERT INTO hash_cache (path, mtime_ns, ctime_ns, size, blake3, md5)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(path) DO UPDATE SET mtime_ns=?2, ctime_ns=?3, size=?4, blake3=?5, md5=?6",
         )?;
         stmt.execute(rusqlite::params![
             relative_path,
             stat.mtime_ns,
+            stat.ctime_ns,
             stat.size as i64,
             &hashes.blake3,
             hashes.md5,
@@ -197,6 +229,7 @@ mod tests {
     fn sample_stat() -> FileStat {
         FileStat {
             mtime_ns: 1_700_000_000_000_000_000,
+            ctime_ns: 1_700_000_000_000_000_000,
             size: 1024,
         }
     }
