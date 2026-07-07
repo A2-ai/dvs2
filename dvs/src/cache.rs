@@ -59,10 +59,11 @@ impl HashCache {
         if let Some(parent) = db_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(db_path)?;
+        let conn = Connection::open(db_path)?;.
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=NORMAL;",
+            "PRAGMA journal_mode=TRUNCATE;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA busy_timeout=5000;",
         )?;
 
         // The cache is disposable, so on a schema-version mismatch we drop and
