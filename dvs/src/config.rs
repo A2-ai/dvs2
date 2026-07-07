@@ -101,7 +101,10 @@ impl Compression {
                     io::copy(&mut reader, &mut writer)?;
                     writer.flush()?;
                 } else {
-                    fs::copy(source, dest)?;
+                    let mut input = fs::File::open(source)?;
+                    let mut output = io::BufWriter::new(fs::File::create(dest)?);
+                    io::copy(&mut input, &mut output)?;
+                    output.flush()?;
                 }
                 Ok(())
             }
