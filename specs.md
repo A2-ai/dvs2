@@ -235,13 +235,15 @@ Options:
       --json               Output results as JSON
       --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
   -g, --glob <GLOB>        
-  -r, --recursive          Recursively include files in subdirectories for directory inputs. Without this flag, directories return only their direct children. Has no effect when no explicit paths are given
+  -r, --recursive          Recursively include files in subdirectories for directory inputs. Without this flag, directories return only their direct children.
       --dry-run            Show what would be retrieved without making any actual changes
   -h, --help               Print help
 ```
 
-Passing `-r, --recursive` with an explicit directory walks its subdirectories. It only constrains paths given
-explicitly, so an empty path list still returns every tracked file.
+Passing `-r, --recursive` with an explicit directory walks its subdirectories. When no explicit paths are given,
+`get` is scoped to the current directory (relative to the repo root): without `-r` it restores the tracked files
+directly under it, and with `-r` it restores every tracked file beneath it. (At the repo root, `-r` therefore
+restores every tracked file in the project.)
 
 A request that names a path with no tracked file (never added, or misspelled) is refused as a whole, retrieves nothing, and exits with `1`. A request that resolves but has one or more files fail on retrieval (for example a hash mismatch) retrieves the rest and also exits with `1`.
 
