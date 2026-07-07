@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 use fs_err as fs;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 fn get_file(
     backend: &dyn Backend,
@@ -59,26 +60,31 @@ fn get_file(
         return Ok((Outcome::Copied, metadata.size));
     }
 
-    // Retrieve from backend to target path
+    let tmp_path = target_path.with_extension(format!("dvs-tmp.{}", Uuid::new_v4()));
     log::debug!(
-        "Copying {} from storage to {}",
+        "Copying {} from storage to temp file {}",
         metadata.hashes,
-        target_path.display()
+        tmp_path.display()
     );
 
-    backend
-        .retrieve(
-            &metadata.hashes,
-            &target_path,
-            metadata.compression,
-            on_bytes,
-        )
-        .with_context(|| format!("Failed to retrieve {}", relative_path.as_ref().display()))?;
-    let actual = FileMetadata::from_file(&target_path, Compression::None, None)?;
-    if actual.hashes != metadata.hashes {
-        fs::remove_file(&target_path)?;
-        bail!("Retrieved file does not match expected hash");
+    let result = (|| {
+        let retrieved = backend
+            .retrieve(&metadata.hashes, &tmp_path, metadata.compression, on_bytes)
+            .with_context(|| format!("Failed to retrieve {}", relative_path.as_ref().display()))?;
+        if !retrieved {
+            bail!("Storage file missing for hash: {}", metadata.hashes);
+        }
+        let actual = FileMetadata::from_file(&tmp_path, Compression::None, None)?;
+        if actual.hashes != metadata.hashes {
+            bail!("Retrieved file does not match expected hash");
+        }
+        fs::rename(&tmp_path, &target_path)?;
+        Ok(actual)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
     }
+    let actual = result?;
 
     // Store retrieved file's hashes in cache
     if let Some(mtx) = cache {
@@ -202,127 +208,172 @@ pub fn get_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Hashes;
     use crate::add_files;
+    use crate::config::Config;
     use crate::files::add::AddDetail;
     use crate::files::status::get_status;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
+    use tempfile::TempDir;
     use uuid::Uuid;
 
-    fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
-        DvsPaths::new(
-            root.to_path_buf(),
-            root.to_path_buf(),
-            config.metadata_folder_name(),
-        )
-        .unwrap()
+    /// An initialized DVS repo with a temporary backend, plus helpers to track and
+    /// retrieve files. Collapses the per-test setup boilerplate to `TestRepo::new()`.
+    struct TestRepo {
+        _tmp: TempDir,
+        root: PathBuf,
+        config: Config,
+        paths: DvsPaths,
     }
 
-    fn make_cache(paths: &DvsPaths) -> Mutex<cache::HashCache> {
-        Mutex::new(cache::HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap())
+    impl TestRepo {
+        fn new() -> Self {
+            let (_tmp, root) = create_temp_git_repo();
+            let (config, _dvs_dir) = init_dvs_repo(&root);
+            let paths =
+                DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name()).unwrap();
+            Self {
+                _tmp,
+                root,
+                config,
+                paths,
+            }
+        }
+
+        fn backend(&self) -> &dyn Backend {
+            self.config.backend()
+        }
+
+        fn cache(&self) -> Mutex<HashCache> {
+            Mutex::new(HashCache::open(&self.paths.cache_folder().join("dvs.db")).unwrap())
+        }
+
+        /// Create `name` with `content` and track it, returning its path and metadata.
+        fn track(
+            &self,
+            name: &str,
+            content: &[u8],
+            compression: Compression,
+        ) -> (PathBuf, FileMetadata) {
+            let file_path = create_file(&self.root, name, content);
+            let metadata = FileMetadata::from_file(&file_path, compression, None).unwrap();
+            metadata
+                .save(
+                    Uuid::new_v4(),
+                    &file_path,
+                    self.backend(),
+                    &self.paths,
+                    name,
+                    None,
+                )
+                .unwrap();
+            (file_path, metadata)
+        }
+
+        /// Run a real (non-dry-run) single-file `get`.
+        fn get(&self, name: &str) -> Result<(Outcome, u64)> {
+            get_file(
+                self.backend(),
+                &self.paths,
+                name,
+                Some(&self.cache()),
+                false,
+                None,
+            )
+        }
+
+        /// Overwrite the stored blob for `hashes` with `content`, defeating verification.
+        fn corrupt_blob(&self, hashes: &Hashes, content: &[u8]) {
+            let hash = hashes.get_blake3();
+            let blob = self
+                .backend()
+                .local_path()
+                .unwrap()
+                .join(&hash[..2])
+                .join(&hash[2..]);
+            // Blobs are stored read-only; make it writable before overwriting.
+            let mut perms = fs::metadata(&blob).unwrap().permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            fs::set_permissions(&blob, perms).unwrap();
+            fs::write(&blob, content).unwrap();
+        }
     }
 
     #[test]
     fn get_file_retrieves_from_storage() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-        let file_path = create_file(&root, "retrieve.txt", b"stored content");
+        let repo = TestRepo::new();
+        let (file_path, _) = repo.track("retrieve.txt", b"stored content", Compression::None);
 
-        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-        metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "retrieve.txt",
-                None,
-            )
-            .unwrap();
-
-        // Delete the original file
         fs::remove_file(&file_path).unwrap();
         assert!(!file_path.exists());
 
-        // Retrieve it
-        let cache = make_cache(&paths);
-        let (outcome, _size) =
-            get_file(backend, &paths, "retrieve.txt", Some(&cache), false, None).unwrap();
+        let (outcome, _) = repo.get("retrieve.txt").unwrap();
         assert_eq!(outcome, Outcome::Copied);
-        assert!(file_path.exists());
         assert_eq!(fs::read(&file_path).unwrap(), b"stored content");
+        assert!(
+            !fs::metadata(&file_path).unwrap().permissions().readonly(),
+            "restored file inherited the blob's read-only mode"
+        );
     }
 
     #[test]
     fn get_file_returns_present_when_already_current() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-        let file_path = create_file(&root, "present.txt", b"content");
-
-        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-        metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "present.txt",
-                None,
-            )
-            .unwrap();
+        let repo = TestRepo::new();
+        repo.track("present.txt", b"content", Compression::Zstd);
 
         // File still exists and matches - should return Present
-        let cache = make_cache(&paths);
-        let (outcome, _size) =
-            get_file(backend, &paths, "present.txt", Some(&cache), false, None).unwrap();
+        let (outcome, _) = repo.get("present.txt").unwrap();
         assert_eq!(outcome, Outcome::Present);
     }
 
     #[test]
     fn get_file_fails_for_untracked_file() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
+        let repo = TestRepo::new();
+        let err = repo.get("untracked.txt").unwrap_err().to_string();
+        assert!(err.contains("not tracked"), "unexpected error: {err}");
+    }
 
-        let cache = make_cache(&paths);
-        let result = get_file(backend, &paths, "untracked.txt", Some(&cache), false, None);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not tracked"));
+    #[test]
+    fn get_file_preserves_target_when_stored_blob_is_corrupt() {
+        let repo = TestRepo::new();
+        // No compression so the corrupt blob still "decompresses" (copies) cleanly
+        // and reaches the hash-mismatch check.
+        let (file_path, metadata) =
+            repo.track("precious.txt", b"original content", Compression::None);
+        repo.corrupt_blob(&metadata.hashes, b"CORRUPTED BLOB BYTES");
+
+        // Stand in for the user's uncommitted local edits, then get must fail on the
+        // hash mismatch WITHOUT destroying the local file or leaking a tmp file.
+        fs::write(&file_path, b"my uncommitted edits").unwrap();
+        let err = repo.get("precious.txt").unwrap_err().to_string();
+        assert!(
+            err.contains("does not match expected hash"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&file_path).unwrap(), b"my uncommitted edits");
+        let tmp_left = fs::read_dir(&repo.root)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().contains("dvs-tmp"));
+        assert!(!tmp_left);
     }
 
     #[test]
     fn get_files_aborts_batch_when_any_path_not_tracked() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
+        let repo = TestRepo::new();
 
-        // Track a.txt, then drop its local copy so a successful get would
-        // restore it.
-        create_file(&root, "a.txt", b"a");
-        add_files(
-            vec!["a.txt".into()],
-            &paths,
-            backend,
-            None,
-            Compression::Zstd,
-            false,
-            None,
-        )
-        .unwrap();
-        fs::remove_file(root.join("a.txt")).unwrap();
+        // Track a.txt, then drop its local copy so a successful get would restore it.
+        repo.track("a.txt", b"a", Compression::Zstd);
+        fs::remove_file(repo.root.join("a.txt")).unwrap();
 
         // A file that exists on disk but is not tracked by DVS.
-        create_file(&root, "untracked.txt", b"hello");
+        create_file(&repo.root, "untracked.txt", b"hello");
 
         let err = get_files(
             vec!["a.txt".into(), "untracked.txt".into()],
-            &paths,
-            backend,
+            &repo.paths,
+            repo.backend(),
             false,
             None,
         )
@@ -333,26 +384,23 @@ mod tests {
 
         // No partial success: the tracked file must not have been restored.
         assert!(
-            !root.join("a.txt").exists(),
+            !repo.root.join("a.txt").exists(),
             "no files should be retrieved when one is not tracked"
         );
     }
 
     fn run_add_get_roundtrip(file_paths: Vec<PathBuf>, expected_files: &[&str]) {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
+        let repo = TestRepo::new();
 
-        create_file(&root, "a.txt", b"a");
-        create_file(&root, "b.txt", b"b");
-        create_file(&root, "c.csv", b"c");
+        create_file(&repo.root, "a.txt", b"a");
+        create_file(&repo.root, "b.txt", b"b");
+        create_file(&repo.root, "c.csv", b"c");
 
         // Add files
         let results = add_files(
             file_paths.clone(),
-            &paths,
-            backend,
+            &repo.paths,
+            repo.backend(),
             None,
             Compression::Zstd,
             false,
@@ -371,7 +419,7 @@ mod tests {
         }
 
         // Verify correct files are tracked
-        let statuses = get_status(&paths, None, None).unwrap();
+        let statuses = get_status(&repo.paths, None, None).unwrap();
         assert_eq!(statuses.len(), expected_files.len());
         let tracked_names: Vec<_> = statuses.iter().map(|s| s.path.to_str().unwrap()).collect();
         for expected in expected_files {
@@ -383,11 +431,11 @@ mod tests {
 
         // Delete tracked files
         for name in expected_files {
-            fs::remove_file(root.join(name)).unwrap();
+            fs::remove_file(repo.root.join(name)).unwrap();
         }
 
         // Get files back
-        let results = get_files(file_paths, &paths, backend, false, None).unwrap();
+        let results = get_files(file_paths, &repo.paths, repo.backend(), false, None).unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
             assert!(matches!(
@@ -401,7 +449,10 @@ mod tests {
 
         // Verify files restored
         for name in expected_files {
-            assert!(root.join(name).exists(), "Expected {name} to be restored");
+            assert!(
+                repo.root.join(name).exists(),
+                "Expected {name} to be restored"
+            );
         }
     }
 
@@ -413,52 +464,12 @@ mod tests {
 
     #[test]
     fn get_file_errors_on_corrupted_storage() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-
-        // Add a file
-        let file_path = create_file(&root, "data.txt", b"original content");
-        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-        metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "data.txt",
-                None,
-            )
-            .unwrap();
-
-        // Delete the local file
+        let repo = TestRepo::new();
+        let (file_path, metadata) = repo.track("data.txt", b"original content", Compression::Zstd);
         fs::remove_file(&file_path).unwrap();
+        repo.corrupt_blob(&metadata.hashes, b"corrupted content");
 
-        // Corrupt the storage file (must remove read-only first)
-        let storage_path = root
-            .parent()
-            .unwrap()
-            .join(".storage")
-            .join(&metadata.hashes.blake3[..2])
-            .join(&metadata.hashes.blake3[2..]);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o644);
-            fs::set_permissions(&storage_path, perms).unwrap();
-        }
-        #[cfg(not(unix))]
-        {
-            let mut perms = fs::metadata(&storage_path).unwrap().permissions();
-            perms.set_readonly(false);
-            fs::set_permissions(&storage_path, perms).unwrap();
-        }
-        fs::write(&storage_path, b"corrupted content").unwrap();
-
-        // get_file should error on decompression or hash mismatch
-        let cache = make_cache(&paths);
-        let result = get_file(backend, &paths, "data.txt", Some(&cache), false, None);
-        assert!(result.is_err());
+        // get_file should error on decompression or hash mismatch.
+        assert!(repo.get("data.txt").is_err());
     }
 }
