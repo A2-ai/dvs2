@@ -9,6 +9,7 @@ use anyhow::anyhow;
 use anyhow::{Result, bail};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::Hashes;
 use crate::audit::{AuditEntry, parse_audit_log};
@@ -223,16 +224,25 @@ impl Backend for LocalBackend {
             self.ensure_group_and_mode(&self.path, self.dir_mode())?;
             self.ensure_group_and_mode(parent, self.dir_mode())?;
         }
-        let tmp_path = path.with_extension("tmp");
-        let stored_size = compression.compress(source, &tmp_path, on_bytes)?;
 
-        if self.use_shared_blob_mode() {
-            self.ensure_group_and_mode(&tmp_path, SHARED_BLOB_MODE)?;
-        } else {
-            make_readonly(&tmp_path)?;
+        // Unique tmp name
+        let tmp_path = path.with_extension(format!("tmp.{}", Uuid::new_v4()));
+
+        // Always clean up the tmp file even if an error occured
+        let result = (|| {
+            let stored_size = compression.compress(source, &tmp_path, on_bytes)?;
+            if self.use_shared_blob_mode() {
+                self.ensure_group_and_mode(&tmp_path, SHARED_BLOB_MODE)?;
+            } else {
+                make_readonly(&tmp_path)?;
+            }
+            fs::rename(&tmp_path, &path)?;
+            Ok(stored_size)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp_path);
         }
-        fs::rename(&tmp_path, &path)?;
-        Ok(stored_size)
+        result
     }
 
     fn retrieve(
