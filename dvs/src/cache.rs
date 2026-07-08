@@ -59,7 +59,7 @@ impl HashCache {
         if let Some(parent) = db_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(db_path)?;.
+        let conn = Connection::open(db_path)?;
         conn.execute_batch(
             "PRAGMA journal_mode=TRUNCATE;
              PRAGMA synchronous=NORMAL;
