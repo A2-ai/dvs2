@@ -1,4 +1,4 @@
-AC_INIT([dvs], [0.1.0])
+AC_INIT([dvs], [0.4.0.9000])
 
 dnl Use tools/ directory for auxiliary build files (config.guess, config.sub)
 dnl This avoids the CRAN NOTE about non-standard top-level files
