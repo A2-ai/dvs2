@@ -9,3 +9,4 @@ dvs_audit_log()
 \description{
 Reads the full audit log of the DVS repository containing the working directory and returns one row per entry. The column structure is inherited directly from \verb{dvs::audit::AuditEntry}'s serde representation, so the rpkg never reaches into the dvs crate's internal types. The \code{action} enum currently surfaces as a nested list-column. Flattening it through serde without re-encoding dvs internals is tracked as miniextendr#1056, with a builder-based alternative in miniextendr#1055.
 }
+\keyword{internal}
