@@ -509,6 +509,29 @@ mod tests {
     }
 
     #[test]
+    fn add_walk_skips_custom_metadata_folder_name() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join("data")).unwrap();
+        File::create(root.join("data/a.csv")).unwrap();
+        // The configured metadata folder, holding a sidecar
+        fs::create_dir_all(root.join("meta/data")).unwrap();
+        File::create(root.join("meta/data/a.csv.dvs")).unwrap();
+        // With a custom name, a directory literally called .dvs is just data
+        fs::create_dir_all(root.join(".dvs")).unwrap();
+        File::create(root.join(".dvs/decoy.csv")).unwrap();
+
+        let dvs_paths = DvsPaths::new(root.to_path_buf(), root.to_path_buf(), "meta").unwrap();
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from(".")], Some("**/*"), &dvs_paths).unwrap();
+
+        assert!(result.contains(&PathBuf::from("data/a.csv")));
+        assert!(result.contains(&PathBuf::from(".dvs/decoy.csv")));
+        assert!(!result.iter().any(|p| p.starts_with("meta")));
+    }
+
+    #[test]
     fn add_walk_skips_nested_git_directories() {
         let (temp, dvs_paths) = setup_test_repo();
         let root = temp.path();
