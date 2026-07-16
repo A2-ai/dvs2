@@ -396,6 +396,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn get_ignores_reserved_sidecars_in_poisoned_repo() {
+        let repo = TestRepo::new();
+
+        // A real tracked file, deleted locally so get has work to do.
+        repo.track("real.csv", b"data", Compression::None);
+        fs::remove_file(repo.root.join("real.csv")).unwrap();
+
+        // Poison: reuse the real sidecar (valid metadata, blob in storage) as a
+        // sidecar for a git internal, the shape a pre-exclusion glob add left
+        // behind. A get that acted on it would clobber .git/refs/heads/main.
+        let real_sidecar = repo.paths.metadata_path(Path::new("real.csv"));
+        let poison = repo.root.join(".dvs/.git/refs/heads/main.dvs");
+        fs::create_dir_all(poison.parent().unwrap()).unwrap();
+        fs::copy(&real_sidecar, &poison).unwrap();
+        let git_ref = repo.root.join(".git/refs/heads/main");
+        fs::create_dir_all(git_ref.parent().unwrap()).unwrap();
+        fs::write(&git_ref, b"current-commit-sha\n").unwrap();
+
+        // The recursive everything-get must not see the reserved sidecar.
+        let resolved =
+            crate::globbing::resolve_paths_for_get(vec![], None, &repo.paths, true).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert!(resolved.contains(&PathBuf::from("real.csv")));
+
+        let results = get_files(
+            resolved.into_iter().collect(),
+            &repo.paths,
+            repo.backend(),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(matches!(
+            results[0].detail,
+            GetDetail::Success {
+                outcome: Outcome::Copied,
+                ..
+            }
+        ));
+        assert_eq!(fs::read(repo.root.join("real.csv")).unwrap(), b"data");
+        assert_eq!(
+            fs::read(&git_ref).unwrap(),
+            b"current-commit-sha\n",
+            "get restored a git internal from a poisoned sidecar"
+        );
+    }
+
     fn run_add_get_roundtrip(file_paths: Vec<PathBuf>, expected_files: &[&str]) {
         let repo = TestRepo::new();
 

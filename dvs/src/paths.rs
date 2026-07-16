@@ -23,6 +23,8 @@ pub enum AddPathStatus {
     IsDirectory,
     /// Path resolves to outside the project root
     OutsideProject,
+    /// Path is inside `.git` or inside the metadata folder
+    ReservedPath,
 }
 
 impl AddPathStatus {
@@ -32,6 +34,7 @@ impl AddPathStatus {
             AddPathStatus::NotFound => Some("file not found"),
             AddPathStatus::OutsideProject => Some("path is outside project"),
             AddPathStatus::IsDirectory => Some("path is a directory"),
+            AddPathStatus::ReservedPath => Some("path is reserved (git or dvs metadata)"),
         }
     }
 }
@@ -159,9 +162,25 @@ impl DvsPaths {
         PathBuf::from(s)
     }
 
+    /// A repo-root-relative path is reserved when any of its components is
+    /// `.git` or when its first component is the metadata folder itself.
+    /// Reserved paths are never valid dvs data: sidecars must stay committed
+    /// to git, and git internals must never be restored by `get`.
+    fn is_reserved_path(&self, relative: &Path) -> bool {
+        relative.starts_with(&self.metadata_folder_name)
+            || relative
+                .components()
+                .any(|c| c.as_os_str() == OsStr::new(".git"))
+    }
+
     /// Repo-root-relative paths of every tracked file: one per `.dvs` entry in
     /// the metadata folder, with the `.dvs` extension stripped.
     /// Shared by `get` and `status`
+    ///
+    /// Sidecars that map to a reserved path are skipped with a warning. Such
+    /// sidecars can exist in repos poisoned by a pre-exclusion glob add and
+    /// propagate through git clones, so the guard must live here rather than
+    /// in `add` alone.
     pub(crate) fn tracked_paths(&self) -> Vec<PathBuf> {
         let metadata_root = self.metadata_folder();
         WalkDir::new(&metadata_root)
@@ -172,10 +191,19 @@ impl DvsPaths {
                 if !entry_path.is_file() || entry_path.extension() != Some(OsStr::new("dvs")) {
                     return None;
                 }
-                entry_path
+                let relative = entry_path
                     .strip_prefix(&metadata_root)
                     .ok()
-                    .map(|rel| rel.with_extension(""))
+                    .map(|rel| rel.with_extension(""))?;
+                if self.is_reserved_path(&relative) {
+                    log::warn!(
+                        "Ignoring stale sidecar {} for reserved path {}, it can be deleted",
+                        entry_path.display(),
+                        relative.display()
+                    );
+                    return None;
+                }
+                Some(relative)
             })
             .collect()
     }
@@ -206,17 +234,19 @@ impl DvsPaths {
         for path in paths {
             let file_path = self.file_path(path);
             let status = match file_path.canonicalize() {
-                Ok(canonical) => {
-                    if !canonical.starts_with(&self.repo_root) {
-                        AddPathStatus::OutsideProject
-                    } else if canonical.is_dir() {
-                        AddPathStatus::IsDirectory
-                    } else if canonical.is_file() {
-                        AddPathStatus::Valid
-                    } else {
-                        AddPathStatus::NotFound
+                Ok(canonical) => match canonical.strip_prefix(&self.repo_root) {
+                    Err(_) => AddPathStatus::OutsideProject,
+                    Ok(relative) if self.is_reserved_path(relative) => AddPathStatus::ReservedPath,
+                    Ok(_) => {
+                        if canonical.is_dir() {
+                            AddPathStatus::IsDirectory
+                        } else if canonical.is_file() {
+                            AddPathStatus::Valid
+                        } else {
+                            AddPathStatus::NotFound
+                        }
                     }
-                }
+                },
                 Err(_) => AddPathStatus::NotFound,
             };
             found.push((path.clone(), status));
@@ -353,5 +383,106 @@ mod tests {
         assert_eq!(result[1].1, AddPathStatus::NotFound);
         assert_eq!(result[2].1, AddPathStatus::OutsideProject);
         assert_eq!(result[3].1, AddPathStatus::IsDirectory);
+    }
+
+    #[test]
+    fn validate_for_add_rejects_reserved_paths() {
+        let (_tmp, root) = create_temp_git_repo();
+        let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs").unwrap();
+
+        // Reserved: git internals at the root and inside a nested repo
+        fs_err::write(root.join(".git/config"), b"[core]").unwrap();
+        fs_err::create_dir_all(root.join("projects/alpha/.git")).unwrap();
+        fs_err::write(root.join("projects/alpha/.git/config"), b"[core]").unwrap();
+
+        // Reserved: a sidecar inside the metadata folder
+        fs_err::create_dir_all(root.join(".dvs/data")).unwrap();
+        fs_err::write(root.join(".dvs/data/iris.csv.dvs"), b"{}").unwrap();
+
+        // Deliberately allowed: .gitignore and dvs.toml named explicitly
+        fs_err::write(root.join(".gitignore"), b"*.log").unwrap();
+        fs_err::write(root.join("dvs.toml"), b"").unwrap();
+
+        let result = paths.validate_for_add(&[
+            PathBuf::from(".git/config"),
+            PathBuf::from(".git"),
+            PathBuf::from("projects/alpha/.git/config"),
+            PathBuf::from(".dvs/data/iris.csv.dvs"),
+            PathBuf::from(".gitignore"),
+            PathBuf::from("dvs.toml"),
+        ]);
+
+        assert_eq!(result[0].1, AddPathStatus::ReservedPath);
+        assert_eq!(result[1].1, AddPathStatus::ReservedPath);
+        assert_eq!(result[2].1, AddPathStatus::ReservedPath);
+        assert_eq!(result[3].1, AddPathStatus::ReservedPath);
+        assert_eq!(result[4].1, AddPathStatus::Valid);
+        assert_eq!(result[5].1, AddPathStatus::Valid);
+    }
+
+    #[test]
+    fn tracked_paths_skips_reserved_sidecars() {
+        let (_tmp, root) = create_temp_git_repo();
+        let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs").unwrap();
+
+        // A real sidecar
+        fs_err::create_dir_all(root.join(".dvs/data")).unwrap();
+        fs_err::write(root.join(".dvs/data/a.csv.dvs"), b"{}").unwrap();
+
+        // Poison: sidecars for git internals, at the root and nested
+        fs_err::create_dir_all(root.join(".dvs/.git/refs/heads")).unwrap();
+        fs_err::write(root.join(".dvs/.git/config.dvs"), b"{}").unwrap();
+        fs_err::write(root.join(".dvs/.git/refs/heads/main.dvs"), b"{}").unwrap();
+        fs_err::create_dir_all(root.join(".dvs/projects/alpha/.git")).unwrap();
+        fs_err::write(root.join(".dvs/projects/alpha/.git/config.dvs"), b"{}").unwrap();
+
+        // Poison: a sidecar of a sidecar under the metadata folder name
+        fs_err::create_dir_all(root.join(".dvs/.dvs/data")).unwrap();
+        fs_err::write(root.join(".dvs/.dvs/data/a.csv.dvs.dvs"), b"{}").unwrap();
+
+        let tracked = paths.tracked_paths();
+        assert_eq!(tracked, vec![PathBuf::from("data/a.csv")]);
+    }
+
+    #[test]
+    fn tracked_paths_custom_metadata_name_literal_dvs_not_special() {
+        let (_tmp, root) = create_temp_git_repo();
+        let paths = DvsPaths::new(root.clone(), root.clone(), "meta").unwrap();
+
+        // A real sidecar, plus one for a data dir literally named .dvs
+        fs_err::create_dir_all(root.join("meta/data")).unwrap();
+        fs_err::write(root.join("meta/data/a.csv.dvs"), b"{}").unwrap();
+        fs_err::create_dir_all(root.join("meta/.dvs")).unwrap();
+        fs_err::write(root.join("meta/.dvs/b.csv.dvs"), b"{}").unwrap();
+
+        // Poison: the configured metadata name and a .git component
+        fs_err::create_dir_all(root.join("meta/meta")).unwrap();
+        fs_err::write(root.join("meta/meta/c.csv.dvs"), b"{}").unwrap();
+        fs_err::create_dir_all(root.join("meta/.git")).unwrap();
+        fs_err::write(root.join("meta/.git/config.dvs"), b"{}").unwrap();
+
+        let mut tracked = paths.tracked_paths();
+        tracked.sort();
+        assert_eq!(
+            tracked,
+            vec![PathBuf::from(".dvs/b.csv"), PathBuf::from("data/a.csv")]
+        );
+    }
+
+    #[test]
+    fn validate_for_add_custom_metadata_name_literal_dvs_not_special() {
+        let (_tmp, root) = create_temp_git_repo();
+        let paths = DvsPaths::new(root.clone(), root.clone(), "meta").unwrap();
+
+        fs_err::create_dir_all(root.join(".dvs")).unwrap();
+        fs_err::write(root.join(".dvs/plain.csv"), b"data").unwrap();
+        fs_err::create_dir_all(root.join("meta")).unwrap();
+        fs_err::write(root.join("meta/x.dvs"), b"{}").unwrap();
+
+        let result =
+            paths.validate_for_add(&[PathBuf::from(".dvs/plain.csv"), PathBuf::from("meta/x.dvs")]);
+
+        assert_eq!(result[0].1, AddPathStatus::Valid);
+        assert_eq!(result[1].1, AddPathStatus::ReservedPath);
     }
 }

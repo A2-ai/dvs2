@@ -270,6 +270,32 @@ mod tests {
     }
 
     #[test]
+    fn get_status_ignores_reserved_sidecars() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+
+        let file_path = create_file(&root, "a.txt", b"content");
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        metadata
+            .save(Uuid::new_v4(), &file_path, backend, &paths, "a.txt", None)
+            .unwrap();
+
+        // Poison: reuse the real sidecar for a git internal and for a sidecar
+        // of a sidecar, the shapes a pre-exclusion glob add left behind.
+        let real_sidecar = dvs_dir.join("a.txt.dvs");
+        fs::create_dir_all(dvs_dir.join(".git")).unwrap();
+        fs::copy(&real_sidecar, dvs_dir.join(".git/config.dvs")).unwrap();
+        fs::create_dir_all(dvs_dir.join(".dvs")).unwrap();
+        fs::copy(&real_sidecar, dvs_dir.join(".dvs/a.txt.dvs.dvs")).unwrap();
+
+        let statuses = get_status(&paths, None, None).unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].path, PathBuf::from("a.txt"));
+    }
+
+    #[test]
     fn get_status_returns_empty_vec_for_repo_with_no_tracked_files() {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);

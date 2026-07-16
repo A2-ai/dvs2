@@ -271,6 +271,31 @@ mod tests {
     }
 
     #[test]
+    fn get_walk_skips_reserved_sidecars() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let root = dvs_paths.repo_root();
+
+        // Poison the metadata folder the way a pre-exclusion glob add did:
+        // sidecars for git internals and a sidecar of a sidecar.
+        fs::create_dir_all(root.join(".dvs/.git/refs/heads")).unwrap();
+        File::create(root.join(".dvs/.git/config.dvs")).unwrap();
+        File::create(root.join(".dvs/.git/refs/heads/main.dvs")).unwrap();
+        fs::create_dir_all(root.join(".dvs/.dvs")).unwrap();
+        File::create(root.join(".dvs/.dvs/foo.txt.dvs.dvs")).unwrap();
+
+        let result = resolve_paths_for_get(vec![], Some("**/*"), &dvs_paths, false).unwrap();
+
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+        assert!(result.contains(&PathBuf::from("data/a.csv")));
+        assert!(
+            !result
+                .iter()
+                .any(|p| p.starts_with(".git") || p.starts_with(".dvs")),
+            "reserved sidecars leaked into the tracked set: {result:?}"
+        );
+    }
+
+    #[test]
     fn get_exact_file_match() {
         let (_temp, dvs_paths) = setup_test_repo();
         let result =

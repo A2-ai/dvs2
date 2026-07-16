@@ -145,6 +145,8 @@ message that will be recorded in the metadata file. Similarly, `add` must not ha
 
 Input paths are validated before any data is written. If any path cannot be resolved to a file to add (it does not exist, it is a directory passed without a glob, or it resolves outside the project root) the whole batch is refused and nothing is added.
 
+Paths under `.git` and paths under the metadata folder are reserved. An explicit input that resolves to a reserved path is invalid and refuses the batch. A `.git` component is reserved at any depth, so files inside a nested repository's `.git` are rejected too. The metadata folder check uses the configured folder name, so with a custom name a directory literally named `.dvs` is plain data. `.gitignore` and `dvs.toml` are not reserved. Naming them explicitly stays allowed.
+
 Once every input resolves, the add is best-effort. A file that fails during the read or the storage write (for example a permission error) does not stop the others. That file is reported and the rest are still added.
 
 Each added file gets a metadata sidecar at `<metadata folder>/<path to file>.dvs` (metadata folder defaults to
@@ -221,6 +223,8 @@ file is renamed over the target. A failed get leaves any existing local file unc
 Users can use `get` with specific paths or globs. In practice those will be ran on the metadata folder rather
 than the actual project, to know what to pull but the resolution works the same way as `add`.
 
+Sidecars that map to a reserved path (any path with a `.git` component, or a path under the metadata folder itself) are ignored when the tracked set is derived. Each ignored sidecar is logged as a warning naming the file so it can be deleted. Such sidecars can exist in repositories that ran an `add` with a broad glob before reserved paths were excluded, and they propagate through git clones. `get` never restores those paths.
+
 #### CLI
 
 ```shell
@@ -272,6 +276,8 @@ It raises an error if no files match, or if any requested path is not tracked (t
 
 This returns the status (mentioned in the high level overview above)
  of the tracked files in the project.
+
+Reserved-path sidecars are ignored the same way as in `get`. `status` never lists paths under `.git` or under the metadata folder, even when stale sidecars for them exist.
 
 #### CLI
 
