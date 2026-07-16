@@ -36,3 +36,15 @@ bash ui/main_log.sh 2>&1 > /tmp/ui-log.log; echo "EXIT: $?"
 ## Cleanup
 
 Tests create `dvs_repo_*`, `dvs_storage_*`, and `dvs_fixture_*` temp dirs under `ui/`. Run `bash ui/cleanup.sh` after each run. The cleanup script trashes (not deletes) these directories.
+
+## Demonstrating fixes (evidence for PRs)
+
+A PR that claims to fix broken behavior must show the breakage actually existed and is gone. The procedure:
+
+1. Install the CLI from origin/main: `just install-cli` from a worktree checked out at origin/main. Run the failing scenario with that installed `dvs` and capture the transcript verbatim (commands, errors, exit codes, resulting `.dvs` sidecars).
+2. Add a `ui/main_*.sh` walkthrough on the fix branch that sets up the same cases and asserts the FIXED behavior. It doubles as the regression walkthrough after merge.
+3. Run the walkthrough twice: once with the branch build first on PATH (`PATH="$PWD/target/debug:$PATH"`) to show it passes, once against the installed origin/main `dvs` to show it fails at the broken case.
+4. Post both transcripts in the PR as a collapsible `<details>` block that a reader can follow top to bottom: setup, broken output on main, fixed output on the branch, and where the script lives.
+5. Leave the environment on main afterwards: reinstall the CLI (and the R package if it was replaced) from origin/main.
+
+If step 1 shows the scenario is NOT broken on main, the fix may be redundant. Say so on the PR instead of pushing the script (see #266 for a case where the resolver already covered it).
