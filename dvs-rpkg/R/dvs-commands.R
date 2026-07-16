@@ -82,6 +82,13 @@ dvs_status <- function(
   tibble::as_tibble(status_data_frame)
 }
 
+#' @inherit dvs_audit_log_impl title description
+#' @rdname dvs_audit_log
+#' @keywords internal
+dvs_audit_log <- function() {
+  tibble::as_tibble(dvs_audit_log_impl())
+}
+
 #' @inherit dvs_get_impl title description params
 #' @rdname dvs_get
 #' @export
