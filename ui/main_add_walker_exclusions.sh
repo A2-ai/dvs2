@@ -96,6 +96,25 @@ dvs add .gitignore
 test -f .dvs/.gitignore.dvs
 say "OK: explicit add of .gitignore still works"
 
+# region: C2 — nested .git directories are pruned at any depth
+
+say
+say "============================================================"
+say "= C2: nested project repos keep their .git unswept         ="
+say "============================================================"
+# A dvs root can manage several folders that are each their own git repo.
+# Pre-fix, a two-project layout had 56 of 59 added files come from the two
+# nested .git trees. The walk prunes .git by name at every depth.
+mkdir -p projects/alpha
+printf 'id\n1\n' > projects/alpha/results.csv
+git -C projects/alpha init -q .
+git -C projects/alpha add results.csv
+git -C projects/alpha -c user.name=ui -c user.email=ui@test -c commit.gpgsign=false commit -qm init
+dvs add projects --glob '**/*'
+test -f .dvs/projects/alpha/results.csv.dvs
+test ! -e .dvs/projects/alpha/.git
+say "OK: nested repo's data tracked, its .git untouched"
+
 # region: D — R binding parity
 
 say

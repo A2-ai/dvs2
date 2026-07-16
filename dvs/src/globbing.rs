@@ -508,6 +508,34 @@ mod tests {
         assert!(!result.contains(&PathBuf::from("data/.gitignore")));
     }
 
+    #[test]
+    fn add_walk_skips_nested_git_directories() {
+        let (temp, dvs_paths) = setup_test_repo();
+        let root = temp.path();
+
+        // A dvs root can manage several folders that are each their own git
+        // repo. The walk must prune .git at any depth, not just at the root.
+        for proj in ["projects/alpha", "projects/beta"] {
+            fs::create_dir_all(root.join(proj).join(".git/refs/heads")).unwrap();
+            File::create(root.join(proj).join(".git/config")).unwrap();
+            File::create(root.join(proj).join(".git/refs/heads/main")).unwrap();
+            File::create(root.join(proj).join("results.csv")).unwrap();
+        }
+
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("projects")], Some("**/*"), &dvs_paths)
+                .unwrap();
+
+        assert!(result.contains(&PathBuf::from("projects/alpha/results.csv")));
+        assert!(result.contains(&PathBuf::from("projects/beta/results.csv")));
+        assert_eq!(result.len(), 2, "unexpected paths: {result:?}");
+        assert!(
+            !result
+                .iter()
+                .any(|p| p.components().any(|c| c.as_os_str() == ".git"))
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn add_walk_skips_broken_symlink() {
