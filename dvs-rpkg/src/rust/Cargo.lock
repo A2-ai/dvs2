@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "dvs-rpkg"
-version = "0.3.0"
+version = "0.4.0-9000"
 dependencies = [
  "anyhow",
  "dvs",
