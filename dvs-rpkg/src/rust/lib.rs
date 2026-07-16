@@ -359,7 +359,7 @@ pub(crate) fn dvs_status(
 
 /// Materialize the audit log as a data frame.
 ///
-/// Reads the full audit log of the DVS repository containing the working
+/// Reads the audit log of the DVS repository containing the working
 /// directory and returns one row per entry. The column structure is inherited
 /// directly from `dvs::audit::AuditEntry`'s serde representation, so the rpkg
 /// never reaches into the dvs crate's internal types. The `action` enum
@@ -367,16 +367,25 @@ pub(crate) fn dvs_status(
 /// without re-encoding dvs internals is tracked as miniextendr#1056, with a
 /// builder-based alternative in miniextendr#1055.
 ///
+/// @param paths Character vector of repo-root-relative file paths recorded at
+///   add time. The filter keeps only `add` entries for those files. An empty
+///   vector (the default) returns the whole log, including `init` entries. A
+///   non-empty filter drops all `init` entries.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_audit_log_impl")]
-pub(crate) fn dvs_audit_log() -> Result<DataFrame> {
+pub(crate) fn dvs_audit_log(
+    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
+) -> Result<DataFrame> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
 
-    // Empty slice = the whole audit log, deserialized off the JSONL via the
-    // dvs crate's own serde impls; hand straight to the dataframe serializer so
-    // the structure is inherited through serde.
-    let entries = config.backend().read_audit_file(&[])?;
+    // An empty `paths` slice returns the whole audit log. A non-empty filter
+    // keeps only `add` entries recording one of those repo-root-relative paths
+    // and drops `init` entries. Entries are deserialized off the JSONL via the
+    // dvs crate's own serde impls and handed straight to the dataframe
+    // serializer, so the structure is inherited through serde. vec_to_dataframe
+    // returns an empty data frame when the filter matches nothing.
+    let entries = config.backend().read_audit_file(&paths)?;
     Ok(miniextendr_api::serde::vec_to_dataframe(&entries)?)
 }
 
