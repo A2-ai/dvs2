@@ -168,7 +168,7 @@ pub fn get_files(
                 let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
                 let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
 
-                match get_file(
+                let result = match get_file(
                     backend,
                     paths,
                     &relative_path,
@@ -196,7 +196,11 @@ pub fn get_files(
                             },
                         }
                     }
+                };
+                if let Some(fp) = &file_progress {
+                    (fp.on_done)(matches!(result.detail, GetDetail::Success { .. }));
                 }
+                result
             })
             .collect()
     });
@@ -213,7 +217,10 @@ mod tests {
     use crate::config::Config;
     use crate::files::add::AddDetail;
     use crate::files::status::get_status;
+    use crate::progress::FileProgress;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -471,5 +478,57 @@ mod tests {
 
         // get_file should error on decompression or hash mismatch.
         assert!(repo.get("data.txt").is_err());
+    }
+
+    #[test]
+    fn get_files_invokes_on_done_for_each_file() {
+        let repo = TestRepo::new();
+
+        // Track two files, one of which will have its storage blob corrupted.
+        let (bad_path, bad_meta) = repo.track("bad.txt", b"bad content", Compression::Zstd);
+        let (good_path, _) = repo.track("good.txt", b"good content", Compression::Zstd);
+        fs::remove_file(&bad_path).unwrap();
+        fs::remove_file(&good_path).unwrap();
+
+        // Corrupt bad.txt's stored blob so its get fails while good.txt succeeds.
+        repo.corrupt_blob(&bad_meta.hashes, b"corrupted content");
+
+        let done_calls = Arc::new(AtomicUsize::new(0));
+        let success_calls = Arc::new(AtomicUsize::new(0));
+        let on_file_start = {
+            let done_calls = Arc::clone(&done_calls);
+            let success_calls = Arc::clone(&success_calls);
+            move |_path: &Path, _size: u64| {
+                let done_calls = Arc::clone(&done_calls);
+                let success_calls = Arc::clone(&success_calls);
+                FileProgress {
+                    on_bytes: Box::new(|_| {}),
+                    on_done: Box::new(move |success| {
+                        done_calls.fetch_add(1, Ordering::SeqCst);
+                        if success {
+                            success_calls.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }),
+                }
+            }
+        };
+
+        let results = get_files(
+            vec!["bad.txt".into(), "good.txt".into()],
+            &repo.paths,
+            repo.backend(),
+            false,
+            Some(&on_file_start),
+        )
+        .unwrap();
+
+        // Results are sorted by path: bad.txt fails, good.txt succeeds.
+        assert_eq!(results.len(), 2);
+        assert!(matches!(results[0].detail, GetDetail::Error { .. }));
+        assert!(matches!(results[1].detail, GetDetail::Success { .. }));
+
+        // on_done fired once per file, with `true` only for the success.
+        assert_eq!(done_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(success_calls.load(Ordering::SeqCst), 1);
     }
 }
