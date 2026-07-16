@@ -214,8 +214,9 @@ Each file in a `get` result reports an outcome:
 - `copied`: the file was retrieved from storage
 - `present`: the local file already matches the metadata -> noop
 
-After retrieval, the file's hash is verified against the metadata. If it doesn't match, the retrieved file
-is deleted and the operation fails for that file.
+Retrieval writes to a temp file next to the target. The temp file's hash is verified against the metadata.
+If it doesn't match, the temp file is deleted and the operation fails for that file. On success the temp
+file is renamed over the target. A failed get leaves any existing local file unchanged.
 
 Users can use `get` with specific paths or globs. In practice those will be ran on the metadata folder rather
 than the actual project, to know what to pull but the resolution works the same way as `add`.
