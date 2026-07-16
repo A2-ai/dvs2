@@ -374,6 +374,70 @@ mod tests {
     }
 
     #[test]
+    fn store_concurrent_same_hash_all_succeed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("storage");
+        let backend = LocalBackend::new(&storage, None).unwrap();
+        backend.init().unwrap();
+
+        // Large enough that interleaved writes to a shared tmp file would
+        // corrupt the blob (#216).
+        let content = vec![b'x'; 256 * 1024];
+        let hash = test_hash("abc123def456789012345678901234ab");
+        let sources: Vec<_> = (0..8)
+            .map(|i| {
+                let source = tmp.path().join(format!("source-{i}.txt"));
+                fs::write(&source, &content).unwrap();
+                source
+            })
+            .collect();
+
+        std::thread::scope(|scope| {
+            for source in &sources {
+                let backend = &backend;
+                let hash = &hash;
+                scope.spawn(move || {
+                    backend
+                        .store(hash, source, Compression::None, None)
+                        .unwrap();
+                });
+            }
+        });
+
+        let prefix = storage.join("ab");
+        let stored = prefix.join("c123def456789012345678901234ab");
+        assert_eq!(fs::read(&stored).unwrap(), content);
+        // Every attempt must have cleaned up its tmp file.
+        assert_eq!(fs::read_dir(&prefix).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn store_succeeds_despite_stale_readonly_tmp_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("storage");
+        let backend = LocalBackend::new(&storage, None).unwrap();
+        backend.init().unwrap();
+
+        // Simulate a crash of the old fixed-name scheme: a read-only leftover
+        // <hash>.tmp in the prefix directory must not block a fresh store.
+        let prefix = storage.join("ab");
+        fs::create_dir_all(&prefix).unwrap();
+        let stale = prefix.join("c123def456789012345678901234ab.tmp");
+        fs::write(&stale, b"stale").unwrap();
+        make_readonly(&stale).unwrap();
+
+        let hash = test_hash("abc123def456789012345678901234ab");
+        let source = tmp.path().join("source.txt");
+        fs::write(&source, b"fresh content").unwrap();
+        backend
+            .store(&hash, &source, Compression::None, None)
+            .unwrap();
+
+        let stored = prefix.join("c123def456789012345678901234ab");
+        assert_eq!(fs::read(&stored).unwrap(), b"fresh content");
+    }
+
+    #[test]
     fn retrieve_copies_to_target() {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");

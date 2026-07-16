@@ -37,7 +37,9 @@ pub trait Backend: Send + Sync {
     /// Check if the file exists in the backend
     fn exists(&self, hash: &Hashes) -> Result<bool>;
 
-    /// Remove content by hash (for rollback). Best-effort, may silently fail.
+    /// Remove content by hash. Removing a missing blob is a no-op.
+    /// Must not be used for rollback: a blob may be referenced by a
+    /// concurrent add.
     fn remove(&self, hash: &Hashes) -> Result<()>;
 
     /// Log an audit entry to the backend's audit log.

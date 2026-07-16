@@ -158,8 +158,10 @@ Each file in an `add` result reports an outcome:
 
 Symlinks are resolved before adding. If an explicitly named path resolves to a location outside the project root, it is rejected and the batch refused. When a directory is expanded by a glob, a matched file whose symlink target resolves outside the project root is skipped with a warning rather than aborting the batch.
 
-Each `add` operation is atomic: the storage write and metadata update either both succeed or both roll back. A
-failure writing to storage will not leave behind a partial metadata file, and vice versa.
+Each `add` operation is atomic: on failure the metadata file rolls back to its previous state. A failure
+writing to storage will not leave behind a partial metadata file. Storage blobs are content-addressed and may
+be referenced by a concurrent add, so rollback never deletes them. A failed add may leave an orphaned blob in
+storage. Orphaned blobs are harmless.
 
 #### CLI
 
@@ -366,9 +368,11 @@ and the remaining characters as the filename.
 For example, a file with blake3 hash `af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262` is stored at
 `<storage-path>/af/1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262`.
 
-Writes to storage are atomic: data is first written to a temporary file (with a `.tmp` extension) in the
+Writes to storage are atomic: data is first written to a temporary file with a unique per-attempt name in the
 same directory, then renamed into place. Since rename is atomic on POSIX within the same filesystem, this
-prevents partial blobs from appearing in storage mapping to an expected file.
+prevents partial blobs from appearing in storage mapping to an expected file. Concurrent writers of the same
+content each write their own temporary file and rename it into place independently. The renames converge
+because the content is identical.
 
 Stored files are set read-only after writing.
 

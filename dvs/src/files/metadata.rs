@@ -159,7 +159,7 @@ impl FileMetadata {
             }
             (Ok(_), Err(_)) => {
                 log::warn!(
-                    "Metadata write failed, rolling back storage for {}",
+                    "Metadata write failed, rolling back for {}",
                     relative_path.as_ref().display()
                 );
                 if let Some(old) = old_metadata_content {
@@ -167,10 +167,9 @@ impl FileMetadata {
                 } else {
                     let _ = fs::remove_file(&dvs_file_path);
                 }
-                // Remove the blob only if this call actually stored it
-                if stored_size.is_some() {
-                    let _ = backend.remove(&self.hashes);
-                }
+                // Blobs are content-addressed and may be referenced by a
+                // concurrent add, so rollback must never delete them. An
+                // orphaned blob is harmless, a dangling reference is data loss.
                 bail!("Failed to write metadata file: {dvs_file_path:?}")
             }
             (Err(e), Err(_)) => {
