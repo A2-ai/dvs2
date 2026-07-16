@@ -103,3 +103,41 @@ test_that("dvs_add accepts a message without error", {
   )
   expect_equal(result$outcome, "copied")
 })
+
+test_that("dvs_add refuses the whole batch when any path is invalid", {
+  new_dvs_test_repo(); write_theoph("ok.csv")
+  expect_error(dvs_add(paths = file.path(getwd(), c("ok.csv", "missing.csv"))))
+  expect_false(file.exists(file.path(getwd(), ".dvs", "ok.csv.dvs")))
+})
+
+test_that("dvs_add reports per-file failures in the result, not as a warning", {
+  # This test forces a per-file failure by revoking all permissions on
+  # noperm.csv, so opening it for hashing fails with EACCES. root bypasses
+  # Unix permission bits and can still read a mode-000 file, which would make
+  # the add succeed and leave no failure to report. Skip under root so the test
+  # does not report a false failure (e.g. in CI/Docker running as root).
+  skip_if(system("id -un", intern = TRUE) == "root", "cannot revoke read access from root")
+  new_dvs_test_repo()
+  write_theoph("good.csv")
+  write_theoph("noperm.csv")
+  Sys.chmod("noperm.csv", "000")
+  on.exit(Sys.chmod("noperm.csv", "644"), add = TRUE)
+
+  # A per-file runtime failure must not raise an R warning or error. dvs does
+  # not turn its own failures into R conditions. The failure is reported only
+  # through the returned data frame.
+  result <- NULL
+  expect_no_warning(
+    result <- dvs_add(paths = file.path(getwd(), c("good.csv", "noperm.csv")))
+  )
+
+  # The good file is added. The bad file's row carries the error message in the
+  # `error` column, with its `outcome` left NA.
+  expect_true(file.exists(file.path(getwd(), ".dvs", "good.csv.dvs")))
+  good <- result[basename(result$path) == "good.csv", ]
+  expect_equal(good$outcome, "copied")
+  bad <- result[basename(result$path) == "noperm.csv", ]
+  expect_equal(nrow(bad), 1L)
+  expect_true(nzchar(bad$error))
+  expect_true(is.na(bad$outcome))
+})
