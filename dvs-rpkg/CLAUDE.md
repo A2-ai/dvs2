@@ -147,18 +147,23 @@ The `vendor/` directory is auto-generated — don't commit manual changes to it.
 
 ## Exported R Functions
 
-All defined in `src/rust/lib.rs` with `#[miniextendr]`:
+Defined in `src/rust/lib.rs` with `#[miniextendr]` unless noted:
 
 | Function | Purpose | Returns |
 |----------|---------|---------|
-| `dvs_init` | Initialize a DVS repository | List |
+| `dvs_init` | Initialize a DVS repository | Single-row data frame (the resulting config) |
 | `dvs_add` | Add files to content-addressable storage | DataFrame |
 | `dvs_status` | Report sync status of managed files | DataFrame |
 | `dvs_get` | Retrieve files from storage | DataFrame |
+| `dvs_version` | Crate version | String |
+| `set_dvs_threads` | Set the `dvs.num_threads` option (R side, `R/dvs-options.R`) | Previous value, invisibly |
+| `set_dvs_log_level` | Set the Rust log level | NULL |
+| `format_byte_size` | Human-readable byte size | String |
+| `new_dvs_bytes` | Construct a `dvs_bytes` vector (R side, `R/pillar.R`) | `dvs_bytes` numeric |
 
 This table is a high-level index only. The authoritative parameter signatures live in the `#[miniextendr]` definitions in `src/rust/lib.rs` and the R help pages (`?dvs_get` and `man/*.Rd`).
 
-Results are returned as DataFrames using miniextendr's `AsSerializeRow` trait. Errors propagate as `anyhow::Result<T>` converted to R error objects.
+Results are returned as DataFrames via miniextendr's serde columnar conversion (`vec_to_dataframe`). Errors propagate as `anyhow::Result<T>` converted to R error objects.
 
 ## Environment Variables
 
