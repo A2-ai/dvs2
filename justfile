@@ -189,7 +189,7 @@ ci: fmt-check clippy check-std-fs test
 
 # Names correspond to ui/main_<NAME>.sh (and ui/main.sh for "main").
 # Each name has matching ui/output/ui-<NAME>.html and alx topic ui-<NAME>.
-ui_names := "main status progress parallel log cli_help threads"
+ui_names := "main status progress parallel log cli_help threads init"
 
 # Run all ui/main*.sh scripts and capture each log into /tmp/ui-<NAME>.log
 ui-run:
