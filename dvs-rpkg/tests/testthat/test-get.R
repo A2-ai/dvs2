@@ -62,3 +62,10 @@ test_that("dvs_get(recursive = TRUE) with no paths restores every tracked file a
   expect_setequal(result$path, c("top.csv", "data/raw/deep.csv"))
   expect_true(all(file.exists(c("top.csv", "data/raw/deep.csv"))))
 })
+
+test_that("dvs_get refuses the whole batch when any path is untracked", {
+  new_dvs_test_repo(); write_theoph("tracked.csv")
+  dvs_add(paths = file.path(getwd(), "tracked.csv")); file.remove("tracked.csv")
+  expect_error(dvs_get(paths = c("tracked.csv", "untracked.csv")))
+  expect_false(file.exists("tracked.csv"))
+})
