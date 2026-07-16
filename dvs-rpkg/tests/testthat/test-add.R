@@ -141,3 +141,22 @@ test_that("dvs_add reports per-file failures in the result, not as a warning", {
   expect_true(nzchar(bad$error))
   expect_true(is.na(bad$outcome))
 })
+
+test_that("dvs_add resolves a bare relative path from a nested working directory", {
+  repo <- new_dvs_test_repo()$repo
+  nested <- file.path(repo, "analysis", "run1")
+  dir.create(nested, recursive = TRUE)
+  setwd(nested)
+  write_theoph("data.csv")
+
+  # CLI parity: `dvs add data.csv` works from a subdirectory, so must dvs_add.
+  result <- dvs_add(paths = "data.csv")
+
+  expect_s3_class(result, "tbl_df")
+  expect_equal(nrow(result), 1L)
+  expect_equal(result$outcome, "copied")
+  # metadata sidecar mirrors the repo-root-relative path
+  expect_true(file.exists(
+    file.path(repo, ".dvs", "analysis", "run1", "data.csv.dvs")
+  ))
+})
