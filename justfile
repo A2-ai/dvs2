@@ -63,14 +63,14 @@ dvs-build ref:
     bin="$cache/bin/dvs"
     if [[ ! -x "$bin" ]]; then
         echo "Building dvs-cli @ $hash ($ref) ..." >&2
-        rm -rf "$cache"
-        mkdir -p "$cache/src" "$cache/bin"
-        git archive "$hash" | tar -x -C "$cache/src"
+        mkdir -p "$root/target/dvs-versions" "$cache/bin"
+        work="$(mktemp -d "$root/target/dvs-versions/.work-$hash-XXXXXX")"
+        trap 'rm -rf "$work"' EXIT
+        git archive "$hash" | tar -x -C "$work"
         cargo build --release --locked \
-            --manifest-path "$cache/src/dvs-cli/Cargo.toml" \
-            --target-dir "$cache/target" 1>&2
-        cp "$cache/target/release/dvs" "$bin"
-        rm -rf "$cache/src" "$cache/target"
+            --manifest-path "$work/dvs-cli/Cargo.toml" \
+            --target-dir "$work/target" 1>&2
+        mv -f "$work/target/release/dvs" "$bin"
     fi
     echo "$bin"
 
@@ -81,15 +81,20 @@ dvs-build ref:
 dvs ref *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    bin="$("{{just_executable()}}" --justfile {{quote(justfile())}} dvs-build "$1")"
+    bin="$({{quote(just_executable())}} --justfile {{quote(justfile())}} dvs-build "$1")"
     exec "$bin" "${@:2}"
 
-# Remove all cached per-ref dvs CLI builds
-dvs-clean:
+# Remove cached dvs CLI builds (all, or one ref's)
+[positional-arguments]
+dvs-clean *ref:
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
-    rm -rf "$root/target/dvs-versions"
+    if [[ $# -ge 1 ]]; then
+        rm -rf "$root/target/dvs-versions/$(git rev-parse --verify "$1^{commit}")"
+    else
+        rm -rf "$root/target/dvs-versions"
+    fi
 
 # ============================================================================
 # R package (dvsR)
