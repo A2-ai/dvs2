@@ -48,6 +48,49 @@ check-std-fs:
 install-cli *args:
     cargo install --profile dev-cli --force --locked --path=dvs-cli {{args}}
 
+# Progress goes to stderr, so `bin=$(just dvs-build <ref>)` works. Cache is
+# keyed by resolved commit hash (never the ref name, which could go stale) and
+# shared across all worktrees: <main-worktree>/target/dvs-versions/<hash>/bin/dvs.
+# Build & cache the dvs CLI for any git ref (branch/tag/hash); prints the binary path
+dvs-build ref:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ref={{quote(ref)}}
+    hash="$(git rev-parse --verify --quiet "$ref^{commit}")" \
+        || { echo "error: cannot resolve '$ref' to a commit" >&2; exit 1; }
+    root="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+    cache="$root/target/dvs-versions/$hash"
+    bin="$cache/bin/dvs"
+    if [[ ! -x "$bin" ]]; then
+        echo "Building dvs-cli @ $hash ($ref) ..." >&2
+        rm -rf "$cache"
+        mkdir -p "$cache/src" "$cache/bin"
+        git archive "$hash" | tar -x -C "$cache/src"
+        cargo build --release --locked \
+            --manifest-path "$cache/src/dvs-cli/Cargo.toml" \
+            --target-dir "$cache/target" 1>&2
+        cp "$cache/target/release/dvs" "$bin"
+        rm -rf "$cache/src" "$cache/target"
+    fi
+    echo "$bin"
+
+# Dash args forward as-is (`just dvs main --help`); do NOT insert `--`,
+# just would pass it through literally to the binary.
+# Run the dvs CLI built from any git ref: `just dvs main status`
+[positional-arguments]
+dvs ref *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bin="$("{{just_executable()}}" --justfile {{quote(justfile())}} dvs-build "$1")"
+    exec "$bin" "${@:2}"
+
+# Remove all cached per-ref dvs CLI builds
+dvs-clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+    rm -rf "$root/target/dvs-versions"
+
 # ============================================================================
 # R package (dvsR)
 # ============================================================================
