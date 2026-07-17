@@ -159,7 +159,8 @@ pub fn resolve_paths_for_get(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fs_err::{self as fs, File};
+    use fs::File;
+    use fs_err as fs;
     use tempfile::TempDir;
 
     /// Creates a test repo structure with files and metadata
