@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::fs::OpenOptions;
 use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -286,7 +285,7 @@ impl Backend for LocalBackend {
         fs::create_dir_all(&self.path)?;
         self.ensure_group_and_mode(&self.path, self.dir_mode())?;
         let audit_path = self.path.join(AUDIT_LOG_FILENAME);
-        let mut file = OpenOptions::new()
+        let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&audit_path)?;
