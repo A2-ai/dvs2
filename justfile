@@ -48,6 +48,54 @@ check-std-fs:
 install-cli *args:
     cargo install --profile dev-cli --force --locked --path=dvs-cli {{args}}
 
+# Progress goes to stderr, so `bin=$(just dvs-build <ref>)` works. Cache is
+# keyed by resolved commit hash (never the ref name, which could go stale) and
+# shared across all worktrees: <main-worktree>/target/dvs-versions/<hash>/bin/dvs.
+# Build & cache the dvs CLI for any git ref (branch/tag/hash); prints the binary path
+dvs-build ref:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ref={{quote(ref)}}
+    hash="$(git rev-parse --verify --quiet "$ref^{commit}")" \
+        || { echo "error: cannot resolve '$ref' to a commit" >&2; exit 1; }
+    root="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+    cache="$root/target/dvs-versions/$hash"
+    bin="$cache/bin/dvs"
+    if [[ ! -x "$bin" ]]; then
+        echo "Building dvs-cli @ $hash ($ref) ..." >&2
+        mkdir -p "$root/target/dvs-versions" "$cache/bin"
+        work="$(mktemp -d "$root/target/dvs-versions/.work-$hash-XXXXXX")"
+        trap 'rm -rf "$work"' EXIT
+        git archive "$hash" | tar -x -C "$work"
+        cargo build --release --locked \
+            --manifest-path "$work/dvs-cli/Cargo.toml" \
+            --target-dir "$work/target" 1>&2
+        mv -f "$work/target/release/dvs" "$bin"
+    fi
+    echo "$bin"
+
+# Dash args forward as-is (`just dvs main --help`); do NOT insert `--`,
+# just would pass it through literally to the binary.
+# Run the dvs CLI built from any git ref: `just dvs main status`
+[positional-arguments]
+dvs ref *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bin="$({{quote(just_executable())}} --justfile {{quote(justfile())}} dvs-build "$1")"
+    exec "$bin" "${@:2}"
+
+# Remove cached dvs CLI builds (all, or one ref's)
+[positional-arguments]
+dvs-clean *ref:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+    if [[ $# -ge 1 ]]; then
+        rm -rf "$root/target/dvs-versions/$(git rev-parse --verify "$1^{commit}")"
+    else
+        rm -rf "$root/target/dvs-versions"
+    fi
+
 # ============================================================================
 # R package (dvsR)
 # ============================================================================
