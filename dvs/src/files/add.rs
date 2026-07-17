@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::{Result, bail};
+use fs_err as fs;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -131,7 +132,7 @@ pub fn add_files(
             .into_par_iter()
             .map(|relative_path| {
                 let full_path = paths.file_path(&relative_path);
-                let file_size = std::fs::metadata(&full_path).map(|m| m.len()).unwrap_or(0);
+                let file_size = fs::metadata(&full_path).map(|m| m.len()).unwrap_or(0);
                 let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
                 let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
                 let result = match add_file(
@@ -200,7 +201,7 @@ mod tests {
     use super::*;
     use crate::progress::FileProgress;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
-    use std::fs;
+    use fs_err as fs;
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};

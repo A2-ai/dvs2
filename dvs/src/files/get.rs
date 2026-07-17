@@ -159,7 +159,7 @@ pub fn get_files(
             .map(|relative_path| {
                 let file_size = {
                     let meta_path = paths.metadata_path(&relative_path);
-                    std::fs::File::open(&meta_path)
+                    fs::File::open(&meta_path)
                         .ok()
                         .and_then(|f| serde_json::from_reader::<_, FileMetadata>(f).ok())
                         .map(|m| m.size)
