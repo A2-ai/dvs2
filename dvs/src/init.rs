@@ -38,7 +38,7 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
     }
 
     log::debug!("Initializing backend");
-    if config.backend().init()? {
+    if config.backend().init(config.compression())? {
         bail!("dvs is already initialized (backend storage exists)");
     }
 

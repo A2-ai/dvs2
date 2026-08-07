@@ -10,9 +10,9 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::Hashes;
 use crate::audit::{AuditEntry, AuditFile, parse_audit_log};
 use crate::backends::{Backend, RetrieveRequest, StoreRequest};
+use crate::{Compression, Hashes};
 
 const AUDIT_LOG_FILENAME: &str = "audit.log.jsonl";
 /// Only protects the current dvs process, not concurrent dvs processes
@@ -212,7 +212,7 @@ impl LocalBackend {
 }
 
 impl Backend for LocalBackend {
-    fn init(&self) -> Result<bool> {
+    fn init(&self, _: Compression) -> Result<bool> {
         let already_initialized = self.path.join(AUDIT_LOG_FILENAME).exists();
         if already_initialized {
             return Ok(true);
@@ -367,7 +367,7 @@ mod tests {
         let backend = LocalBackend::new(&storage_path, None).unwrap();
         assert!(!storage_path.exists());
 
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
         assert!(storage_path.is_dir());
     }
 
@@ -376,7 +376,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         // Create source file
         let source = tmp.path().join("source.txt");
@@ -397,7 +397,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         // Store content via store()
         let hash = test_hash("abc123def456789012345678901234ab");
@@ -427,7 +427,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         let target = tmp.path().join("target.txt");
         let result = backend
@@ -447,7 +447,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
         assert!(!backend.exists(&hash).unwrap());
@@ -464,7 +464,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
@@ -485,7 +485,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
@@ -504,7 +504,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
 
@@ -561,7 +561,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
         let workers = 4;
@@ -630,7 +630,7 @@ mod tests {
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, Some(current_group_name)).unwrap();
 
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
         let storage_mode = fs::metadata(&storage).unwrap().permissions().mode();
         assert_eq!(storage_mode & 0o7777, SHARED_DIRECTORY_MODE);
 

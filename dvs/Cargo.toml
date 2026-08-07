@@ -26,6 +26,8 @@ uuid.workspace = true
 globset.workspace = true
 rayon.workspace = true
 url.workspace = true
+ureq.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["user", "fs"] }
@@ -35,5 +37,3 @@ default = ["cache"]
 # The server does not want the cache
 cache = ["dep:rusqlite"]
 
-[dev-dependencies]
-tempfile = "3.24.0"

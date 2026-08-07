@@ -60,7 +60,7 @@ impl<'a> RetrieveRequest<'a> {
 pub trait Backend: Send + Sync {
     /// Initialize the backend storage
     /// Idempotent: returns `true` if the backend was already initialized.
-    fn init(&self) -> Result<bool>;
+    fn init(&self, compression: Compression) -> Result<bool>;
 
     /// Store file to backend by hash, optionally compressing.
     /// Returns the stored (compressed) size in bytes.
