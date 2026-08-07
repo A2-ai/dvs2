@@ -36,34 +36,32 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
     if root_dir.join(paths::CONFIG_FILE_NAME).exists() {
         bail!("dvs is already initialized (dvs.toml exists)");
     }
-    if config.backend().is_initialized()? {
+
+    log::debug!("Initializing backend");
+    if config.backend().init()? {
         bail!("dvs is already initialized (backend storage exists)");
     }
+
     config.save(root_dir)?;
 
     let metadata_dir = root_dir.join(config.metadata_folder_name());
     let config_path = root_dir.join(paths::CONFIG_FILE_NAME);
-    let metadata_existed = metadata_dir.exists();
 
-    let result = (|| {
-        log::debug!("Creating metadata folder: {}", metadata_dir.display());
-        fs::create_dir(&metadata_dir)?;
-        log::debug!("Initializing backend");
-        config.backend().init()
-    })();
-
-    if let Err(e) = result {
-        // Best-effort cleanup of local artifacts we created
-        if !metadata_existed {
-            let _ = fs::remove_dir_all(&metadata_dir);
-        }
+    log::debug!("Creating metadata folder: {}", metadata_dir.display());
+    if let Err(e) = fs::create_dir(&metadata_dir) {
+        // Roll back the config file we just wrote.
         let _ = fs::remove_file(&config_path);
-        return Err(e);
+        return Err(e.into());
     }
 
-    let audit_entry = AuditEntry::new_init(Uuid::new_v4(), config.clone(), root_dir.to_path_buf());
-    if let Err(e) = config.backend().log_audit(&audit_entry) {
-        log::error!("Failed to write init audit log {audit_entry:?}: {e}");
+    match &config.backend {
+        Backend::Local(b) => {
+            let audit_entry =
+                AuditEntry::new_init(Uuid::new_v4(), config.clone(), root_dir.to_path_buf());
+            if let Err(e) = b.log_audit_entry(&audit_entry) {
+                log::error!("Failed to write init audit log {audit_entry:?}: {e}");
+            }
+        }
     }
 
     log::info!("DVS repository initialized successfully");
@@ -99,7 +97,7 @@ mod tests {
         let config = Config::new_local(&storage, None).unwrap();
         init(&root, config.clone()).unwrap();
 
-        let entries = config.backend().read_audit_file(&[]).unwrap();
+        let entries = config.backend().get_audit_entries(&[]).unwrap();
         assert_eq!(entries.len(), 1);
         assert!(matches!(
             entries[0].action,
@@ -126,9 +124,7 @@ mod tests {
         let storage = root.parent().unwrap().join(".storage");
 
         let config = Config::new_local(&storage, None).unwrap();
-        assert!(!config.backend().is_initialized().unwrap());
         init(&root, config.clone()).unwrap();
-        assert!(config.backend().is_initialized().unwrap());
 
         // Remove dvs.toml and .dvs but leave backend storage intact
         fs::remove_file(root.join("dvs.toml")).unwrap();

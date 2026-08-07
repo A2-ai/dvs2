@@ -25,6 +25,7 @@ rusqlite = { workspace = true, optional = true }
 uuid.workspace = true
 globset.workspace = true
 rayon.workspace = true
+url.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["user", "fs"] }
