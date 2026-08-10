@@ -7,6 +7,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde_json::json;
 use tabled::Tabled;
 use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
+use url::Url;
 
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
@@ -18,12 +19,8 @@ use dvs::{
 };
 
 #[derive(Debug, Subcommand)]
-pub enum Command {
-    /// Starts a new dvs project.
-    /// This will create a `dvs.toml` file in the current folder of where the user is calling the CLI
-    /// from.
-    #[command(next_display_order = 100)]
-    Init {
+pub enum Init {
+    Local {
         /// Where the data will be stored
         path: PathBuf,
         /// If you want to use a root folder other than the current directory
@@ -39,6 +36,30 @@ pub enum Command {
         #[clap(long)]
         no_compression: bool,
     },
+    Server {
+        /// The project name
+        name: String,
+        /// The URL of the dvs server
+        url: Url,
+        /// If you want to use a folder name other than `.dvs` for storing the metadata files
+        #[clap(long)]
+        metadata_folder_name: Option<String>,
+        /// Unix group to use for permissions
+        #[clap(long)]
+        group: Option<String>,
+        /// Disable compression of stored files. Compression defaults to zstd
+        #[clap(long)]
+        no_compression: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Starts a new dvs project.
+    /// This will create a `dvs.toml` file in the current folder of where the user is calling the CLI
+    /// from.
+    #[command(next_display_order = 100, subcommand)]
+    Init(Init),
     /// Adds the given files to dvs. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
     /// At least one path or --glob must be provided
@@ -201,25 +222,41 @@ fn try_main() -> Result<()> {
     let current_dir = std::env::current_dir()?;
 
     match cli.command {
-        Command::Init {
-            path: storage_path,
-            root_dir,
-            metadata_folder_name,
-            group,
-            no_compression,
-        } => {
-            let mut config = Config::new_local(&storage_path, group)?;
-            if no_compression {
-                config.set_compression(Compression::None);
-            }
+        Command::Init(init_cmd) => {
+            let (config, root_dir, metadata_folder_name) = match init_cmd {
+                Init::Local {
+                    path: storage_path,
+                    root_dir,
+                    metadata_folder_name,
+                    group,
+                    no_compression,
+                } => {
+                    let mut config = Config::new_local(&storage_path, group)?;
+                    if no_compression {
+                        config.set_compression(Compression::None);
+                    }
+                    (config, root_dir, metadata_folder_name)
+                }
+                Init::Server {
+                    name,
+                    url,
+                    metadata_folder_name,
+                    group,
+                    no_compression,
+                } => {
+                    let mut config = Config::new_server(name, url, group);
+                    if no_compression {
+                        config.set_compression(Compression::None);
+                    }
+                    (config, None, metadata_folder_name)
+                }
+            };
+
+            let mut config = config;
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
             }
-            let root = if let Some(root) = root_dir {
-                root
-            } else {
-                current_dir
-            };
+            let root = root_dir.unwrap_or(current_dir);
 
             let repo_root = init(&root, config)?;
             if cli.json {

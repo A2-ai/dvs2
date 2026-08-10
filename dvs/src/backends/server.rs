@@ -67,14 +67,14 @@ pub struct UploadMeta {
 #[derive(Serialize, Deserialize)]
 pub struct HistoryPayload {
     #[serde(default)]
-    paths: Vec<String>,
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ServerBackend {
     pub name: String,
     pub group: Option<String>,
-    url: Url,
+    pub url: Url,
 }
 
 impl ServerBackend {

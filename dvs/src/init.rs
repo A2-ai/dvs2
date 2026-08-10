@@ -31,6 +31,7 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
             }
             b.path = abs_storage;
         }
+        Backend::Server(_) => { /* nothing to do here */ }
     }
 
     if root_dir.join(paths::CONFIG_FILE_NAME).exists() {
@@ -62,6 +63,7 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
                 log::error!("Failed to write init audit log {audit_entry:?}: {e}");
             }
         }
+        Backend::Server(_) => { /* noop */ }
     }
 
     log::info!("DVS repository initialized successfully");
