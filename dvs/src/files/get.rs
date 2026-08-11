@@ -300,6 +300,7 @@ mod tests {
             let hash = hashes.get_blake3();
             let storage = match &self.config.backend {
                 crate::config::Backend::Local(b) => b.path.clone(),
+                crate::config::Backend::Server(_) => unreachable!(),
             };
             let blob = storage.join(&hash[..2]).join(&hash[2..]);
             // Blobs are stored read-only; make it writable before overwriting.
