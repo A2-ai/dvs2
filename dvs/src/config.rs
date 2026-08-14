@@ -170,8 +170,8 @@ impl Config {
         })
     }
 
-    pub fn new_server(name: String, url: Url, group: Option<String>) -> Config {
-        let backend = ServerBackend { name, group, url };
+    pub fn new_server(name: String, url: Url, group: String) -> Config {
+        let backend = ServerBackend::new(name, group, url);
         Config {
             compression: Compression::Zstd,
             metadata_folder_name: None,
@@ -231,6 +231,13 @@ impl Config {
         match &self.backend {
             Backend::Local(b) => b,
             Backend::Server(s) => s,
+        }
+    }
+
+    pub fn server_url(&self) -> Option<&Url> {
+        match &self.backend {
+            Backend::Local(_) => None,
+            Backend::Server(s) => Some(&s.url),
         }
     }
 

@@ -1,15 +1,15 @@
+use anyhow::bail;
+use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use std::time::Duration;
-
-use anyhow::bail;
-use fs_err as fs;
 use tempfile::NamedTempFile;
 use url::Url;
 
 use crate::audit::AuditEntry;
+use crate::auth::get_token;
+use crate::utils::http_agent;
 use crate::{Backend, Compression, Hashes, RetrieveRequest, StoreRequest};
 
 /// Wraps a reader and reports bytes as they're read, driving the `on_bytes`
@@ -37,17 +37,6 @@ impl<R: Read> Read for CountingReader<'_, R> {
     }
 }
 
-fn agent() -> &'static ureq::Agent {
-    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
-    AGENT.get_or_init(|| {
-        ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .timeout_connect(Some(Duration::from_secs(5)))
-            .build()
-            .new_agent()
-    })
-}
-
 #[derive(Serialize, Deserialize)]
 pub struct InitPayload {
     pub name: String,
@@ -73,11 +62,22 @@ pub struct HistoryPayload {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ServerBackend {
     pub name: String,
-    pub group: Option<String>,
+    pub group: String,
     pub url: Url,
+    #[serde(skip)]
+    access_token: OnceLock<Option<String>>,
 }
 
 impl ServerBackend {
+    pub fn new(name: String, group: String, url: Url) -> Self {
+        Self {
+            name,
+            group,
+            url,
+            access_token: OnceLock::new(),
+        }
+    }
+
     fn init_url(&self) -> Url {
         self.url.join("/api/init").unwrap()
     }
@@ -88,10 +88,31 @@ impl ServerBackend {
             .unwrap()
     }
 
+    fn access_url(&self) -> Url {
+        self.url
+            .join(&format!("/api/{}/access", self.name))
+            .unwrap()
+    }
+
     fn history_url(&self) -> Url {
         self.url
             .join(&format!("/api/{}/history", self.name))
             .unwrap()
+    }
+
+    fn bearer(&self) -> anyhow::Result<String> {
+        let token = self.access_token.get_or_init(|| {
+            get_token(&self.url).unwrap_or_else(|e| {
+                log::warn!("Could not read the credentials store: {e}");
+                None
+            })
+        });
+        match token {
+            Some(token) => Ok(format!("Bearer {token}")),
+            None => {
+                bail!("Could not find access token. Log in first")
+            }
+        }
     }
 }
 
@@ -100,13 +121,19 @@ impl Backend for ServerBackend {
         let url = self.init_url();
         let payload = InitPayload {
             name: self.name.clone(),
-            group: "todo".to_string(),
+            group: self.group.clone(),
             compression,
         };
-        let mut resp = agent().post(url.as_str()).send_json(&payload)?;
+        let mut resp = http_agent()
+            .post(url.as_str())
+            .header("authorization", self.bearer()?)
+            .send_json(&payload)?;
         match resp.status().as_u16() {
             201 => Ok(false), // created
             200 => Ok(true),  // already existed (group+compression matched)
+            401 => {
+                bail!("You need to login first")
+            }
             409 => {
                 bail!(
                     "Server initialization failed: the project already exists with a different group or compression"
@@ -114,6 +141,28 @@ impl Backend for ServerBackend {
             }
             code => bail!(
                 "server init failed ({code}): {}",
+                resp.body_mut().read_to_string().unwrap_or_default()
+            ),
+        }
+    }
+
+    fn check_access(&self) -> anyhow::Result<()> {
+        let mut resp = http_agent()
+            .get(self.access_url().as_str())
+            .header("authorization", self.bearer()?)
+            .call()?;
+
+        match resp.status().as_u16() {
+            200 => Ok(()),
+            401 => {
+                bail!("You need to login first")
+            }
+            403 => bail!(
+                "You are not allowed to access this project, make sure you are logged in with the right user."
+            ),
+            404 => bail!("The project {} does not exist on the server", self.name),
+            code => bail!(
+                "access check failed ({code}): {}",
                 resp.body_mut().read_to_string().unwrap_or_default()
             ),
         }
@@ -140,10 +189,19 @@ impl Backend for ServerBackend {
             );
 
         let url = self.blob_url(req.hashes.get_blake3());
-        let mut resp = agent().put(url.as_str()).send(form)?;
+        let mut resp = http_agent()
+            .put(url.as_str())
+            .header("authorization", self.bearer()?)
+            .send(form)?;
 
         match resp.status().as_u16() {
             200 | 201 => Ok(stored_size),
+            401 => {
+                bail!("You need to login first")
+            }
+            403 => bail!(
+                "You are not allowed to access this project, make sure you are logged in with the right user."
+            ),
             code => bail!(
                 "upload failed ({code}): {}",
                 resp.body_mut().read_to_string().unwrap_or_default()
@@ -156,10 +214,19 @@ impl Backend for ServerBackend {
         url.query_pairs_mut()
             .append_pair("path", &req.path.to_string_lossy());
 
-        let mut resp = agent().get(url.as_str()).call()?;
+        let mut resp = http_agent()
+            .get(url.as_str())
+            .header("authorization", self.bearer()?)
+            .call()?;
 
         match resp.status().as_u16() {
             200 => {}
+            401 => {
+                bail!("You need to login first")
+            }
+            403 => bail!(
+                "You are not allowed to access this project, make sure you are logged in with the right user."
+            ),
             404 => return Ok(false),
             code => bail!(
                 "download failed ({code}): {}",
@@ -181,8 +248,20 @@ impl Backend for ServerBackend {
     fn exists(&self, hashes: &Hashes) -> anyhow::Result<bool> {
         let url = self.blob_url(hashes.get_blake3());
 
-        match agent().head(url.as_str()).call()?.status().as_u16() {
+        match http_agent()
+            .head(url.as_str())
+            .header("authorization", self.bearer()?)
+            .call()?
+            .status()
+            .as_u16()
+        {
             200 => Ok(true),
+            401 => {
+                bail!("You need to login first")
+            }
+            403 => bail!(
+                "You are not allowed to access this project, make sure you are logged in with the right user."
+            ),
             404 => Ok(false),
             _ => bail!("Error while trying to see if a file exists"),
         }
@@ -200,10 +279,19 @@ impl Backend for ServerBackend {
             paths: files.iter().map(|f| f.to_string_lossy().into()).collect(),
         };
 
-        let mut resp = agent().post(url.as_str()).send_json(&payload)?;
+        let mut resp = http_agent()
+            .post(url.as_str())
+            .header("authorization", self.bearer()?)
+            .send_json(&payload)?;
 
         match resp.status().as_u16() {
             200 => Ok(resp.body_mut().read_json::<Vec<AuditEntry>>()?),
+            401 => {
+                bail!("You need to login first")
+            }
+            403 => bail!(
+                "You are not allowed to access this project, make sure you are logged in with the right user."
+            ),
             code => bail!(
                 "history failed ({code}): {}",
                 resp.body_mut().read_to_string().unwrap_or_default()

@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod auth;
 pub mod backends;
 mod cache;
 pub mod config;
@@ -27,11 +28,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]
 pub mod testutil {
-    use crate::config::Config;
-    use crate::init::init;
     use fs_err as fs;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
+
+    use crate::config::Config;
+    use crate::init::init;
 
     /// Creates a temporary directory with a .git folder (simulating a git repo).
     /// Returns the TempDir (owns the directory) and the path to the repo root.

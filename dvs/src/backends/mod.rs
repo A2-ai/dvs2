@@ -62,6 +62,13 @@ pub trait Backend: Send + Sync {
     /// Idempotent: returns `true` if the backend was already initialized.
     fn init(&self, compression: Compression) -> Result<bool>;
 
+    /// Check that the current user can access the backend.
+    /// Called once before batch operations so auth/permission problems fail
+    /// fast with a single error instead of once per file.
+    fn check_access(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Store file to backend by hash, optionally compressing.
     /// Returns the stored (compressed) size in bytes.
     fn store(&self, req: StoreRequest<'_>) -> Result<u64>;

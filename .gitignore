@@ -51,3 +51,7 @@ testfile.bin
 # Downloaded sample datasets (just datasets)
 datasets/
 
+/AGENTS.md
+/MAINTAINER.md
+/specs.md
+/justfile

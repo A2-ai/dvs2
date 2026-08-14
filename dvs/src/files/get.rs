@@ -156,6 +156,10 @@ pub fn get_files(
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
 
+    // Fail fast on auth/permission problems before retrieving anything,
+    // so the user gets a single error instead of one per file.
+    backend.check_access()?;
+
     let pool = get_threadpool(tracked_paths.len())?;
     let cache = try_open_cache(paths);
 

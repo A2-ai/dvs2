@@ -38,6 +38,15 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
         bail!("dvs is already initialized (dvs.toml exists)");
     }
 
+    // Check the metadata folder before touching the backend
+    let metadata_dir = root_dir.join(config.metadata_folder_name());
+    if metadata_dir.exists() && fs::read_dir(&metadata_dir)?.next().is_some() {
+        bail!(
+            "dvs is already initialized ({} exists and is not empty)",
+            config.metadata_folder_name()
+        );
+    }
+
     log::debug!("Initializing backend");
     if config.backend().init(config.compression())? {
         bail!("dvs is already initialized (backend storage exists)");
@@ -45,14 +54,15 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
 
     config.save(root_dir)?;
 
-    let metadata_dir = root_dir.join(config.metadata_folder_name());
     let config_path = root_dir.join(paths::CONFIG_FILE_NAME);
 
     log::debug!("Creating metadata folder: {}", metadata_dir.display());
     if let Err(e) = fs::create_dir(&metadata_dir) {
-        // Roll back the config file we just wrote.
-        let _ = fs::remove_file(&config_path);
-        return Err(e.into());
+        if e.kind() != std::io::ErrorKind::AlreadyExists {
+            // Roll back the config file we just wrote.
+            let _ = fs::remove_file(&config_path);
+            return Err(e.into());
+        }
     }
 
     match &config.backend {

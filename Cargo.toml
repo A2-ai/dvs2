@@ -39,6 +39,7 @@ rayon = "1.10"
 url = { version = "2" , features = ["serde"] }
 ureq = { version = "3", features = ["json", "multipart"] }
 tempfile = "3"
+etcetera = "0.11"
 
 [profile.dev-cli]
 inherits = "release"

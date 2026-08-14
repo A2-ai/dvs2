@@ -28,6 +28,7 @@ rayon.workspace = true
 url.workspace = true
 ureq.workspace = true
 tempfile.workspace = true
+etcetera.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["user", "fs"] }
