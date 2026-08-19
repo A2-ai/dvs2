@@ -123,6 +123,9 @@ pub fn add_files(
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
 
+    // Fail fast on auth/permission problems before doing any work
+    backend.check_access()?;
+
     let pool = get_threadpool(valid_paths.len())?;
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();

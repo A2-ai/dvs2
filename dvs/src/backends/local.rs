@@ -10,10 +10,9 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::Hashes;
-use crate::audit::{AuditEntry, parse_audit_log};
-use crate::backends::Backend;
-use crate::config::Compression;
+use crate::audit::{AuditEntry, AuditFile, parse_audit_log};
+use crate::backends::{Backend, RetrieveRequest, StoreRequest};
+use crate::{Compression, Hashes};
 
 const AUDIT_LOG_FILENAME: &str = "audit.log.jsonl";
 /// Only protects the current dvs process, not concurrent dvs processes
@@ -191,67 +190,107 @@ impl LocalBackend {
         let (prefix, suffix) = hash.split_at(2);
         Ok(self.path.join(prefix).join(suffix))
     }
+
+    pub fn log_audit_entry(&self, entry: &AuditEntry) -> Result<()> {
+        let _guard = AUDIT_LOG_LOCK
+            .lock()
+            .expect("audit log lock should not be poisoned");
+        log::debug!("Appending {entry:?} to audit log");
+
+        fs::create_dir_all(&self.path)?;
+        self.ensure_group_and_mode(&self.path, self.dir_mode())?;
+        let audit_path = self.path.join(AUDIT_LOG_FILENAME);
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&audit_path)?;
+        self.ensure_group_and_mode(&audit_path, self.audit_mode())?;
+        let json = serde_json::to_string(entry)?;
+        writeln!(file, "{}", json)?;
+        Ok(())
+    }
 }
 
 impl Backend for LocalBackend {
-    fn is_initialized(&self) -> Result<bool> {
-        Ok(self.path.join(AUDIT_LOG_FILENAME).exists())
-    }
+    fn init(&self, _: Compression) -> Result<bool> {
+        let already_initialized = self.path.join(AUDIT_LOG_FILENAME).exists();
+        if already_initialized {
+            return Ok(true);
+        }
 
-    fn local_path(&self) -> Option<&Path> {
-        Some(&self.path)
-    }
-
-    fn init(&self) -> Result<()> {
         log::debug!("Creating storage directory: {}", self.path.display());
         fs::create_dir_all(&self.path)?;
         self.ensure_group_and_mode(&self.path, self.dir_mode())?;
         log::info!("Initialized local storage at {}", self.path.display());
-        Ok(())
+        Ok(false)
     }
 
-    fn store(
-        &self,
-        hash: &Hashes,
-        source: &Path,
-        compression: Compression,
-        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-    ) -> Result<u64> {
-        let path = self.hash_to_path(hash)?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-            self.ensure_group_and_mode(&self.path, self.dir_mode())?;
-            self.ensure_group_and_mode(parent, self.dir_mode())?;
-        }
+    fn store(&self, req: StoreRequest<'_>) -> Result<u64> {
+        let StoreRequest {
+            hashes,
+            source,
+            compression,
+            path: rel_path,
+            operation_id,
+            message,
+            on_bytes,
+            ..
+        } = req;
+        let blob_path = self.hash_to_path(hashes)?;
 
-        // Unique tmp name
-        let tmp_path = path.with_extension(format!("tmp.{}", Uuid::new_v4()));
-
-        // Always clean up the tmp file even if an error occured
-        let result = (|| {
-            let stored_size = compression.compress(source, &tmp_path, on_bytes)?;
-            if self.use_shared_blob_mode() {
-                self.ensure_group_and_mode(&tmp_path, SHARED_BLOB_MODE)?;
-            } else {
-                make_readonly(&tmp_path)?;
+        // Store the blob unless it is already present (dedup).
+        let stored_size = if blob_path.is_file() {
+            fs::metadata(&blob_path)?.len()
+        } else {
+            if let Some(parent) = blob_path.parent() {
+                fs::create_dir_all(parent)?;
+                self.ensure_group_and_mode(&self.path, self.dir_mode())?;
+                self.ensure_group_and_mode(parent, self.dir_mode())?;
             }
-            fs::rename(&tmp_path, &path)?;
-            Ok(stored_size)
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&tmp_path);
-        }
-        result
+
+            // Unique tmp name
+            let tmp_path = blob_path.with_extension(format!("tmp.{}", Uuid::new_v4()));
+
+            // Always clean up the tmp file even if an error occurred
+            let result: Result<u64> = (|| {
+                let stored_size = compression.compress(source, &tmp_path, on_bytes)?;
+                if self.use_shared_blob_mode() {
+                    self.ensure_group_and_mode(&tmp_path, SHARED_BLOB_MODE)?;
+                } else {
+                    make_readonly(&tmp_path)?;
+                }
+                fs::rename(&tmp_path, &blob_path)?;
+                Ok(stored_size)
+            })();
+            if result.is_err() {
+                let _ = fs::remove_file(&tmp_path);
+            }
+            result?
+        };
+
+        let entry = AuditEntry::new_add(
+            operation_id,
+            AuditFile {
+                path: rel_path.to_path_buf(),
+                hashes: hashes.clone(),
+            },
+            compression,
+            message.map(|m| m.to_string()),
+        );
+        self.log_audit_entry(&entry)?;
+
+        Ok(stored_size)
     }
 
-    fn retrieve(
-        &self,
-        hash: &Hashes,
-        target: &Path,
-        compression: Compression,
-        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-    ) -> Result<bool> {
-        let path = self.hash_to_path(hash)?;
+    fn retrieve(&self, req: RetrieveRequest<'_>) -> Result<bool> {
+        let RetrieveRequest {
+            hashes,
+            target,
+            compression,
+            on_bytes,
+            ..
+        } = req;
+        let path = self.hash_to_path(hashes)?;
         if path.is_file() {
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)?;
@@ -276,28 +315,9 @@ impl Backend for LocalBackend {
         Ok(())
     }
 
-    fn log_audit(&self, entry: &AuditEntry) -> Result<()> {
-        let _guard = AUDIT_LOG_LOCK
-            .lock()
-            .expect("audit log lock should not be poisoned");
-        log::debug!("Appending {entry:?} to audit log");
-
-        fs::create_dir_all(&self.path)?;
-        self.ensure_group_and_mode(&self.path, self.dir_mode())?;
-        let audit_path = self.path.join(AUDIT_LOG_FILENAME);
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&audit_path)?;
-        self.ensure_group_and_mode(&audit_path, self.audit_mode())?;
-        let json = serde_json::to_string(entry)?;
-        writeln!(file, "{}", json)?;
-        Ok(())
-    }
-
     /// An empty `files` slice returns the full audit log. See
     /// [`parse_audit_log`] for the filtering rules.
-    fn read_audit_file(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>> {
+    fn get_audit_entries(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>> {
         let files_to_include: HashSet<_> = HashSet::from_iter(files.iter().cloned());
         let audit_path = self.path.join(AUDIT_LOG_FILENAME);
         let f = fs::File::open(&audit_path)?;
@@ -347,7 +367,7 @@ mod tests {
         let backend = LocalBackend::new(&storage_path, None).unwrap();
         assert!(!storage_path.exists());
 
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
         assert!(storage_path.is_dir());
     }
 
@@ -356,7 +376,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         // Create source file
         let source = tmp.path().join("source.txt");
@@ -364,7 +384,7 @@ mod tests {
 
         let hash = test_hash("d41d8cd98f00b204e9800998ecf8427e");
         backend
-            .store(&hash, &source, Compression::None, None)
+            .store(StoreRequest::new_local(&hash, &source, Compression::None))
             .unwrap();
 
         let stored = storage.join("d4").join("1d8cd98f00b204e9800998ecf8427e");
@@ -377,20 +397,24 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         // Store content via store()
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"stored content").unwrap();
         backend
-            .store(&hash, &source, Compression::None, None)
+            .store(StoreRequest::new_local(&hash, &source, Compression::None))
             .unwrap();
 
         // Retrieve to new location
         let target = tmp.path().join("retrieved.txt");
         let result = backend
-            .retrieve(&hash, &target, Compression::None, None)
+            .retrieve(RetrieveRequest::new_local(
+                &hash,
+                &target,
+                Compression::None,
+            ))
             .unwrap();
 
         // file was copied if result == true
@@ -403,16 +427,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         let target = tmp.path().join("target.txt");
         let result = backend
-            .retrieve(
+            .retrieve(RetrieveRequest::new_local(
                 &test_hash("1234567890123456789012"),
                 &target,
                 Compression::None,
-                None,
-            )
+            ))
             .unwrap();
 
         assert!(!result);
@@ -424,14 +447,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
         assert!(!backend.exists(&hash).unwrap());
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
         backend
-            .store(&hash, &source, Compression::None, None)
+            .store(StoreRequest::new_local(&hash, &source, Compression::None))
             .unwrap();
         assert!(backend.exists(&hash).unwrap());
     }
@@ -441,13 +464,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
         backend
-            .store(&hash, &source, Compression::None, None)
+            .store(StoreRequest::new_local(&hash, &source, Compression::None))
             .unwrap();
         assert!(backend.exists(&hash).unwrap());
 
@@ -462,13 +485,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
         backend
-            .store(&hash, &source, Compression::None, None)
+            .store(StoreRequest::new_local(&hash, &source, Compression::None))
             .unwrap();
 
         let stored = storage.join("ab").join("c123def456789012345678901234ab");
@@ -481,7 +504,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
 
@@ -495,6 +518,7 @@ mod tests {
                     hashes: hash.clone(),
                 },
                 compression: Compression::Zstd,
+                message: None,
             },
         };
 
@@ -508,11 +532,12 @@ mod tests {
                     hashes: hash.clone(),
                 },
                 compression: Compression::Zstd,
+                message: None,
             },
         };
 
-        backend.log_audit(&entry1).unwrap();
-        backend.log_audit(&entry2).unwrap();
+        backend.log_audit_entry(&entry1).unwrap();
+        backend.log_audit_entry(&entry2).unwrap();
 
         let audit_path = storage.join("audit.log.jsonl");
         assert!(audit_path.is_file());
@@ -536,7 +561,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, None).unwrap();
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
 
         let hash = test_hash("abc123def456789012345678901234ab");
         let workers = 4;
@@ -561,9 +586,10 @@ mod tests {
                                     hashes: hash.clone(),
                                 },
                                 compression: Compression::Zstd,
+                                message: None,
                             },
                         };
-                        backend.log_audit(&entry).unwrap();
+                        backend.log_audit_entry(&entry).unwrap();
                     }
                 });
             }
@@ -587,6 +613,7 @@ mod tests {
                     hashes: test_hash("abc123def456789012345678901234ab"),
                 },
                 compression: Compression::Zstd,
+                message: None,
             },
         }
     }
@@ -603,7 +630,7 @@ mod tests {
         let storage = tmp.path().join("storage");
         let backend = LocalBackend::new(&storage, Some(current_group_name)).unwrap();
 
-        backend.init().unwrap();
+        backend.init(Compression::None).unwrap();
         let storage_mode = fs::metadata(&storage).unwrap().permissions().mode();
         assert_eq!(storage_mode & 0o7777, SHARED_DIRECTORY_MODE);
 
@@ -611,7 +638,7 @@ mod tests {
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
         backend
-            .store(&hash, &source, Compression::None, None)
+            .store(StoreRequest::new_local(&hash, &source, Compression::None))
             .unwrap();
 
         let prefix_dir = storage.join("ab");
@@ -622,7 +649,7 @@ mod tests {
         let file_mode = fs::metadata(&stored).unwrap().permissions().mode();
         assert_eq!(file_mode & 0o777, SHARED_BLOB_MODE);
 
-        backend.log_audit(&test_audit_entry()).unwrap();
+        backend.log_audit_entry(&test_audit_entry()).unwrap();
         let audit_path = storage.join("audit.log.jsonl");
         let audit_mode = fs::metadata(&audit_path).unwrap().permissions().mode();
         assert_eq!(audit_mode & 0o777, SHARED_AUDIT_LOG_MODE);

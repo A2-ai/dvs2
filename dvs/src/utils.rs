@@ -1,6 +1,7 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use anyhow::{Result, bail};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 const DEFAULT_THREADS_PER_CPU: usize = 4;
 /// Maximum thread count threshold when `DVS_NUM_THREADS` is unset
@@ -146,6 +147,17 @@ pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
         .num_threads(num_threads)
         .build()?;
     Ok(pool)
+}
+
+pub fn http_agent() -> &'static ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_connect(Some(Duration::from_secs(5)))
+            .build()
+            .new_agent()
+    })
 }
 
 #[cfg(test)]

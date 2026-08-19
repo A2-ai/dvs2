@@ -1,13 +1,18 @@
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde_json::json;
 use tabled::Tabled;
 use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
+use url::Url;
 
+use dvs::auth::{
+    delete_token, get_client_approve_url, get_token, initiate_device_approval, poll_for_token,
+    store_token,
+};
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
@@ -18,12 +23,8 @@ use dvs::{
 };
 
 #[derive(Debug, Subcommand)]
-pub enum Command {
-    /// Starts a new dvs project.
-    /// This will create a `dvs.toml` file in the current folder of where the user is calling the CLI
-    /// from.
-    #[command(next_display_order = 100)]
-    Init {
+pub enum Init {
+    Local {
         /// Where the data will be stored
         path: PathBuf,
         /// If you want to use a root folder other than the current directory
@@ -39,6 +40,30 @@ pub enum Command {
         #[clap(long)]
         no_compression: bool,
     },
+    Server {
+        /// The project name
+        name: String,
+        /// The URL of the dvs server
+        url: Url,
+        /// If you want to use a folder name other than `.dvs` for storing the metadata files
+        #[clap(long)]
+        metadata_folder_name: Option<String>,
+        /// Unix group to use for permissions
+        #[clap(long)]
+        group: String,
+        /// Disable compression of stored files. Compression defaults to zstd
+        #[clap(long)]
+        no_compression: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Starts a new dvs project.
+    /// This will create a `dvs.toml` file in the current folder of where the user is calling the CLI
+    /// from.
+    #[command(next_display_order = 100, subcommand)]
+    Init(Init),
     /// Adds the given files to dvs. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
     /// At least one path or --glob must be provided
@@ -97,6 +122,10 @@ pub enum Command {
         #[clap(long)]
         dry_run: bool,
     },
+    /// Log in to a DVS server defined in the config
+    Login,
+    /// Log out from a DVS server
+    Logout,
 }
 
 #[derive(Parser)]
@@ -191,6 +220,20 @@ fn make_progress_callback(threshold: u64) -> impl Fn(&std::path::Path, u64) -> F
     }
 }
 
+/// Runs the interactive device-authorization flow and stores the resulting token.
+fn run_device_login(url: &Url) -> Result<()> {
+    let device_auth = initiate_device_approval(url)?;
+    let approve_url = get_client_approve_url(url, &device_auth.user_code)?;
+    println!(
+        "Go to {approve_url} and enter the code {}",
+        device_auth.user_code
+    );
+    let polling_result = poll_for_token(url, &device_auth.device_code)?;
+    store_token(url, &polling_result.access_token)?;
+    println!("You are now logged in!");
+    Ok(())
+}
+
 fn try_main() -> Result<()> {
     env_logger::init();
 
@@ -201,25 +244,46 @@ fn try_main() -> Result<()> {
     let current_dir = std::env::current_dir()?;
 
     match cli.command {
-        Command::Init {
-            path: storage_path,
-            root_dir,
-            metadata_folder_name,
-            group,
-            no_compression,
-        } => {
-            let mut config = Config::new_local(&storage_path, group)?;
-            if no_compression {
-                config.set_compression(Compression::None);
-            }
+        Command::Init(init_cmd) => {
+            let (config, root_dir, metadata_folder_name) = match init_cmd {
+                Init::Local {
+                    path: storage_path,
+                    root_dir,
+                    metadata_folder_name,
+                    group,
+                    no_compression,
+                } => {
+                    let mut config = Config::new_local(&storage_path, group)?;
+                    if no_compression {
+                        config.set_compression(Compression::None);
+                    }
+                    (config, root_dir, metadata_folder_name)
+                }
+                Init::Server {
+                    name,
+                    url,
+                    metadata_folder_name,
+                    group,
+                    no_compression,
+                } => {
+                    // Initializing on the server requires authentication, so run the
+                    // login flow first if we don't have a token for it yet.
+                    if get_token(&url)?.is_none() {
+                        run_device_login(&url)?;
+                    }
+                    let mut config = Config::new_server(name, url, group);
+                    if no_compression {
+                        config.set_compression(Compression::None);
+                    }
+                    (config, None, metadata_folder_name)
+                }
+            };
+
+            let mut config = config;
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
             }
-            let root = if let Some(root) = root_dir {
-                root
-            } else {
-                current_dir
-            };
+            let root = root_dir.unwrap_or(current_dir);
 
             let repo_root = init(&root, config)?;
             if cli.json {
@@ -461,6 +525,31 @@ fn try_main() -> Result<()> {
             }
             if has_errors {
                 return Err(anyhow!("Some files failed to get"));
+            }
+        }
+        Command::Login => {
+            let config =
+                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+
+            if let Some(url) = config.server_url() {
+                run_device_login(url)?;
+            } else {
+                bail!("This project is not using a dvs server");
+            }
+        }
+        Command::Logout => {
+            let config =
+                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+
+            if let Some(url) = config.server_url() {
+                let removed = delete_token(url)?;
+                if removed {
+                    println!("Logged out successfully");
+                } else {
+                    println!("You were not logged in");
+                }
+            } else {
+                bail!("This project is not using a dvs server");
             }
         }
     }

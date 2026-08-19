@@ -5,7 +5,7 @@ use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
 use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
-use crate::{Backend, Compression, DvsPaths, Outcome, cache};
+use crate::{Backend, Compression, DvsPaths, Outcome, RetrieveRequest, cache};
 use anyhow::{Context, Result, bail};
 use fs_err as fs;
 use rayon::prelude::*;
@@ -69,7 +69,13 @@ fn get_file(
 
     let result = (|| {
         let retrieved = backend
-            .retrieve(&metadata.hashes, &tmp_path, metadata.compression, on_bytes)
+            .retrieve(RetrieveRequest {
+                hashes: &metadata.hashes,
+                target: &tmp_path,
+                compression: metadata.compression,
+                path: relative_path.as_ref(),
+                on_bytes,
+            })
             .with_context(|| format!("Failed to retrieve {}", relative_path.as_ref().display()))?;
         if !retrieved {
             bail!("Storage file missing for hash: {}", metadata.hashes);
@@ -149,6 +155,10 @@ pub fn get_files(
         .into_iter()
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
+
+    // Fail fast on auth/permission problems before retrieving anything,
+    // so the user gets a single error instead of one per file.
+    backend.check_access()?;
 
     let pool = get_threadpool(tracked_paths.len())?;
     let cache = try_open_cache(paths);
@@ -292,12 +302,11 @@ mod tests {
         /// Overwrite the stored blob for `hashes` with `content`, defeating verification.
         fn corrupt_blob(&self, hashes: &Hashes, content: &[u8]) {
             let hash = hashes.get_blake3();
-            let blob = self
-                .backend()
-                .local_path()
-                .unwrap()
-                .join(&hash[..2])
-                .join(&hash[2..]);
+            let storage = match &self.config.backend {
+                crate::config::Backend::Local(b) => b.path.clone(),
+                crate::config::Backend::Server(_) => unreachable!(),
+            };
+            let blob = storage.join(&hash[..2]).join(&hash[2..]);
             // Blobs are stored read-only; make it writable before overwriting.
             let mut perms = fs::metadata(&blob).unwrap().permissions();
             #[allow(clippy::permissions_set_readonly_false)]

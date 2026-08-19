@@ -22,7 +22,7 @@ rust-version = '1.85'
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.149"
-toml = "0.9"
+toml = "1.1.4+spec-1.1.0"
 fs-err = "3"
 log = "0.4.29"
 blake3 = "1.8.3"
@@ -31,11 +31,15 @@ md5 = "0.8.0"
 jiff = { version = "0.2.18", features = ["serde"] }
 anyhow = "1.0.100"
 whoami = "2"
-uuid = { version = "1.20.0", features = ["v4"] }
+uuid = { version = "1.20.0", features = ["v4", "serde"] }
 zstd = "0.13.3"
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 globset = "0.4"
 rayon = "1.10"
+url = { version = "2" , features = ["serde"] }
+ureq = { version = "3", features = ["json", "multipart"] }
+tempfile = "3"
+etcetera = "0.11"
 
 [profile.dev-cli]
 inherits = "release"
