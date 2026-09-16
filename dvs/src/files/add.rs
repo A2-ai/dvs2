@@ -54,7 +54,7 @@ fn add_file(
     let full_path = paths.file_path(relative_path);
     let rel_str = relative_path.to_string_lossy();
     let (hashes, size) = cache::hashes_for_file(&full_path, &rel_str, cache)?;
-    let metadata = FileMetadata::from_hashes(hashes, size, compression, message);
+    let mut metadata = FileMetadata::from_hashes(hashes, size, compression, message);
     if dry_run {
         let dvs_file_path = paths.metadata_path(relative_path);
         let dvs_file_exists = dvs_file_path.is_file();

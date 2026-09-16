@@ -69,7 +69,7 @@ impl FileMetadata {
     /// and the compressed size if applicable.
     /// Copies the source file to storage and saves metadata atomically (both succeed or neither).
     pub fn save(
-        &self,
+        &mut self,
         operation_id: Uuid,
         source_file: impl AsRef<Path>,
         backend: &dyn Backend,
@@ -114,21 +114,26 @@ impl FileMetadata {
             compression: self.compression,
             path: relative_path.as_ref(),
             operation_id,
-            size: self.size,
             message: self.message.as_deref(),
             on_bytes,
         });
+
+        // The server compresses with the project's setting, which may not be the one
+        // we asked for
+        if let Ok(res) = &store_res {
+            self.compression = res.compression;
+        }
 
         // 3. Then metadata
         let old_metadata_content = fs::read(&dvs_file_path).ok();
         log::debug!("Writing metadata to {}", dvs_file_path.display());
         let metadata_res = fs::write(
             &dvs_file_path,
-            serde_json::to_string_pretty(self).expect("valid json"),
+            serde_json::to_string_pretty(&*self).expect("valid json"),
         );
 
         match (store_res, metadata_res) {
-            (Ok(size), Ok(_)) => Ok((Outcome::Copied, Some(size))),
+            (Ok(res), Ok(_)) => Ok((Outcome::Copied, Some(res.stored_size))),
             (Err(e), Ok(_)) => {
                 log::warn!(
                     "Storage failed, rolling back metadata for {}",
@@ -247,7 +252,7 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "data.bin", b"binary data");
 
-        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         let (outcome, stored_size) = metadata
             .save(
                 Uuid::new_v4(),
@@ -274,7 +279,7 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "data.bin", b"binary data");
 
-        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
             .save(
                 Uuid::new_v4(),

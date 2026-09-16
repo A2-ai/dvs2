@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit::{AuditEntry, AuditFile, parse_audit_log};
-use crate::backends::{Backend, RetrieveRequest, StoreRequest};
+use crate::backends::{Backend, RetrieveRequest, StoreRequest, StoreResult};
 use crate::{Compression, Hashes};
 
 const AUDIT_LOG_FILENAME: &str = "audit.log.jsonl";
@@ -225,7 +225,7 @@ impl Backend for LocalBackend {
         Ok(false)
     }
 
-    fn store(&self, req: StoreRequest<'_>) -> Result<u64> {
+    fn store(&self, req: StoreRequest<'_>) -> Result<StoreResult> {
         let StoreRequest {
             hashes,
             source,
@@ -279,7 +279,10 @@ impl Backend for LocalBackend {
         );
         self.log_audit_entry(&entry)?;
 
-        Ok(stored_size)
+        Ok(StoreResult {
+            stored_size,
+            compression,
+        })
     }
 
     fn retrieve(&self, req: RetrieveRequest<'_>) -> Result<bool> {

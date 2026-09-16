@@ -12,7 +12,7 @@ pub mod paths;
 pub mod progress;
 pub(crate) mod utils;
 
-pub use backends::{Backend, RetrieveRequest, StoreRequest};
+pub use backends::{Backend, RetrieveRequest, StoreRequest, StoreResult};
 pub use config::Compression;
 pub use files::add::{AddDetail, AddResult, add_files};
 pub use files::get::{GetDetail, GetResult, get_files};

@@ -13,10 +13,11 @@ pub mod server;
 pub struct StoreRequest<'a> {
     pub hashes: &'a Hashes,
     pub source: &'a Path,
+    /// The compression the caller would like. It could be overriden eg in the case of a dvs
+    /// server backend if the project was init with a different alg
     pub compression: Compression,
     pub path: &'a Path,
     pub operation_id: Uuid,
-    pub size: u64,
     pub message: Option<&'a str>,
     pub on_bytes: Option<&'a (dyn Fn(u64) + Send + Sync)>,
 }
@@ -29,11 +30,18 @@ impl<'a> StoreRequest<'a> {
             compression,
             path: Path::new(""),
             operation_id: Uuid::nil(),
-            size: 0,
             message: None,
             on_bytes: None,
         }
     }
+}
+
+/// What the backend actually did with the file.
+pub struct StoreResult {
+    /// Size of the stored blob, after compression.
+    pub stored_size: u64,
+    /// The compression that was actually applied.
+    pub compression: Compression,
 }
 
 /// Common fields needed for retrieving a file across backends
@@ -69,9 +77,10 @@ pub trait Backend: Send + Sync {
         Ok(())
     }
 
-    /// Store file to backend by hash, optionally compressing.
-    /// Returns the stored (compressed) size in bytes.
-    fn store(&self, req: StoreRequest<'_>) -> Result<u64>;
+    /// Store file to backend under `req.hashes`, compressing it.
+    /// The source is passed uncompressed, the hash we send is only for (optional) verification by
+    /// a server
+    fn store(&self, req: StoreRequest<'_>) -> Result<StoreResult>;
 
     /// Retrieve content by hash to target path, optionally decompressing.
     /// Returns true if the file was copied to the target path.

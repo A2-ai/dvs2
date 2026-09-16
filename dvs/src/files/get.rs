@@ -273,7 +273,7 @@ mod tests {
             compression: Compression,
         ) -> (PathBuf, FileMetadata) {
             let file_path = create_file(&self.root, name, content);
-            let metadata = FileMetadata::from_file(&file_path, compression, None).unwrap();
+            let mut metadata = FileMetadata::from_file(&file_path, compression, None).unwrap();
             metadata
                 .save(
                     Uuid::new_v4(),
