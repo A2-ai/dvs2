@@ -1,10 +1,12 @@
 use std::path::{Path, PathBuf};
 
+use anyhow::Result;
+use uuid::Uuid;
+
 use crate::Hashes;
 use crate::audit::AuditEntry;
 use crate::config::Compression;
-use anyhow::Result;
-use uuid::Uuid;
+use crate::paths::ProjectPath;
 
 pub mod local;
 pub mod server;
@@ -16,19 +18,24 @@ pub struct StoreRequest<'a> {
     /// The compression the caller would like. It could be overriden eg in the case of a dvs
     /// server backend if the project was init with a different alg
     pub compression: Compression,
-    pub path: &'a Path,
+    pub path: ProjectPath,
     pub operation_id: Uuid,
     pub message: Option<&'a str>,
     pub on_bytes: Option<&'a (dyn Fn(u64) + Send + Sync)>,
 }
 
 impl<'a> StoreRequest<'a> {
-    pub fn new_local(hashes: &'a Hashes, source: &'a Path, compression: Compression) -> Self {
+    pub fn new_local(
+        hashes: &'a Hashes,
+        source: &'a Path,
+        path: ProjectPath,
+        compression: Compression,
+    ) -> Self {
         Self {
             hashes,
             source,
             compression,
-            path: Path::new(""),
+            path,
             operation_id: Uuid::nil(),
             message: None,
             on_bytes: None,
@@ -49,17 +56,22 @@ pub struct RetrieveRequest<'a> {
     pub hashes: &'a Hashes,
     pub target: &'a Path,
     pub compression: Compression,
-    pub path: &'a Path,
+    pub path: ProjectPath,
     pub on_bytes: Option<&'a (dyn Fn(u64) + Send + Sync)>,
 }
 
 impl<'a> RetrieveRequest<'a> {
-    pub fn new_local(hashes: &'a Hashes, target: &'a Path, compression: Compression) -> Self {
+    pub fn new_local(
+        hashes: &'a Hashes,
+        target: &'a Path,
+        path: ProjectPath,
+        compression: Compression,
+    ) -> Self {
         Self {
             hashes,
             target,
             compression,
-            path: Path::new(""),
+            path,
             on_bytes: None,
         }
     }

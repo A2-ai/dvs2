@@ -3,10 +3,11 @@ use std::sync::Mutex;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
+use crate::paths::ProjectPath;
 use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
 use crate::{Backend, Compression, DvsPaths, Outcome, RetrieveRequest, cache};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use fs_err as fs;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,7 @@ fn get_file(
         metadata.hashes,
         tmp_path.display()
     );
+    let path = ProjectPath::from_path(relative_path.as_ref()).map_err(|e| anyhow!("{e}"))?;
 
     let result = (|| {
         let retrieved = backend
@@ -73,7 +75,7 @@ fn get_file(
                 hashes: &metadata.hashes,
                 target: &tmp_path,
                 compression: metadata.compression,
-                path: relative_path.as_ref(),
+                path,
                 on_bytes,
             })
             .with_context(|| format!("Failed to retrieve {}", relative_path.as_ref().display()))?;

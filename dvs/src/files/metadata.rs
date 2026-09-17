@@ -1,10 +1,11 @@
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::paths::ProjectPath;
 use crate::{Backend, Compression, DvsPaths, Hashes, Outcome, StoreRequest};
 
 /// The dvs metadata for a given file
@@ -108,11 +109,12 @@ impl FileMetadata {
 
         // 2. Store file to backend. The backend records the add in its audit log
         // and dedups the blob internally if it is already present.
+        let path = ProjectPath::from_path(relative_path.as_ref()).map_err(|e| anyhow!("{e}"))?;
         let store_res = backend.store(StoreRequest {
             hashes: &self.hashes,
             source: source_file.as_ref(),
             compression: self.compression,
-            path: relative_path.as_ref(),
+            path,
             operation_id,
             message: self.message.as_deref(),
             on_bytes,

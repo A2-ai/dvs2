@@ -1,10 +1,12 @@
 use std::ffi::OsStr;
+use std::fmt;
+use std::fmt::Formatter;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::Result;
 use fs_err as fs;
 use globset::GlobMatcher;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use walkdir::WalkDir;
 
 use crate::config::Config;
@@ -313,6 +315,100 @@ impl PathFilter {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum ProjectPathError {
+    Empty,
+    NotRelative,
+    NotUtf8,
+    Backslash,
+}
+
+impl fmt::Display for ProjectPathError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ProjectPathError::Empty => f.write_str("Path is empty or has an empty component"),
+            ProjectPathError::NotRelative => {
+                f.write_str("Path needs to be relative, without a leading `/`, `.` or `..`")
+            }
+            ProjectPathError::NotUtf8 => f.write_str("Path is not UTF-8"),
+            ProjectPathError::Backslash => f.write_str("Part of the path contains `\\`"),
+        }
+    }
+}
+
+/// We want a path to be the same on all OSes: we need to be able to push on Windows and
+/// pull on Linux.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub struct ProjectPath(String);
+
+impl ProjectPath {
+    pub fn from_path(path: &Path) -> Result<Self, ProjectPathError> {
+        let mut out = String::new();
+        for component in path.components() {
+            let Component::Normal(c) = component else {
+                return Err(ProjectPathError::NotRelative);
+            };
+            let part = c.to_str().ok_or(ProjectPathError::NotUtf8)?;
+            if part.contains('\\') {
+                return Err(ProjectPathError::Backslash);
+            }
+            if !out.is_empty() {
+                out.push('/');
+            }
+            out.push_str(part);
+        }
+        if out.is_empty() {
+            return Err(ProjectPathError::Empty);
+        }
+        Ok(Self(out))
+    }
+
+    /// This is like from_path but from a canonical dvs path, eg using / even on Windows
+    pub fn from_canonical(path: &str) -> Result<Self, ProjectPathError> {
+        if path.starts_with('/') {
+            return Err(ProjectPathError::NotRelative);
+        }
+        let mut out = String::with_capacity(path.len());
+        for part in path.split('/') {
+            match part {
+                "" => return Err(ProjectPathError::Empty),
+                "." | ".." => return Err(ProjectPathError::NotRelative),
+                _ => {
+                    if part.contains('\\') {
+                        return Err(ProjectPathError::Backslash);
+                    }
+                    if !out.is_empty() {
+                        out.push('/');
+                    }
+                    out.push_str(part);
+                }
+            }
+        }
+
+        if out.is_empty() {
+            return Err(ProjectPathError::Empty);
+        }
+
+        Ok(Self(out))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn to_native(&self) -> PathBuf {
+        self.0.split('/').collect()
+    }
+}
+
+impl<'de> Deserialize<'de> for ProjectPath {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(de)?;
+        ProjectPath::from_canonical(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,5 +449,54 @@ mod tests {
         assert_eq!(result[1].1, AddPathStatus::NotFound);
         assert_eq!(result[2].1, AddPathStatus::OutsideProject);
         assert_eq!(result[3].1, AddPathStatus::IsDirectory);
+    }
+
+    #[test]
+    fn can_handle_project_paths() {
+        assert_eq!(
+            ProjectPath::from_path(Path::new("data/file.csv"))
+                .unwrap()
+                .as_str(),
+            "data/file.csv"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            ProjectPath::from_path(Path::new("data\\file.csv")),
+            Err(ProjectPathError::Backslash)
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            ProjectPath::from_path(Path::new("data\\file.csv"))
+                .unwrap()
+                .as_str(),
+            "data/file.csv"
+        );
+
+        let paths = vec!["../file.csv", "./file.csv"];
+        for p in paths {
+            assert!(ProjectPath::from_path(Path::new(p)).is_err());
+        }
+    }
+
+    #[test]
+    fn canonical_project_path_errors() {
+        for (input, expected) in [
+            ("/abs/file.csv", ProjectPathError::NotRelative),
+            ("../file.csv", ProjectPathError::NotRelative),
+            ("./file.csv", ProjectPathError::NotRelative),
+            ("data\\file.csv", ProjectPathError::Backslash),
+            ("data//file.csv", ProjectPathError::Empty),
+            ("data/", ProjectPathError::Empty),
+            ("", ProjectPathError::Empty),
+        ] {
+            assert_eq!(ProjectPath::from_canonical(input), Err(expected),);
+        }
+    }
+
+    #[test]
+    fn canonical_project_path_round_trip() {
+        let path = ProjectPath::from_canonical("data/sub/file.csv").unwrap();
+        assert_eq!(path.as_str(), "data/sub/file.csv");
+        assert_eq!(ProjectPath::from_path(&path.to_native()), Ok(path));
     }
 }

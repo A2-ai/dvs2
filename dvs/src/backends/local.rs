@@ -271,7 +271,7 @@ impl Backend for LocalBackend {
         let entry = AuditEntry::new_add(
             operation_id,
             AuditFile {
-                path: rel_path.to_path_buf(),
+                path: rel_path.to_native(),
                 hashes: hashes.clone(),
             },
             compression,
@@ -332,10 +332,16 @@ impl Backend for LocalBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ProjectPath;
     use crate::audit::{Action, AuditEntry, AuditFile, parse_audit_log};
     use crate::config::Compression;
     use crate::hashes::Hashes;
     use std::io::Cursor;
+
+    /// Shorthand for a project path in tests.
+    fn project_path(s: &str) -> ProjectPath {
+        ProjectPath::from_canonical(s).unwrap()
+    }
 
     fn test_hash(hash: &str) -> Hashes {
         Hashes {
@@ -387,7 +393,12 @@ mod tests {
 
         let hash = test_hash("d41d8cd98f00b204e9800998ecf8427e");
         backend
-            .store(StoreRequest::new_local(&hash, &source, Compression::None))
+            .store(StoreRequest::new_local(
+                &hash,
+                &source,
+                project_path("source.txt"),
+                Compression::None,
+            ))
             .unwrap();
 
         let stored = storage.join("d4").join("1d8cd98f00b204e9800998ecf8427e");
@@ -407,7 +418,12 @@ mod tests {
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"stored content").unwrap();
         backend
-            .store(StoreRequest::new_local(&hash, &source, Compression::None))
+            .store(StoreRequest::new_local(
+                &hash,
+                &source,
+                project_path("source.txt"),
+                Compression::None,
+            ))
             .unwrap();
 
         // Retrieve to new location
@@ -416,6 +432,7 @@ mod tests {
             .retrieve(RetrieveRequest::new_local(
                 &hash,
                 &target,
+                project_path("source.txt"),
                 Compression::None,
             ))
             .unwrap();
@@ -437,6 +454,7 @@ mod tests {
             .retrieve(RetrieveRequest::new_local(
                 &test_hash("1234567890123456789012"),
                 &target,
+                project_path("source.txt"),
                 Compression::None,
             ))
             .unwrap();
@@ -457,7 +475,12 @@ mod tests {
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
         backend
-            .store(StoreRequest::new_local(&hash, &source, Compression::None))
+            .store(StoreRequest::new_local(
+                &hash,
+                &source,
+                project_path("source.txt"),
+                Compression::None,
+            ))
             .unwrap();
         assert!(backend.exists(&hash).unwrap());
     }
@@ -473,7 +496,12 @@ mod tests {
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
         backend
-            .store(StoreRequest::new_local(&hash, &source, Compression::None))
+            .store(StoreRequest::new_local(
+                &hash,
+                &source,
+                project_path("source.txt"),
+                Compression::None,
+            ))
             .unwrap();
         assert!(backend.exists(&hash).unwrap());
 
@@ -494,7 +522,12 @@ mod tests {
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
         backend
-            .store(StoreRequest::new_local(&hash, &source, Compression::None))
+            .store(StoreRequest::new_local(
+                &hash,
+                &source,
+                project_path("source.txt"),
+                Compression::None,
+            ))
             .unwrap();
 
         let stored = storage.join("ab").join("c123def456789012345678901234ab");
@@ -641,7 +674,12 @@ mod tests {
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
         backend
-            .store(StoreRequest::new_local(&hash, &source, Compression::None))
+            .store(StoreRequest::new_local(
+                &hash,
+                &source,
+                project_path("source.txt"),
+                Compression::None,
+            ))
             .unwrap();
 
         let prefix_dir = storage.join("ab");
