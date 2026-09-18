@@ -80,7 +80,9 @@ impl FileMetadata {
     ) -> Result<(Outcome, Option<u64>)> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
         let dvs_file_exists = dvs_file_path.is_file();
-        let storage_exists = backend.exists(&self.hashes)?;
+        // Only check if file exists on the server if it exists locally
+        // Backend will dedup anyway
+        let storage_exists = dvs_file_exists && backend.exists(&self.hashes)?;
 
         log::debug!(
             "Saving {}: metadata_exists={}, storage_exists={}",

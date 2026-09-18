@@ -155,6 +155,8 @@ pub fn http_agent() -> &'static ureq::Agent {
         ureq::Agent::config_builder()
             .http_status_as_error(false)
             .timeout_connect(Some(Duration::from_secs(5)))
+            .max_idle_connections(ENV_MAX_THREADS)
+            .max_idle_connections_per_host(ENV_MAX_THREADS)
             .build()
             .new_agent()
     })

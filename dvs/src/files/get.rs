@@ -37,10 +37,6 @@ fn get_file(
         metadata.hashes
     );
 
-    if !backend.exists(&metadata.hashes)? {
-        bail!("Storage file missing for hash: {}", metadata.hashes);
-    }
-
     let target_path = paths.file_path(relative_path.as_ref());
     let rel_str = relative_path.as_ref().to_string_lossy();
 
@@ -58,6 +54,10 @@ fn get_file(
     }
 
     if dry_run {
+        // We only check for a dry run, the normal get will 404
+        if !backend.exists(&metadata.hashes)? {
+            bail!("Storage file missing for hash: {}", metadata.hashes);
+        }
         return Ok((Outcome::Copied, metadata.size));
     }
 
