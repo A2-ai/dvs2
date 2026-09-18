@@ -2,14 +2,20 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
-use crate::gitignore::add_to_gitignore;
 use crate::hashes::Hashes;
 use crate::paths::DvsPaths;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use fs_err as fs;
+
+#[cfg(feature = "cache")]
+use crate::gitignore::add_to_gitignore;
+#[cfg(feature = "cache")]
+use anyhow::bail;
+#[cfg(feature = "cache")]
 use rusqlite::Connection;
 
 /// Bump whenever the cache schema changes; a mismatch drops and rebuilds the table.
+#[cfg(feature = "cache")]
 const SCHEMA_VERSION: i64 = 1;
 
 /// Filesystem stat used as cache key: mtime + ctime + size.
@@ -50,10 +56,12 @@ fn ctime_ns(_meta: &std::fs::Metadata) -> i64 {
 
 /// SQLite-backed hash cache.
 /// All errors are non-fatal — callers fall back to re-hashing.
+#[cfg(feature = "cache")]
 pub struct HashCache {
     conn: Connection,
 }
 
+#[cfg(feature = "cache")]
 impl HashCache {
     pub fn open(db_path: &Path) -> Result<Self> {
         if let Some(parent) = db_path.parent() {
@@ -125,6 +133,23 @@ impl HashCache {
     }
 }
 
+/// No-op hash cache used when the `cache` feature is disabled (e.g. the server).
+/// Every lookup misses and every insert is dropped, so callers transparently
+/// fall back to hashing without pulling in rusqlite/libsqlite3-sys.
+#[cfg(not(feature = "cache"))]
+pub struct HashCache;
+
+#[cfg(not(feature = "cache"))]
+impl HashCache {
+    pub fn lookup(&self, _relative_path: &str, _stat: &FileStat) -> Result<Option<Hashes>> {
+        Ok(None)
+    }
+
+    pub fn insert(&self, _relative_path: &str, _stat: &FileStat, _hashes: &Hashes) -> Result<()> {
+        Ok(())
+    }
+}
+
 /// Compute hashes for a file, using the cache when possible.
 ///
 /// Returns `(Hashes, file_size)`.
@@ -168,6 +193,7 @@ pub fn hashes_for_file(
 ///
 /// On failure, deletes the DB files and retries once.
 /// Also ensures the cache directory is gitignored.
+#[cfg(feature = "cache")]
 pub fn open_cache(paths: &DvsPaths) -> Result<HashCache> {
     let cache_dir = paths.cache_folder();
     let db_path = cache_dir.join("dvs.db");
@@ -199,16 +225,25 @@ pub fn open_cache(paths: &DvsPaths) -> Result<HashCache> {
 /// Open a thread safe cache, ignoring errors when it encounters them since
 /// the cache is optional and shouldn't block actual operation
 pub(crate) fn try_open_cache(paths: &DvsPaths) -> Option<Mutex<HashCache>> {
-    match open_cache(paths) {
-        Ok(c) => Some(Mutex::new(c)),
-        Err(e) => {
-            log::warn!("Failed to open hash cache: {e}");
-            None
+    #[cfg(feature = "cache")]
+    {
+        match open_cache(paths) {
+            Ok(c) => Some(Mutex::new(c)),
+            Err(e) => {
+                log::warn!("Failed to open hash cache: {e}");
+                None
+            }
         }
+    }
+    // No cache
+    #[cfg(not(feature = "cache"))]
+    {
+        let _ = paths;
+        None
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cache"))]
 mod tests {
     use super::*;
     use tempfile::TempDir;
