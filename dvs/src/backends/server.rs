@@ -249,6 +249,9 @@ impl Backend for ServerBackend {
             std::io::copy(&mut reader, &mut out)?;
         }
 
+        if let Some(parent) = req.target.parent() {
+            fs::create_dir_all(parent)?;
+        }
         req.compression.decompress(&tmp, req.target, None)?;
         Ok(true)
     }
