@@ -68,9 +68,10 @@ impl HashCache {
             fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(db_path)?;
+        // Trading durability for speed
         conn.execute_batch(
-            "PRAGMA journal_mode=TRUNCATE;
-             PRAGMA synchronous=NORMAL;
+            "PRAGMA journal_mode=MEMORY;
+             PRAGMA synchronous=OFF;
              PRAGMA busy_timeout=5000;",
         )?;
 
