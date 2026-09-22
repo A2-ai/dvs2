@@ -15,6 +15,8 @@ pub enum Action {
     Add {
         file: AuditFile,
         compression: Compression,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     Init {
         settings: Config,
@@ -38,7 +40,12 @@ pub struct AuditEntry {
 }
 
 impl AuditEntry {
-    pub fn new_add(operation_id: Uuid, file: AuditFile, compression: Compression) -> Self {
+    pub fn new_add(
+        operation_id: Uuid,
+        file: AuditFile,
+        compression: Compression,
+        message: Option<String>,
+    ) -> Self {
         let timestamp = Timestamp::now();
         let user = whoami::username().unwrap_or_else(|_| "unknown".to_string());
 
@@ -46,7 +53,11 @@ impl AuditEntry {
             operation_id: operation_id.to_string(),
             timestamp,
             user,
-            action: Action::Add { file, compression },
+            action: Action::Add {
+                file,
+                compression,
+                message,
+            },
         }
     }
 

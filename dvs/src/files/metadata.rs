@@ -1,12 +1,12 @@
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::audit::{AuditEntry, AuditFile};
-use crate::{Backend, Compression, DvsPaths, Hashes, Outcome};
+use crate::paths::ProjectPath;
+use crate::{Backend, Compression, DvsPaths, Hashes, Outcome, StoreRequest};
 
 /// The dvs metadata for a given file
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -70,17 +70,19 @@ impl FileMetadata {
     /// and the compressed size if applicable.
     /// Copies the source file to storage and saves metadata atomically (both succeed or neither).
     pub fn save(
-        &self,
+        &mut self,
         operation_id: Uuid,
         source_file: impl AsRef<Path>,
-        backend: &dyn Backend,
+        backend: &Backend,
         paths: &DvsPaths,
         relative_path: impl AsRef<Path>,
         on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
     ) -> Result<(Outcome, Option<u64>)> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
         let dvs_file_exists = dvs_file_path.is_file();
-        let storage_exists = backend.exists(&self.hashes)?;
+        // Only check if file exists on the server if it exists locally
+        // Backend will dedup anyway
+        let storage_exists = dvs_file_exists && backend.exists(&self.hashes)?;
 
         log::debug!(
             "Saving {}: metadata_exists={}, storage_exists={}",
@@ -107,44 +109,35 @@ impl FileMetadata {
             fs::create_dir_all(parent)?;
         }
 
-        // 2. Store file to backend if it doesn't already exist
-        let (storage_res, stored_size) = if storage_exists {
-            (Ok(()), None)
-        } else {
-            match backend.store(
-                &self.hashes,
-                source_file.as_ref(),
-                self.compression,
-                on_bytes,
-            ) {
-                Ok(size) => (Ok(()), Some(size)),
-                Err(e) => (Err(e), None),
-            }
-        };
+        // 2. Store file to backend. The backend records the add in its audit log
+        // and dedups the blob internally if it is already present.
+        let path = ProjectPath::from_path(relative_path.as_ref()).map_err(|e| anyhow!("{e}"))?;
+        let store_res = backend.store(StoreRequest {
+            hashes: &self.hashes,
+            source: source_file.as_ref(),
+            compression: self.compression,
+            path,
+            operation_id,
+            message: self.message.as_deref(),
+            on_bytes,
+        });
+
+        // The server compresses with the project's setting, which may not be the one
+        // we asked for
+        if let Ok(res) = &store_res {
+            self.compression = res.compression;
+        }
 
         // 3. Then metadata
         let old_metadata_content = fs::read(&dvs_file_path).ok();
         log::debug!("Writing metadata to {}", dvs_file_path.display());
         let metadata_res = fs::write(
             &dvs_file_path,
-            serde_json::to_string_pretty(self).expect("valid json"),
+            serde_json::to_string_pretty(&*self).expect("valid json"),
         );
 
-        match (storage_res, metadata_res) {
-            (Ok(_), Ok(_)) => {
-                let audit_entry = AuditEntry::new_add(
-                    operation_id,
-                    AuditFile {
-                        path: relative_path.as_ref().to_path_buf(),
-                        hashes: self.hashes.clone(),
-                    },
-                    self.compression,
-                );
-                if let Err(e) = backend.log_audit(&audit_entry) {
-                    log::error!("Failed to write audit log {audit_entry:?}: {e}");
-                }
-                Ok((Outcome::Copied, stored_size))
-            }
+        match (store_res, metadata_res) {
+            (Ok(res), Ok(_)) => Ok((Outcome::Copied, Some(res.stored_size))),
             (Err(e), Ok(_)) => {
                 log::warn!(
                     "Storage failed, rolling back metadata for {}",
@@ -167,8 +160,8 @@ impl FileMetadata {
                 } else {
                     let _ = fs::remove_file(&dvs_file_path);
                 }
-                // Remove the blob only if this call actually stored it
-                if stored_size.is_some() {
+                // Remove the blob only if this call actually created it
+                if !storage_exists {
                     let _ = backend.remove(&self.hashes);
                 }
                 bail!("Failed to write metadata file: {dvs_file_path:?}")
@@ -263,7 +256,7 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "data.bin", b"binary data");
 
-        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         let (outcome, stored_size) = metadata
             .save(
                 Uuid::new_v4(),
@@ -290,7 +283,7 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "data.bin", b"binary data");
 
-        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
             .save(
                 Uuid::new_v4(),

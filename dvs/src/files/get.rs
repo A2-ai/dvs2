@@ -3,17 +3,18 @@ use std::sync::Mutex;
 
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
+use crate::paths::ProjectPath;
 use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
-use crate::{Backend, Compression, DvsPaths, Outcome, cache};
-use anyhow::{Context, Result, bail};
+use crate::{Backend, Compression, DvsPaths, Outcome, RetrieveRequest, cache};
+use anyhow::{Context, Result, anyhow, bail};
 use fs_err as fs;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 fn get_file(
-    backend: &dyn Backend,
+    backend: &Backend,
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
     cache: Option<&Mutex<HashCache>>,
@@ -36,10 +37,6 @@ fn get_file(
         metadata.hashes
     );
 
-    if !backend.exists(&metadata.hashes)? {
-        bail!("Storage file missing for hash: {}", metadata.hashes);
-    }
-
     let target_path = paths.file_path(relative_path.as_ref());
     let rel_str = relative_path.as_ref().to_string_lossy();
 
@@ -57,6 +54,10 @@ fn get_file(
     }
 
     if dry_run {
+        // We only check for a dry run, the normal get will 404
+        if !backend.exists(&metadata.hashes)? {
+            bail!("Storage file missing for hash: {}", metadata.hashes);
+        }
         return Ok((Outcome::Copied, metadata.size));
     }
 
@@ -66,10 +67,17 @@ fn get_file(
         metadata.hashes,
         tmp_path.display()
     );
+    let path = ProjectPath::from_path(relative_path.as_ref()).map_err(|e| anyhow!("{e}"))?;
 
     let result = (|| {
         let retrieved = backend
-            .retrieve(&metadata.hashes, &tmp_path, metadata.compression, on_bytes)
+            .retrieve(RetrieveRequest {
+                hashes: &metadata.hashes,
+                target: &tmp_path,
+                compression: metadata.compression,
+                path,
+                on_bytes,
+            })
             .with_context(|| format!("Failed to retrieve {}", relative_path.as_ref().display()))?;
         if !retrieved {
             bail!("Storage file missing for hash: {}", metadata.hashes);
@@ -120,7 +128,7 @@ pub enum GetDetail {
 pub fn get_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
-    backend: &dyn Backend,
+    backend: &Backend,
     dry_run: bool,
     on_file_start: Option<&OnFileStart>,
 ) -> Result<Vec<GetResult>> {
@@ -149,6 +157,10 @@ pub fn get_files(
         .into_iter()
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
+
+    // Fail fast on auth/permission problems before retrieving anything,
+    // so the user gets a single error instead of one per file.
+    backend.check_access()?;
 
     let pool = get_threadpool(tracked_paths.len())?;
     let cache = try_open_cache(paths);
@@ -247,7 +259,7 @@ mod tests {
             }
         }
 
-        fn backend(&self) -> &dyn Backend {
+        fn backend(&self) -> &Backend {
             self.config.backend()
         }
 
@@ -263,7 +275,7 @@ mod tests {
             compression: Compression,
         ) -> (PathBuf, FileMetadata) {
             let file_path = create_file(&self.root, name, content);
-            let metadata = FileMetadata::from_file(&file_path, compression, None).unwrap();
+            let mut metadata = FileMetadata::from_file(&file_path, compression, None).unwrap();
             metadata
                 .save(
                     Uuid::new_v4(),
@@ -292,12 +304,11 @@ mod tests {
         /// Overwrite the stored blob for `hashes` with `content`, defeating verification.
         fn corrupt_blob(&self, hashes: &Hashes, content: &[u8]) {
             let hash = hashes.get_blake3();
-            let blob = self
-                .backend()
-                .local_path()
-                .unwrap()
-                .join(&hash[..2])
-                .join(&hash[2..]);
+            let storage = match &self.config.backend {
+                Backend::Local(b) => b.path.clone(),
+                Backend::Server(_) => unreachable!(),
+            };
+            let blob = storage.join(&hash[..2]).join(&hash[2..]);
             // Blobs are stored read-only; make it writable before overwriting.
             let mut perms = fs::metadata(&blob).unwrap().permissions();
             #[allow(clippy::permissions_set_readonly_false)]

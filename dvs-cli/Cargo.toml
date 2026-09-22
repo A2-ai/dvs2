@@ -12,6 +12,7 @@ indicatif = "0.18"
 serde_json.workspace = true
 tabled = "0.20"
 walkdir.workspace = true
+url = "2.5.8"
 
 [dev-dependencies]
 tempfile = "3"
