@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit::{AuditEntry, AuditFile, parse_audit_log};
-use crate::backends::{Backend, RetrieveRequest, StoreRequest, StoreResult};
+use crate::backends::{RetrieveRequest, StoreRequest, StoreResult};
 use crate::{Compression, Hashes};
 
 const AUDIT_LOG_FILENAME: &str = "audit.log.jsonl";
@@ -209,10 +209,8 @@ impl LocalBackend {
         writeln!(file, "{}", json)?;
         Ok(())
     }
-}
 
-impl Backend for LocalBackend {
-    fn init(&self, _: Compression) -> Result<bool> {
+    pub fn init(&self, _: Compression) -> Result<bool> {
         let already_initialized = self.path.join(AUDIT_LOG_FILENAME).exists();
         if already_initialized {
             return Ok(true);
@@ -225,7 +223,7 @@ impl Backend for LocalBackend {
         Ok(false)
     }
 
-    fn store(&self, req: StoreRequest<'_>) -> Result<StoreResult> {
+    pub fn store(&self, req: StoreRequest<'_>) -> Result<StoreResult> {
         let StoreRequest {
             hashes,
             source,
@@ -285,7 +283,7 @@ impl Backend for LocalBackend {
         })
     }
 
-    fn retrieve(&self, req: RetrieveRequest<'_>) -> Result<bool> {
+    pub fn retrieve(&self, req: RetrieveRequest<'_>) -> Result<bool> {
         let RetrieveRequest {
             hashes,
             target,
@@ -305,11 +303,11 @@ impl Backend for LocalBackend {
         }
     }
 
-    fn exists(&self, hash: &Hashes) -> Result<bool> {
+    pub fn exists(&self, hash: &Hashes) -> Result<bool> {
         Ok(self.hash_to_path(hash)?.is_file())
     }
 
-    fn remove(&self, hash: &Hashes) -> Result<()> {
+    pub fn remove(&self, hash: &Hashes) -> Result<()> {
         let path = self.hash_to_path(hash)?;
         if path.is_file() {
             log::debug!("Removing {path:?} from storage");
@@ -320,7 +318,7 @@ impl Backend for LocalBackend {
 
     /// An empty `files` slice returns the full audit log. See
     /// [`parse_audit_log`] for the filtering rules.
-    fn get_audit_entries(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>> {
+    pub fn get_audit_entries(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>> {
         let files_to_include: HashSet<_> = HashSet::from_iter(files.iter().cloned());
         let audit_path = self.path.join(AUDIT_LOG_FILENAME);
         let f = fs::File::open(&audit_path)?;

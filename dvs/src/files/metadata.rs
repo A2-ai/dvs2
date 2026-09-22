@@ -73,7 +73,7 @@ impl FileMetadata {
         &mut self,
         operation_id: Uuid,
         source_file: impl AsRef<Path>,
-        backend: &dyn Backend,
+        backend: &Backend,
         paths: &DvsPaths,
         relative_path: impl AsRef<Path>,
         on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,

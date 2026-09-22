@@ -10,9 +10,7 @@ use url::Url;
 use crate::audit::AuditEntry;
 use crate::auth::get_token;
 use crate::utils::http_agent;
-use crate::{
-    Backend, Compression, Hashes, ProjectPath, RetrieveRequest, StoreRequest, StoreResult,
-};
+use crate::{Compression, Hashes, ProjectPath, RetrieveRequest, StoreRequest, StoreResult};
 
 /// Wraps a reader and reports bytes as they're read, driving the `on_bytes`
 /// progress callback. Used to stream an upload body while updating a progress bar.
@@ -121,10 +119,8 @@ impl ServerBackend {
             }
         }
     }
-}
 
-impl Backend for ServerBackend {
-    fn init(&self, compression: Compression) -> anyhow::Result<bool> {
+    pub fn init(&self, compression: Compression) -> anyhow::Result<bool> {
         let url = self.init_url();
         let payload = InitPayload {
             name: self.name.clone(),
@@ -153,7 +149,7 @@ impl Backend for ServerBackend {
         }
     }
 
-    fn check_access(&self) -> anyhow::Result<()> {
+    pub fn check_access(&self) -> anyhow::Result<()> {
         let mut resp = http_agent()
             .get(self.access_url().as_str())
             .header("authorization", self.bearer()?)
@@ -175,7 +171,7 @@ impl Backend for ServerBackend {
         }
     }
 
-    fn store(&self, req: StoreRequest<'_>) -> anyhow::Result<StoreResult> {
+    pub fn store(&self, req: StoreRequest<'_>) -> anyhow::Result<StoreResult> {
         let upload_meta = serde_json::to_string(&UploadMeta {
             batch_id: req.operation_id,
             path: req.path.clone(),
@@ -218,7 +214,7 @@ impl Backend for ServerBackend {
         }
     }
 
-    fn retrieve(&self, req: RetrieveRequest<'_>) -> anyhow::Result<bool> {
+    pub fn retrieve(&self, req: RetrieveRequest<'_>) -> anyhow::Result<bool> {
         let mut url = self.blob_url(req.hashes.get_blake3());
         url.query_pairs_mut().append_pair("path", req.path.as_str());
 
@@ -256,7 +252,7 @@ impl Backend for ServerBackend {
         Ok(true)
     }
 
-    fn exists(&self, hashes: &Hashes) -> anyhow::Result<bool> {
+    pub fn exists(&self, hashes: &Hashes) -> anyhow::Result<bool> {
         let url = self.blob_url(hashes.get_blake3());
 
         match http_agent()
@@ -278,12 +274,12 @@ impl Backend for ServerBackend {
         }
     }
 
-    fn remove(&self, _: &Hashes) -> anyhow::Result<()> {
+    pub fn remove(&self, _: &Hashes) -> anyhow::Result<()> {
         // We don't rollback with the server
         Ok(())
     }
 
-    fn get_audit_entries(&self, files: &[PathBuf]) -> anyhow::Result<Vec<AuditEntry>> {
+    pub fn get_audit_entries(&self, files: &[PathBuf]) -> anyhow::Result<Vec<AuditEntry>> {
         let url = self.history_url();
 
         let mut paths = Vec::with_capacity(files.len());

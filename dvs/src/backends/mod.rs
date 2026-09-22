@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::Hashes;
@@ -10,6 +11,9 @@ use crate::paths::ProjectPath;
 
 pub mod local;
 pub mod server;
+
+use local::LocalBackend;
+use server::ServerBackend;
 
 /// Common fields needed for storing a file across backends
 pub struct StoreRequest<'a> {
@@ -77,34 +81,75 @@ impl<'a> RetrieveRequest<'a> {
     }
 }
 
-pub trait Backend: Send + Sync {
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum Backend {
+    Local(LocalBackend),
+    Server(ServerBackend),
+}
+
+impl Backend {
     /// Initialize the backend storage
     /// Idempotent: returns `true` if the backend was already initialized.
-    fn init(&self, compression: Compression) -> Result<bool>;
+    pub fn init(&self, compression: Compression) -> Result<bool> {
+        match self {
+            Backend::Local(b) => b.init(compression),
+            Backend::Server(s) => s.init(compression),
+        }
+    }
 
     /// Check that the current user can access the backend.
     /// Called once before batch operations so auth/permission problems fail
     /// fast with a single error instead of once per file.
-    fn check_access(&self) -> Result<()> {
-        Ok(())
+    pub fn check_access(&self) -> Result<()> {
+        match self {
+            // The filesystem permissions are the access control for local storage.
+            Backend::Local(_) => Ok(()),
+            Backend::Server(s) => s.check_access(),
+        }
     }
 
     /// Store file to backend under `req.hashes`, compressing it.
     /// The source is passed uncompressed, the hash we send is only for (optional) verification by
     /// a server
-    fn store(&self, req: StoreRequest<'_>) -> Result<StoreResult>;
+    pub fn store(&self, req: StoreRequest<'_>) -> Result<StoreResult> {
+        match self {
+            Backend::Local(b) => b.store(req),
+            Backend::Server(s) => s.store(req),
+        }
+    }
 
     /// Retrieve content by hash to target path, optionally decompressing.
     /// Returns true if the file was copied to the target path.
-    fn retrieve(&self, req: RetrieveRequest<'_>) -> Result<bool>;
+    pub fn retrieve(&self, req: RetrieveRequest<'_>) -> Result<bool> {
+        match self {
+            Backend::Local(b) => b.retrieve(req),
+            Backend::Server(s) => s.retrieve(req),
+        }
+    }
 
     /// Check if the file exists in the backend
-    fn exists(&self, hash: &Hashes) -> Result<bool>;
+    pub fn exists(&self, hash: &Hashes) -> Result<bool> {
+        match self {
+            Backend::Local(b) => b.exists(hash),
+            Backend::Server(s) => s.exists(hash),
+        }
+    }
 
     /// Remove content by hash (for rollback). Best-effort, may silently fail.
-    fn remove(&self, hash: &Hashes) -> Result<()>;
+    pub fn remove(&self, hash: &Hashes) -> Result<()> {
+        match self {
+            Backend::Local(b) => b.remove(hash),
+            Backend::Server(s) => s.remove(hash),
+        }
+    }
 
     /// Read the whole audit file, filtered by the given file paths.
     /// If `files` is empty, return the full audit log
-    fn get_audit_entries(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>>;
+    pub fn get_audit_entries(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>> {
+        match self {
+            Backend::Local(b) => b.get_audit_entries(files),
+            Backend::Server(s) => s.get_audit_entries(files),
+        }
+    }
 }

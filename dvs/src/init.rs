@@ -5,7 +5,8 @@ use fs_err as fs;
 use uuid::Uuid;
 
 use crate::audit::AuditEntry;
-use crate::config::{Backend, Config};
+use crate::backends::Backend;
+use crate::config::Config;
 use crate::paths;
 
 /// Starts a new dvs project.

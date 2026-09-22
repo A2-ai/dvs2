@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 fn get_file(
-    backend: &dyn Backend,
+    backend: &Backend,
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
     cache: Option<&Mutex<HashCache>>,
@@ -128,7 +128,7 @@ pub enum GetDetail {
 pub fn get_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
-    backend: &dyn Backend,
+    backend: &Backend,
     dry_run: bool,
     on_file_start: Option<&OnFileStart>,
 ) -> Result<Vec<GetResult>> {
@@ -259,7 +259,7 @@ mod tests {
             }
         }
 
-        fn backend(&self) -> &dyn Backend {
+        fn backend(&self) -> &Backend {
             self.config.backend()
         }
 
@@ -305,8 +305,8 @@ mod tests {
         fn corrupt_blob(&self, hashes: &Hashes, content: &[u8]) {
             let hash = hashes.get_blake3();
             let storage = match &self.config.backend {
-                crate::config::Backend::Local(b) => b.path.clone(),
-                crate::config::Backend::Server(_) => unreachable!(),
+                Backend::Local(b) => b.path.clone(),
+                Backend::Server(_) => unreachable!(),
             };
             let blob = storage.join(&hash[..2]).join(&hash[2..]);
             // Blobs are stored read-only; make it writable before overwriting.

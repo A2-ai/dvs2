@@ -2,7 +2,7 @@ use std::io;
 use std::io::Write;
 use std::path::Path;
 
-use crate::backends::Backend as BackendTrait;
+use crate::backends::Backend;
 use crate::backends::local::LocalBackend;
 use crate::backends::server::ServerBackend;
 use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, find_repo_root};
@@ -129,13 +129,6 @@ impl Compression {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(untagged)]
-pub enum Backend {
-    Local(LocalBackend),
-    Server(ServerBackend),
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct CliConfig {
     /// Defaults to 500MB if not set in the config file
     #[serde(
@@ -227,11 +220,8 @@ impl Config {
         self.compression = compression;
     }
 
-    pub fn backend(&self) -> &dyn BackendTrait {
-        match &self.backend {
-            Backend::Local(b) => b,
-            Backend::Server(s) => s,
-        }
+    pub fn backend(&self) -> &Backend {
+        &self.backend
     }
 
     pub fn server_url(&self) -> Option<&Url> {

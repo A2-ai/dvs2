@@ -43,7 +43,7 @@ pub enum AddDetail {
 fn add_file(
     relative_path: &Path,
     paths: &DvsPaths,
-    backend: &dyn Backend,
+    backend: &Backend,
     cache: Option<&Mutex<HashCache>>,
     operation_id: Uuid,
     message: Option<String>,
@@ -91,7 +91,7 @@ fn add_file(
 pub fn add_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
-    backend: &dyn Backend,
+    backend: &Backend,
     message: Option<String>,
     compression: Compression,
     dry_run: bool,
