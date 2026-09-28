@@ -18,6 +18,7 @@ fn get_file(
     paths: &DvsPaths,
     relative_path: impl AsRef<Path>,
     cache: Option<&Mutex<HashCache>>,
+    operation_id: Uuid,
     dry_run: bool,
     on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
 ) -> Result<(Outcome, u64)> {
@@ -76,6 +77,7 @@ fn get_file(
                 target: &tmp_path,
                 compression: metadata.compression,
                 path,
+                operation_id,
                 on_bytes,
             })
             .with_context(|| format!("Failed to retrieve {}", relative_path.as_ref().display()))?;
@@ -164,6 +166,7 @@ pub fn get_files(
 
     let pool = get_threadpool(tracked_paths.len())?;
     let cache = try_open_cache(paths);
+    let operation_id = Uuid::new_v4();
 
     let mut results: Vec<GetResult> = pool.install(|| {
         tracked_paths
@@ -185,6 +188,7 @@ pub fn get_files(
                     paths,
                     &relative_path,
                     cache.as_ref(),
+                    operation_id,
                     dry_run,
                     on_bytes,
                 ) {
@@ -296,6 +300,7 @@ mod tests {
                 &self.paths,
                 name,
                 Some(&self.cache()),
+                Uuid::nil(),
                 false,
                 None,
             )

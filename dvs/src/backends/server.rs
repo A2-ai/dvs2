@@ -218,7 +218,9 @@ impl ServerBackend {
 
     pub fn retrieve(&self, req: RetrieveRequest<'_>) -> anyhow::Result<bool> {
         let mut url = self.blob_url(req.hashes.get_blake3());
-        url.query_pairs_mut().append_pair("path", req.path.as_str());
+        url.query_pairs_mut()
+            .append_pair("path", req.path.as_str())
+            .append_pair("batch_id", &req.operation_id.to_string());
 
         let mut resp = http_agent()
             .get(url.as_str())

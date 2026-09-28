@@ -61,6 +61,7 @@ pub struct RetrieveRequest<'a> {
     pub target: &'a Path,
     pub compression: Compression,
     pub path: ProjectPath,
+    pub operation_id: Uuid,
     pub on_bytes: Option<&'a (dyn Fn(u64) + Send + Sync)>,
 }
 
@@ -76,6 +77,7 @@ impl<'a> RetrieveRequest<'a> {
             target,
             compression,
             path,
+            operation_id: Uuid::nil(),
             on_bytes: None,
         }
     }
