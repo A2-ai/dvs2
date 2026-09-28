@@ -122,8 +122,8 @@ pub enum Command {
         #[clap(long)]
         dry_run: bool,
     },
-    /// Log in to a DVS server defined in the config
-    Login,
+    /// Log in to a DVS server, the one in the config unless a URL is given
+    Login { url: Option<Url> },
     /// Log out from a DVS server
     Logout,
 }
@@ -527,7 +527,10 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("Some files failed to get"));
             }
         }
-        Command::Login => {
+        Command::Login { url: Some(url) } => {
+            run_device_login(&url)?;
+        }
+        Command::Login { url: None } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
 

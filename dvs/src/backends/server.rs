@@ -8,7 +8,7 @@ use tempfile::NamedTempFile;
 use url::Url;
 
 use crate::audit::AuditEntry;
-use crate::auth::get_token;
+use crate::auth::{delete_token, get_token};
 use crate::utils::http_agent;
 use crate::{Compression, Hashes, ProjectPath, RetrieveRequest, StoreRequest, StoreResult};
 
@@ -120,6 +120,14 @@ impl ServerBackend {
         }
     }
 
+    /// The server rejected the stored token: forget it so the next `init` asks to log in
+    fn login_expired(&self) -> anyhow::Error {
+        if let Err(e) = delete_token(&self.url) {
+            log::warn!("Could not remove the expired token: {e}");
+        }
+        anyhow::anyhow!("Your login is no longer valid, run `dvs login`")
+    }
+
     pub fn init(&self, compression: Compression) -> anyhow::Result<bool> {
         let url = self.init_url();
         let payload = InitPayload {
@@ -134,9 +142,7 @@ impl ServerBackend {
         match resp.status().as_u16() {
             201 => Ok(false), // created
             200 => Ok(true),  // already existed (group+compression matched)
-            401 => {
-                bail!("You need to login first")
-            }
+            401 => return Err(self.login_expired()),
             409 => {
                 bail!(
                     "Server initialization failed: the project already exists with a different group or compression"
@@ -157,9 +163,7 @@ impl ServerBackend {
 
         match resp.status().as_u16() {
             200 => Ok(()),
-            401 => {
-                bail!("You need to login first")
-            }
+            401 => return Err(self.login_expired()),
             403 => bail!(
                 "You are not allowed to access this project, make sure you are logged in with the right user."
             ),
@@ -201,9 +205,7 @@ impl ServerBackend {
                     compression: uploaded.compression,
                 })
             }
-            401 => {
-                bail!("You need to login first")
-            }
+            401 => return Err(self.login_expired()),
             403 => bail!(
                 "You are not allowed to access this project, make sure you are logged in with the right user."
             ),
@@ -225,9 +227,7 @@ impl ServerBackend {
 
         match resp.status().as_u16() {
             200 => {}
-            401 => {
-                bail!("You need to login first")
-            }
+            401 => return Err(self.login_expired()),
             403 => bail!(
                 "You are not allowed to access this project, make sure you are logged in with the right user."
             ),
@@ -263,9 +263,7 @@ impl ServerBackend {
             .as_u16()
         {
             200 => Ok(true),
-            401 => {
-                bail!("You need to login first")
-            }
+            401 => return Err(self.login_expired()),
             403 => bail!(
                 "You are not allowed to access this project, make sure you are logged in with the right user."
             ),
@@ -296,9 +294,7 @@ impl ServerBackend {
 
         match resp.status().as_u16() {
             200 => Ok(resp.body_mut().read_json::<Vec<AuditEntry>>()?),
-            401 => {
-                bail!("You need to login first")
-            }
+            401 => return Err(self.login_expired()),
             403 => bail!(
                 "You are not allowed to access this project, make sure you are logged in with the right user."
             ),

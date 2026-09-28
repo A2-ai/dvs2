@@ -50,6 +50,9 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
 
     log::debug!("Initializing backend");
     if config.backend().init(config.compression())? {
+        if let Backend::Server(s) = config.backend() {
+            bail!("the project {} already exists on {}", s.name, s.url);
+        }
         bail!("dvs is already initialized (backend storage exists)");
     }
 
