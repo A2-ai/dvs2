@@ -56,6 +56,11 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
         bail!("dvs is already initialized (backend storage exists)");
     }
 
+    // The server decides the compression, so there is nothing to keep past init
+    if matches!(config.backend(), Backend::Server(_)) {
+        config.set_compression(None);
+    }
+
     config.save(root_dir)?;
 
     let config_path = root_dir.join(paths::CONFIG_FILE_NAME);

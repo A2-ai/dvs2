@@ -16,10 +16,10 @@ use dvs::auth::{
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
-use dvs::paths::DvsPaths;
+use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter, Status,
-    StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
+    AddDetail, Backend, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter,
+    Status, StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -64,6 +64,19 @@ pub enum Command {
     /// from.
     #[command(next_display_order = 100, subcommand)]
     Init(Init),
+    /// Attach to a project created via the dvs server UI.
+    /// If the project is found, it will write a `dvs.toml` file based on the information from
+    /// the server
+    #[command(next_display_order = 100)]
+    Attach {
+        /// Project name: has to match the existing project on the server
+        name: String,
+        /// The URL of the dvs server
+        url: Url,
+        /// If you want to use a folder name other than `.dvs` for storing the metadata files
+        #[clap(long)]
+        metadata_folder_name: Option<String>,
+    },
     /// Adds the given files to dvs. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
     /// At least one path or --glob must be provided
@@ -255,7 +268,7 @@ fn try_main() -> Result<()> {
                 } => {
                     let mut config = Config::new_local(&storage_path, group)?;
                     if no_compression {
-                        config.set_compression(Compression::None);
+                        config.set_compression(Some(Compression::None));
                     }
                     (config, root_dir, metadata_folder_name)
                 }
@@ -271,9 +284,9 @@ fn try_main() -> Result<()> {
                     if get_token(&url)?.is_none() {
                         run_device_login(&url)?;
                     }
-                    let mut config = Config::new_server(name, url, group);
+                    let mut config = Config::new_server(name, url, Some(group));
                     if no_compression {
-                        config.set_compression(Compression::None);
+                        config.set_compression(Some(Compression::None));
                     }
                     (config, None, metadata_folder_name)
                 }
@@ -290,6 +303,32 @@ fn try_main() -> Result<()> {
                 println!("{}", json!({"status": "initialized"}));
             } else {
                 println!("DVS Initialized at {repo_root:?}");
+            }
+        }
+        Command::Attach {
+            name,
+            url,
+            metadata_folder_name,
+        } => {
+            let config_path = current_dir.join(CONFIG_FILE_NAME);
+            if config_path.exists() {
+                bail!("Configuration file already exists");
+            }
+
+            // Initializing on the server requires authentication, so run the
+            // login flow first if we don't have a token for it yet.
+            if get_token(&url)?.is_none() {
+                run_device_login(&url)?;
+            }
+            let mut config = Config::new_server(name, url, None);
+            config.set_compression(None);
+            if let Some(m) = metadata_folder_name {
+                config.set_metadata_folder_name(m);
+            }
+
+            if let Backend::Server(s) = config.backend() {
+                s.attach()?;
+                config.save(current_dir)?;
             }
         }
         Command::Add {

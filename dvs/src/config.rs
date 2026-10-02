@@ -142,7 +142,8 @@ pub struct CliConfig {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Config {
     /// Compression algorithm to use for files in the storage directory
-    compression: Compression,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compression: Option<Compression>,
     /// By default, all the metadata files (the .dvs files) will be stored in a `.dvs` folder
     /// at the root of the repository
     /// If this option is set, dvs will use that folder name instead of `.dvs`
@@ -156,17 +157,17 @@ impl Config {
     pub fn new_local(path: impl AsRef<Path>, group: Option<String>) -> Result<Config> {
         let backend = LocalBackend::new(path.as_ref(), group)?;
         Ok(Config {
-            compression: Compression::Zstd,
+            compression: Some(Compression::Zstd),
             metadata_folder_name: None,
             backend: Backend::Local(backend),
             cli: None,
         })
     }
 
-    pub fn new_server(name: String, url: Url, group: String) -> Config {
+    pub fn new_server(name: String, url: Url, group: Option<String>) -> Config {
         let backend = ServerBackend::new(name, group, url);
         Config {
-            compression: Compression::Zstd,
+            compression: Some(Compression::Zstd),
             metadata_folder_name: None,
             backend: Backend::Server(backend),
             cli: None,
@@ -213,10 +214,10 @@ impl Config {
     }
 
     pub fn compression(&self) -> Compression {
-        self.compression
+        self.compression.unwrap_or_default()
     }
 
-    pub fn set_compression(&mut self, compression: Compression) {
+    pub fn set_compression(&mut self, compression: Option<Compression>) {
         self.compression = compression;
     }
 

@@ -67,14 +67,17 @@ pub struct HistoryPayload {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ServerBackend {
     pub name: String,
-    pub group: String,
     pub url: Url,
+    /// This is used for init but never after since people can edit groups in the
+    /// UI so that field would be dead either way
+    #[serde(skip)]
+    pub group: Option<String>,
     #[serde(skip)]
     access_token: OnceLock<Option<String>>,
 }
 
 impl ServerBackend {
-    pub fn new(name: String, group: String, url: Url) -> Self {
+    pub fn new(name: String, group: Option<String>, url: Url) -> Self {
         Self {
             name,
             group,
@@ -87,9 +90,15 @@ impl ServerBackend {
         self.url.join("/api/init").unwrap()
     }
 
+    fn project_url(&self) -> Url {
+        self.url
+            .join(&format!("api/project/{}", self.name,))
+            .unwrap()
+    }
+
     fn blob_url(&self, hash: &str) -> Url {
         self.url
-            .join(&format!("api/{}/blobs/{hash}", self.name,))
+            .join(&format!("api/{}/blobs/{hash}", self.name))
             .unwrap()
     }
 
@@ -129,10 +138,13 @@ impl ServerBackend {
     }
 
     pub fn init(&self, compression: Compression) -> anyhow::Result<bool> {
+        let Some(group) = self.group.clone() else {
+            bail!("A group is required to create a project on the server");
+        };
         let url = self.init_url();
         let payload = InitPayload {
             name: self.name.clone(),
-            group: self.group.clone(),
+            group,
             compression,
         };
         let mut resp = http_agent()
@@ -142,7 +154,7 @@ impl ServerBackend {
         match resp.status().as_u16() {
             201 => Ok(false), // created
             200 => Ok(true),  // already existed (group+compression matched)
-            401 => return Err(self.login_expired()),
+            401 => Err(self.login_expired()),
             409 => {
                 bail!(
                     "Server initialization failed: the project already exists with a different group or compression"
@@ -150,6 +162,26 @@ impl ServerBackend {
             }
             code => bail!(
                 "server init failed ({code}): {}",
+                resp.body_mut().read_to_string().unwrap_or_default()
+            ),
+        }
+    }
+
+    pub fn attach(&self) -> anyhow::Result<()> {
+        let url = self.project_url();
+        let mut resp = http_agent()
+            .get(url.as_str())
+            .header("authorization", self.bearer()?)
+            .call()?;
+
+        match resp.status().as_u16() {
+            200 => Ok(()),
+            401 => Err(self.login_expired()),
+            404 => {
+                bail!("Project {} not found on server", self.name)
+            }
+            code => bail!(
+                "couldn't get project information ({code}): {}",
                 resp.body_mut().read_to_string().unwrap_or_default()
             ),
         }
