@@ -2,15 +2,16 @@ use std::io;
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use fs_err as fs;
-use serde::{Deserialize, Deserializer, Serialize};
-
-use crate::backends::Backend as BackendTrait;
+use crate::backends::Backend;
 use crate::backends::local::LocalBackend;
+use crate::backends::server::ServerBackend;
 use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, find_repo_root};
 use crate::progress::ProgressReader;
 use crate::utils::parse_size;
+use anyhow::{Context, Result};
+use fs_err as fs;
+use serde::{Deserialize, Deserializer, Serialize};
+use url::Url;
 
 const DEFAULT_PROGRESS_BYTE_SIZE_THRESHOLD: u64 = 524_288_000;
 
@@ -128,12 +129,6 @@ impl Compression {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(untagged)]
-pub enum Backend {
-    Local(LocalBackend),
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct CliConfig {
     /// Defaults to 500MB if not set in the config file
     #[serde(
@@ -147,7 +142,8 @@ pub struct CliConfig {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Config {
     /// Compression algorithm to use for files in the storage directory
-    compression: Compression,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compression: Option<Compression>,
     /// By default, all the metadata files (the .dvs files) will be stored in a `.dvs` folder
     /// at the root of the repository
     /// If this option is set, dvs will use that folder name instead of `.dvs`
@@ -161,11 +157,21 @@ impl Config {
     pub fn new_local(path: impl AsRef<Path>, group: Option<String>) -> Result<Config> {
         let backend = LocalBackend::new(path.as_ref(), group)?;
         Ok(Config {
-            compression: Compression::Zstd,
+            compression: Some(Compression::Zstd),
             metadata_folder_name: None,
             backend: Backend::Local(backend),
             cli: None,
         })
+    }
+
+    pub fn new_server(name: String, url: Url, group: Option<String>) -> Config {
+        let backend = ServerBackend::new(name, group, url);
+        Config {
+            compression: Some(Compression::Zstd),
+            metadata_folder_name: None,
+            backend: Backend::Server(backend),
+            cli: None,
+        }
     }
 
     pub fn save(&self, directory: impl AsRef<Path>) -> Result<()> {
@@ -208,16 +214,21 @@ impl Config {
     }
 
     pub fn compression(&self) -> Compression {
-        self.compression
+        self.compression.unwrap_or_default()
     }
 
-    pub fn set_compression(&mut self, compression: Compression) {
+    pub fn set_compression(&mut self, compression: Option<Compression>) {
         self.compression = compression;
     }
 
-    pub fn backend(&self) -> &dyn BackendTrait {
+    pub fn backend(&self) -> &Backend {
+        &self.backend
+    }
+
+    pub fn server_url(&self) -> Option<&Url> {
         match &self.backend {
-            Backend::Local(b) => b,
+            Backend::Local(_) => None,
+            Backend::Server(s) => Some(&s.url),
         }
     }
 

@@ -162,7 +162,7 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "synced.txt", b"content");
 
-        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
             .save(
                 Uuid::new_v4(),
@@ -188,7 +188,7 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "deleted.txt", b"content");
 
-        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
             .save(
                 Uuid::new_v4(),
@@ -217,7 +217,7 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "modified.txt", b"original");
 
-        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
         metadata
             .save(
                 Uuid::new_v4(),
@@ -248,7 +248,8 @@ mod tests {
         // Add multiple files
         for name in ["a.txt", "b.txt", "subdir/c.txt"] {
             let file_path = create_file(&root, name, name.as_bytes());
-            let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+            let mut metadata =
+                FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
             metadata
                 .save(Uuid::new_v4(), &file_path, backend, &paths, name, None)
                 .unwrap();
@@ -293,7 +294,7 @@ mod tests {
 
         // Add file A with content "foo" (hash H1)
         let file_a = create_file(&root, "a.txt", b"foo");
-        let metadata_a = FileMetadata::from_file(&file_a, Compression::Zstd, None).unwrap();
+        let mut metadata_a = FileMetadata::from_file(&file_a, Compression::Zstd, None).unwrap();
         metadata_a
             .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt", None)
             .unwrap();
@@ -301,7 +302,7 @@ mod tests {
 
         // Add file B with content "bar" (hash H2)
         let file_b = create_file(&root, "b.txt", b"bar");
-        let metadata_b = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
+        let mut metadata_b = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
         metadata_b
             .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", None)
             .unwrap();
@@ -312,7 +313,7 @@ mod tests {
         fs::write(&file_b, b"foo").unwrap();
 
         // Run add on B with new content
-        let metadata_b_new = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
+        let mut metadata_b_new = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
         assert_eq!(metadata_b_new.hashes.blake3, hash_h1);
 
         metadata_b_new
@@ -345,7 +346,8 @@ mod tests {
 
         for name in ["a.txt", "dir1/b.txt", "dir1/sub/c.txt", "dir2/d.txt"] {
             let file_path = create_file(&root, name, name.as_bytes());
-            let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+            let mut metadata =
+                FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
             metadata
                 .save(Uuid::new_v4(), &file_path, backend, &paths, name, None)
                 .unwrap();
