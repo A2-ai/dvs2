@@ -149,15 +149,24 @@ pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
     Ok(pool)
 }
 
+fn insecure_tls_requested(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
 pub fn http_agent() -> &'static ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
+        let insecure = insecure_tls_requested(std::env::var("DVS_INSECURE").ok().as_deref());
+        if insecure {
+            log::warn!("TLS certificate verification is disabled via DVS_INSECURE");
+        }
         ureq::Agent::config_builder()
             .user_agent(format!("dvs/{}", crate::VERSION))
             // Trust the OS certificate store so internal CAs work
             .tls_config(
                 ureq::tls::TlsConfig::builder()
                     .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                    .disable_verification(insecure)
                     .build(),
             )
             .http_status_as_error(false)
@@ -172,6 +181,16 @@ pub fn http_agent() -> &'static ureq::Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn insecure_tls_opt_in_is_explicit() {
+        for value in ["1", "true", "TRUE", "TrUe"] {
+            assert!(insecure_tls_requested(Some(value)));
+        }
+        for value in ["0", "false", "yes", "on", "", " true", "true "] {
+            assert!(!insecure_tls_requested(Some(value)));
+        }
+        assert!(!insecure_tls_requested(None));
+    }
     #[test]
     fn parse_size_basic() {
         assert_eq!(parse_size("0").unwrap(), 0);
