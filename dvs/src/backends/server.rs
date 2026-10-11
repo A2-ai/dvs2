@@ -50,6 +50,8 @@ pub struct UploadMeta {
     pub batch_id: uuid::Uuid,
     pub path: ProjectPath,
     pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_branch: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -212,6 +214,7 @@ impl ServerBackend {
             batch_id: req.operation_id,
             path: req.path.clone(),
             message: req.message.map(|s| s.to_string()),
+            git_branch: req.git_branch.map(str::to_owned),
         })?;
         let mut file = CountingReader::new(fs::File::open(req.source)?, req.on_bytes);
         let form = ureq::unversioned::multipart::Form::new()
@@ -337,5 +340,30 @@ impl ServerBackend {
                 resp.body_mut().read_to_string().unwrap_or_default()
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod upload_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn upload_metadata_preserves_legacy_wire_format_and_optional_branch() {
+        let legacy = serde_json::json!({
+            "batch_id": uuid::Uuid::nil(), "path": "data.csv", "message": null
+        });
+        let mut meta: UploadMeta = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(meta.git_branch, None);
+        assert_eq!(serde_json::to_value(&meta).unwrap(), legacy);
+        meta.git_branch = Some("feature/data".into());
+        let wire = serde_json::to_value(&meta).unwrap();
+        assert_eq!(wire["git_branch"], "feature/data");
+        assert_eq!(
+            serde_json::from_value::<UploadMeta>(wire)
+                .unwrap()
+                .git_branch
+                .as_deref(),
+            Some("feature/data")
+        );
     }
 }

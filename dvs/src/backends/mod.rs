@@ -25,6 +25,8 @@ pub struct StoreRequest<'a> {
     pub path: ProjectPath,
     pub operation_id: Uuid,
     pub message: Option<&'a str>,
+    /// Best-effort local branch captured once for the add batch.
+    pub git_branch: Option<&'a str>,
     pub on_bytes: Option<&'a (dyn Fn(u64) + Send + Sync)>,
 }
 
@@ -42,6 +44,7 @@ impl<'a> StoreRequest<'a> {
             path,
             operation_id: Uuid::nil(),
             message: None,
+            git_branch: None,
             on_bytes: None,
         }
     }

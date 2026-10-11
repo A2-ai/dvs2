@@ -17,6 +17,16 @@ use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
 use crate::{Outcome, cache};
 
+/// Read HEAD from the project's repository without consulting the process cwd or
+/// spawning Git. Branch context must never prevent an upload.
+fn current_git_branch(project_root: &Path) -> Option<String> {
+    let repo = gix::discover(project_root).ok()?;
+    let name = repo.head_name().ok()??;
+    let full = std::str::from_utf8(name.as_bstr().as_ref()).ok()?;
+    let branch = full.strip_prefix("refs/heads/")?;
+    (!branch.is_empty()).then(|| branch.to_owned())
+}
+
 /// Result of adding a single file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddResult {
@@ -47,6 +57,7 @@ fn add_file(
     cache: Option<&Mutex<HashCache>>,
     operation_id: Uuid,
     message: Option<String>,
+    git_branch: Option<&str>,
     compression: Compression,
     dry_run: bool,
     on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
@@ -72,13 +83,14 @@ fn add_file(
         };
         Ok((outcome, metadata, None))
     } else {
-        let (outcome, stored_size) = metadata.save(
+        let (outcome, stored_size) = metadata.save_with_git_branch(
             operation_id,
             &full_path,
             backend,
             paths,
             relative_path,
             on_bytes,
+            git_branch,
         )?;
         Ok((outcome, metadata, stored_size))
     }
@@ -129,6 +141,7 @@ pub fn add_files(
     let pool = get_threadpool(valid_paths.len())?;
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
+    let git_branch = current_git_branch(paths.repo_root());
 
     let mut results: Vec<AddResult> = pool.install(|| {
         valid_paths
@@ -145,6 +158,7 @@ pub fn add_files(
                     cache.as_ref(),
                     operation_id,
                     message.clone(),
+                    git_branch.as_deref(),
                     compression,
                     dry_run,
                     on_bytes,
@@ -208,6 +222,97 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn branch_discovery_handles_unborn_attached_subdirectory_and_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        fs::create_dir(&root).unwrap();
+        git(&root, &["init", "--initial-branch=feature/unborn"]);
+        assert_eq!(current_git_branch(&root).as_deref(), Some("feature/unborn"));
+        fs::create_dir(root.join("nested")).unwrap();
+        assert_eq!(
+            current_git_branch(&root.join("nested")).as_deref(),
+            Some("feature/unborn")
+        );
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "fixture",
+            ],
+        );
+        git(&root, &["switch", "-c", "feature/attached"]);
+        assert_eq!(
+            current_git_branch(&root).as_deref(),
+            Some("feature/attached")
+        );
+        let worktree = temp.path().join("linked");
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature/linked",
+                worktree.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(
+            current_git_branch(&worktree).as_deref(),
+            Some("feature/linked")
+        );
+        git(&root, &["checkout", "--detach"]);
+        assert_eq!(current_git_branch(&root), None);
+    }
+
+    #[test]
+    fn branch_discovery_omits_unavailable_or_invalid_context() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(current_git_branch(temp.path()), None);
+        assert_eq!(current_git_branch(&temp.path().join("missing")), None);
+        git(temp.path(), &["init"]);
+        fs::write(
+            temp.path().join(".git/HEAD"),
+            b"ref: refs/heads/invalid name\n",
+        )
+        .unwrap();
+        assert_eq!(current_git_branch(temp.path()), None);
+        fs::write(
+            temp.path().join(".git/HEAD"),
+            b"ref: refs/tags/not-a-branch\n",
+        )
+        .unwrap();
+        assert_eq!(current_git_branch(temp.path()), None);
+        fs::write(
+            temp.path().join(".git/HEAD"),
+            b"ref: refs/heads/non-utf8-\xff\n",
+        )
+        .unwrap();
+        assert_eq!(current_git_branch(temp.path()), None);
+        fs::remove_file(temp.path().join(".git/HEAD")).unwrap();
+        assert_eq!(current_git_branch(temp.path()), None);
+    }
 
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
         DvsPaths::new(

@@ -78,6 +78,28 @@ impl FileMetadata {
         relative_path: impl AsRef<Path>,
         on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
     ) -> Result<(Outcome, Option<u64>)> {
+        self.save_with_git_branch(
+            operation_id,
+            source_file,
+            backend,
+            paths,
+            relative_path,
+            on_bytes,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn save_with_git_branch(
+        &mut self,
+        operation_id: Uuid,
+        source_file: impl AsRef<Path>,
+        backend: &Backend,
+        paths: &DvsPaths,
+        relative_path: impl AsRef<Path>,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+        git_branch: Option<&str>,
+    ) -> Result<(Outcome, Option<u64>)> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
         let dvs_file_exists = dvs_file_path.is_file();
         // Only check if file exists on the server if it exists locally
@@ -119,6 +141,7 @@ impl FileMetadata {
             path,
             operation_id,
             message: self.message.as_deref(),
+            git_branch,
             on_bytes,
         });
 
