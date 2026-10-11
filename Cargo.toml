@@ -37,7 +37,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 globset = "0.4"
 rayon = "1.10"
 url = { version = "2" , features = ["serde"] }
-ureq = { version = "3", features = ["json", "multipart"] }
+ureq = { version = "3", features = ["json", "multipart", "platform-verifier"] }
 tempfile = "3"
 etcetera = "0.11"
 
