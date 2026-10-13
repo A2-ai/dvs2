@@ -4,6 +4,7 @@ pub mod backends;
 mod cache;
 pub mod config;
 mod files;
+pub mod git;
 mod gitignore;
 pub mod globbing;
 mod hashes;

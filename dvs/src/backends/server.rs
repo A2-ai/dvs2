@@ -68,6 +68,13 @@ pub struct UploadManifest {
     pub operation_id: uuid::Uuid,
     pub message: Option<String>,
     pub entries: Vec<UploadManifestEntry>,
+    /// git current status at the time of `dvs add`. The file may or may not
+    /// be in this branch/commit.
+    /// This is more to know: what was the person working on when they pushed
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    #[serde(default)]
+    pub git_commit: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

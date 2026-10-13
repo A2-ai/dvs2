@@ -193,11 +193,14 @@ pub fn add_files(
                 .filter(|p| !p.in_sync(paths))
                 .map(Pending::manifest_entry)
                 .collect::<Result<Vec<_>>>()?;
+            let checkout = crate::git::current_checkout(paths.repo_root());
             let mut missing = HashSet::new();
             if !entries.is_empty() {
                 let answer = server.manifest(&UploadManifest {
                     operation_id,
                     message: message.clone(),
+                    git_branch: checkout.branch.clone(),
+                    git_commit: checkout.commit.clone(),
                     entries,
                 })?;
                 // The metadata files record the project's compression, not the one asked for
