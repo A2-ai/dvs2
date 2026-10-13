@@ -252,6 +252,12 @@ pub struct ServerLimits {
     pub max_manifest_entries: usize,
     /// Longest path, in UTF-8 bytes
     pub max_path_bytes: usize,
+    /// Files per status request; 0 from servers without remote status
+    #[serde(default)]
+    pub max_status_paths: usize,
+    /// Body bytes per status request; 0 from servers without remote status
+    #[serde(default)]
+    pub max_status_body_bytes: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -427,6 +433,133 @@ pub struct VersionView {
     pub yanked: bool,
     /// Other paths in the project holding the same content
     pub other_paths: u64,
+}
+
+/// A path and the most recent upload at it: a row of the Files view. Every path ever
+/// uploaded is listed; the server knows uploads, not which of them a Git branch uses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct FileView {
+    pub path: String,
+    /// The latest version's content hash
+    pub hash: String,
+    /// Uncompressed size of the latest version
+    pub size: u64,
+    pub stored_size: u64,
+    /// When the latest version was placed here
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
+    pub uploaded_at: Timestamp,
+    /// Who placed it: their username
+    pub uploaded_by: Option<String>,
+    /// The uploader's branch when they ran `dvs add` (client-asserted, see `GitContext`)
+    pub branch: Option<String>,
+    /// The uploader's HEAD when they ran `dvs add`; it rarely contains the file
+    pub commit: Option<String>,
+    /// The uploader's checkout state, null for uploads from before it was recorded
+    pub git_state: Option<String>,
+    /// Distinct contents ever placed at this path
+    pub versions: u64,
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
+    pub first_uploaded_at: Timestamp,
+    pub yanked: bool,
+}
+
+/// What the files matching a filter add up to. Neither figure is disk usage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct FilesSummary {
+    pub files: u64,
+    /// The sizes of the matching files' latest versions, added up
+    pub logical_bytes: u64,
+    /// Stored sizes of the distinct contents those versions hold, added up
+    pub unique_stored_bytes: u64,
+}
+
+/// How many of the project's paths have a value as their latest upload's, for the
+/// Files view's filter choices.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct FacetCount {
+    /// Null for "not recorded" (a branch) or an unknown uploader
+    pub value: Option<String>,
+    pub files: u64,
+}
+
+/// The uploaders and branches of the project's latest versions, most files first.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct FileFacets {
+    pub uploaders: Vec<FacetCount>,
+    pub branches: Vec<FacetCount>,
+}
+
+/// A local file to compare with the server: its path and content hash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct StatusFile {
+    pub path: String,
+    pub hash: String,
+}
+
+/// `POST /api/v1/projects/{name}/status`: at most `max_status_paths` files and
+/// `max_status_body_bytes` bytes per request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct StatusRequest {
+    pub files: Vec<StatusFile>,
+}
+
+/// How a local file's content relates to what the server has at its path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum StatusRelation {
+    /// Your content is the newest placed at this path
+    Latest,
+    /// Something was placed at this path after your content last was. It may come from
+    /// a branch that is never merged: this is not "out of date".
+    NewerUploadExists,
+    /// Nothing was ever placed at this path
+    UnknownPath,
+    /// The path is known, but your content was never placed at it
+    NotPlacedHere,
+}
+
+/// One local file compared with the server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct FileStatus {
+    pub path: String,
+    pub hash: String,
+    /// The project has this content (its bytes are stored)
+    pub recorded: bool,
+    /// This content has been placed at this path
+    pub placed_here: bool,
+    /// Recorded and not yanked
+    pub downloadable: bool,
+    pub yanked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yank_reason: Option<String>,
+    pub relation: StatusRelation,
+    /// Placements at this path after your content's most recent one there, so content
+    /// placed again (A, B, then A) counts as current
+    pub newer_uploads: u64,
+    /// The most recent placement at this path, from any branch
+    pub latest_hash: Option<String>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = DateTime))]
+    pub latest_at: Option<Timestamp>,
+    pub latest_by: Option<String>,
+    pub latest_branch: Option<String>,
+    pub latest_commit: Option<String>,
+}
+
+/// The files of a status request, in the order they were sent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct StatusResult {
+    pub files: Vec<FileStatus>,
 }
 
 /// RFC 8628 device authorization.
