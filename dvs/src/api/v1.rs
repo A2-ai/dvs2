@@ -83,6 +83,11 @@ pub struct GrantView {
     pub group_id: Uuid,
     pub group: String,
     pub role: Role,
+    /// The group was deleted from the directory, so this grant no longer gives anyone
+    /// access. A group created again under the same name is a different group: remove
+    /// this grant, or grant the new one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,8 +199,7 @@ pub struct GroupView {
     pub is_member: bool,
     /// The configured global admin group: admin on every project
     pub is_admin_group: bool,
-    /// Members the directory knows. Under the Arx header resolver that is only people
-    /// who have used DVS; member lists are not exposed.
+    /// How many members the directory has; member lists are not exposed.
     pub known_members: i64,
 }
 
