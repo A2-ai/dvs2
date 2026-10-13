@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit::{AuditEntry, AuditFile, parse_audit_log};
-use crate::backends::{RetrieveRequest, StoreRequest, StoreResult};
+use crate::backends::{Batch, ManifestItem, ManifestReply, PresentSize, RetrieveRequest, Stored};
 use crate::{Compression, Hashes};
 
 const AUDIT_LOG_FILENAME: &str = "audit.log.jsonl";
@@ -223,62 +223,86 @@ impl LocalBackend {
         Ok(false)
     }
 
-    pub fn store(&self, req: StoreRequest<'_>) -> Result<StoreResult> {
-        let StoreRequest {
-            hashes,
-            source,
-            compression,
-            path: rel_path,
-            operation_id,
-            message,
-            on_bytes,
-            ..
-        } = req;
-        let blob_path = self.hash_to_path(hashes)?;
-
-        // Store the blob unless it is already present (dedup).
-        let stored_size = if blob_path.is_file() {
-            fs::metadata(&blob_path)?.len()
-        } else {
-            if let Some(parent) = blob_path.parent() {
-                fs::create_dir_all(parent)?;
-                self.ensure_group_and_mode(&self.path, self.dir_mode())?;
-                self.ensure_group_and_mode(parent, self.dir_mode())?;
-            }
-
-            // Unique tmp name
-            let tmp_path = blob_path.with_extension(format!("tmp.{}", Uuid::new_v4()));
-
-            // Always clean up the tmp file even if an error occurred
-            let result: Result<u64> = (|| {
-                let stored_size = compression.compress(source, &tmp_path, on_bytes)?;
-                if self.use_shared_blob_mode() {
-                    self.ensure_group_and_mode(&tmp_path, SHARED_BLOB_MODE)?;
-                } else {
-                    make_readonly(&tmp_path)?;
+    /// Log one entry per path and report which contents storage lacks.
+    pub fn manifest(&self, batch: &Batch, items: &[ManifestItem]) -> Result<ManifestReply> {
+        let mut missing = BTreeSet::new();
+        let mut present = HashMap::new();
+        for item in items {
+            let hash = item.hashes.get_blake3().to_string();
+            match fs::metadata(self.hash_to_path(&item.hashes)?) {
+                Ok(m) if m.is_file() => {
+                    present.insert(
+                        hash,
+                        PresentSize {
+                            size: item.size,
+                            stored_size: m.len(),
+                        },
+                    );
                 }
-                fs::rename(&tmp_path, &blob_path)?;
-                Ok(stored_size)
-            })();
-            if result.is_err() {
-                let _ = fs::remove_file(&tmp_path);
+                _ => {
+                    missing.insert(hash);
+                }
             }
-            result?
-        };
+            let entry = AuditEntry::new_add(
+                batch.id,
+                AuditFile {
+                    path: item.path.to_native(),
+                    hashes: item.hashes.clone(),
+                },
+                batch.compression,
+                batch.message.clone(),
+            );
+            self.log_audit_entry(&entry)?;
+        }
+        Ok(ManifestReply {
+            missing,
+            present,
+            compression: batch.compression,
+        })
+    }
 
-        let entry = AuditEntry::new_add(
-            operation_id,
-            AuditFile {
-                path: rel_path.to_native(),
-                hashes: hashes.clone(),
-            },
-            compression,
-            message.map(|m| m.to_string()),
-        );
-        self.log_audit_entry(&entry)?;
+    /// Store the content's bytes, compressed. Only copies bytes: the manifest logged
+    /// the paths.
+    pub fn put(
+        &self,
+        batch: &Batch,
+        hashes: &Hashes,
+        source: &Path,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<Stored> {
+        let compression = batch.compression;
+        let blob_path = self.hash_to_path(hashes)?;
+        if blob_path.is_file() {
+            return Ok(Stored {
+                stored_size: fs::metadata(&blob_path)?.len(),
+                compression,
+            });
+        }
+        if let Some(parent) = blob_path.parent() {
+            fs::create_dir_all(parent)?;
+            self.ensure_group_and_mode(&self.path, self.dir_mode())?;
+            self.ensure_group_and_mode(parent, self.dir_mode())?;
+        }
 
-        Ok(StoreResult {
-            stored_size,
+        // Unique tmp name
+        let tmp_path = blob_path.with_extension(format!("tmp.{}", Uuid::new_v4()));
+
+        // Always clean up the tmp file even if an error occurred
+        let result: Result<u64> = (|| {
+            let stored_size = compression.compress(source, &tmp_path, on_bytes)?;
+            if self.use_shared_blob_mode() {
+                self.ensure_group_and_mode(&tmp_path, SHARED_BLOB_MODE)?;
+            } else {
+                make_readonly(&tmp_path)?;
+            }
+            fs::rename(&tmp_path, &blob_path)?;
+            Ok(stored_size)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp_path);
+        }
+        Ok(Stored {
+            stored_size: result?,
             compression,
         })
     }
@@ -341,6 +365,31 @@ mod tests {
         ProjectPath::from_canonical(s).unwrap()
     }
 
+    /// Manifest then put, as `add` does.
+    fn store(
+        backend: &LocalBackend,
+        hash: &Hashes,
+        source: &Path,
+        path: &str,
+        compression: Compression,
+    ) {
+        let batch = Batch {
+            id: Uuid::new_v4(),
+            kind: crate::api::v1::BatchKind::Upload,
+            message: None,
+            compression,
+        };
+        let item = ManifestItem {
+            path: project_path(path),
+            hashes: hash.clone(),
+            size: fs::metadata(source).unwrap().len(),
+        };
+        let reply = backend.manifest(&batch, &[item]).unwrap();
+        if reply.missing.contains(hash.get_blake3()) {
+            backend.put(&batch, hash, source, None).unwrap();
+        }
+    }
+
     fn test_hash(hash: &str) -> Hashes {
         Hashes {
             blake3: hash.to_string(),
@@ -390,14 +439,7 @@ mod tests {
         fs::write(&source, b"test content").unwrap();
 
         let hash = test_hash("d41d8cd98f00b204e9800998ecf8427e");
-        backend
-            .store(StoreRequest::new_local(
-                &hash,
-                &source,
-                project_path("source.txt"),
-                Compression::None,
-            ))
-            .unwrap();
+        store(&backend, &hash, &source, "source.txt", Compression::None);
 
         let stored = storage.join("d4").join("1d8cd98f00b204e9800998ecf8427e");
         assert!(stored.is_file());
@@ -415,14 +457,7 @@ mod tests {
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"stored content").unwrap();
-        backend
-            .store(StoreRequest::new_local(
-                &hash,
-                &source,
-                project_path("source.txt"),
-                Compression::None,
-            ))
-            .unwrap();
+        store(&backend, &hash, &source, "source.txt", Compression::None);
 
         // Retrieve to new location
         let target = tmp.path().join("retrieved.txt");
@@ -472,14 +507,7 @@ mod tests {
         assert!(!backend.exists(&hash).unwrap());
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
-        backend
-            .store(StoreRequest::new_local(
-                &hash,
-                &source,
-                project_path("source.txt"),
-                Compression::None,
-            ))
-            .unwrap();
+        store(&backend, &hash, &source, "source.txt", Compression::None);
         assert!(backend.exists(&hash).unwrap());
     }
 
@@ -493,14 +521,7 @@ mod tests {
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
-        backend
-            .store(StoreRequest::new_local(
-                &hash,
-                &source,
-                project_path("source.txt"),
-                Compression::None,
-            ))
-            .unwrap();
+        store(&backend, &hash, &source, "source.txt", Compression::None);
         assert!(backend.exists(&hash).unwrap());
 
         backend.remove(&hash).unwrap();
@@ -519,14 +540,7 @@ mod tests {
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
-        backend
-            .store(StoreRequest::new_local(
-                &hash,
-                &source,
-                project_path("source.txt"),
-                Compression::None,
-            ))
-            .unwrap();
+        store(&backend, &hash, &source, "source.txt", Compression::None);
 
         let stored = storage.join("ab").join("c123def456789012345678901234ab");
         let perms = fs::metadata(&stored).unwrap().permissions();
@@ -671,14 +685,7 @@ mod tests {
         let hash = test_hash("abc123def456789012345678901234ab");
         let source = tmp.path().join("source.txt");
         fs::write(&source, b"content").unwrap();
-        backend
-            .store(StoreRequest::new_local(
-                &hash,
-                &source,
-                project_path("source.txt"),
-                Compression::None,
-            ))
-            .unwrap();
+        store(&backend, &hash, &source, "source.txt", Compression::None);
 
         let prefix_dir = storage.join("ab");
         let prefix_mode = fs::metadata(&prefix_dir).unwrap().permissions().mode();

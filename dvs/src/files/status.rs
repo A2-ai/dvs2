@@ -125,8 +125,7 @@ mod tests {
     use super::*;
     use crate::Compression;
     use crate::paths::normalize_path;
-    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
-    use uuid::Uuid;
+    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo, track};
 
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
         DvsPaths::new(
@@ -160,19 +159,9 @@ mod tests {
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
         let paths = make_paths(&root, &config);
-        let file_path = create_file(&root, "synced.txt", b"content");
+        create_file(&root, "synced.txt", b"content");
 
-        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-        metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "synced.txt",
-                None,
-            )
-            .unwrap();
+        track(&paths, backend, "synced.txt");
 
         let cache = make_cache(&paths);
         let (status, metadata) = get_file_status(&paths, "synced.txt", Some(&cache)).unwrap();
@@ -188,17 +177,7 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "deleted.txt", b"content");
 
-        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-        metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "deleted.txt",
-                None,
-            )
-            .unwrap();
+        track(&paths, backend, "deleted.txt");
 
         // Delete the original file
         fs::remove_file(&file_path).unwrap();
@@ -217,17 +196,7 @@ mod tests {
         let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "modified.txt", b"original");
 
-        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-        metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "modified.txt",
-                None,
-            )
-            .unwrap();
+        track(&paths, backend, "modified.txt");
 
         // Modify the file
         fs::write(&file_path, b"changed content").unwrap();
@@ -247,12 +216,8 @@ mod tests {
 
         // Add multiple files
         for name in ["a.txt", "b.txt", "subdir/c.txt"] {
-            let file_path = create_file(&root, name, name.as_bytes());
-            let mut metadata =
-                FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-            metadata
-                .save(Uuid::new_v4(), &file_path, backend, &paths, name, None)
-                .unwrap();
+            create_file(&root, name, name.as_bytes());
+            track(&paths, backend, name);
         }
 
         let statuses = get_status(&paths, None, None).unwrap();
@@ -294,18 +259,14 @@ mod tests {
 
         // Add file A with content "foo" (hash H1)
         let file_a = create_file(&root, "a.txt", b"foo");
-        let mut metadata_a = FileMetadata::from_file(&file_a, Compression::Zstd, None).unwrap();
-        metadata_a
-            .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt", None)
-            .unwrap();
+        let metadata_a = FileMetadata::from_file(&file_a, Compression::Zstd, None).unwrap();
+        track(&paths, backend, "a.txt");
         let hash_h1 = metadata_a.hashes.blake3.clone();
 
         // Add file B with content "bar" (hash H2)
         let file_b = create_file(&root, "b.txt", b"bar");
-        let mut metadata_b = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
-        metadata_b
-            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", None)
-            .unwrap();
+        let metadata_b = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
+        track(&paths, backend, "b.txt");
         let hash_h2 = metadata_b.hashes.blake3.clone();
         assert_ne!(hash_h1, hash_h2);
 
@@ -313,12 +274,10 @@ mod tests {
         fs::write(&file_b, b"foo").unwrap();
 
         // Run add on B with new content
-        let mut metadata_b_new = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
+        let metadata_b_new = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
         assert_eq!(metadata_b_new.hashes.blake3, hash_h1);
 
-        metadata_b_new
-            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", None)
-            .unwrap();
+        track(&paths, backend, "b.txt");
 
         // Verify metadata was updated
         let dvs_file = dvs_dir.join("b.txt.dvs");
@@ -345,12 +304,8 @@ mod tests {
         let paths = make_paths(&root, &config);
 
         for name in ["a.txt", "dir1/b.txt", "dir1/sub/c.txt", "dir2/d.txt"] {
-            let file_path = create_file(&root, name, name.as_bytes());
-            let mut metadata =
-                FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-            metadata
-                .save(Uuid::new_v4(), &file_path, backend, &paths, name, None)
-                .unwrap();
+            create_file(&root, name, name.as_bytes());
+            track(&paths, backend, name);
         }
         (tmp, paths)
     }

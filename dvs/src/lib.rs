@@ -1,20 +1,23 @@
+pub mod api;
 pub mod audit;
 pub mod auth;
 pub mod backends;
 mod cache;
 pub mod config;
 mod files;
+pub mod git;
 mod gitignore;
 pub mod globbing;
 mod hashes;
 pub mod init;
 pub mod paths;
 pub mod progress;
+pub mod remote;
 pub(crate) mod utils;
 
-pub use backends::{Backend, RetrieveRequest, StoreRequest, StoreResult};
+pub use backends::{Backend, RetrieveRequest};
 pub use config::Compression;
-pub use files::add::{AddDetail, AddResult, add_files};
+pub use files::add::{AddOutcome, AddResult, add_files};
 pub use files::get::{GetDetail, GetResult, get_files};
 pub use files::metadata::FileMetadata;
 pub use files::status::{FileStatus, StatusDetail, get_status};
@@ -61,6 +64,21 @@ pub mod testutil {
         }
         fs::write(&path, content).unwrap();
         path
+    }
+
+    /// Adds `name` with `add_files`, which must succeed.
+    pub fn track(paths: &crate::DvsPaths, backend: &crate::Backend, name: &str) {
+        let results = crate::add_files(
+            vec![name.into()],
+            paths,
+            backend,
+            None,
+            crate::Compression::Zstd,
+            false,
+            None,
+        )
+        .unwrap();
+        assert!(!results[0].is_failure(), "{results:?}");
     }
 
     /// Initializes a DVS repository in the given directory.

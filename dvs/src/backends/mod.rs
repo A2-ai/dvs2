@@ -1,3 +1,4 @@
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -5,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::Hashes;
+use crate::api::v1::{BatchKind, CompleteBatch, GitContext};
 use crate::audit::AuditEntry;
 use crate::config::Compression;
 use crate::paths::ProjectPath;
@@ -15,56 +17,66 @@ pub mod server;
 use local::LocalBackend;
 use server::ServerBackend;
 
-/// Common fields needed for storing a file across backends
-pub struct StoreRequest<'a> {
-    pub hashes: &'a Hashes,
-    pub source: &'a Path,
-    /// The compression the caller would like. It could be overriden eg in the case of a dvs
-    /// server backend if the project was init with a different alg
+/// A batch of transfers: one `add` or one `get`. The server issues the id; the local
+/// backend makes one up for its log.
+#[derive(Debug, Clone)]
+pub struct Batch {
+    pub id: Uuid,
+    pub kind: BatchKind,
+    /// The `add` message, for the local log
+    pub message: Option<String>,
+    /// What the local backend compresses new content with
     pub compression: Compression,
+}
+
+/// One file in a manifest, with every hash the local log records.
+#[derive(Debug, Clone)]
+pub struct ManifestItem {
     pub path: ProjectPath,
-    pub operation_id: Uuid,
-    pub message: Option<&'a str>,
-    /// Best-effort local branch captured once for the add batch.
-    pub git_branch: Option<&'a str>,
-    pub on_bytes: Option<&'a (dyn Fn(u64) + Send + Sync)>,
+    pub hashes: Hashes,
+    pub size: u64,
 }
 
-impl<'a> StoreRequest<'a> {
-    pub fn new_local(
-        hashes: &'a Hashes,
-        source: &'a Path,
-        path: ProjectPath,
-        compression: Compression,
-    ) -> Self {
-        Self {
-            hashes,
-            source,
-            compression,
-            path,
-            operation_id: Uuid::nil(),
-            message: None,
-            git_branch: None,
-            on_bytes: None,
-        }
-    }
-}
-
-/// What the backend actually did with the file.
-pub struct StoreResult {
-    /// Size of the stored blob, after compression.
+/// Content the project already has: its size and stored size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PresentSize {
+    pub size: u64,
     pub stored_size: u64,
-    /// The compression that was actually applied.
+}
+
+/// What a manifest call learned.
+#[derive(Debug, Clone)]
+pub struct ManifestReply {
+    /// Hashes whose bytes must be sent
+    pub missing: BTreeSet<String>,
+    /// Hashes the project has, by hash
+    pub present: HashMap<String, PresentSize>,
+    /// What the project compresses with
     pub compression: Compression,
 }
 
-/// Common fields needed for retrieving a file across backends
+/// What storing one content did.
+#[derive(Debug, Clone, Copy)]
+pub struct Stored {
+    pub stored_size: u64,
+    pub compression: Compression,
+}
+
+/// How much one manifest call may carry.
+#[derive(Debug, Clone, Copy)]
+pub struct ManifestLimits {
+    pub max_entries: usize,
+    pub max_body_bytes: usize,
+}
+
+/// Fetch the content of `hashes` into `target`, decompressed.
 pub struct RetrieveRequest<'a> {
     pub hashes: &'a Hashes,
     pub target: &'a Path,
+    /// What the `.dvs` file says it was stored with; the server's answer decides
     pub compression: Compression,
+    /// The path being fetched, for the audit
     pub path: ProjectPath,
-    pub operation_id: Uuid,
     pub on_bytes: Option<&'a (dyn Fn(u64) + Send + Sync)>,
 }
 
@@ -80,7 +92,6 @@ impl<'a> RetrieveRequest<'a> {
             target,
             compression,
             path,
-            operation_id: Uuid::nil(),
             on_bytes: None,
         }
     }
@@ -103,9 +114,8 @@ impl Backend {
         }
     }
 
-    /// Check that the current user can access the backend.
-    /// Called once before batch operations so auth/permission problems fail
-    /// fast with a single error instead of once per file.
+    /// Check that the current user can read the project, so a dry run fails clearly
+    /// instead of reporting everything as missing.
     pub fn check_access(&self) -> Result<()> {
         match self {
             // The filesystem permissions are the access control for local storage.
@@ -114,38 +124,80 @@ impl Backend {
         }
     }
 
-    /// Store file to backend under `req.hashes`, compressing it.
-    /// The source is passed uncompressed, the hash we send is only for (optional) verification by
-    /// a server
-    pub fn store(&self, req: StoreRequest<'_>) -> Result<StoreResult> {
+    pub fn manifest_limits(&self) -> Result<ManifestLimits> {
         match self {
-            Backend::Local(b) => b.store(req),
-            Backend::Server(s) => s.store(req),
+            Backend::Local(_) => Ok(ManifestLimits {
+                max_entries: usize::MAX,
+                max_body_bytes: usize::MAX,
+            }),
+            Backend::Server(s) => s.manifest_limits(),
         }
     }
 
-    /// Retrieve content by hash to target path, optionally decompressing.
-    /// Returns true if the file was copied to the target path.
-    pub fn retrieve(&self, req: RetrieveRequest<'_>) -> Result<bool> {
+    /// Start an `add` (upload) or a `get` (download). The server checks the role, and
+    /// the lock for uploads, before any bytes move.
+    pub fn open_batch(
+        &self,
+        kind: BatchKind,
+        message: Option<&str>,
+        git: &GitContext,
+        compression: Compression,
+    ) -> Result<Batch> {
+        match self {
+            Backend::Local(_) => Ok(Batch {
+                id: Uuid::new_v4(),
+                kind,
+                message: message.map(str::to_owned),
+                compression,
+            }),
+            Backend::Server(s) => s.open_batch(kind, message, git),
+        }
+    }
+
+    /// Record a placement for every item and learn which contents need their bytes.
+    /// The local backend writes one log entry per path.
+    pub fn manifest(&self, batch: &Batch, items: &[ManifestItem]) -> Result<ManifestReply> {
+        match self {
+            Backend::Local(b) => b.manifest(batch, items),
+            Backend::Server(s) => s.manifest(batch, items),
+        }
+    }
+
+    /// Send the bytes of one content listed in the batch's manifest.
+    pub fn put(
+        &self,
+        batch: &Batch,
+        hashes: &Hashes,
+        source: &Path,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<Stored> {
+        match self {
+            Backend::Local(b) => b.put(batch, hashes, source, on_bytes),
+            Backend::Server(s) => s.put(batch, hashes, source, on_bytes),
+        }
+    }
+
+    /// Close the batch with the client's counts.
+    pub fn complete(&self, batch: &Batch, counts: &CompleteBatch) -> Result<()> {
+        match self {
+            Backend::Local(_) => Ok(()),
+            Backend::Server(s) => s.complete(batch, counts),
+        }
+    }
+
+    /// Fetch content into `req.target`. False when the project has no such content.
+    pub fn fetch(&self, batch: &Batch, req: RetrieveRequest<'_>) -> Result<bool> {
         match self {
             Backend::Local(b) => b.retrieve(req),
-            Backend::Server(s) => s.retrieve(req),
+            Backend::Server(s) => s.fetch(batch, req),
         }
     }
 
-    /// Check if the file exists in the backend
+    /// Whether the project has the content. Records nothing; for dry runs.
     pub fn exists(&self, hash: &Hashes) -> Result<bool> {
         match self {
             Backend::Local(b) => b.exists(hash),
             Backend::Server(s) => s.exists(hash),
-        }
-    }
-
-    /// Remove content by hash (for rollback). Best-effort, may silently fail.
-    pub fn remove(&self, hash: &Hashes) -> Result<()> {
-        match self {
-            Backend::Local(b) => b.remove(hash),
-            Backend::Server(s) => s.remove(hash),
         }
     }
 

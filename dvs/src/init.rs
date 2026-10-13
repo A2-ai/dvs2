@@ -4,6 +4,7 @@ use anyhow::{Result, bail};
 use fs_err as fs;
 use uuid::Uuid;
 
+use crate::api::v1::ProjectView;
 use crate::audit::AuditEntry;
 use crate::backends::Backend;
 use crate::config::Config;
@@ -87,6 +88,29 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
 
     log::info!("DVS repository initialized successfully");
     Ok(root_dir.to_path_buf())
+}
+
+/// Use an existing server project in `root_dir`: check that it exists and that you
+/// can read it, then write `dvs.toml` and create the metadata folder. Metadata files
+/// already in the folder, such as those of a fresh clone, are kept.
+pub fn attach(root_dir: impl AsRef<Path>, mut config: Config) -> Result<ProjectView> {
+    let root_dir = root_dir.as_ref();
+    let Backend::Server(server) = config.backend() else {
+        bail!("only a server project can be attached");
+    };
+    if root_dir.join(paths::CONFIG_FILE_NAME).exists() {
+        bail!("dvs is already initialized (dvs.toml exists)");
+    }
+    let project = server.project()?;
+    // The server decides the compression
+    config.set_compression(None);
+    config.save(root_dir)?;
+    let metadata_dir = root_dir.join(config.metadata_folder_name());
+    if let Err(e) = fs::create_dir_all(&metadata_dir) {
+        let _ = fs::remove_file(root_dir.join(paths::CONFIG_FILE_NAME));
+        return Err(e.into());
+    }
+    Ok(project)
 }
 
 #[cfg(test)]

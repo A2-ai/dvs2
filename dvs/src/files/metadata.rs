@@ -1,12 +1,11 @@
 use std::path::Path;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::paths::ProjectPath;
-use crate::{Backend, Compression, DvsPaths, Hashes, Outcome, StoreRequest};
+use crate::{Compression, Hashes};
 
 /// The dvs metadata for a given file
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -66,158 +65,34 @@ impl FileMetadata {
         })
     }
 
-    /// Returns whether the file already existed in the dvs folder and therefore is an update
-    /// and the compressed size if applicable.
-    /// Copies the source file to storage and saves metadata atomically (both succeed or neither).
-    pub fn save(
-        &mut self,
-        operation_id: Uuid,
-        source_file: impl AsRef<Path>,
-        backend: &Backend,
-        paths: &DvsPaths,
-        relative_path: impl AsRef<Path>,
-        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-    ) -> Result<(Outcome, Option<u64>)> {
-        self.save_with_git_branch(
-            operation_id,
-            source_file,
-            backend,
-            paths,
-            relative_path,
-            on_bytes,
-            None,
-        )
+    /// The `.dvs` file at `path`.
+    pub fn read(path: &Path) -> Result<Self> {
+        Ok(serde_json::from_reader(fs::File::open(path)?)?)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn save_with_git_branch(
-        &mut self,
-        operation_id: Uuid,
-        source_file: impl AsRef<Path>,
-        backend: &Backend,
-        paths: &DvsPaths,
-        relative_path: impl AsRef<Path>,
-        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-        git_branch: Option<&str>,
-    ) -> Result<(Outcome, Option<u64>)> {
-        let dvs_file_path = paths.metadata_path(relative_path.as_ref());
-        let dvs_file_exists = dvs_file_path.is_file();
-        // Only check if file exists on the server if it exists locally
-        // Backend will dedup anyway
-        let storage_exists = dvs_file_exists && backend.exists(&self.hashes)?;
-
-        log::debug!(
-            "Saving {}: metadata_exists={}, storage_exists={}",
-            relative_path.as_ref().display(),
-            dvs_file_exists,
-            storage_exists
-        );
-
-        if dvs_file_exists && storage_exists {
-            // we read the file anyway to make sure it's not 2 files having the same hash
-            let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)?;
-            if existing == *self {
-                log::debug!(
-                    "File {} is already in sync",
-                    relative_path.as_ref().display()
-                );
-                return Ok((Outcome::Present, None));
-            }
-        }
-
-        // We do an atomic update, either everything works or we error
-        // 1. Create metadata dirs first
-        if let Some(parent) = dvs_file_path.parent() {
+    /// Write the `.dvs` file at `path` through a temporary file and a rename, so a
+    /// failed write leaves the old metadata in place.
+    pub fn write(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-
-        // 2. Store file to backend. The backend records the add in its audit log
-        // and dedups the blob internally if it is already present.
-        let path = ProjectPath::from_path(relative_path.as_ref()).map_err(|e| anyhow!("{e}"))?;
-        let store_res = backend.store(StoreRequest {
-            hashes: &self.hashes,
-            source: source_file.as_ref(),
-            compression: self.compression,
-            path,
-            operation_id,
-            message: self.message.as_deref(),
-            git_branch,
-            on_bytes,
-        });
-
-        // The server compresses with the project's setting, which may not be the one
-        // we asked for
-        if let Ok(res) = &store_res {
-            self.compression = res.compression;
+        let tmp = path.with_extension(format!("dvs-tmp.{}", Uuid::new_v4()));
+        let result = fs::write(
+            &tmp,
+            serde_json::to_string_pretty(self).expect("valid json"),
+        )
+        .and_then(|()| fs::rename(&tmp, path));
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
         }
-
-        // 3. Then metadata
-        let old_metadata_content = fs::read(&dvs_file_path).ok();
-        log::debug!("Writing metadata to {}", dvs_file_path.display());
-        let metadata_res = fs::write(
-            &dvs_file_path,
-            serde_json::to_string_pretty(&*self).expect("valid json"),
-        );
-
-        match (store_res, metadata_res) {
-            (Ok(res), Ok(_)) => Ok((Outcome::Copied, Some(res.stored_size))),
-            (Err(e), Ok(_)) => {
-                log::warn!(
-                    "Storage failed, rolling back metadata for {}",
-                    relative_path.as_ref().display()
-                );
-                if let Some(old) = old_metadata_content {
-                    let _ = fs::write(&dvs_file_path, &old);
-                } else {
-                    let _ = fs::remove_file(&dvs_file_path);
-                }
-                Err(e)
-            }
-            (Ok(_), Err(_)) => {
-                log::warn!(
-                    "Metadata write failed, rolling back storage for {}",
-                    relative_path.as_ref().display()
-                );
-                if let Some(old) = old_metadata_content {
-                    let _ = fs::write(&dvs_file_path, &old);
-                } else {
-                    let _ = fs::remove_file(&dvs_file_path);
-                }
-                // Remove the blob only if this call actually created it
-                if !storage_exists {
-                    let _ = backend.remove(&self.hashes);
-                }
-                bail!("Failed to write metadata file: {dvs_file_path:?}")
-            }
-            (Err(e), Err(_)) => {
-                log::warn!(
-                    "Both storage and metadata failed, rolling back for {}",
-                    relative_path.as_ref().display()
-                );
-                if let Some(old) = old_metadata_content {
-                    let _ = fs::write(&dvs_file_path, &old);
-                } else {
-                    let _ = fs::remove_file(&dvs_file_path);
-                }
-                bail!("Failed to write metadata file: {dvs_file_path:?}: {e}")
-            }
-        }
+        result.with_context(|| format!("Failed to write metadata file {}", path.display()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
-
-    fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
-        DvsPaths::new(
-            root.to_path_buf(),
-            root.to_path_buf(),
-            config.metadata_folder_name(),
-        )
-        .unwrap()
-    }
+    use crate::testutil::{create_file, create_temp_git_repo};
 
     #[test]
     fn file_metadata_from_file_creates_hashes_and_message() {
@@ -272,64 +147,34 @@ mod tests {
     }
 
     #[test]
-    fn save_local_creates_storage_and_metadata() {
+    fn write_replaces_metadata_atomically() {
         let (_tmp, root) = create_temp_git_repo();
-        let (config, dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "data.bin", b"binary data");
+        let target = root.join(".dvs").join("sub").join("data.bin.dvs");
 
-        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-        let (outcome, stored_size) = metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "data.bin",
-                None,
-            )
-            .unwrap();
+        let first = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        first.write(&target).unwrap();
+        assert_eq!(FileMetadata::read(&target).unwrap(), first);
 
-        assert_eq!(outcome, Outcome::Copied);
-        assert!(stored_size.is_some());
-        // Metadata file should exist
-        assert!(dvs_dir.join("data.bin.dvs").is_file());
-        assert!(backend.exists(&metadata.hashes).unwrap());
+        fs::write(&file_path, b"other data").unwrap();
+        let second = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        second.write(&target).unwrap();
+        assert_eq!(FileMetadata::read(&target).unwrap(), second);
+        let leftovers = fs::read_dir(target.parent().unwrap()).unwrap().count();
+        assert_eq!(leftovers, 1, "no temporary file is left behind");
     }
 
     #[test]
-    fn save_local_returns_present_when_already_stored() {
+    fn a_failed_write_keeps_the_old_metadata() {
         let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
         let file_path = create_file(&root, "data.bin", b"binary data");
-
-        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-        metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "data.bin",
-                None,
-            )
-            .unwrap();
-
-        // Second save should return Present
-        let (outcome, stored_size) = metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "data.bin",
-                None,
-            )
-            .unwrap();
-        assert_eq!(outcome, Outcome::Present);
-        assert!(stored_size.is_none());
+        let metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        // A directory where the file should go: the rename fails
+        let target = root.join(".dvs").join("data.bin.dvs");
+        fs::create_dir_all(target.join("occupied")).unwrap();
+        assert!(metadata.write(&target).is_err());
+        assert!(target.join("occupied").is_dir());
+        let entries = fs::read_dir(root.join(".dvs")).unwrap().count();
+        assert_eq!(entries, 1, "no temporary file is left behind");
     }
 }

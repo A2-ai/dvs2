@@ -34,3 +34,19 @@ test_that("dvs_audit_log with a non-matching path returns zero rows without erro
   expect_s3_class(bogus, "tbl_df")
   expect_equal(nrow(bogus), 0L)
 })
+
+test_that("dvs_audit_log on a server project points to the server's history", {
+  repo <- tempfile("dvs-repo-")
+  dir.create(repo)
+  old_wd <- setwd(repo)
+  on.exit({
+    setwd(old_wd)
+    unlink(repo, recursive = TRUE, force = TRUE)
+  }, add = TRUE)
+  stopifnot(system2("git", c("init", "-q")) == 0L)
+  writeLines(c("[backend]", 'name = "demo"', 'url = "http://127.0.0.1:9/"'), "dvs.toml")
+  dir.create(".dvs")
+
+  # Its history lives on the server; nothing is read locally or over the network
+  expect_error(dvs_audit_log(), "dvs_log\\(\\)")
+})

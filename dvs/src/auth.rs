@@ -3,16 +3,11 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::thread::sleep;
-use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use etcetera::BaseStrategy;
 use fs_err as fs;
-use serde::{Deserialize, Serialize};
 use url::Url;
-
-use crate::utils::http_agent;
 
 type TokenStore = HashMap<String, String>;
 
@@ -98,75 +93,5 @@ pub fn delete_token(url: &Url) -> Result<bool> {
         Ok(old.is_some())
     } else {
         Ok(false)
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct DeviceAuthorizationResponse {
-    pub device_code: String,
-    pub user_code: String,
-}
-
-pub fn get_client_approve_url(base_url: &Url, user_code: &str) -> Result<Url> {
-    let mut u = base_url.join("/device/approve")?;
-    u.set_query(Some(&format!("user_code={user_code}")));
-    Ok(u)
-}
-
-pub fn initiate_device_approval(base_url: &Url) -> Result<DeviceAuthorizationResponse> {
-    let url = base_url.join("/api/oauth/device/authorize")?;
-    let mut resp = http_agent().post(url.as_str()).send_empty()?;
-    if !resp.status().is_success() {
-        bail!("Server error: {}", resp.status());
-    }
-    let r = resp.body_mut().read_json::<DeviceAuthorizationResponse>()?;
-    Ok(r)
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct TokenPayload {
-    pub device_code: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct TokenResponse {
-    pub access_token: String,
-}
-
-pub fn query_for_token(base_url: &Url, device_code: &str) -> Result<Option<TokenResponse>> {
-    let url = base_url.join("/api/oauth/token")?;
-    let mut resp = http_agent().post(url.as_str()).send_json(TokenPayload {
-        device_code: device_code.to_string(),
-    })?;
-    match resp.status().as_u16() {
-        200 => {
-            let r = resp.body_mut().read_json::<TokenResponse>()?;
-            Ok(Some(r))
-        }
-        400 => bail!("User code expired"),
-        401 => Ok(None),
-        404 => bail!("Unknown device code"),
-        _ => bail!("Unknown server error: {}", resp.status()),
-    }
-}
-
-pub fn poll_for_token(base_url: &Url, device_code: &str) -> Result<TokenResponse> {
-    let mut num_retries = 0;
-
-    loop {
-        if num_retries > 120 {
-            bail!("Token will have expired");
-        }
-
-        match query_for_token(base_url, device_code) {
-            Ok(None) => {
-                sleep(Duration::from_secs(5));
-                num_retries += 1;
-            }
-            Ok(Some(t)) => {
-                return Ok(t);
-            }
-            Err(e) => return Err(e),
-        }
     }
 }

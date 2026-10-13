@@ -9,16 +9,14 @@ use tabled::Tabled;
 use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
 use url::Url;
 
-use dvs::auth::{
-    delete_token, get_client_approve_url, get_token, initiate_device_approval, poll_for_token,
-    store_token,
-};
+use dvs::auth::{delete_token, get_token};
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
-use dvs::init::init;
-use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
+use dvs::init::{attach, init};
+use dvs::paths::DvsPaths;
+use dvs::remote::{self, ApiError, TOKEN_ENV, TokenSource, api_error, token_for};
 use dvs::{
-    AddDetail, Backend, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter,
+    AddOutcome, Backend, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter,
     Status, StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
 };
 
@@ -137,8 +135,62 @@ pub enum Command {
     },
     /// Log in to a DVS server, the one in the config unless a URL is given
     Login { url: Option<Url> },
-    /// Log out from a DVS server
-    Logout,
+    /// Log out from a DVS server, the one in the config unless a URL is given: the
+    /// stored token is revoked, then forgotten. A `DVS_TOKEN` is left alone.
+    Logout { url: Option<Url> },
+    /// Show the server, the client, who you are and your role on this project
+    Info {
+        /// A server to ask, instead of this project's
+        url: Option<Url>,
+    },
+}
+
+/// Some files failed; the codes the server gave decide the exit code.
+#[derive(Debug)]
+struct FilesFailed {
+    action: &'static str,
+    codes: Vec<String>,
+}
+
+impl std::fmt::Display for FilesFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Some files failed to {}", self.action)
+    }
+}
+
+impl std::error::Error for FilesFailed {}
+
+/// 3 not logged in or token rejected, 5 project not found or no access, 4 project
+/// exists, 1 anything else. When several apply, the first in that list wins. Clap
+/// exits with 2 on usage errors before any of this.
+fn exit_code(e: &anyhow::Error) -> i32 {
+    let codes: Vec<&str> = match e.downcast_ref::<FilesFailed>() {
+        Some(f) => f.codes.iter().map(String::as_str).collect(),
+        None => api_error(e).map(|a| a.code.as_str()).into_iter().collect(),
+    };
+    let api = |code: &&str| ApiError::new(0, code, "");
+    if codes.iter().any(|c| api(c).is_auth()) {
+        3
+    } else if codes.iter().any(|c| api(c).is_access()) {
+        5
+    } else if codes.contains(&"project_exists") {
+        4
+    } else {
+        1
+    }
+}
+
+/// The URL given, or the server of the project here.
+fn server_url(url: Option<Url>, current_dir: &std::path::Path) -> Result<Url> {
+    if let Some(url) = url {
+        return Ok(url);
+    }
+    let config = Config::find(current_dir)
+        .ok_or_else(|| anyhow!("Not in a DVS repository; give the server URL"))??;
+    match config.server_url() {
+        Some(url) => Ok(url.clone()),
+        None => bail!("This project is not using a dvs server"),
+    }
 }
 
 #[derive(Parser)]
@@ -235,15 +287,16 @@ fn make_progress_callback(threshold: u64) -> impl Fn(&std::path::Path, u64) -> F
 
 /// Runs the interactive device-authorization flow and stores the resulting token.
 fn run_device_login(url: &Url) -> Result<()> {
-    let device_auth = initiate_device_approval(url)?;
-    let approve_url = get_client_approve_url(url, &device_auth.user_code)?;
-    println!(
-        "Go to {approve_url} and enter the code {}",
-        device_auth.user_code
-    );
-    let polling_result = poll_for_token(url, &device_auth.device_code)?;
-    store_token(url, &polling_result.access_token)?;
-    println!("You are now logged in!");
+    if std::env::var(TOKEN_ENV).is_ok_and(|t| !t.trim().is_empty()) {
+        eprintln!("Note: {TOKEN_ENV} is set, so dvs will keep using it instead of this login");
+    }
+    let token = remote::login(url, |start| {
+        eprintln!(
+            "Open {} and check that it shows the code {}",
+            start.verification_uri_complete, start.user_code
+        );
+    })?;
+    eprintln!("You are now logged in to {url} until {}", token.expires_at);
     Ok(())
 }
 
@@ -279,9 +332,8 @@ fn try_main() -> Result<()> {
                     group,
                     no_compression,
                 } => {
-                    // Initializing on the server requires authentication, so run the
-                    // login flow first if we don't have a token for it yet.
-                    if get_token(&url)?.is_none() {
+                    // Creating the project needs a token, so log in first if there is none
+                    if token_for(&url)?.is_none() {
                         run_device_login(&url)?;
                     }
                     let mut config = Config::new_server(name, url, Some(group));
@@ -310,25 +362,28 @@ fn try_main() -> Result<()> {
             url,
             metadata_folder_name,
         } => {
-            let config_path = current_dir.join(CONFIG_FILE_NAME);
-            if config_path.exists() {
-                bail!("Configuration file already exists");
-            }
-
-            // Initializing on the server requires authentication, so run the
-            // login flow first if we don't have a token for it yet.
-            if get_token(&url)?.is_none() {
+            // Reading the project needs a token, so log in first if there is none
+            if token_for(&url)?.is_none() {
                 run_device_login(&url)?;
             }
             let mut config = Config::new_server(name, url, None);
-            config.set_compression(None);
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
             }
-
-            if let Backend::Server(s) = config.backend() {
-                s.attach()?;
-                config.save(current_dir)?;
+            let project = attach(&current_dir, config)?;
+            if cli.json {
+                println!("{}", json!({"status": "attached", "project": project}));
+            } else {
+                println!(
+                    "Attached {} (your role: {}){}",
+                    project.name,
+                    project.your_role.as_str(),
+                    if project.locked {
+                        ", locked: uploads are refused"
+                    } else {
+                        ""
+                    }
+                );
             }
         }
         Command::Add {
@@ -363,43 +418,46 @@ fn try_main() -> Result<()> {
                     None
                 },
             )?;
-            let has_errors = results
+            let codes: Vec<String> = results
                 .iter()
-                .any(|r| matches!(r.detail, AddDetail::Error { .. }));
+                .filter(|r| r.is_failure())
+                .map(|r| r.code.clone().unwrap_or_default())
+                .collect();
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
                 for result in &results {
-                    match &result.detail {
-                        AddDetail::Error { error: err } => {
-                            eprintln!("Error adding {}: {err}", result.path.display());
+                    let path = result.path.display();
+                    let size = format_size(result.size.unwrap_or(0));
+                    let hash = result.hash.as_deref().unwrap_or("");
+                    let error = result.error.as_deref().unwrap_or("");
+                    match result.outcome {
+                        AddOutcome::Added => {
+                            let msg = if dry_run { "To add" } else { "Added" };
+                            let stored_info = match result.stored_size {
+                                Some(s) if Some(s) != result.size => {
+                                    format!(" --> saved [{}]", format_size(s))
+                                }
+                                _ => String::new(),
+                            };
+                            println!("{msg}: {path} [{size}]{stored_info} as {hash}");
                         }
-                        AddDetail::Success {
-                            outcome,
-                            hash,
-                            size,
-                            stored_size,
-                        } => match outcome {
-                            Outcome::Copied => {
-                                let msg = if dry_run { "To add" } else { "Added" };
-                                let stored_info = if size != stored_size {
-                                    format!(" --> saved [{}]", format_size(*stored_size))
-                                } else {
-                                    String::new()
-                                };
-                                println!(
-                                    "{msg}: {} [{}]{stored_info} as {hash}",
-                                    result.path.display(),
-                                    format_size(*size),
-                                );
-                            }
-                            Outcome::Present => {}
-                        },
+                        AddOutcome::Present => {
+                            let msg = if dry_run { "To record" } else { "Recorded" };
+                            println!("{msg}: {path} [{size}] as {hash} (content already stored)");
+                        }
+                        AddOutcome::Skipped => {}
+                        AddOutcome::Failed => eprintln!("Error adding {path}: {error}"),
+                        AddOutcome::NotAttempted => eprintln!("Not attempted: {path}: {error}"),
                     }
                 }
             }
-            if has_errors {
-                return Err(anyhow!("Some files failed to add"));
+            if !codes.is_empty() {
+                return Err(FilesFailed {
+                    action: "add",
+                    codes,
+                }
+                .into());
             }
         }
         Command::Status {
@@ -536,9 +594,13 @@ fn try_main() -> Result<()> {
                     None
                 },
             )?;
-            let has_errors = results
+            let codes: Vec<String> = results
                 .iter()
-                .any(|r| matches!(r.detail, GetDetail::Error { .. }));
+                .filter_map(|r| match &r.detail {
+                    GetDetail::Error { code, .. } => Some(code.clone().unwrap_or_default()),
+                    GetDetail::Success { .. } => None,
+                })
+                .collect();
             if cli.json {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
@@ -553,7 +615,7 @@ fn try_main() -> Result<()> {
                                 total_bytes += size;
                             }
                         }
-                        GetDetail::Error { error } => {
+                        GetDetail::Error { error, .. } => {
                             eprintln!("Error: {} - {}", result.path.display(), error)
                         }
                     }
@@ -562,36 +624,115 @@ fn try_main() -> Result<()> {
                     println!("Total: {} files, {}", total_files, format_size(total_bytes));
                 }
             }
-            if has_errors {
-                return Err(anyhow!("Some files failed to get"));
+            if !codes.is_empty() {
+                return Err(FilesFailed {
+                    action: "get",
+                    codes,
+                }
+                .into());
             }
         }
-        Command::Login { url: Some(url) } => {
+        Command::Login { url } => {
+            let url = server_url(url, &current_dir)?;
             run_device_login(&url)?;
         }
-        Command::Login { url: None } => {
-            let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-
-            if let Some(url) = config.server_url() {
-                run_device_login(url)?;
-            } else {
-                bail!("This project is not using a dvs server");
+        Command::Logout { url } => {
+            let url = server_url(url, &current_dir)?;
+            if std::env::var(TOKEN_ENV).is_ok_and(|t| !t.trim().is_empty()) {
+                eprintln!(
+                    "Note: {TOKEN_ENV} is set; it is not revoked. Unset it to stop using it."
+                );
+            }
+            match get_token(&url)? {
+                None => println!("You were not logged in to {url}"),
+                Some(token) => {
+                    match remote::revoke(&url, &token) {
+                        Ok(_) => {}
+                        Err(e) => eprintln!(
+                            "Could not reach {url} to revoke the token ({e:#}). It is forgotten \
+                             here, but stays valid on the server until it expires."
+                        ),
+                    }
+                    delete_token(&url)?;
+                    println!("Logged out of {url}");
+                }
             }
         }
-        Command::Logout => {
-            let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-
-            if let Some(url) = config.server_url() {
-                let removed = delete_token(url)?;
-                if removed {
-                    println!("Logged out successfully");
-                } else {
-                    println!("You were not logged in");
-                }
+        Command::Info { url } => {
+            let config = match &url {
+                Some(_) => None,
+                None => Config::find(&current_dir).transpose()?,
+            };
+            let project = config.as_ref().and_then(|c| match c.backend() {
+                Backend::Server(s) => Some(s.clone()),
+                Backend::Local(_) => None,
+            });
+            let url = match (url, &project, &config) {
+                (Some(url), _, _) => url,
+                (None, Some(s), _) => s.url.clone(),
+                (None, None, Some(_)) => bail!("This project is not using a dvs server"),
+                (None, None, None) => bail!("Not in a DVS repository; give the server URL"),
+            };
+            let server = project.clone().unwrap_or_else(|| {
+                dvs::backends::server::ServerBackend::new(String::new(), None, url.clone())
+            });
+            let info = server.server_info()?;
+            let source = server.token_source();
+            let me = server.me();
+            let role = match (&project, &me) {
+                (Some(p), Ok(_)) => Some(p.project()),
+                _ => None,
+            };
+            if cli.json {
+                println!(
+                    "{}",
+                    json!({
+                        "server": url,
+                        "server_version": info.server_version,
+                        "api_versions": info.api_versions,
+                        "client_version": dvs::VERSION,
+                        "token_source": source,
+                        "me": me.as_ref().ok(),
+                        "project": role.as_ref().and_then(|r| r.as_ref().ok()),
+                    })
+                );
             } else {
-                bail!("This project is not using a dvs server");
+                println!(
+                    "Server:  {url} (dvs-server {}, API {:?})",
+                    info.server_version, info.api_versions
+                );
+                println!("Client:  dvs {}", dvs::VERSION);
+                if let Ok(me) = &me {
+                    let name = me.username.as_deref().unwrap_or(&me.sub);
+                    match &me.email {
+                        Some(email) => println!("User:    {name} <{email}>"),
+                        None => println!("User:    {name}"),
+                    }
+                    let from = match source {
+                        Some(TokenSource::Environment) => TOKEN_ENV,
+                        _ => "dvs login",
+                    };
+                    match &me.token {
+                        Some(t) => println!("Token:   from {from}, expires {}", t.expires_at),
+                        None => println!("Token:   from {from}"),
+                    }
+                }
+                if let Some(Ok(p)) = &role {
+                    println!(
+                        "Project: {}, your role: {}{}",
+                        p.name,
+                        p.your_role.as_str(),
+                        if p.locked {
+                            " (locked: uploads are refused)"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+            }
+            me?;
+            if let Some(role) = role {
+                role?;
             }
         }
     }
@@ -600,7 +741,47 @@ fn try_main() -> Result<()> {
 
 fn main() {
     if let Err(e) = try_main() {
-        eprintln!("Error: {e}");
-        ::std::process::exit(1)
+        eprintln!("Error: {e:#}");
+        ::std::process::exit(exit_code(&e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn files(codes: &[&str]) -> anyhow::Error {
+        FilesFailed {
+            action: "add",
+            codes: codes.iter().map(|c| c.to_string()).collect(),
+        }
+        .into()
+    }
+
+    #[test]
+    fn the_first_applicable_exit_code_wins() {
+        assert_eq!(exit_code(&anyhow!("plain")), 1);
+        assert_eq!(
+            exit_code(&ApiError::new(409, "project_exists", "").into()),
+            4
+        );
+        assert_eq!(
+            exit_code(&ApiError::new(404, "project_not_found", "").into()),
+            5
+        );
+        let wrapped =
+            anyhow::Error::from(ApiError::new(401, "token_expired", "")).context("while adding");
+        assert_eq!(exit_code(&wrapped), 3);
+
+        assert_eq!(exit_code(&files(&["", "hash_mismatch"])), 1);
+        assert_eq!(exit_code(&files(&["", "project_exists"])), 4);
+        assert_eq!(
+            exit_code(&files(&["project_exists", "insufficient_role"])),
+            5
+        );
+        assert_eq!(
+            exit_code(&files(&["insufficient_role", "unauthenticated", ""])),
+            3
+        );
     }
 }

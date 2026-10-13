@@ -16,7 +16,7 @@ test_that("dvs_add on a single Theoph CSV returns a tibble with bytes columns", 
   expect_equal(typeof(unclass(result$stored_size)), "double")
   expect_true(result$size > 0)
   expect_true(nzchar(result$hash))
-  expect_equal(result$outcome, "copied")
+  expect_equal(result$outcome, "added")
 })
 
 test_that("dvs_add on several shuffled Theoph variants produces distinct hashes", {
@@ -32,23 +32,23 @@ test_that("dvs_add on several shuffled Theoph variants produces distinct hashes"
   expect_s3_class(result, "tbl_df")
   expect_equal(nrow(result), 3L)
   expect_equal(length(unique(result$hash)), 3L)
-  expect_true(all(result$outcome == "copied"))
+  expect_true(all(result$outcome == "added"))
   expect_true(all(result$size > 0))
 })
 
-test_that("re-adding the same path reports 'present'", {
+test_that("re-adding an unchanged path reports 'skipped'", {
   new_dvs_test_repo()
   write_theoph("a.csv")
 
   first <- dvs_add(paths = file.path(getwd(), "a.csv"))
   second <- dvs_add(paths = file.path(getwd(), "a.csv"))
 
-  expect_equal(first$outcome, "copied")
-  expect_equal(second$outcome, "present")
+  expect_equal(first$outcome, "added")
+  expect_equal(second$outcome, "skipped")
   expect_equal(first$hash, second$hash)
 })
 
-test_that("two files with identical content share a hash but both 'copied'", {
+test_that("a copy of added content is recorded as 'present'", {
   new_dvs_test_repo()
   write_theoph("a.csv")
   file.copy("a.csv", "b.csv")
@@ -57,8 +57,10 @@ test_that("two files with identical content share a hash but both 'copied'", {
   second <- dvs_add(paths = file.path(getwd(), "b.csv"))
 
   expect_equal(first$hash, second$hash)
-  expect_equal(first$outcome, "copied")
-  expect_equal(second$outcome, "copied")
+  expect_equal(first$outcome, "added")
+  # The content is already stored, so only the path is recorded
+  expect_equal(second$outcome, "present")
+  expect_true(file.exists(file.path(getwd(), ".dvs", "b.csv.dvs")))
 })
 
 test_that("dvs_add dry_run returns a tibble but writes nothing to storage", {
@@ -101,7 +103,7 @@ test_that("dvs_add accepts a message without error", {
     paths = file.path(getwd(), "t.csv"),
     message = "added theoph"
   )
-  expect_equal(result$outcome, "copied")
+  expect_equal(result$outcome, "added")
 })
 
 test_that("dvs_add refuses the whole batch when any path is invalid", {
@@ -131,15 +133,15 @@ test_that("dvs_add reports per-file failures in the result, not as a warning", {
     result <- dvs_add(paths = file.path(getwd(), c("good.csv", "noperm.csv")))
   )
 
-  # The good file is added. The bad file's row carries the error message in the
-  # `error` column, with its `outcome` left NA.
+  # The good file is added. The bad file's row is `failed`, with the error
+  # message in the `error` column.
   expect_true(file.exists(file.path(getwd(), ".dvs", "good.csv.dvs")))
   good <- result[basename(result$path) == "good.csv", ]
-  expect_equal(good$outcome, "copied")
+  expect_equal(good$outcome, "added")
   bad <- result[basename(result$path) == "noperm.csv", ]
   expect_equal(nrow(bad), 1L)
   expect_true(nzchar(bad$error))
-  expect_true(is.na(bad$outcome))
+  expect_equal(bad$outcome, "failed")
 })
 
 test_that("dvs_add resolves a bare relative path from a nested working directory", {
@@ -154,7 +156,7 @@ test_that("dvs_add resolves a bare relative path from a nested working directory
 
   expect_s3_class(result, "tbl_df")
   expect_equal(nrow(result), 1L)
-  expect_equal(result$outcome, "copied")
+  expect_equal(result$outcome, "added")
   # metadata sidecar mirrors the repo-root-relative path
   expect_true(file.exists(
     file.path(repo, ".dvs", "analysis", "run1", "data.csv.dvs")

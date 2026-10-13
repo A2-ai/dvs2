@@ -1,10 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::api::v1::{BatchKind, CompleteBatch};
+use crate::backends::Batch;
 use crate::cache::{HashCache, try_open_cache};
 use crate::files::metadata::FileMetadata;
+use crate::git::current_git_context;
 use crate::paths::ProjectPath;
 use crate::progress::OnFileStart;
+use crate::remote::api_error;
 use crate::utils::get_threadpool;
 use crate::{Backend, Compression, DvsPaths, Outcome, RetrieveRequest, cache};
 use anyhow::{Context, Result, anyhow, bail};
@@ -13,74 +17,78 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-fn get_file(
-    backend: &Backend,
-    paths: &DvsPaths,
-    relative_path: impl AsRef<Path>,
-    cache: Option<&Mutex<HashCache>>,
-    operation_id: Uuid,
-    dry_run: bool,
-    on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-) -> Result<(Outcome, u64)> {
-    log::debug!("Retrieving file: {}", relative_path.as_ref().display());
-    let dvs_file_path = paths.metadata_path(relative_path.as_ref());
-    if !dvs_file_path.is_file() {
-        bail!(
-            "File {} is not tracked by DVS",
-            relative_path.as_ref().display()
-        );
-    }
+/// A tracked file whose local copy is missing or different.
+struct Needed {
+    metadata: FileMetadata,
+    path: ProjectPath,
+}
 
-    let metadata: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)?;
+/// Read the file's metadata: `None` when the local copy already matches.
+fn check_file(
+    paths: &DvsPaths,
+    relative_path: &Path,
+    cache: Option<&Mutex<HashCache>>,
+) -> Result<Option<Needed>> {
+    let dvs_file_path = paths.metadata_path(relative_path);
+    if !dvs_file_path.is_file() {
+        bail!("File {} is not tracked by DVS", relative_path.display());
+    }
+    let metadata = FileMetadata::read(&dvs_file_path)?;
     log::debug!(
         "Read metadata for {}: {}",
-        relative_path.as_ref().display(),
+        relative_path.display(),
         metadata.hashes
     );
 
-    let target_path = paths.file_path(relative_path.as_ref());
-    let rel_str = relative_path.as_ref().to_string_lossy();
-
-    // Check if target already exists and matches
+    let target_path = paths.file_path(relative_path);
     if target_path.is_file() {
+        let rel_str = relative_path.to_string_lossy();
         let (hashes, size) = cache::hashes_for_file(&target_path, &rel_str, cache)?;
-
         if hashes == metadata.hashes && size == metadata.size {
             log::debug!(
                 "File {} already present locally and matches",
-                relative_path.as_ref().display()
+                relative_path.display()
             );
-            return Ok((Outcome::Present, metadata.size));
+            return Ok(None);
         }
     }
+    let path = ProjectPath::from_path(relative_path).map_err(|e| anyhow!("{e}"))?;
+    Ok(Some(Needed { metadata, path }))
+}
 
-    if dry_run {
-        // We only check for a dry run, the normal get will 404
-        if !backend.exists(&metadata.hashes)? {
-            bail!("Storage file missing for hash: {}", metadata.hashes);
-        }
-        return Ok((Outcome::Copied, metadata.size));
-    }
-
+/// Download one file into place: into a temporary file, verified, then renamed over
+/// the target, so a failure leaves the local copy as it was.
+fn fetch_file(
+    backend: &Backend,
+    batch: &Batch,
+    paths: &DvsPaths,
+    relative_path: &Path,
+    needed: Needed,
+    cache: Option<&Mutex<HashCache>>,
+    on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+) -> Result<u64> {
+    let Needed { metadata, path } = needed;
+    let target_path = paths.file_path(relative_path);
     let tmp_path = target_path.with_extension(format!("dvs-tmp.{}", Uuid::new_v4()));
     log::debug!(
         "Copying {} from storage to temp file {}",
         metadata.hashes,
         tmp_path.display()
     );
-    let path = ProjectPath::from_path(relative_path.as_ref()).map_err(|e| anyhow!("{e}"))?;
 
     let result = (|| {
         let retrieved = backend
-            .retrieve(RetrieveRequest {
-                hashes: &metadata.hashes,
-                target: &tmp_path,
-                compression: metadata.compression,
-                path,
-                operation_id,
-                on_bytes,
-            })
-            .with_context(|| format!("Failed to retrieve {}", relative_path.as_ref().display()))?;
+            .fetch(
+                batch,
+                RetrieveRequest {
+                    hashes: &metadata.hashes,
+                    target: &tmp_path,
+                    compression: metadata.compression,
+                    path,
+                    on_bytes,
+                },
+            )
+            .with_context(|| format!("Failed to retrieve {}", relative_path.display()))?;
         if !retrieved {
             bail!("Storage file missing for hash: {}", metadata.hashes);
         }
@@ -97,15 +105,15 @@ fn get_file(
     let actual = result?;
 
     // Store retrieved file's hashes in cache
-    if let Some(mtx) = cache {
-        if let Ok(stat) = cache::FileStat::from_path(&target_path) {
-            if let Err(e) = mtx.lock().unwrap().insert(&rel_str, &stat, &actual.hashes) {
-                log::warn!("Cache store failed after get for {rel_str}: {e}");
-            }
-        }
+    let rel_str = relative_path.to_string_lossy();
+    if let Some(mtx) = cache
+        && let Ok(stat) = cache::FileStat::from_path(&target_path)
+        && let Err(e) = mtx.lock().unwrap().insert(&rel_str, &stat, &actual.hashes)
+    {
+        log::warn!("Cache store failed after get for {rel_str}: {e}");
     }
 
-    Ok((Outcome::Copied, metadata.size))
+    Ok(metadata.size)
 }
 
 /// Result of getting a single file.
@@ -119,14 +127,34 @@ pub struct GetResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum GetDetail {
-    Success { outcome: Outcome, size: u64 },
-    Error { error: String },
+    Success {
+        outcome: Outcome,
+        size: u64,
+    },
+    Error {
+        error: String,
+        /// The server's error code, when it gave one
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+    },
+}
+
+impl GetDetail {
+    fn error(e: &anyhow::Error) -> Self {
+        GetDetail::Error {
+            error: format!("{e:#}"),
+            code: api_error(e).map(|a| a.code.clone()),
+        }
+    }
 }
 
 /// Gets files matching a glob pattern from DVS storage.
 ///
 /// The pattern is matched against tracked files (paths in metadata folder).
 /// The pattern is adjusted based on cwd relative to repo root.
+///
+/// Files whose local copy already matches are not fetched. A download batch is
+/// opened only when some file needs fetching, and closed when they are done.
 pub fn get_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
@@ -166,60 +194,133 @@ pub fn get_files(
 
     let pool = get_threadpool(tracked_paths.len())?;
     let cache = try_open_cache(paths);
-    let operation_id = Uuid::new_v4();
 
-    let mut results: Vec<GetResult> = pool.install(|| {
+    let checked: Vec<_> = pool.install(|| {
         tracked_paths
             .into_par_iter()
-            .map(|relative_path| {
-                let file_size = {
-                    let meta_path = paths.metadata_path(&relative_path);
-                    fs::File::open(&meta_path)
-                        .ok()
-                        .and_then(|f| serde_json::from_reader::<_, FileMetadata>(f).ok())
-                        .map(|m| m.size)
-                        .unwrap_or(0)
-                };
-                let file_progress = on_file_start.map(|f| f(&relative_path, file_size));
-                let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
-
-                let result = match get_file(
-                    backend,
-                    paths,
-                    &relative_path,
-                    cache.as_ref(),
-                    operation_id,
-                    dry_run,
-                    on_bytes,
-                ) {
-                    Ok((outcome, size)) => {
-                        log::info!(
-                            "Successfully retrieved {} ({:?})",
-                            relative_path.display(),
-                            outcome
-                        );
-                        GetResult {
-                            path: relative_path,
-                            detail: GetDetail::Success { outcome, size },
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to get {}: {e}", relative_path.display());
-                        GetResult {
-                            path: relative_path,
-                            detail: GetDetail::Error {
-                                error: e.to_string(),
-                            },
-                        }
-                    }
-                };
-                if let Some(fp) = &file_progress {
-                    (fp.on_done)(matches!(result.detail, GetDetail::Success { .. }));
-                }
-                result
+            .map(|path| {
+                let checked = check_file(paths, &path, cache.as_ref());
+                (path, checked)
             })
             .collect()
     });
+
+    let mut results = Vec::with_capacity(checked.len());
+    let mut needed = Vec::new();
+    for (path, checked) in checked {
+        match checked {
+            Ok(None) => results.push((
+                path,
+                GetDetail::Success {
+                    outcome: Outcome::Present,
+                    size: 0,
+                },
+            )),
+            Ok(Some(n)) => needed.push((path, n)),
+            Err(e) => {
+                log::warn!("Failed to get {}: {e:#}", path.display());
+                results.push((path, GetDetail::error(&e)));
+            }
+        }
+    }
+    // A present file reports the size its metadata records
+    for (path, detail) in &mut results {
+        if let GetDetail::Success { size, .. } = detail
+            && let Ok(m) = FileMetadata::read(&paths.metadata_path(path))
+        {
+            *size = m.size;
+        }
+    }
+    let report = |results: &[(PathBuf, GetDetail)]| {
+        if let Some(on_file_start) = on_file_start {
+            for (path, detail) in results {
+                let progress = on_file_start(path, 0);
+                (progress.on_done)(matches!(detail, GetDetail::Success { .. }));
+            }
+        }
+    };
+    report(&results);
+
+    if dry_run {
+        let checked: Vec<_> = pool.install(|| {
+            needed
+                .into_par_iter()
+                .map(|(path, n)| {
+                    let detail = match backend.exists(&n.metadata.hashes) {
+                        Ok(true) => GetDetail::Success {
+                            outcome: Outcome::Copied,
+                            size: n.metadata.size,
+                        },
+                        Ok(false) => GetDetail::error(&anyhow!(
+                            "Storage file missing for hash: {}",
+                            n.metadata.hashes
+                        )),
+                        Err(e) => GetDetail::error(&e),
+                    };
+                    (path, detail)
+                })
+                .collect()
+        });
+        report(&checked);
+        results.extend(checked);
+    } else if !needed.is_empty() {
+        let git = current_git_context(paths.repo_root());
+        let batch = backend.open_batch(BatchKind::Download, None, &git, Compression::default())?;
+        let fetched: Vec<_> = pool.install(|| {
+            needed
+                .into_par_iter()
+                .map(|(path, n)| {
+                    let progress = on_file_start.map(|f| f(&path, n.metadata.size));
+                    let on_bytes = progress.as_ref().map(|p| &*p.on_bytes);
+                    let detail = match fetch_file(
+                        backend,
+                        &batch,
+                        paths,
+                        &path,
+                        n,
+                        cache.as_ref(),
+                        on_bytes,
+                    ) {
+                        Ok(size) => {
+                            log::info!("Successfully retrieved {}", path.display());
+                            GetDetail::Success {
+                                outcome: Outcome::Copied,
+                                size,
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to get {}: {e:#}", path.display());
+                            GetDetail::error(&e)
+                        }
+                    };
+                    if let Some(p) = &progress {
+                        (p.on_done)(matches!(detail, GetDetail::Success { .. }));
+                    }
+                    (path, detail)
+                })
+                .collect()
+        });
+        let mut counts = CompleteBatch::default();
+        for (_, detail) in results.iter().chain(&fetched) {
+            match detail {
+                GetDetail::Success {
+                    outcome: Outcome::Copied,
+                    ..
+                } => counts.ok += 1,
+                GetDetail::Success { .. } => counts.skipped += 1,
+                GetDetail::Error { .. } => counts.failed += 1,
+            }
+        }
+        if let Err(e) = backend.complete(&batch, &counts) {
+            log::warn!("The files were retrieved, but closing the download failed: {e:#}");
+        }
+        results.extend(fetched);
+    }
+
+    let mut results: Vec<_> = results
+        .into_iter()
+        .map(|(path, detail)| GetResult { path, detail })
+        .collect();
     results.sort_by(|a, b| a.path.cmp(&b.path));
 
     Ok(results)
@@ -231,14 +332,13 @@ mod tests {
     use crate::Hashes;
     use crate::add_files;
     use crate::config::Config;
-    use crate::files::add::AddDetail;
+    use crate::files::add::AddOutcome;
     use crate::files::status::get_status;
     use crate::progress::FileProgress;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
-    use uuid::Uuid;
 
     /// An initialized DVS repo with a temporary backend, plus helpers to track and
     /// retrieve files. Collapses the per-test setup boilerplate to `TestRepo::new()`.
@@ -267,10 +367,6 @@ mod tests {
             self.config.backend()
         }
 
-        fn cache(&self) -> Mutex<HashCache> {
-            Mutex::new(HashCache::open(&self.paths.cache_folder().join("dvs.db")).unwrap())
-        }
-
         /// Create `name` with `content` and track it, returning its path and metadata.
         fn track(
             &self,
@@ -279,31 +375,28 @@ mod tests {
             compression: Compression,
         ) -> (PathBuf, FileMetadata) {
             let file_path = create_file(&self.root, name, content);
-            let mut metadata = FileMetadata::from_file(&file_path, compression, None).unwrap();
-            metadata
-                .save(
-                    Uuid::new_v4(),
-                    &file_path,
-                    self.backend(),
-                    &self.paths,
-                    name,
-                    None,
-                )
-                .unwrap();
+            let results = add_files(
+                vec![name.into()],
+                &self.paths,
+                self.backend(),
+                None,
+                compression,
+                false,
+                None,
+            )
+            .unwrap();
+            assert!(!results[0].is_failure(), "{results:?}");
+            let metadata = FileMetadata::read(&self.paths.metadata_path(Path::new(name))).unwrap();
             (file_path, metadata)
         }
 
         /// Run a real (non-dry-run) single-file `get`.
         fn get(&self, name: &str) -> Result<(Outcome, u64)> {
-            get_file(
-                self.backend(),
-                &self.paths,
-                name,
-                Some(&self.cache()),
-                Uuid::nil(),
-                false,
-                None,
-            )
+            let results = get_files(vec![name.into()], &self.paths, self.backend(), false, None)?;
+            match &results[0].detail {
+                GetDetail::Success { outcome, size } => Ok((*outcome, *size)),
+                GetDetail::Error { error, .. } => Err(anyhow!("{error}")),
+            }
         }
 
         /// Overwrite the stored blob for `hashes` with `content`, defeating verification.
@@ -354,7 +447,10 @@ mod tests {
     fn get_file_fails_for_untracked_file() {
         let repo = TestRepo::new();
         let err = repo.get("untracked.txt").unwrap_err().to_string();
-        assert!(err.contains("not tracked"), "unexpected error: {err}");
+        assert!(
+            err.contains("cannot be retrieved"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -432,13 +528,7 @@ mod tests {
         .unwrap();
         assert_eq!(results.len(), expected_files.len());
         for result in &results {
-            assert!(matches!(
-                result.detail,
-                AddDetail::Success {
-                    outcome: Outcome::Copied,
-                    ..
-                }
-            ));
+            assert_eq!(result.outcome, AddOutcome::Added);
         }
 
         // Verify correct files are tracked
