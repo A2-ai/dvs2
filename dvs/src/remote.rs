@@ -1,6 +1,7 @@
 //! The v1 server API from the client side: transport, errors, discovery and login.
 
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, OnceLock};
 use std::thread::sleep;
 use std::time::Duration;
@@ -59,9 +60,11 @@ impl ApiError {
     /// Parse the error envelope; anything else becomes a generic error with the
     /// status and the start of the body.
     pub fn from_body(status: u16, body: &str) -> Self {
-        if let Ok(Value::Object(mut root)) = serde_json::from_str::<Value>(body)
-            && let Some(Value::Object(mut error)) = root.remove("error")
-        {
+        let error = match serde_json::from_str::<Value>(body) {
+            Ok(Value::Object(mut root)) => root.remove("error"),
+            _ => None,
+        };
+        if let Some(Value::Object(mut error)) = error {
             let take = |e: &mut Map<String, Value>, k: &str| match e.remove(k) {
                 Some(Value::String(s)) => Some(s),
                 _ => None,
@@ -143,6 +146,8 @@ pub fn token_for(url: &Url) -> Result<Option<(String, TokenSource)>> {
 pub struct Client {
     token: OnceLock<Option<(String, TokenSource)>>,
     info: OnceLock<ServerInfo>,
+    /// The stored token was rejected and has been forgotten
+    forgotten: AtomicBool,
 }
 
 /// A transport failure: no response at all, so the request may or may not have
@@ -157,6 +162,11 @@ impl fmt::Display for NoResponse {
 }
 
 impl std::error::Error for NoResponse {}
+
+/// Whether the request got no response at all.
+pub fn is_no_response(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<NoResponse>().is_some())
+}
 
 pub type Response = ureq::http::Response<ureq::Body>;
 
@@ -205,6 +215,12 @@ impl Client {
                 })
             })
             .as_ref()
+    }
+
+    /// True the first time only: a rejected stored token is forgotten once per client,
+    /// however many requests saw it rejected.
+    pub fn forget_once(&self) -> bool {
+        !self.forgotten.swap(true, Ordering::SeqCst)
     }
 
     pub fn bearer(&self, base: &Url) -> Result<String> {

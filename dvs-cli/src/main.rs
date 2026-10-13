@@ -301,7 +301,18 @@ fn run_device_login(url: &Url) -> Result<()> {
 }
 
 fn try_main() -> Result<()> {
-    env_logger::init();
+    // Warnings (a failed `complete`, a retried upload) show unless RUST_LOG says otherwise,
+    // as `warning: ...` unless RUST_LOG asks for the full format
+    let mut logger =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("dvs=warn"));
+    if std::env::var_os("RUST_LOG").is_none() {
+        logger.format(|buf, record| {
+            use std::io::Write;
+            let level = record.level().as_str().to_ascii_lowercase();
+            writeln!(buf, "{level}: {}", record.args())
+        });
+    }
+    logger.init();
 
     let cli = Cli::parse();
     if let Some(n) = cli.threads {
@@ -638,7 +649,11 @@ fn try_main() -> Result<()> {
         }
         Command::Logout { url } => {
             let url = server_url(url, &current_dir)?;
-            if std::env::var(TOKEN_ENV).is_ok_and(|t| !t.trim().is_empty()) {
+            let env_token = std::env::var(TOKEN_ENV)
+                .ok()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty());
+            if env_token.is_some() {
                 eprintln!(
                     "Note: {TOKEN_ENV} is set; it is not revoked. Unset it to stop using it."
                 );
@@ -646,12 +661,23 @@ fn try_main() -> Result<()> {
             match get_token(&url)? {
                 None => println!("You were not logged in to {url}"),
                 Some(token) => {
-                    match remote::revoke(&url, &token) {
-                        Ok(_) => {}
-                        Err(e) => eprintln!(
-                            "Could not reach {url} to revoke the token ({e:#}). It is forgotten \
-                             here, but stays valid on the server until it expires."
-                        ),
+                    if env_token.as_deref() == Some(token.as_str()) {
+                        eprintln!(
+                            "The stored token is the one in {TOKEN_ENV}, so it is not revoked; \
+                             it is only forgotten here."
+                        );
+                    } else {
+                        match remote::revoke(&url, &token) {
+                            Ok(_) => {}
+                            Err(e) if remote::is_no_response(&e) => eprintln!(
+                                "Could not reach {url} to revoke the token ({e:#}). It is \
+                                 forgotten here, but stays valid on the server until it expires."
+                            ),
+                            Err(e) => eprintln!(
+                                "{url} did not revoke the token ({e:#}). It is forgotten here, \
+                                 but may stay valid on the server until it expires."
+                            ),
+                        }
                     }
                     delete_token(&url)?;
                     println!("Logged out of {url}");

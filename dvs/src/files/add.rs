@@ -18,7 +18,7 @@ use crate::gitignore::add_to_gitignore;
 use crate::paths::{DvsPaths, ProjectPath};
 use crate::progress::OnFileStart;
 use crate::remote::api_error;
-use crate::utils::get_threadpool;
+use crate::utils::{format_size, get_threadpool, requested_threads, thread_count};
 
 /// The largest manifest body sent, whatever the server allows.
 const MAX_MANIFEST_BYTES: usize = 10 * 1024 * 1024;
@@ -296,14 +296,44 @@ pub fn add_files(
             .filter(|r| !r.is_failure())
             .map(|r| r.path.clone())
             .collect();
-        if !recorded.is_empty()
-            && let Err(e) = add_to_gitignore(paths.repo_root(), &recorded)
-        {
-            log::warn!("Failed to update .gitignore: {e}");
+        if !recorded.is_empty() {
+            if let Err(e) = add_to_gitignore(paths.repo_root(), &recorded) {
+                log::warn!("Failed to update .gitignore: {e}");
+            }
         }
     }
 
     Ok(results.into_values().collect())
+}
+
+/// Why the server would refuse this file's manifest entry, checked before sending so
+/// one bad file does not fail the others in its manifest call.
+fn entry_problem(h: &Hashed, limits: &ManifestLimits) -> Option<String> {
+    let path = h.project_path.as_str();
+    if let Some(max) = limits.max_path_bytes.filter(|&max| path.len() > max) {
+        return Some(format!(
+            "the path is {} bytes; the server takes at most {max}",
+            path.len()
+        ));
+    }
+    if path.chars().any(char::is_control) {
+        return Some("the path contains a control character".into());
+    }
+    if let Some(max) = limits.max_blob_size.filter(|&max| h.size > max) {
+        return Some(format!(
+            "{} is larger than the server takes ({})",
+            format_size(h.size),
+            format_size(max)
+        ));
+    }
+    None
+}
+
+/// The entry an `invalid_entry` error names, as an index into the call's entries.
+fn invalid_index(e: &anyhow::Error, len: usize) -> Option<usize> {
+    let api = api_error(e).filter(|a| a.code == "invalid_entry")?;
+    let index = usize::try_from(api.details.get("index")?.as_u64()?).ok()?;
+    (index < len).then_some(index)
 }
 
 /// One upload batch for the files in `to_send`, writing each file's result.
@@ -319,12 +349,28 @@ fn upload(
     progressed: &mut HashSet<PathBuf>,
 ) -> Result<()> {
     let limits = backend.manifest_limits()?;
+    let mut to_send: Vec<&Hashed> = to_send.iter().collect();
+    to_send.retain(|h| match entry_problem(h, &limits) {
+        None => true,
+        Some(error) => {
+            log::warn!("Cannot add {}: {error}", h.path.display());
+            let failure = Failure {
+                error,
+                code: Some("invalid_entry".into()),
+            };
+            results.insert(h.path.clone(), h.failed(AddOutcome::Failed, &failure));
+            false
+        }
+    });
+    if to_send.is_empty() {
+        return Ok(());
+    }
     let git = current_git_context(paths.repo_root());
     let batch = backend.open_batch(BatchKind::Upload, message.as_deref(), &git, compression)?;
 
     // The manifest, in chunks. After a chunk fails, later chunks are not sent; the
     // contents of earlier chunks are still uploaded.
-    let items: Vec<_> = to_send.iter().map(Hashed::item).collect();
+    let items: Vec<_> = to_send.iter().map(|h| h.item()).collect();
     let mut missing = BTreeSet::new();
     let mut present: HashMap<String, PresentSize> = HashMap::new();
     let mut project_compression = compression;
@@ -341,23 +387,47 @@ fn upload(
             }
             continue;
         }
-        match backend.manifest(&batch, &items[range.clone()]) {
-            Ok(reply) => {
-                missing.extend(reply.missing);
-                present.extend(reply.present);
-                project_compression = reply.compression;
-                recorded[range].fill(true);
-            }
-            Err(e) => {
-                log::warn!("The manifest failed: {e:#}");
-                let failure = Failure::from(&e);
-                for h in &to_send[range] {
-                    results.insert(h.path.clone(), h.failed(AddOutcome::Failed, &failure));
+        // Indexes into `to_send` still to record; one entry the server refuses is
+        // failed and the rest sent once more
+        let mut pending: Vec<usize> = range.collect();
+        let mut resent = false;
+        loop {
+            let chunk: Vec<_> = pending.iter().map(|&i| items[i].clone()).collect();
+            match backend.manifest(&batch, &chunk) {
+                Ok(reply) => {
+                    missing.extend(reply.missing);
+                    present.extend(reply.present);
+                    project_compression = reply.compression;
+                    for &i in &pending {
+                        recorded[i] = true;
+                    }
                 }
-                failed_chunk = true;
+                Err(e) => {
+                    if let Some(bad) = invalid_index(&e, pending.len()).filter(|_| !resent) {
+                        let h = to_send[pending.remove(bad)];
+                        log::warn!("Cannot add {}: {e:#}", h.path.display());
+                        results.insert(h.path.clone(), h.failed(AddOutcome::Failed, &(&e).into()));
+                        resent = true;
+                        if !pending.is_empty() {
+                            continue;
+                        }
+                        break;
+                    }
+                    log::warn!("The manifest failed: {e:#}");
+                    let failure = Failure::from(&e);
+                    for &i in &pending {
+                        let h = to_send[i];
+                        results.insert(h.path.clone(), h.failed(AddOutcome::Failed, &failure));
+                    }
+                    failed_chunk = true;
+                }
             }
+            break;
         }
     }
+    // Content another upload published while the manifest was being sent: a later
+    // call reported it present, so its bytes are not needed
+    missing.retain(|hash| !present.contains_key(hash));
 
     // Each missing content once, from the first file holding it
     let mut sources: BTreeMap<&str, &Hashed> = BTreeMap::new();
@@ -371,11 +441,11 @@ fn upload(
         HashMap::new()
     } else {
         let threads = match backend {
-            Backend::Server(_) => MAX_PARALLEL_UPLOADS.min(sources.len()),
-            Backend::Local(_) => get_threadpool(sources.len())?.current_num_threads(),
+            Backend::Server(_) => requested_threads().unwrap_or(MAX_PARALLEL_UPLOADS),
+            Backend::Local(_) => thread_count(sources.len()),
         };
         let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
+            .num_threads(threads.clamp(1, sources.len()))
             .build()?;
         pool.install(|| {
             sources
@@ -408,7 +478,7 @@ fn upload(
                 results.insert(h.path.clone(), h.failed(AddOutcome::Failed, failure));
                 continue;
             }
-            (None, Some(p)) => (AddOutcome::Present, p.stored_size),
+            (None, Some(p)) => (AddOutcome::Present, Some(p.stored_size)),
             (None, None) => {
                 let failure = Failure {
                     error: "the server did not say whether it has this content".into(),
@@ -427,7 +497,10 @@ fn upload(
         let result = match metadata.write(&paths.metadata_path(&h.path)) {
             Ok(()) => {
                 log::info!("Added {} ({outcome:?})", h.path.display());
-                h.result(outcome, Some(stored_size))
+                if let Err(e) = backend.record(&batch, &h.item()) {
+                    log::warn!("{} was added, but not logged: {e:#}", h.path.display());
+                }
+                h.result(outcome, stored_size)
             }
             Err(e) => {
                 log::warn!("{e:#}");
@@ -743,6 +816,33 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_store_is_not_logged() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+        create_file(&root, "a.txt", b"stored");
+        create_file(&root, "b.txt", b"not stored");
+        // A file where b.txt's content directory goes, so storing it fails
+        let Backend::Local(local) = backend else {
+            unreachable!()
+        };
+        let hash = Hashes::compute_from_path(&root.join("b.txt"), &[])
+            .unwrap()
+            .0
+            .blake3;
+        fs::create_dir_all(&local.path).unwrap();
+        fs::write(local.path.join(&hash[..2]), b"in the way").unwrap();
+
+        let results = add(&paths, backend, &["a.txt", "b.txt"], false);
+        assert_eq!(
+            outcomes(&results),
+            [("a.txt", AddOutcome::Added), ("b.txt", AddOutcome::Failed)]
+        );
+        assert_eq!(added_paths(backend), [PathBuf::from("a.txt")]);
+    }
+
+    #[test]
     fn manifests_split_at_either_limit() {
         let item = |i: usize| ManifestItem {
             path: ProjectPath::from_canonical(&format!("dir/file-{i:04}.csv")).unwrap(),
@@ -756,6 +856,8 @@ mod tests {
         let unlimited = ManifestLimits {
             max_entries: usize::MAX,
             max_body_bytes: usize::MAX,
+            max_blob_size: None,
+            max_path_bytes: None,
         };
         let whole = manifest_chunks(&items, unlimited);
         assert_eq!((whole.len(), whole[0].clone()), (1, 0..10));

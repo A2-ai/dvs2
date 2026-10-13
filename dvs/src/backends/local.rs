@@ -223,7 +223,8 @@ impl LocalBackend {
         Ok(false)
     }
 
-    /// Log one entry per path and report which contents storage lacks.
+    /// Report which contents storage lacks. Paths are logged by [`Self::record`] once
+    /// their content is stored.
     pub fn manifest(&self, batch: &Batch, items: &[ManifestItem]) -> Result<ManifestReply> {
         let mut missing = BTreeSet::new();
         let mut present = HashMap::new();
@@ -243,16 +244,6 @@ impl LocalBackend {
                     missing.insert(hash);
                 }
             }
-            let entry = AuditEntry::new_add(
-                batch.id,
-                AuditFile {
-                    path: item.path.to_native(),
-                    hashes: item.hashes.clone(),
-                },
-                batch.compression,
-                batch.message.clone(),
-            );
-            self.log_audit_entry(&entry)?;
         }
         Ok(ManifestReply {
             missing,
@@ -261,7 +252,20 @@ impl LocalBackend {
         })
     }
 
-    /// Store the content's bytes, compressed. Only copies bytes: the manifest logged
+    /// Log one path whose content storage has: one entry per path added.
+    pub fn record(&self, batch: &Batch, item: &ManifestItem) -> Result<()> {
+        self.log_audit_entry(&AuditEntry::new_add(
+            batch.id,
+            AuditFile {
+                path: item.path.to_native(),
+                hashes: item.hashes.clone(),
+            },
+            batch.compression,
+            batch.message.clone(),
+        ))
+    }
+
+    /// Store the content's bytes, compressed. Only copies bytes: [`Self::record`] logs
     /// the paths.
     pub fn put(
         &self,
@@ -274,7 +278,7 @@ impl LocalBackend {
         let blob_path = self.hash_to_path(hashes)?;
         if blob_path.is_file() {
             return Ok(Stored {
-                stored_size: fs::metadata(&blob_path)?.len(),
+                stored_size: Some(fs::metadata(&blob_path)?.len()),
                 compression,
             });
         }
@@ -302,7 +306,7 @@ impl LocalBackend {
             let _ = fs::remove_file(&tmp_path);
         }
         Ok(Stored {
-            stored_size: result?,
+            stored_size: Some(result?),
             compression,
         })
     }

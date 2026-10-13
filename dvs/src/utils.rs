@@ -113,40 +113,49 @@ pub fn get_threadpool(work_items: usize) -> Result<rayon::ThreadPool> {
         work_items, 0,
         "the thread pool should not be instantiated when there are no work items to process"
     );
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(thread_count(work_items))
+        .build()?;
+    Ok(pool)
+}
+
+/// The thread count set by `set_num_threads` or `DVS_NUM_THREADS`, capped at
+/// `ENV_MAX_THREADS`; None when neither is set.
+pub(crate) fn requested_threads() -> Option<usize> {
+    get_num_threads()
+        .or_else(|| {
+            std::env::var("DVS_NUM_THREADS")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|&n| n > 0)
+        })
+        .map(|n| n.min(ENV_MAX_THREADS))
+}
+
+/// Threads for `work_items` items, from the priority chain of [`get_threadpool`].
+pub(crate) fn thread_count(work_items: usize) -> usize {
     let work_limit = work_items.max(1);
     let available_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
         .max(1);
 
-    let override_threads = get_num_threads();
-    let environment_threads = std::env::var("DVS_NUM_THREADS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0);
-
-    let num_threads = match (override_threads, environment_threads) {
-        (Some(n), _) | (None, Some(n)) => n.min(ENV_MAX_THREADS).min(work_limit),
-        (None, None) => available_cpus
-            .saturating_mul(DEFAULT_THREADS_PER_CPU)
-            .min(DEFAULT_MAX_THREADS)
-            .min(work_limit),
-    };
-
-    let source = if override_threads.is_some() {
+    let source = if get_num_threads().is_some() {
         ThreadSource::Override
-    } else if environment_threads.is_some() {
+    } else if requested_threads().is_some() {
         ThreadSource::Environment
     } else {
         ThreadSource::Default
     };
-
+    let num_threads = match requested_threads() {
+        Some(n) => n.min(work_limit),
+        None => available_cpus
+            .saturating_mul(DEFAULT_THREADS_PER_CPU)
+            .min(DEFAULT_MAX_THREADS)
+            .min(work_limit),
+    };
     log::debug!("thread pool: {num_threads} threads (source: {source}, work_items={work_items})",);
-
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(num_threads)
-        .build()?;
-    Ok(pool)
+    num_threads
 }
 
 fn insecure_tls_requested(value: Option<&str>) -> bool {

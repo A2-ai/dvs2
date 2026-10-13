@@ -58,7 +58,8 @@ pub struct ManifestReply {
 /// What storing one content did.
 #[derive(Debug, Clone, Copy)]
 pub struct Stored {
-    pub stored_size: u64,
+    /// Unknown when the upload's response was lost but the server has the content
+    pub stored_size: Option<u64>,
     pub compression: Compression,
 }
 
@@ -67,6 +68,10 @@ pub struct Stored {
 pub struct ManifestLimits {
     pub max_entries: usize,
     pub max_body_bytes: usize,
+    /// The largest file the server takes
+    pub max_blob_size: Option<u64>,
+    /// The longest path, in bytes
+    pub max_path_bytes: Option<usize>,
 }
 
 /// Fetch the content of `hashes` into `target`, decompressed.
@@ -129,6 +134,8 @@ impl Backend {
             Backend::Local(_) => Ok(ManifestLimits {
                 max_entries: usize::MAX,
                 max_body_bytes: usize::MAX,
+                max_blob_size: None,
+                max_path_bytes: None,
             }),
             Backend::Server(s) => s.manifest_limits(),
         }
@@ -155,11 +162,19 @@ impl Backend {
     }
 
     /// Record a placement for every item and learn which contents need their bytes.
-    /// The local backend writes one log entry per path.
     pub fn manifest(&self, batch: &Batch, items: &[ManifestItem]) -> Result<ManifestReply> {
         match self {
             Backend::Local(b) => b.manifest(batch, items),
             Backend::Server(s) => s.manifest(batch, items),
+        }
+    }
+
+    /// A path whose content the project now has, and whose `.dvs` is written. The
+    /// local backend logs it; the server recorded it with the manifest.
+    pub fn record(&self, batch: &Batch, item: &ManifestItem) -> Result<()> {
+        match self {
+            Backend::Local(b) => b.record(batch, item),
+            Backend::Server(_) => Ok(()),
         }
     }
 

@@ -13,14 +13,17 @@ use url::Url;
 
 use crate::api::v1::{
     BatchKind, BatchView, CompleteBatch, CreateProject, GitContext, GrantRequest, Manifest,
-    ManifestEntry, ManifestResult, MeView, OpenBatch, ProjectView, ServerInfo, StoredBlob,
+    ManifestEntry, ManifestResult, MeView, OpenBatch, Page, ProjectView, Role, ServerInfo,
+    StoredBlob, VersionView,
 };
 use crate::audit::AuditEntry;
 use crate::auth::delete_token;
 use crate::backends::{
     Batch, ManifestItem, ManifestLimits, ManifestReply, PresentSize, RetrieveRequest, Stored,
 };
-use crate::remote::{ApiError, Client, NoResponse, Response, TokenSource, check, read_json};
+use crate::remote::{
+    ApiError, Client, NoResponse, Response, TokenSource, check, is_no_response, read_json,
+};
 use crate::{Compression, Hashes};
 
 /// The header naming a download's compression.
@@ -42,9 +45,7 @@ impl<'a, R> CountingReader<'a, R> {
 impl<R: Read> Read for CountingReader<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let n = self.inner.read(buf)?;
-        if n > 0
-            && let Some(cb) = self.on_bytes
-        {
+        if let Some(cb) = self.on_bytes.filter(|_| n > 0) {
             cb(n as u64);
         }
         Ok(n)
@@ -106,8 +107,10 @@ impl ServerBackend {
         if matches!(api.code.as_str(), "unauthenticated" | "token_expired")
             && self.token_source() == Some(TokenSource::Stored)
         {
-            if let Err(e) = delete_token(&self.url) {
-                log::warn!("Could not remove the rejected token: {e}");
+            if self.client.forget_once() {
+                if let Err(e) = delete_token(&self.url) {
+                    log::warn!("Could not remove the rejected token: {e}");
+                }
             }
             let mut api = api.clone();
             api.message = format!("{}; run `dvs login`", api.message.trim_end_matches('.'));
@@ -183,6 +186,9 @@ impl ServerBackend {
         Ok(ManifestLimits {
             max_entries: info.limits.max_manifest_entries.max(1),
             max_body_bytes: info.limits.max_body_bytes.max(1024),
+            // 0 means no limit
+            max_blob_size: Some(info.limits.max_blob_size).filter(|&n| n > 0),
+            max_path_bytes: Some(info.limits.max_path_bytes).filter(|&n| n > 0),
         })
     }
 
@@ -223,12 +229,16 @@ impl ServerBackend {
                 .collect(),
         };
         let id = batch.id.to_string();
-        let resp = self.client.post_json(
-            &self.url,
-            &self.project_url(&["batches", &id, "manifest"]),
-            &body,
-        );
-        let result: ManifestResult = self.json(resp)?;
+        let url = self.project_url(&["batches", &id, "manifest"]);
+        // Recording a manifest is idempotent, so a lost response is sent once more
+        let result: ManifestResult = match self.json(self.client.post_json(&self.url, &url, &body))
+        {
+            Err(e) if is_no_response(&e) => {
+                log::warn!("No response to the manifest, retrying: {e:#}");
+                self.json(self.client.post_json(&self.url, &url, &body))?
+            }
+            other => other?,
+        };
         Ok(ManifestReply {
             missing: result.missing.into_iter().collect::<BTreeSet<_>>(),
             present: result
@@ -248,9 +258,11 @@ impl ServerBackend {
         })
     }
 
-    /// Send one content's bytes. A request that gets no response at all is sent once
-    /// more: a lost response is safe to retry, because the server checks and discards
-    /// bytes it already has.
+    /// Send one content's bytes. When a request gets no response at all (or its
+    /// response is cut off), the server is asked whether it now has the content: if it
+    /// does, the upload is done; if the project was locked or the role lowered, that is
+    /// the error; otherwise the bytes are sent once more, which is safe because the
+    /// server checks and discards bytes it already has.
     pub fn put(
         &self,
         batch: &Batch,
@@ -262,29 +274,78 @@ impl ServerBackend {
         url.query_pairs_mut()
             .append_pair("batch", &batch.id.to_string());
         let mut attempt = 0;
-        let resp = loop {
+        loop {
             attempt += 1;
-            let mut body = CountingReader::new(fs::File::open(source)?, on_bytes);
-            match self.client.put_reader(&self.url, &url, &mut body) {
-                Err(e) if e.downcast_ref::<NoResponse>().is_some() && attempt < 2 => {
-                    log::warn!(
-                        "No response to the upload of {}, retrying: {e}",
-                        source.display()
+            let e = match self.put_once(&url, source, on_bytes) {
+                Ok(stored) => {
+                    return Ok(Stored {
+                        stored_size: Some(stored.stored_size),
+                        compression: parse_compression(&stored.compression)?,
+                    });
+                }
+                Err(e) if is_no_response(&e) => e,
+                Err(e) => return Err(self.fail(e)),
+            };
+            if let Ok(true) = self.exists(hashes) {
+                log::warn!(
+                    "No response to the upload of {}, but the server has the content",
+                    source.display()
+                );
+                return Ok(Stored {
+                    stored_size: None,
+                    compression: Compression::default(),
+                });
+            }
+            if let Ok(project) = self.project() {
+                if project.locked {
+                    return Err(
+                        ApiError::new(423, "project_locked", "the project is locked").into(),
                     );
                 }
-                Err(e) if e.downcast_ref::<NoResponse>().is_some() => {
-                    return Err(e.context(
-                        "no response after a retry: the bytes may have been uploaded; run `dvs add` again",
-                    ));
+                if project.your_role < Role::Write {
+                    return Err(ApiError::new(
+                        403,
+                        "insufficient_role",
+                        format!(
+                            "uploading needs the write role; yours is {}",
+                            project.your_role
+                        ),
+                    )
+                    .into());
                 }
-                other => break other,
             }
-        };
-        let stored: StoredBlob = self.json(resp)?;
-        Ok(Stored {
-            stored_size: stored.stored_size,
-            compression: parse_compression(&stored.compression)?,
-        })
+            if attempt >= 2 {
+                return Err(e.context(
+                    "no response after a retry: the bytes may have been uploaded; run `dvs add` again",
+                ));
+            }
+            log::warn!(
+                "No response to the upload of {}, retrying: {e:#}",
+                source.display()
+            );
+        }
+    }
+
+    /// One `PUT`. A transport failure while sending, or while reading a success
+    /// response, is a [`NoResponse`]; an error the server answered is not.
+    fn put_once(
+        &self,
+        url: &Url,
+        source: &Path,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<StoredBlob> {
+        let mut body = CountingReader::new(fs::File::open(source)?, on_bytes);
+        let mut resp = self.client.put_reader(&self.url, url, &mut body)?;
+        let status = resp.status().as_u16();
+        if !(200..300).contains(&status) {
+            let body = resp.body_mut().read_to_string().unwrap_or_default();
+            return Err(ApiError::from_body(status, &body).into());
+        }
+        let text = resp
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| anyhow::Error::from(NoResponse(e)))?;
+        serde_json::from_str(&text).context("the server's answer to an upload")
     }
 
     pub fn complete(&self, batch: &Batch, counts: &CompleteBatch) -> Result<()> {
@@ -349,11 +410,45 @@ impl ServerBackend {
         match resp.status().as_u16() {
             200 => Ok(true),
             404 => Ok(false),
-            401 => Err(self.fail(
-                ApiError::new(401, "unauthenticated", "the server rejected your token").into(),
-            )),
+            // A HEAD has no body to say why, so the stored token is kept
+            401 => Err(ApiError::new(
+                401,
+                "unauthenticated",
+                "the server rejected the token (HTTP 401); run `dvs login`",
+            )
+            .into()),
+            403 => Err(ApiError::new(
+                403,
+                "insufficient_role",
+                "the server refused the content check (HTTP 403)",
+            )
+            .into()),
             status => bail!("the server answered {status} to a content check"),
         }
+    }
+
+    /// The versions of `path`, newest first: one page of at most `limit` (the server's
+    /// default when None), starting at `cursor`.
+    pub fn versions(
+        &self,
+        path: &str,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Page<VersionView>> {
+        self.client.server_info(&self.url)?;
+        let mut url = self.project_url(&["versions"]);
+        {
+            let mut q = url.query_pairs_mut();
+            q.append_pair("path", path);
+            if let Some(limit) = limit {
+                q.append_pair("limit", &limit.to_string());
+            }
+            if let Some(cursor) = cursor {
+                q.append_pair("cursor", cursor);
+            }
+        }
+        let resp = self.client.get(&self.url, &url);
+        self.json(resp)
     }
 
     pub fn get_audit_entries(&self, _files: &[PathBuf]) -> Result<Vec<AuditEntry>> {

@@ -50,6 +50,21 @@ pub struct Faults {
     pub no_project: AtomicBool,
     /// Creating the project finds one you can read
     pub project_exists: AtomicBool,
+    /// The largest blob taken, in bytes; 0 for no limit
+    pub max_blob_size: AtomicUsize,
+    /// Refuse the manifest entry with this path as `invalid_entry`, naming its index
+    pub reject_entry_path: Mutex<Option<String>>,
+    /// After this manifest call (1-based), another client publishes `publish_bytes`
+    pub publish_after_manifest_call: AtomicUsize,
+    pub publish_bytes: Mutex<Vec<u8>>,
+    /// Close this many manifest calls without answering
+    pub drop_manifests: AtomicUsize,
+    /// On the first `PUT`, lock the project and answer 423 without reading the body
+    pub lock_on_put: AtomicBool,
+    /// Store this many `PUT`s, then cut their response off after the headers
+    pub truncate_put_responses: AtomicUsize,
+    /// Answer `HEAD`s with this status instead
+    pub head_status: AtomicUsize,
 }
 
 #[derive(Default)]
@@ -58,6 +73,7 @@ struct State {
     blobs: HashMap<String, Vec<u8>>,
     batches: usize,
     manifest_calls: usize,
+    locked: bool,
 }
 
 pub struct Fake {
@@ -72,6 +88,7 @@ impl Fake {
         let url = format!("http://{}/", listener.local_addr().unwrap());
         let faults = Arc::new(Faults {
             max_manifest_entries: AtomicUsize::new(1000),
+            max_blob_size: AtomicUsize::new(1 << 20),
             ..Default::default()
         });
         let state = Arc::new(Mutex::new(State::default()));
@@ -97,7 +114,8 @@ impl Fake {
     }
 }
 
-fn read_request(stream: &mut TcpStream) -> Option<Request> {
+/// Read a request; with `skip_body`, only its line and headers.
+fn read_request(stream: &mut TcpStream, skip_body: bool) -> Option<Request> {
     let mut reader = BufReader::new(stream.try_clone().ok()?);
     let mut line = String::new();
     reader.read_line(&mut line).ok()?;
@@ -116,7 +134,9 @@ fn read_request(stream: &mut TcpStream) -> Option<Request> {
         headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
     }
     let mut body = Vec::new();
-    if let Some(len) = headers.get("content-length") {
+    let skip_body = skip_body && method == "PUT";
+    if skip_body {
+    } else if let Some(len) = headers.get("content-length") {
         body.resize(len.parse().ok()?, 0);
         reader.read_exact(&mut body).ok()?;
     } else if headers
@@ -153,6 +173,8 @@ fn read_request(stream: &mut TcpStream) -> Option<Request> {
 
 enum Reply {
     Json(u16, Value),
+    /// The status and headers of this JSON, then only part of its body
+    Truncated(u16, Value),
     Bytes(Vec<(&'static str, String)>, Vec<u8>),
     Status(u16),
     /// Close without answering
@@ -166,20 +188,28 @@ fn error(status: u16, code: &str, message: &str) -> Reply {
     )
 }
 
-fn project() -> Value {
+fn project(locked: bool) -> Value {
     json!({
-        "name": PROJECT, "compression": "none", "locked": false, "version": 1,
+        "name": PROJECT, "compression": "none", "locked": locked, "version": 1,
         "created_at": NOW, "created_by": "alice", "your_role": "write",
         "grants": [], "repo_commit_url": null,
     })
 }
 
 fn serve(mut stream: TcpStream, faults: &Faults, state: &Mutex<State>) {
-    let Some(req) = read_request(&mut stream) else {
+    let lock_on_put = faults.lock_on_put.load(Ordering::SeqCst);
+    let Some(req) = read_request(&mut stream, lock_on_put) else {
         return;
     };
     state.lock().unwrap().requests.push(req.clone());
-    let reply = handle(&req, faults, state);
+    let reply = if lock_on_put && req.method == "PUT" {
+        faults.lock_on_put.store(false, Ordering::SeqCst);
+        state.lock().unwrap().locked = true;
+        error(423, "project_locked", "the project is locked")
+    } else {
+        handle(&req, faults, state)
+    };
+    let mut cut = false;
     let (status, headers, body): (u16, Vec<(&str, String)>, Vec<u8>) = match reply {
         Reply::Drop => return,
         Reply::Status(s) => (s, vec![], vec![]),
@@ -188,6 +218,14 @@ fn serve(mut stream: TcpStream, faults: &Faults, state: &Mutex<State>) {
             vec![("content-type", "application/json".into())],
             serde_json::to_vec(&v).unwrap(),
         ),
+        Reply::Truncated(s, v) => {
+            cut = true;
+            (
+                s,
+                vec![("content-type", "application/json".into())],
+                serde_json::to_vec(&v).unwrap(),
+            )
+        }
         Reply::Bytes(h, b) => (200, h, b),
     };
     let mut out = format!("HTTP/1.1 {status} X\r\nconnection: close\r\n");
@@ -197,7 +235,7 @@ fn serve(mut stream: TcpStream, faults: &Faults, state: &Mutex<State>) {
     out.push_str(&format!("content-length: {}\r\n\r\n", body.len()));
     let _ = stream.write_all(out.as_bytes());
     if req.method != "HEAD" {
-        let _ = stream.write_all(&body);
+        let _ = stream.write_all(if cut { &body[..body.len() / 2] } else { &body });
     }
 }
 
@@ -210,7 +248,7 @@ fn handle(req: &Request, faults: &Faults, state: &Mutex<State>) -> Reply {
                 "server_version": "0.5.0", "api_versions": [1], "min_client_version": "0.5.0",
                 "features": [],
                 "limits": {
-                    "max_blob_size": 0, "max_page_size": 100, "max_body_bytes": 10_485_760,
+                    "max_blob_size": faults.max_blob_size.load(Ordering::SeqCst), "max_page_size": 100, "max_body_bytes": 10_485_760,
                     "max_manifest_entries": faults.max_manifest_entries.load(Ordering::SeqCst),
                     "max_path_bytes": 4096,
                 },
@@ -219,7 +257,11 @@ fn handle(req: &Request, faults: &Faults, state: &Mutex<State>) -> Reply {
         );
     }
     if req.headers.get("authorization").map(String::as_str) != Some(&format!("Bearer {TOKEN}")) {
-        return error(401, "unauthenticated", "the token was not recognised");
+        return if req.method == "HEAD" {
+            Reply::Status(401)
+        } else {
+            error(401, "unauthenticated", "the token was not recognised")
+        };
     }
     let segments: Vec<&str> = path.trim_start_matches("/api/v1/").split('/').collect();
     match (req.method.as_str(), segments.as_slice()) {
@@ -241,7 +283,7 @@ fn handle(req: &Request, faults: &Faults, state: &Mutex<State>) -> Reply {
                                      "project": {"name": PROJECT, "your_role": "read"}}}),
                 )
             } else {
-                Reply::Json(201, project())
+                Reply::Json(201, project(false))
             }
         }
         (_, ["projects", name, ..])
@@ -253,7 +295,25 @@ fn handle(req: &Request, faults: &Faults, state: &Mutex<State>) -> Reply {
                 "no such project, or you cannot read it",
             )
         }
-        ("GET", ["projects", _]) => Reply::Json(200, project()),
+        ("GET", ["projects", _]) => Reply::Json(200, project(state.lock().unwrap().locked)),
+        ("GET", ["projects", _, "versions"]) => {
+            let path = req.query.get("path").cloned().unwrap_or_default();
+            let version = |hash: &str| {
+                json!({"hash": hash, "size": 5, "stored_size": 5, "first_uploaded_at": NOW,
+                       "last_uploaded_at": NOW, "placements": 1, "downloads": 0,
+                       "yanked": false, "other_paths": 0})
+            };
+            match req.query.get("cursor").map(String::as_str) {
+                None => Reply::Json(
+                    200,
+                    json!({"items": [version(&"b".repeat(64))], "next_cursor": format!("after-{path}")}),
+                ),
+                Some(_) => Reply::Json(
+                    200,
+                    json!({"items": [version(&"a".repeat(64))], "next_cursor": null}),
+                ),
+            }
+        }
         ("POST", ["projects", _, "batches"]) => {
             let mut s = state.lock().unwrap();
             s.batches += 1;
@@ -267,11 +327,33 @@ fn handle(req: &Request, faults: &Faults, state: &Mutex<State>) -> Reply {
         ("POST", ["projects", _, "batches", _, "manifest"]) => {
             let mut s = state.lock().unwrap();
             s.manifest_calls += 1;
+            if faults.drop_manifests.load(Ordering::SeqCst) > 0 {
+                faults.drop_manifests.fetch_sub(1, Ordering::SeqCst);
+                return Reply::Drop;
+            }
             if s.manifest_calls == faults.fail_manifest_call.load(Ordering::SeqCst) {
                 return error(409, "batch_closed", "the batch is closed");
             }
             let entries = req.json()["entries"].as_array().unwrap().clone();
             assert!(entries.len() <= faults.max_manifest_entries.load(Ordering::SeqCst));
+            let max_size = faults.max_blob_size.load(Ordering::SeqCst) as u64;
+            let rejected = faults.reject_entry_path.lock().unwrap().clone();
+            for (i, e) in entries.iter().enumerate() {
+                let bad = if max_size > 0 && e["size"].as_u64().unwrap() > max_size {
+                    Some("size")
+                } else if rejected.as_deref() == e["path"].as_str() {
+                    Some("path")
+                } else {
+                    None
+                };
+                if let Some(field) = bad {
+                    return Reply::Json(
+                        422,
+                        json!({"error": {"code": "invalid_entry", "message": "refused",
+                                         "index": i, "field": field}}),
+                    );
+                }
+            }
             let mut missing = BTreeSet::new();
             let mut present = Vec::new();
             for e in entries {
@@ -285,6 +367,11 @@ fn handle(req: &Request, faults: &Faults, state: &Mutex<State>) -> Reply {
                     }
                 }
             }
+            if s.manifest_calls == faults.publish_after_manifest_call.load(Ordering::SeqCst) {
+                let bytes = faults.publish_bytes.lock().unwrap().clone();
+                s.blobs
+                    .insert(blake3::hash(&bytes).to_hex().to_string(), bytes);
+            }
             Reply::Json(
                 200,
                 json!({"missing": missing, "present": present, "compression": "none"}),
@@ -296,20 +383,28 @@ fn handle(req: &Request, faults: &Faults, state: &Mutex<State>) -> Reply {
                 return Reply::Drop;
             }
             assert!(req.query.contains_key("batch"));
+            let max_size = faults.max_blob_size.load(Ordering::SeqCst);
+            if max_size > 0 && req.body.len() > max_size {
+                return error(413, "payload_too_large", "the blob is too large");
+            }
             let actual = blake3::hash(&req.body).to_hex().to_string();
             if actual != *hash {
                 return error(422, "hash_mismatch", "the bytes do not match the hash");
             }
             let size = req.body.len();
-            state
+            let created = state
                 .lock()
                 .unwrap()
                 .blobs
-                .insert(hash.to_string(), req.body.clone());
-            Reply::Json(
-                200,
-                json!({"size": size, "stored_size": size, "compression": "none"}),
-            )
+                .insert(hash.to_string(), req.body.clone())
+                .is_none();
+            let body = json!({"size": size, "stored_size": size, "compression": "none"});
+            let status = if created { 201 } else { 200 };
+            if faults.truncate_put_responses.load(Ordering::SeqCst) > 0 {
+                faults.truncate_put_responses.fetch_sub(1, Ordering::SeqCst);
+                return Reply::Truncated(status, body);
+            }
+            Reply::Json(status, body)
         }
         ("POST", ["projects", _, "batches", id, "complete"]) => {
             if faults.fail_complete.load(Ordering::SeqCst) {
@@ -318,6 +413,10 @@ fn handle(req: &Request, faults: &Faults, state: &Mutex<State>) -> Reply {
             Reply::Json(200, json!({"id": id, "completed_at": NOW, "abandoned": 0}))
         }
         ("HEAD", ["projects", _, "blobs", hash]) => {
+            match faults.head_status.load(Ordering::SeqCst) {
+                0 => {}
+                status => return Reply::Status(status as u16),
+            }
             if state.lock().unwrap().blobs.contains_key(*hash) {
                 Reply::Status(200)
             } else {

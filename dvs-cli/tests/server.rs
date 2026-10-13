@@ -200,6 +200,118 @@ fn a_lost_upload_response_is_retried_once() {
 }
 
 #[test]
+fn a_cut_off_upload_response_is_settled_by_asking_the_server() {
+    let fake = Fake::start();
+    let c = attached(&fake);
+    c.write("a.csv", b"alpha");
+    fake.faults
+        .truncate_put_responses
+        .store(1, Ordering::SeqCst);
+    let out = c.dvs_ok(&["--json", "add", "a.csv"]);
+    assert_eq!(out.outcomes(), pairs(&[("a.csv", "added")]));
+    // The HEAD found the content, so it was not sent again
+    assert_eq!(fake.count("PUT", ""), 1);
+    assert_eq!(fake.count("HEAD", ""), 1);
+    assert!(c.repo().join(".dvs/a.csv.dvs").is_file());
+}
+
+#[test]
+fn an_upload_refused_unread_reports_the_lock() {
+    let fake = Fake::start();
+    let c = attached(&fake);
+    // Large enough that the refusal arrives while the body is still being sent
+    let big: Vec<u8> = (0..900_000u32).flat_map(|i| i.to_le_bytes()).collect();
+    fake.faults
+        .max_blob_size
+        .store(big.len() * 2, Ordering::SeqCst);
+    c.write("big.bin", &big);
+    fake.faults.lock_on_put.store(true, Ordering::SeqCst);
+    let out = c.dvs(Some(TOKEN), &["--json", "add", "big.bin"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.outcomes(), pairs(&[("big.bin", "failed")]));
+    assert_eq!(out.json()[0]["code"], "project_locked", "{out:?}");
+    // The refusal usually breaks the upload, so the client learns of the lock by asking
+    assert_eq!(fake.count("PUT", ""), 1, "not retried");
+    assert!(!c.repo().join(".dvs/big.bin.dvs").exists());
+}
+
+#[test]
+fn content_published_between_manifest_calls_is_not_sent() {
+    let fake = Fake::start();
+    fake.faults.max_manifest_entries.store(1, Ordering::SeqCst);
+    // Another client uploads the shared content after the first call reported it missing
+    fake.faults
+        .publish_after_manifest_call
+        .store(1, Ordering::SeqCst);
+    *fake.faults.publish_bytes.lock().unwrap() = b"shared".to_vec();
+    let c = attached(&fake);
+    c.write("a.csv", b"shared");
+    c.write("b.csv", b"shared");
+    let out = c.dvs_ok(&["--json", "add", "a.csv", "b.csv"]);
+    assert_eq!(
+        out.outcomes(),
+        pairs(&[("a.csv", "present"), ("b.csv", "present")])
+    );
+    assert_eq!(fake.count("POST", "/manifest"), 2);
+    assert_eq!(fake.count("PUT", ""), 0);
+}
+
+#[test]
+fn a_lost_manifest_response_is_retried_once() {
+    let fake = Fake::start();
+    fake.faults.drop_manifests.store(1, Ordering::SeqCst);
+    let c = attached(&fake);
+    c.write("a.csv", b"alpha");
+    let out = c.dvs_ok(&["--json", "add", "a.csv"]);
+    assert_eq!(out.outcomes(), pairs(&[("a.csv", "added")]));
+    assert_eq!(fake.count("POST", "/manifest"), 2);
+    assert!(out.stderr.contains("retrying"), "{out:?}");
+}
+
+#[test]
+fn a_file_the_server_would_refuse_fails_alone() {
+    let fake = Fake::start();
+    fake.faults.max_blob_size.store(10, Ordering::SeqCst);
+    let c = attached(&fake);
+    c.write("a.csv", b"alpha");
+    c.write("big.csv", b"more than ten bytes");
+    c.write("c.csv", b"gamma");
+    c.write("d.csv", b"delta");
+    // The client cannot know about this one: the server refuses it, and the rest are
+    // sent again without it
+    *fake.faults.reject_entry_path.lock().unwrap() = Some("c.csv".into());
+    let out = c.dvs(
+        Some(TOKEN),
+        &["--json", "add", "a.csv", "big.csv", "c.csv", "d.csv"],
+    );
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(
+        out.outcomes(),
+        pairs(&[
+            ("a.csv", "added"),
+            ("big.csv", "failed"),
+            ("c.csv", "failed"),
+            ("d.csv", "added")
+        ])
+    );
+    let rows = out.json();
+    assert_eq!(rows[1]["code"], "invalid_entry");
+    assert!(
+        rows[1]["error"].as_str().unwrap().contains("larger than"),
+        "{rows}"
+    );
+    assert_eq!(rows[2]["code"], "invalid_entry");
+    // big.csv never reached the server; c.csv's call was sent again without it
+    let manifests: Vec<_> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.is("POST", "/manifest"))
+        .map(|r| r.json()["entries"].as_array().unwrap().len())
+        .collect();
+    assert_eq!(manifests, [3, 2]);
+}
+
+#[test]
 fn a_failed_complete_is_only_a_warning() {
     let fake = Fake::start();
     fake.faults.fail_complete.store(true, Ordering::SeqCst);
@@ -208,6 +320,10 @@ fn a_failed_complete_is_only_a_warning() {
     let out = c.dvs_ok(&["--json", "add", "a.csv"]);
     assert_eq!(out.outcomes(), pairs(&[("a.csv", "added")]));
     assert!(c.repo().join(".dvs/a.csv.dvs").is_file());
+    assert!(
+        out.stderr.contains("closing the upload failed"),
+        "the warning shows without RUST_LOG: {out:?}"
+    );
 }
 
 #[test]
@@ -283,6 +399,17 @@ fn dvs_token_wins_and_logout_leaves_it_alone() {
     let out = c.dvs(Some(TOKEN), &["logout"]);
     assert!(out.stdout.contains("not logged in"), "{out:?}");
     assert_eq!(fake.count("DELETE", "/auth/token"), 1);
+
+    // The stored token is DVS_TOKEN itself: forgotten, never revoked
+    c.store_token(&fake.url, TOKEN);
+    let out = c.dvs(Some(TOKEN), &["logout"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stderr.contains("not revoked"), "{out:?}");
+    assert_eq!(fake.count("DELETE", "/auth/token"), 1);
+    let store = std::fs::read_to_string(c.credentials()).unwrap();
+    assert!(!store.contains(TOKEN), "{store}");
+    // And it still works
+    c.dvs_ok(&["info"]);
 }
 
 #[test]
