@@ -430,6 +430,7 @@ pub struct VersionView {
     pub placements: u64,
     /// Downloads of this hash requested for this path
     pub downloads: u64,
+    /// A project admin blocked this content's downloads (see `YankView`)
     pub yanked: bool,
     /// Other paths in the project holding the same content
     pub other_paths: u64,
@@ -461,6 +462,7 @@ pub struct FileView {
     pub versions: u64,
     #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
     pub first_uploaded_at: Timestamp,
+    /// The latest version is yanked: nobody can download it until it is unyanked
     pub yanked: bool,
 }
 
@@ -570,7 +572,7 @@ pub struct ActivityItem {
     /// `u:<n>` for an upload, `d:<n>` for a download, `e:<n>` for a project change
     pub id: String,
     /// `upload`, `download`, `project_create`, `access_change`, `lock`, `unlock`,
-    /// `settings_change` or `project_rename`
+    /// `settings_change`, `project_rename`, `yank` or `unyank`
     pub kind: String,
     #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
     pub at: Timestamp,
@@ -582,6 +584,7 @@ pub struct ActivityItem {
     /// Their directory id, stable across renames
     pub user_id: Uuid,
     pub path: Option<String>,
+    /// The content: of an upload or download, or the one a yank or unyank was about
     pub hash: Option<String>,
     /// Uncompressed size of the content
     pub size: Option<u64>,
@@ -595,7 +598,8 @@ pub struct ActivityItem {
     pub git_state: Option<String>,
     /// The client's User-Agent
     pub client: Option<String>,
-    /// Project changes only: `{before, after}`
+    /// Project changes only: `{before, after}`. A yank's `after` has its `reason`; an
+    /// unyank's `before` has the yank's reason and its `after` the unyank's, if given.
     #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
     pub detail: Option<serde_json::Value>,
 }
@@ -662,6 +666,52 @@ pub struct BatchDetail {
     #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = DateTime))]
     pub completed_at: Option<Timestamp>,
     pub files: Page<BatchFile>,
+}
+
+/// `POST …/yanks`: block a content's downloads everywhere in the project, for everyone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct YankRequest {
+    /// The content hash, in full
+    pub hash: String,
+    /// Why, shown to everyone who tries to download it; required
+    pub reason: String,
+}
+
+/// `DELETE …/yanks/{hash}`: allow downloads again.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct UnyankRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// A yank: a content hash whose downloads a project admin blocked, everywhere in the
+/// project and for everyone, admins included. Nothing is deleted; the content stays
+/// listed, and uploading the same bytes again does not unyank it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct YankView {
+    pub hash: String,
+    pub reason: String,
+    /// Who yanked it: their username
+    pub yanked_by: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
+    pub yanked_at: Timestamp,
+    /// Set once it is unyanked
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unyanked_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = DateTime))]
+    pub unyanked_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unyank_reason: Option<String>,
+    /// Paths in the project this content was ever placed at, by path; the first 100
+    pub paths: Vec<String>,
+    /// How many paths there are in all
+    pub path_count: u64,
 }
 
 /// RFC 8628 device authorization.
