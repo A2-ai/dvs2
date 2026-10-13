@@ -562,6 +562,108 @@ pub struct StatusResult {
     pub files: Vec<FileStatus>,
 }
 
+/// One event in a project's history, newest first. An `upload` is a placement: this
+/// batch put this content at this path, whether or not bytes had to move.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ActivityItem {
+    /// `u:<n>` for an upload, `d:<n>` for a download, `e:<n>` for a project change
+    pub id: String,
+    /// `upload`, `download`, `project_create`, `access_change`, `lock`, `unlock`,
+    /// `settings_change` or `project_rename`
+    pub kind: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
+    pub at: Timestamp,
+    /// The project's name; only in the cross-project audit
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Who did it: their username
+    pub user: String,
+    /// Their directory id, stable across renames
+    pub user_id: Uuid,
+    pub path: Option<String>,
+    pub hash: Option<String>,
+    /// Uncompressed size of the content
+    pub size: Option<u64>,
+    pub stored_size: Option<u64>,
+    pub batch_id: Option<Uuid>,
+    /// The `dvs add` message
+    pub message: Option<String>,
+    /// The client's branch at the time (client-asserted, see `GitContext`)
+    pub branch: Option<String>,
+    pub commit: Option<String>,
+    pub git_state: Option<String>,
+    /// The client's User-Agent
+    pub client: Option<String>,
+    /// Project changes only: `{before, after}`
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
+    pub detail: Option<serde_json::Value>,
+}
+
+/// One `dvs add` or `dvs get` run, for `activity?group_by=batch`, newest first.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ActivityBatch {
+    pub batch_id: Uuid,
+    /// `upload` or `download`
+    pub kind: String,
+    /// The project's name; only in the cross-project audit
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// When the batch was opened
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
+    pub at: Timestamp,
+    pub user: String,
+    pub message: Option<String>,
+    /// Published placements of an upload, downloads of a download
+    pub files: u64,
+    /// Their uncompressed sizes, added up
+    pub bytes: u64,
+    /// Placements still waiting for their bytes, or given up on
+    pub pending: u64,
+    pub branch: Option<String>,
+    pub commit: Option<String>,
+    pub git_state: Option<String>,
+    pub client: Option<String>,
+    /// What the client reported when it completed the batch
+    pub ok: Option<u64>,
+    pub failed: Option<u64>,
+    pub skipped: Option<u64>,
+    /// `open`, `completed` or `expired`
+    pub state: String,
+}
+
+/// A file of a batch. Uploads: the placement and whether this batch sent the bytes.
+/// Downloads: the version that was latest at the path when it was requested.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct BatchFile {
+    pub path: String,
+    pub hash: String,
+    pub size: u64,
+    /// Null while the project has no bytes for it
+    pub stored_size: Option<u64>,
+    /// Uploads: `visible`, `pending` (bytes missing) or `abandoned`. Downloads: `requested`.
+    pub status: String,
+    /// Uploads: this batch sent the bytes (false when the project already had them)
+    pub transferred: bool,
+    /// Downloads: the hash latest at this path then, if any, and the batch that put it there
+    pub latest_hash: Option<String>,
+    pub latest_batch: Option<Uuid>,
+}
+
+/// `GET …/batches/{id}`: the batch and a page of its files, by path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct BatchDetail {
+    pub batch: ActivityBatch,
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
+    pub expires_at: Timestamp,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = DateTime))]
+    pub completed_at: Option<Timestamp>,
+    pub files: Page<BatchFile>,
+}
+
 /// RFC 8628 device authorization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
