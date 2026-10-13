@@ -153,6 +153,12 @@ pub fn http_agent() -> &'static ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
         ureq::Agent::config_builder()
+            // Trust the OS certificate store so internal CAs work
+            .tls_config(
+                ureq::tls::TlsConfig::builder()
+                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                    .build(),
+            )
             .http_status_as_error(false)
             .timeout_connect(Some(Duration::from_secs(5)))
             .max_idle_connections(ENV_MAX_THREADS)
