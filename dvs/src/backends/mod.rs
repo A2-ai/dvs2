@@ -53,6 +53,8 @@ pub struct StoreResult {
     pub stored_size: u64,
     /// The compression that was actually applied.
     pub compression: Compression,
+    /// Whether this call created the blob, or it was already there (dedup).
+    pub created: bool,
 }
 
 /// Common fields needed for retrieving a file across backends

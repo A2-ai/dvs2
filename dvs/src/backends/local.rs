@@ -237,7 +237,8 @@ impl LocalBackend {
         let blob_path = self.hash_to_path(hashes)?;
 
         // Store the blob unless it is already present (dedup).
-        let stored_size = if blob_path.is_file() {
+        let created = !blob_path.is_file();
+        let stored_size = if !created {
             fs::metadata(&blob_path)?.len()
         } else {
             if let Some(parent) = blob_path.parent() {
@@ -280,6 +281,7 @@ impl LocalBackend {
         Ok(StoreResult {
             stored_size,
             compression,
+            created,
         })
     }
 

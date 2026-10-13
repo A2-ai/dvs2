@@ -66,6 +66,20 @@ impl FileMetadata {
         })
     }
 
+    /// Writes the metadata file, creating its directory if needed.
+    pub fn write(&self, paths: &DvsPaths, relative_path: impl AsRef<Path>) -> Result<()> {
+        let dvs_file_path = paths.metadata_path(relative_path.as_ref());
+        if let Some(parent) = dvs_file_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        log::debug!("Writing metadata to {}", dvs_file_path.display());
+        fs::write(
+            &dvs_file_path,
+            serde_json::to_string_pretty(self).expect("valid json"),
+        )?;
+        Ok(())
+    }
+
     /// Returns whether the file already existed in the dvs folder and therefore is an update
     /// and the compressed size if applicable.
     /// Copies the source file to storage and saves metadata atomically (both succeed or neither).
@@ -103,13 +117,31 @@ impl FileMetadata {
             }
         }
 
-        // We do an atomic update, either everything works or we error
-        // 1. Create metadata dirs first
-        if let Some(parent) = dvs_file_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        let stored_size = self.store_and_write(
+            operation_id,
+            source_file,
+            backend,
+            paths,
+            relative_path,
+            on_bytes,
+        )?;
+        Ok((Outcome::Copied, Some(stored_size)))
+    }
 
-        // 2. Store file to backend. The backend records the add in its audit log
+    /// Stores the file then writes the metadata, atomically: either both succeed or
+    /// neither is left behind. Returns the compressed size.
+    pub fn store_and_write(
+        &mut self,
+        operation_id: Uuid,
+        source_file: impl AsRef<Path>,
+        backend: &Backend,
+        paths: &DvsPaths,
+        relative_path: impl AsRef<Path>,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<u64> {
+        let dvs_file_path = paths.metadata_path(relative_path.as_ref());
+
+        // 1. Store file to backend. The backend records the add in its audit log
         // and dedups the blob internally if it is already present.
         let path = ProjectPath::from_path(relative_path.as_ref()).map_err(|e| anyhow!("{e}"))?;
         let store_res = backend.store(StoreRequest {
@@ -128,16 +160,12 @@ impl FileMetadata {
             self.compression = res.compression;
         }
 
-        // 3. Then metadata
+        // 2. Then metadata
         let old_metadata_content = fs::read(&dvs_file_path).ok();
-        log::debug!("Writing metadata to {}", dvs_file_path.display());
-        let metadata_res = fs::write(
-            &dvs_file_path,
-            serde_json::to_string_pretty(&*self).expect("valid json"),
-        );
+        let metadata_res = self.write(paths, relative_path.as_ref());
 
         match (store_res, metadata_res) {
-            (Ok(res), Ok(_)) => Ok((Outcome::Copied, Some(res.stored_size))),
+            (Ok(res), Ok(_)) => Ok(res.stored_size),
             (Err(e), Ok(_)) => {
                 log::warn!(
                     "Storage failed, rolling back metadata for {}",
@@ -150,7 +178,7 @@ impl FileMetadata {
                 }
                 Err(e)
             }
-            (Ok(_), Err(_)) => {
+            (Ok(res), Err(_)) => {
                 log::warn!(
                     "Metadata write failed, rolling back storage for {}",
                     relative_path.as_ref().display()
@@ -161,7 +189,7 @@ impl FileMetadata {
                     let _ = fs::remove_file(&dvs_file_path);
                 }
                 // Remove the blob only if this call actually created it
-                if !storage_exists {
+                if res.created {
                     let _ = backend.remove(&self.hashes);
                 }
                 bail!("Failed to write metadata file: {dvs_file_path:?}")

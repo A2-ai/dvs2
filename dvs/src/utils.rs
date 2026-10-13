@@ -153,6 +153,7 @@ pub fn http_agent() -> &'static ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
         ureq::Agent::config_builder()
+            .user_agent(format!("dvs/{}", crate::VERSION))
             // Trust the OS certificate store so internal CAs work
             .tls_config(
                 ureq::tls::TlsConfig::builder()
