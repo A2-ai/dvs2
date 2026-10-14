@@ -98,6 +98,9 @@ pub struct ProjectView {
     pub compression: String,
     /// Uploads are refused while locked; downloads still work
     pub locked: bool,
+    /// Who locked it, when and why, while it is locked
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock: Option<LockView>,
     /// The ETag of the settings and the access list
     pub version: i64,
     #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
@@ -110,6 +113,18 @@ pub struct ProjectView {
     /// On a single project, and on lists with `stats=true`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats: Option<ProjectStats>,
+}
+
+/// The lock in force on a project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct LockView {
+    /// Their username
+    pub locked_by: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
+    pub locked_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// A grant in a request: groups by name, roles validated here so a bad one is
@@ -146,6 +161,9 @@ pub struct PatchProject {
     /// Lock or unlock uploads
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locked: Option<bool>,
+    /// Why, with `locked`: one line, up to 1000 characters, kept in the activity
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_reason: Option<String>,
     /// A URL containing `{commit}`, or null to clear it
     #[serde(
         default,
@@ -199,7 +217,8 @@ pub struct GroupView {
     pub is_member: bool,
     /// The configured global admin group: admin on every project
     pub is_admin_group: bool,
-    /// How many members the directory has; member lists are not exposed.
+    /// How many members the directory has. Member lists are on the directory routes,
+    /// for global admins.
     pub known_members: i64,
 }
 
@@ -569,20 +588,40 @@ pub struct StatusResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct ActivityItem {
-    /// `u:<n>` for an upload, `d:<n>` for a download, `e:<n>` for a project change
+    /// `u:<n>` for an upload, `d:<n>` for a download, `e:<n>` for a project change,
+    /// `x:<n>` for a directory or credential change
     pub id: String,
-    /// `upload`, `download`, `project_create`, `access_change`, `lock`, `unlock`,
-    /// `settings_change`, `project_rename`, `yank` or `unyank`
+    /// `upload`, `download`; a project change: `project_create`, `access_change`,
+    /// `lock`, `unlock`, `settings_change`, `project_rename`, `yank`, `unyank`; in the
+    /// audit only, a directory change: `person_added`, `person_changed`,
+    /// `person_deactivated`, `person_reactivated`, `person_deleted`, `person_restored`,
+    /// `group_added`, `group_renamed`, `group_removed`, `group_restored`, `member_added`,
+    /// `member_removed`, `tokens_revoked`, `directory_refilled`,
+    /// `directory_contract_refused`, `admin_group_pinned`, `admin_group_held`,
+    /// `admin_group_accepted`; or a credential change: `token_issued`, `token_revoked`
     pub kind: String,
     #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
     pub at: Timestamp,
-    /// The project's name; only in the cross-project audit
+    /// The project's name; only in the cross-project audit, and absent on directory
+    /// and credential changes
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
-    /// Who did it: their username
-    pub user: String,
+    /// Who did it: their username. Absent when Arx's directory or the server's operator
+    /// made the change
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
     /// Their directory id, stable across renames
-    pub user_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<Uuid>,
+    /// A project change made through global admin, not a grant on the project
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub global_admin: bool,
+    /// A directory or credential change: the person it was about
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub person: Option<DirectoryRef>,
+    /// A directory change: the group it was about
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<DirectoryRef>,
     pub path: Option<String>,
     /// The content: of an upload or download, or the one a yank or unyank was about
     pub hash: Option<String>,
@@ -598,10 +637,21 @@ pub struct ActivityItem {
     pub git_state: Option<String>,
     /// The client's User-Agent
     pub client: Option<String>,
-    /// Project changes only: `{before, after}`. A yank's `after` has its `reason`; an
-    /// unyank's `before` has the yank's reason and its `after` the unyank's, if given.
+    /// Project changes: `{before, after}`. A yank's `after` has its `reason`; an
+    /// unyank's `before` has the yank's reason and its `after` the unyank's, if given;
+    /// a lock's `after` its `reason`, if given. Directory and credential changes: names
+    /// as they were at the time and what changed.
     #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
     pub detail: Option<serde_json::Value>,
+}
+
+/// A person or group of the directory, by id and current name.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct DirectoryRef {
+    pub id: Uuid,
+    /// Username or group name, as the directory has it now
+    pub name: String,
 }
 
 /// One `dvs add` or `dvs get` run, for `activity?group_by=batch`, newest first.
@@ -712,6 +762,156 @@ pub struct YankView {
     pub paths: Vec<String>,
     /// How many paths there are in all
     pub path_count: u64,
+}
+
+/// `GET /api/v1/directory`: the copy of the identity directory people are checked
+/// against, for global admins diagnosing sign-in and access problems.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct DirectoryStatus {
+    /// `scim`: a copy of Arx's directory, kept in sync. `arx`: filled by hand, for
+    /// development and tests
+    pub resolver: String,
+    /// Whether people are identified from the copy: false while Arx publishes a directory
+    /// contract this server cannot read, and every sign-in is refused
+    pub trusted: bool,
+    /// Whether the answering server process is connected to Arx's directory
+    pub connected: bool,
+    /// When that process last read Arx's directory state, changed or not
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = DateTime))]
+    pub checked_at: Option<Timestamp>,
+    /// Its last failure to reach or apply the directory, and when
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = DateTime))]
+    pub last_error_at: Option<Timestamp>,
+    /// When a read was last applied, and what it was: Arx's database (`generation`), its
+    /// change counter (`version`) and the contract it was read under
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = DateTime))]
+    pub synced_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<i32>,
+    /// A contract Arx published that this server cannot read
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_contract: Option<i32>,
+    /// Active people and live groups in the copy
+    pub people: i64,
+    pub groups: i64,
+    /// The configured global admin group
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_group: Option<AdminGroupStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct AdminGroupStatus {
+    pub name: String,
+    /// `ok`; `missing`: no group has the name; `held`: a different group than the one
+    /// first seen has the name (deleted and created again, or renamed to it), and gives
+    /// nobody global admin until an operator runs `dvs-server maintenance
+    /// accept-admin-group`
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<Uuid>,
+    /// People who are global admins through it
+    pub members: i64,
+}
+
+/// A person of the directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct PersonView {
+    pub id: Uuid,
+    pub username: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// Their display name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Deactivated people are refused everywhere, and their tokens are gone
+    pub active: bool,
+    /// Gone from the directory; kept so history still names them
+    pub deleted: bool,
+    /// Their live groups, by name
+    pub groups: Vec<String>,
+    pub global_admin: bool,
+}
+
+/// `GET /api/v1/directory/people/{id}`: a person, what they can reach and why.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct PersonDetail {
+    pub person: PersonView,
+    /// Projects their groups are granted, with their role and the grants that give it;
+    /// a global admin reaches every project besides
+    pub projects: Vec<PersonProject>,
+    pub tokens: PersonTokens,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct PersonProject {
+    pub project: String,
+    pub role: Role,
+    /// Their groups granted on it, by name, highest role first
+    pub via: Vec<GrantView>,
+    pub locked: bool,
+}
+
+/// A person's `dvs login` tokens. Their values are never shown.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct PersonTokens {
+    /// Tokens not yet expired
+    pub live: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = DateTime))]
+    pub newest_issued_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = DateTime))]
+    pub last_used_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = DateTime))]
+    pub expires_at: Option<Timestamp>,
+}
+
+/// A group of the directory, removed ones included.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct DirectoryGroupView {
+    pub id: Uuid,
+    pub name: String,
+    /// Deleted from the directory: its grants match nobody. A group created again under
+    /// the name is a different group
+    pub removed: bool,
+    pub members: i64,
+    /// Projects it is granted on
+    pub projects: i64,
+    pub is_admin_group: bool,
+}
+
+/// `GET /api/v1/directory/groups/{id}`: a group, its members and its grants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct DirectoryGroupDetail {
+    pub group: DirectoryGroupView,
+    /// By username
+    pub members: Vec<DirectoryRef>,
+    pub grants: Vec<GroupGrant>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct GroupGrant {
+    pub project: String,
+    pub role: Role,
 }
 
 /// RFC 8628 device authorization.
