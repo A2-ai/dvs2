@@ -183,6 +183,18 @@ impl Config {
         Ok(())
     }
 
+    /// The config of the project `current_directory` is in; outside any, an error with
+    /// the code `not_in_repository`.
+    pub fn find_required(current_directory: impl AsRef<Path>) -> Result<Self> {
+        Self::find(current_directory).unwrap_or_else(|| {
+            Err(crate::errors::DvsError::new(
+                crate::errors::ErrorCode::NotInRepository,
+                "Not in a DVS repository: no dvs.toml here or in a parent folder",
+            )
+            .into())
+        })
+    }
+
     pub fn find(current_directory: impl AsRef<Path>) -> Option<Result<Self>> {
         let repo_root = find_repo_root(current_directory);
         let config_path = repo_root.join(CONFIG_FILE_NAME);

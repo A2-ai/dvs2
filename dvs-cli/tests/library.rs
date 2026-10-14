@@ -66,4 +66,47 @@ fn versions_pages_and_content_checks() {
         dvs::auth::get_token(&url).unwrap().as_deref(),
         Some("stale")
     );
+
+    // A device login polled one request at a time, as the R package does
+    use dvs::remote::{LoginPoll, poll_login, start_login};
+    *fake.faults.login_answers.lock().unwrap() = vec!["pending", "slow_down"];
+    let mut pending = start_login(&url).unwrap();
+    assert_eq!(pending.authorization.user_code, "ABCD-EFGH");
+    assert_eq!(
+        pending.authorization.verification_uri_complete,
+        format!("{}device?code=ABCD-EFGH", fake.url)
+    );
+    assert_eq!(pending.interval, 1);
+    assert!(matches!(
+        poll_login(&url, &pending).unwrap(),
+        LoginPoll::Pending
+    ));
+    assert!(matches!(
+        poll_login(&url, &pending).unwrap(),
+        LoginPoll::SlowDown
+    ));
+    pending.slow_down();
+    assert_eq!(pending.interval, 6);
+    match poll_login(&url, &pending).unwrap() {
+        LoginPoll::Done(token) => assert_eq!(token.access_token, TOKEN),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(dvs::auth::get_token(&url).unwrap().as_deref(), Some(TOKEN));
+
+    // Denied, and expired: errors with codes
+    *fake.faults.login_answers.lock().unwrap() = vec!["denied"];
+    let e = poll_login(&url, &pending).unwrap_err();
+    assert_eq!(dvs::error_code(&e), Some("login_denied"));
+    let polls = fake.count("POST", "/auth/token");
+    pending.expires_at = "2000-01-01T00:00:00Z".parse().unwrap();
+    let e = poll_login(&url, &pending).unwrap_err();
+    assert_eq!(dvs::error_code(&e), Some("login_expired"));
+    assert_eq!(fake.count("POST", "/auth/token"), polls);
+
+    // The blocking login is built on them
+    *fake.faults.login_answers.lock().unwrap() = vec!["pending"];
+    let mut shown = None;
+    let token = dvs::remote::login(&url, |a| shown = Some(a.user_code.clone())).unwrap();
+    assert_eq!(token.access_token, TOKEN);
+    assert_eq!(shown.as_deref(), Some("ABCD-EFGH"));
 }

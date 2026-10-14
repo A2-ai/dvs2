@@ -4,6 +4,7 @@ pub mod auth;
 pub mod backends;
 mod cache;
 pub mod config;
+pub mod errors;
 mod files;
 pub mod git;
 mod gitignore;
@@ -18,6 +19,7 @@ pub(crate) mod utils;
 
 pub use backends::{Backend, RetrieveRequest};
 pub use config::Compression;
+pub use errors::{DvsError, ErrorCode, error_code, error_message};
 pub use files::add::{AddOutcome, AddResult, add_files};
 pub use files::get::{GetDetail, GetResult, get_files};
 pub use files::metadata::FileMetadata;

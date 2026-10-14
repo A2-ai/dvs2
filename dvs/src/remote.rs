@@ -7,8 +7,8 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -397,15 +397,51 @@ pub fn server_info(base: &Url) -> Result<ServerInfo> {
     Ok(info)
 }
 
-/// Device login (RFC 8628): print where to approve, poll at the server's pace, store
-/// the token. `on_code` shows the URL and code to the user.
-pub fn login(base: &Url, on_code: impl FnOnce(&DeviceAuthorization)) -> Result<DeviceToken> {
+/// A device login (RFC 8628) waiting for approval: what to show the person, and what
+/// [`poll_login`] needs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingLogin {
+    /// The user code, the verification URIs (absolute), the device code
+    pub authorization: DeviceAuthorization,
+    /// Seconds to wait between polls; [`PendingLogin::slow_down`] raises it
+    pub interval: u64,
+    /// When the codes expire, approved or not
+    pub expires_at: jiff::Timestamp,
+}
+
+impl PendingLogin {
+    /// After [`LoginPoll::SlowDown`]: poll 5 seconds less often from now on (RFC 8628
+    /// §3.5).
+    pub fn slow_down(&mut self) {
+        self.interval += 5;
+    }
+
+    /// Whether the codes have expired.
+    pub fn is_expired(&self) -> bool {
+        jiff::Timestamp::now() > self.expires_at
+    }
+}
+
+/// The answer to one poll of a device login.
+#[derive(Debug, Clone)]
+pub enum LoginPoll {
+    /// Not approved yet: poll again after `interval` seconds
+    Pending,
+    /// Polling too often: call [`PendingLogin::slow_down`], then poll again
+    SlowDown,
+    /// Approved; the token is stored for the server
+    Done(DeviceToken),
+}
+
+/// Start a device login with the server at `base`: the code to show and where to
+/// approve it. Then call [`poll_login`] every `interval` seconds.
+pub fn start_login(base: &Url) -> Result<PendingLogin> {
     server_info(base)?;
     let resp = http_agent()
         .post(Client::url(base, "/api/v1/auth/device").as_str())
         .send_empty()
         .map_err(Client::transport(base))?;
-    let start: DeviceAuthorization = match resp.status().as_u16() {
+    let mut start: DeviceAuthorization = match resp.status().as_u16() {
         200 => read_json(resp)?,
         status => {
             let mut resp = resp;
@@ -418,65 +454,93 @@ pub fn login(base: &Url, on_code: impl FnOnce(&DeviceAuthorization)) -> Result<D
             );
         }
     };
-    let mut start = start;
     // A relative URI is relative to the server the client used
     if start.verification_uri_complete.starts_with('/') {
         start.verification_uri_complete =
             Client::url(base, &start.verification_uri_complete).to_string();
         start.verification_uri = Client::url(base, &start.verification_uri).to_string();
     }
-    on_code(&start);
+    let lifetime = jiff::SignedDuration::from_secs(start.expires_in.min(i64::MAX as u64) as i64);
+    Ok(PendingLogin {
+        interval: start.interval.max(1),
+        expires_at: jiff::Timestamp::now()
+            .checked_add(lifetime)
+            .unwrap_or(jiff::Timestamp::MAX),
+        authorization: start,
+    })
+}
 
-    let mut interval = Duration::from_secs(start.interval.max(1));
-    let deadline = std::time::Instant::now() + Duration::from_secs(start.expires_in);
+/// One token request for a pending login. On approval the token is stored for `base`.
+/// A login that expired or was denied is an error with the code `login_expired` or
+/// `login_denied`; a request that got no answer is one [`is_no_response`] recognizes,
+/// which a caller may poll again after.
+pub fn poll_login(base: &Url, pending: &PendingLogin) -> Result<LoginPoll> {
+    let expired = || {
+        anyhow::Error::from(ApiError::new(
+            400,
+            "login_expired",
+            "the code expired before it was approved; run `dvs login` again",
+        ))
+    };
+    if pending.is_expired() {
+        return Err(expired());
+    }
+    let mut resp = http_agent()
+        .post(Client::url(base, "/api/v1/auth/token").as_str())
+        .send_json(DeviceTokenRequest {
+            device_code: pending.authorization.device_code.clone(),
+        })
+        .map_err(Client::transport(base))?;
+    let status = resp.status().as_u16();
+    if status == 200 {
+        let token: DeviceToken = resp.body_mut().read_json()?;
+        store_token(base, &token.access_token)?;
+        return Ok(LoginPoll::Done(token));
+    }
+    let body = resp.body_mut().read_to_string().unwrap_or_default();
+    let err: DeviceError = match serde_json::from_str(&body) {
+        Ok(e) => e,
+        Err(_) => bail!("unexpected answer while waiting for approval: {body}"),
+    };
+    match err.error.as_str() {
+        "authorization_pending" => Ok(LoginPoll::Pending),
+        "slow_down" => Ok(LoginPoll::SlowDown),
+        "expired_token" => Err(expired()),
+        "access_denied" => Err(ApiError::new(
+            status,
+            "login_denied",
+            "the login was denied in the browser",
+        )
+        .into()),
+        _ => bail!(
+            "login failed: {}",
+            err.error_description.unwrap_or(err.error)
+        ),
+    }
+}
+
+/// Device login (RFC 8628), blocking: show where to approve with `on_code`, poll at
+/// the server's pace (a few polls in a row may get no answer), store the token.
+pub fn login(base: &Url, on_code: impl FnOnce(&DeviceAuthorization)) -> Result<DeviceToken> {
+    let mut pending = start_login(base)?;
+    on_code(&pending.authorization);
     // Polls that got no answer in a row: a proxy closing an idle connection, or a
     // moment of network trouble, is tried again at the next poll
     let mut unanswered = 0;
     loop {
-        sleep(interval);
-        if std::time::Instant::now() > deadline {
-            bail!("the code expired before it was approved; run `dvs login` again");
-        }
-        let polled = http_agent()
-            .post(Client::url(base, "/api/v1/auth/token").as_str())
-            .send_json(DeviceTokenRequest {
-                device_code: start.device_code.clone(),
-            })
-            .map_err(Client::transport(base));
-        let mut resp = match polled {
-            Ok(resp) => {
+        sleep(Duration::from_secs(pending.interval));
+        match poll_login(base, &pending) {
+            Ok(LoginPoll::Done(token)) => return Ok(token),
+            Ok(LoginPoll::Pending) => unanswered = 0,
+            Ok(LoginPoll::SlowDown) => {
                 unanswered = 0;
-                resp
+                pending.slow_down();
             }
-            Err(e) if unanswered < MAX_UNANSWERED_POLLS => {
+            Err(e) if is_no_response(&e) && unanswered < MAX_UNANSWERED_POLLS => {
                 unanswered += 1;
                 log::warn!("No answer while waiting for approval, trying again: {e:#}");
-                continue;
             }
             Err(e) => return Err(e),
-        };
-        if resp.status().as_u16() == 200 {
-            let token: DeviceToken = resp.body_mut().read_json()?;
-            store_token(base, &token.access_token)?;
-            return Ok(token);
-        }
-        let body = resp.body_mut().read_to_string().unwrap_or_default();
-        let err: DeviceError = match serde_json::from_str(&body) {
-            Ok(e) => e,
-            Err(_) => bail!("unexpected answer while waiting for approval: {body}"),
-        };
-        match err.error.as_str() {
-            "authorization_pending" => {}
-            // RFC 8628 §3.5: add 5 seconds
-            "slow_down" => interval += Duration::from_secs(5),
-            "expired_token" => {
-                bail!("the code expired before it was approved; run `dvs login` again")
-            }
-            "access_denied" => bail!("the login was denied in the browser"),
-            _ => bail!(
-                "login failed: {}",
-                err.error_description.unwrap_or(err.error)
-            ),
         }
     }
 }

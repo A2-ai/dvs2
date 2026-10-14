@@ -65,6 +65,9 @@ pub struct Faults {
     pub truncate_put_responses: AtomicUsize,
     /// Answer `HEAD`s with this status instead
     pub head_status: AtomicUsize,
+    /// How the device login's token polls are answered, in order: `pending`,
+    /// `slow_down`, `denied`; once empty, approved
+    pub login_answers: Mutex<Vec<&'static str>>,
 }
 
 #[derive(Default)]
@@ -255,6 +258,30 @@ fn handle(req: &Request, faults: &Faults, state: &Mutex<State>) -> Reply {
                 "auth": {"device_flow": true},
             }),
         );
+    }
+    if req.method == "POST" && path == "/api/v1/auth/device" {
+        return Reply::Json(
+            200,
+            json!({
+                "device_code": "device-code", "user_code": "ABCD-EFGH",
+                "verification_uri": "/device", "verification_uri_complete": "/device?code=ABCD-EFGH",
+                "expires_in": 600, "interval": 1,
+            }),
+        );
+    }
+    if req.method == "POST" && path == "/api/v1/auth/token" {
+        let mut answers = faults.login_answers.lock().unwrap();
+        let answer = (!answers.is_empty()).then(|| answers.remove(0));
+        return match answer {
+            None => Reply::Json(
+                200,
+                json!({"access_token": TOKEN, "token_type": "Bearer",
+                       "expires_at": "2026-11-12T00:00:00Z"}),
+            ),
+            Some("pending") => Reply::Json(400, json!({"error": "authorization_pending"})),
+            Some("slow_down") => Reply::Json(400, json!({"error": "slow_down"})),
+            Some(_) => Reply::Json(400, json!({"error": "access_denied"})),
+        };
     }
     if req.headers.get("authorization").map(String::as_str) != Some(&format!("Bearer {TOKEN}")) {
         return if req.method == "HEAD" {

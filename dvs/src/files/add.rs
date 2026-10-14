@@ -3,7 +3,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +12,7 @@ use crate::backends::{Backend, ManifestItem, ManifestLimits, PresentSize, Stored
 use crate::cache;
 use crate::cache::{HashCache, try_open_cache};
 use crate::config::Compression;
+use crate::errors::{DvsError, ErrorCode};
 use crate::files::metadata::FileMetadata;
 use crate::git::current_git_context;
 use crate::gitignore::add_to_gitignore;
@@ -75,8 +76,8 @@ struct Failure {
 impl From<&anyhow::Error> for Failure {
     fn from(e: &anyhow::Error) -> Self {
         Self {
-            error: format!("{e:#}"),
-            code: api_error(e).map(|a| a.code.clone()),
+            error: crate::errors::error_message(e),
+            code: crate::errors::error_code(e).map(str::to_string),
         }
     }
 }
@@ -198,10 +199,14 @@ pub fn add_files(
         })
         .collect::<Vec<_>>();
     if !invalid.is_empty() {
-        bail!(
-            "Refusing to add, the following paths are invalid:\n{}",
-            invalid.join("\n")
-        );
+        return Err(DvsError::new(
+            ErrorCode::InvalidPaths,
+            format!(
+                "Refusing to add, the following paths are invalid:\n{}",
+                invalid.join("\n")
+            ),
+        )
+        .into());
     }
 
     let valid_paths = matched_paths

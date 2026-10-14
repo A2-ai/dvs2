@@ -4,7 +4,7 @@ mod server_cmds;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde_json::json;
@@ -23,6 +23,7 @@ use dvs::{
     set_num_threads, short_hash,
 };
 
+use dvs::{DvsError, ErrorCode};
 use output::Mode;
 use server_cmds::Target;
 
@@ -216,7 +217,20 @@ fn error_code(e: &anyhow::Error) -> &str {
     if e.downcast_ref::<FilesFailed>().is_some() {
         return "files_failed";
     }
-    api_error(e).map_or("error", |a| a.code.as_str())
+    dvs::error_code(e).unwrap_or("error")
+}
+
+/// A client-side error with its code.
+fn coded(code: ErrorCode, message: impl Into<String>) -> anyhow::Error {
+    DvsError::new(code, message).into()
+}
+
+/// A per-file error with the code, when there is one, after it.
+fn with_code(error: &str, code: Option<&str>) -> String {
+    match code {
+        Some(code) if !code.is_empty() => format!("{error} ({code})"),
+        _ => error.to_string(),
+    }
 }
 
 const EXIT_CODES: &str = "\
@@ -255,11 +269,18 @@ fn server_url(url: Option<Url>, current_dir: &std::path::Path) -> Result<Url> {
     if let Some(url) = url {
         return Ok(url);
     }
-    let config = Config::find(current_dir)
-        .ok_or_else(|| anyhow!("Not in a DVS repository; give the server URL"))??;
+    let config = Config::find(current_dir).ok_or_else(|| {
+        coded(
+            ErrorCode::NotInRepository,
+            "Not in a DVS repository; give the server URL",
+        )
+    })??;
     match config.server_url() {
         Some(url) => Ok(url.clone()),
-        None => bail!("This project is not using a dvs server"),
+        None => Err(coded(
+            ErrorCode::NotAServerProject,
+            "This project is not using a dvs server",
+        )),
     }
 }
 
@@ -551,14 +572,13 @@ fn try_main(cli: Cli) -> Result<()> {
             message,
             dry_run,
         } => {
-            let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let config = Config::find_required(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
                 .into_iter()
                 .collect();
             if all_paths.is_empty() {
-                return Err(anyhow!("No files to add"));
+                return Err(coded(ErrorCode::NothingToAdd, "No files to add"));
             }
 
             let show_progress = !json_out && !dry_run && std::io::stderr().is_terminal();
@@ -590,7 +610,10 @@ fn try_main(cli: Cli) -> Result<()> {
                     let path = result.path.display();
                     let size = format_size(result.size.unwrap_or(0));
                     let hash = result.hash.as_deref().map(short_hash).unwrap_or("");
-                    let error = result.error.as_deref().unwrap_or("");
+                    let error = with_code(
+                        result.error.as_deref().unwrap_or(""),
+                        result.code.as_deref(),
+                    );
                     match result.outcome {
                         AddOutcome::Added => {
                             let msg = if dry_run { "To add" } else { "Added" };
@@ -653,8 +676,7 @@ fn try_main(cli: Cli) -> Result<()> {
             glob,
             remote,
         } => {
-            let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let config = Config::find_required(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !unsynced;
 
@@ -793,15 +815,14 @@ fn try_main(cli: Cli) -> Result<()> {
             recursive,
             dry_run,
         } => {
-            let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let config = Config::find_required(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let all_paths: Vec<_> =
                 resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?
                     .into_iter()
                     .collect();
             if all_paths.is_empty() {
-                return Err(anyhow!("No files to get"));
+                return Err(coded(ErrorCode::NothingToGet, "No files to get"));
             }
 
             let show_progress = !json_out && !dry_run && std::io::stderr().is_terminal();
@@ -847,9 +868,11 @@ fn try_main(cli: Cli) -> Result<()> {
                                 matching += 1;
                             }
                         }
-                        GetDetail::Error { error, .. } => {
-                            eprintln!("Error: {} - {}", result.path.display(), error)
-                        }
+                        GetDetail::Error { error, code } => eprintln!(
+                            "Error: {} - {}",
+                            result.path.display(),
+                            with_code(error, code.as_deref())
+                        ),
                     }
                 }
                 if total_files > 0 {
@@ -931,8 +954,18 @@ fn try_main(cli: Cli) -> Result<()> {
             let url = match (url, &project, &config) {
                 (Some(url), _, _) => url,
                 (None, Some(s), _) => s.url.clone(),
-                (None, None, Some(_)) => bail!("This project is not using a dvs server"),
-                (None, None, None) => bail!("Not in a DVS repository; give the server URL"),
+                (None, None, Some(_)) => {
+                    return Err(coded(
+                        ErrorCode::NotAServerProject,
+                        "This project is not using a dvs server",
+                    ));
+                }
+                (None, None, None) => {
+                    return Err(coded(
+                        ErrorCode::NotInRepository,
+                        "Not in a DVS repository; give the server URL",
+                    ));
+                }
             };
             let server = project.clone().unwrap_or_else(|| {
                 dvs::backends::server::ServerBackend::new(String::new(), None, url.clone())

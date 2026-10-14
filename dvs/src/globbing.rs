@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use crate::errors::{DvsError, ErrorCode};
 use crate::paths::{DvsPaths, PathFilter};
 use anyhow::{Result, anyhow, bail};
 use globset::{GlobBuilder, GlobMatcher};
@@ -152,10 +153,14 @@ pub fn resolve_paths_for_get(
         }
     }
     if !missing.is_empty() {
-        bail!(
-            "The following paths are not tracked by DVS:\n{}",
-            missing.join("\n")
-        );
+        return Err(DvsError::new(
+            ErrorCode::NotTracked,
+            format!(
+                "The following paths are not tracked by DVS:\n{}",
+                missing.join("\n")
+            ),
+        )
+        .into());
     }
 
     Ok(out)
@@ -329,8 +334,9 @@ mod tests {
             false,
         );
 
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        let err = result.unwrap_err();
+        assert_eq!(crate::error_code(&err), Some("not_tracked"));
+        let err = err.to_string();
         assert!(err.contains("not tracked"), "unexpected error: {err}");
         assert!(err.contains("bar.csv"), "unexpected error: {err}");
     }

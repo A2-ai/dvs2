@@ -301,6 +301,14 @@ fn a_file_the_server_would_refuse_fails_alone() {
         "{rows}"
     );
     assert_eq!(rows[2]["code"], "invalid_entry");
+    // The message alone: the code has its own field, and the text output adds it
+    assert!(
+        !rows[2]["error"]
+            .as_str()
+            .unwrap()
+            .ends_with("(invalid_entry)"),
+        "{rows}"
+    );
     // big.csv never reached the server; c.csv's call was sent again without it
     let manifests: Vec<_> = fake
         .requests()
@@ -309,6 +317,11 @@ fn a_file_the_server_would_refuse_fails_alone() {
         .map(|r| r.json()["entries"].as_array().unwrap().len())
         .collect();
     assert_eq!(manifests, [3, 2]);
+    let out = c.dvs(Some(TOKEN), &["add", "c.csv"]);
+    assert!(
+        out.stderr.contains("Error adding c.csv: ") && out.stderr.contains("(invalid_entry)\n"),
+        "{out:?}"
+    );
 }
 
 #[test]
@@ -538,6 +551,27 @@ fn add_get_and_status_say_what_happened() {
             .contains("No tracked files in . are absent or unsynced"),
         "{out:?}"
     );
+
+    // Client-side errors have codes too
+    let code = |args: &[&str]| -> serde_json::Value {
+        let out = c.dvs(Some(TOKEN), args);
+        serde_json::from_str::<serde_json::Value>(out.stderr.trim()).unwrap()["error"]["code"]
+            .clone()
+    };
+    assert_eq!(code(&["--json", "get", "notes.txt"]), "not_tracked");
+    assert_eq!(code(&["--json", "add", "dvs.toml"]), "invalid_paths");
+    assert_eq!(
+        code(&["--json", "get", "--glob", "*.none"]),
+        "nothing_to_get"
+    );
+    let outside = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dvs"))
+        .current_dir(outside.path())
+        .args(["--json", "status"])
+        .output()
+        .unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "not_in_repository");
 
     // --json errors are JSON, usage errors too
     let out = c.dvs(None, &["--json", "add", "notes.txt"]);

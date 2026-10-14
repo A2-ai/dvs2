@@ -8,10 +8,15 @@ use crate::api::v1::ProjectView;
 use crate::audit::AuditEntry;
 use crate::backends::Backend;
 use crate::config::Config;
+use crate::errors::{DvsError, ErrorCode};
 use crate::paths;
 
 /// Starts a new dvs project.
 /// We need a ready to use Config object + the current directory the user is in
+fn already(message: String) -> anyhow::Error {
+    DvsError::new(ErrorCode::AlreadyInitialized, message).into()
+}
+
 pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
     let root_dir = root_dir.as_ref();
 
@@ -37,16 +42,18 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
     }
 
     if root_dir.join(paths::CONFIG_FILE_NAME).exists() {
-        bail!("dvs is already initialized (dvs.toml exists)");
+        return Err(already(
+            "dvs is already initialized (dvs.toml exists)".into(),
+        ));
     }
 
     // Check the metadata folder before touching the backend
     let metadata_dir = root_dir.join(config.metadata_folder_name());
     if metadata_dir.exists() && fs::read_dir(&metadata_dir)?.next().is_some() {
-        bail!(
+        return Err(already(format!(
             "dvs is already initialized ({} exists and is not empty)",
             config.metadata_folder_name()
-        );
+        )));
     }
 
     log::debug!("Initializing backend");
@@ -54,7 +61,9 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
         if let Backend::Server(s) = config.backend() {
             bail!("the project {} already exists on {}", s.name, s.url);
         }
-        bail!("dvs is already initialized (backend storage exists)");
+        return Err(already(
+            "dvs is already initialized (backend storage exists)".into(),
+        ));
     }
 
     // The server decides the compression, so there is nothing to keep past init
@@ -96,10 +105,16 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
 pub fn attach(root_dir: impl AsRef<Path>, mut config: Config) -> Result<ProjectView> {
     let root_dir = root_dir.as_ref();
     let Backend::Server(server) = config.backend() else {
-        bail!("only a server project can be attached");
+        return Err(DvsError::new(
+            ErrorCode::NotAServerProject,
+            "only a server project can be attached",
+        )
+        .into());
     };
     if root_dir.join(paths::CONFIG_FILE_NAME).exists() {
-        bail!("dvs is already initialized (dvs.toml exists)");
+        return Err(already(
+            "dvs is already initialized (dvs.toml exists)".into(),
+        ));
     }
     let project = server.project()?;
     // The server decides the compression

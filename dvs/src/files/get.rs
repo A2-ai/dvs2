@@ -4,11 +4,11 @@ use std::sync::Mutex;
 use crate::api::v1::{BatchKind, CompleteBatch};
 use crate::backends::Batch;
 use crate::cache::{HashCache, try_open_cache};
+use crate::errors::{DvsError, ErrorCode};
 use crate::files::metadata::FileMetadata;
 use crate::git::current_git_context;
 use crate::paths::ProjectPath;
 use crate::progress::OnFileStart;
-use crate::remote::api_error;
 use crate::utils::get_threadpool;
 use crate::{Backend, Compression, DvsPaths, Outcome, RetrieveRequest, cache};
 use anyhow::{Context, Result, anyhow, bail};
@@ -31,7 +31,11 @@ fn check_file(
 ) -> Result<Option<Needed>> {
     let dvs_file_path = paths.metadata_path(relative_path);
     if !dvs_file_path.is_file() {
-        bail!("File {} is not tracked by DVS", relative_path.display());
+        return Err(DvsError::new(
+            ErrorCode::NotTracked,
+            format!("File {} is not tracked by DVS", relative_path.display()),
+        )
+        .into());
     }
     let metadata = FileMetadata::read(&dvs_file_path)?;
     log::debug!(
@@ -143,8 +147,8 @@ pub enum GetDetail {
 impl GetDetail {
     fn error(e: &anyhow::Error) -> Self {
         GetDetail::Error {
-            error: format!("{e:#}"),
-            code: api_error(e).map(|a| a.code.clone()),
+            error: crate::errors::error_message(e),
+            code: crate::errors::error_code(e).map(str::to_string),
         }
     }
 }
@@ -178,10 +182,14 @@ pub fn get_files(
         })
         .collect::<Vec<_>>();
     if !invalid.is_empty() {
-        bail!(
-            "Refusing to get, the following paths cannot be retrieved:\n{}",
-            invalid.join("\n")
-        );
+        return Err(DvsError::new(
+            ErrorCode::NotTracked,
+            format!(
+                "Refusing to get, the following paths cannot be retrieved:\n{}",
+                invalid.join("\n")
+            ),
+        )
+        .into());
     }
 
     let tracked_paths = matched_paths

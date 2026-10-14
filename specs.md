@@ -87,6 +87,23 @@ With `--json` (or `--json-lines`), an error is printed on stderr as
 `{"error": {"code": "...", "message": "..."}}`: the server's code (`project_locked`, `not_logged_in`, ...),
 `files_failed` when some files failed (each file's error is in the JSON on stdout), or `error`.
 
+Errors the client finds itself have stable codes too (`dvs::ErrorCode`, read from any error with
+`dvs::error_code`, which also returns a server error's code):
+
+| Code | Meaning |
+|------|---------|
+| `not_in_repository` | no `dvs.toml` here or in a parent folder |
+| `not_a_server_project` | the project uses local storage, but this needs a dvs server |
+| `already_initialized` | `dvs.toml`, the metadata folder or the storage is already there |
+| `invalid_paths` | paths given to add cannot be added (missing, a folder, outside the project, `dvs.toml` or the metadata folder); nothing was done |
+| `not_tracked` | paths given to get are not tracked; nothing was done |
+| `nothing_to_add` | the paths and glob match no file to add |
+| `nothing_to_get` | the paths and glob match no tracked file |
+| `login_expired`, `login_denied` | a device login's code expired, or was denied in the browser |
+
+In per-file results (`add`, `get`), `error` is the message alone and `code` the code, when there
+is one; the text output shows the code after the message.
+
 #### R package
 
 Error handling in the R package assumes interactive, long-lived sessions. Thus,

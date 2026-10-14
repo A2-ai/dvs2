@@ -23,8 +23,8 @@ use dvs::paths::DvsPaths;
 use dvs::queries::{ActivityQuery, FilesQuery, GroupsQuery, ProjectsQuery};
 use dvs::remote::api_error;
 use dvs::{
-    Backend, FileStatus, StatusDetail, format_size, format_time, parse_size, short_commit,
-    short_hash, since,
+    Backend, DvsError, ErrorCode, FileStatus, StatusDetail, format_size, format_time, parse_size,
+    short_commit, short_hash, since,
 };
 
 use crate::output::{self, Mode, or_blank};
@@ -51,18 +51,28 @@ pub fn backend(target: &Target, cwd: &Path, need_project: bool) -> Result<Server
         (Some(url), Some(s)) if s.same_server(url) => s.url.clone(),
         (Some(url), _) => url.clone(),
         (None, Some(s)) => s.url.clone(),
-        (None, None) if local => bail!(
-            "This project keeps its files in local storage, not on a dvs server; give \
-             --server URL to ask a server"
-        ),
-        (None, None) => bail!(
-            "Not in a DVS repository attached to a server; give --server URL{}",
-            if need_project {
-                " and --project NAME"
-            } else {
-                ""
-            }
-        ),
+        (None, None) if local => {
+            return Err(DvsError::new(
+                ErrorCode::NotAServerProject,
+                "This project keeps its files in local storage, not on a dvs server; give \
+                 --server URL to ask a server",
+            )
+            .into());
+        }
+        (None, None) => {
+            return Err(DvsError::new(
+                ErrorCode::NotInRepository,
+                format!(
+                    "Not in a DVS repository attached to a server; give --server URL{}",
+                    if need_project {
+                        " and --project NAME"
+                    } else {
+                        ""
+                    }
+                ),
+            )
+            .into());
+        }
     };
     let name = match (&target.project, &configured) {
         (Some(name), _) => name.clone(),
