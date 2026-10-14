@@ -15,10 +15,11 @@
 #'   `project_not_found`, `insufficient_role` and `project_locked`. dvs gives
 #'   its own errors the codes `not_in_repository`, `not_a_server_project`,
 #'   `already_initialized`, `invalid_paths`, `not_tracked`, `nothing_to_add`,
-#'   `nothing_to_get`, `login_expired`, `login_denied`, `not_interactive`,
-#'   `invalid_argument` and `files_failed`, and anything else the code
-#'   `error`. Interrupting (Esc, Ctrl-C) while dvs waits for
-#'   the server is an interrupt, not an error.
+#'   `nothing_to_get`, `login_expired`, `login_denied`, `credentials_busy`,
+#'   `not_interactive`, `invalid_argument` and `files_failed`, and anything
+#'   else the code `error`. Interrupting (Esc, Ctrl-C) while dvs waits for the
+#'   server, or for another dvs process to finish updating the stored
+#'   credentials, is an interrupt, not an error.
 #' * `status`: the server's HTTP status, or `NA` when no server answered.
 #' * `message`: for people.
 #' * `request_id`: finds the server's log line when reporting a problem, or

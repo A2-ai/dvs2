@@ -5,10 +5,13 @@
 //! on R's thread, from the result.
 
 use std::ffi::c_int;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
+use dvs::auth;
 
 use crate::conditions::{ClientError, client_error};
 
@@ -41,14 +44,28 @@ pub(crate) fn off_r_thread<T: Send + 'static>(
     work: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
     let (tx, rx) = channel();
+    let abandoned = Arc::new(AtomicBool::new(false));
+    let stop = Arc::clone(&abandoned);
     std::thread::spawn(move || {
-        let _ = tx.send(work());
+        // Work R stopped waiting for changes no credentials from then on
+        let result = auth::with_check(
+            move || {
+                if stop.load(Ordering::SeqCst) {
+                    Err(client_error(INTERRUPTED, "Interrupted"))
+                } else {
+                    Ok(())
+                }
+            },
+            work,
+        );
+        let _ = tx.send(result);
     });
     loop {
         let received = rx.recv_timeout(Duration::from_millis(100));
         // An interrupt wins over a result that came in with it: the user asked to stop,
         // so the caller must not go on to commit what the result says
         if interrupted() {
+            abandoned.store(true, Ordering::SeqCst);
             return Err(client_error(INTERRUPTED, "Interrupted"));
         }
         match received {
@@ -59,6 +76,22 @@ pub(crate) fn off_r_thread<T: Send + 'static>(
             }
         }
     }
+}
+
+/// Run `work`, which changes the credentials store, on R's thread: waiting for the
+/// store's locks stops on an interrupt, and so does a change not yet written when the
+/// locks are held.
+pub(crate) fn on_r_thread_credentials<T>(work: impl FnOnce() -> Result<T>) -> Result<T> {
+    auth::with_check(
+        || {
+            if interrupted() {
+                Err(client_error(INTERRUPTED, "Interrupted"))
+            } else {
+                Ok(())
+            }
+        },
+        work,
+    )
 }
 
 /// Whether `e` is the error [`off_r_thread`] stops with on an interrupt.

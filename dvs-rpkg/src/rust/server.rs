@@ -33,7 +33,7 @@ use dvs::remote::{self, LoginPoll, PendingLogin, TOKEN_ENV, TokenSource, token_f
 use dvs::{Backend, DvsError, ErrorCode, ProjectPath, parse_size, since};
 
 use crate::conditions::{client_error, or_raise, raise};
-use crate::interrupt::{is_interrupted, off_r_thread};
+use crate::interrupt::{is_interrupted, off_r_thread, on_r_thread_credentials};
 
 /// Rows a page asks for; the server may give fewer.
 const PAGE_SIZE: usize = 1000;
@@ -314,7 +314,9 @@ pub(crate) fn dvs_login_poll(handle: ExternalPtr<LoginHandle>) -> AsSerialize<Lo
     let mut wait = handle.wait.lock().unwrap_or_else(|p| p.into_inner());
     let expires_at = match poll {
         Ok(LoginPoll::Done(token)) => {
-            if let Err(e) = store_token(&handle.url, &token.access_token) {
+            if let Err(e) =
+                on_r_thread_credentials(|| store_token(&handle.url, &token.access_token))
+            {
                 drop(wait);
                 raise(e)
             }
@@ -406,7 +408,7 @@ pub(crate) fn dvs_logout(
             }
         }
         // Only the token revoked: a login since then is kept
-        if !delete_token_if(&url, &token)? {
+        if !on_r_thread_credentials(|| delete_token_if(&url, &token))? {
             notes.push(format!(
                 "A newer login to {url} was stored meanwhile; it is kept."
             ));

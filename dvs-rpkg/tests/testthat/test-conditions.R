@@ -229,3 +229,58 @@ test_that("date and size arguments are written as the server reads them", {
   expect_identical(dvs_size_arg(5e9, "min_size"), "5000000000")
   expect_identical(dvs_size_arg("100MiB", "min_size"), "100MiB")
 })
+
+test_that("another process holding the credentials lock: dvs gives up, or stops on an interrupt", {
+  skip_on_cran()
+  skip_on_os("windows")
+  helper <- normalizePath(test_path("..", "server", "server.cjs"), mustWork = FALSE)
+  skip_if_not(file.exists(helper), "tests/server/server.cjs is missing")
+  skip_if(Sys.which("node") == "", "node is not on PATH")
+  skip_if(Sys.which("perl") == "", "perl is not on PATH")
+
+  config <- withr::local_tempdir()
+  dir.create(file.path(config, "dvs"))
+  store <- file.path(config, "dvs", "credentials.json")
+  url <- "http://127.0.0.1:9/"
+  writeLines(sprintf('{"%s": "tok-old"}', url), store)
+  withr::local_envvar(XDG_CONFIG_HOME = config, DVS_TOKEN = NA)
+
+  # Another process takes the lock, as dvs does (flock), until told to stop
+  locked <- file.path(config, "locked")
+  release <- file.path(config, "release")
+  withr::defer(file.create(release))
+  system2(Sys.which("perl"), c(
+    "-e", shQuote(paste(
+      'use Fcntl ":flock"; open(my $f, ">>", $ARGV[0]) or die; flock($f, LOCK_EX) or die;',
+      'open(my $m, ">", $ARGV[1]); close($m); my $n = 0;',
+      'until (-e $ARGV[2] || $n++ > 600) { select(undef, undef, undef, 0.1) }'
+    )),
+    shQuote(paste0(store, ".lock")), shQuote(locked), shQuote(release)
+  ), wait = FALSE)
+  for (i in 1:100) if (!file.exists(locked)) Sys.sleep(0.1)
+  expect_true(file.exists(locked))
+
+  # The server cannot be reached, so the logout goes on to forget the token, and
+  # waits for the lock: at most 10 seconds
+  e <- catch(suppressMessages(dvs_logout(url)))
+  expect_s3_class(e, "dvs_error_credentials_busy")
+  expect_match(readLines(store), "tok-old", fixed = TRUE)
+
+  # Esc or Ctrl-C stops the wait; the token is kept
+  script <- withr::local_tempfile(fileext = ".R")
+  writeLines(c(
+    "library(dvs)",
+    sprintf("r <- tryCatch(dvs_logout('%s'), interrupt = function(e) 'interrupted')", url),
+    "cat(r, '\\n')"
+  ), script)
+  withr::local_envvar(R_LIBS = paste(.libPaths(), collapse = .Platform$path.sep))
+  out <- system2(
+    Sys.which("node"),
+    c(shQuote(helper), "interrupt", "2", "--", shQuote(file.path(R.home("bin"), "Rscript")), shQuote(script)),
+    stdout = TRUE, stderr = TRUE
+  )
+  expect_true("interrupted " %in% out, info = paste(out, collapse = "\n"))
+  elapsed <- as.numeric(sub("^elapsed ", "", grep("^elapsed ", out, value = TRUE)))
+  expect_lt(elapsed, 5)
+  expect_match(readLines(store), "tok-old", fixed = TRUE)
+})
