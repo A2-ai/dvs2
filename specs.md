@@ -115,7 +115,8 @@ taken with `std::fs::File::try_lock`, retried for up to 10 seconds before giving
 file is the user's own and private (mode 0600, narrowed if an older dvs left it wider; refused if
 it is someone else's), since anyone who can open it can lock it. A caller that may stop waiting (an
 interrupted R session, or work it abandoned) passes a check (`dvs::auth::with_check`) that ends the
-wait and is run again once the lock is held, just before writing, so a stopped change writes
+wait and is run again once the lock is held and once more just before the new store replaces the
+old (after its sync, which may be slow on a network file system), so a stopped change writes
 nothing.
 
 #### R package

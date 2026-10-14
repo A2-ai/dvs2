@@ -37,8 +37,8 @@ thread_local! {
 }
 
 /// Run `work` with `check` consulted by every change to the credentials store made
-/// on this thread: while waiting for the store's locks, and again once they are held,
-/// just before writing. When it returns an error the change is not made and that
+/// on this thread: while waiting for the store's locks, once they are held, and just
+/// before the new store replaces the old. When it returns an error the change is not made and that
 /// error is returned. For a caller that may stop waiting (an interrupted R session),
 /// or that runs work it may abandon, which must then change nothing.
 pub fn with_check<T>(check: impl Fn() -> Result<()> + 'static, work: impl FnOnce() -> T) -> T {
@@ -177,6 +177,16 @@ fn write_store(path: &Path, store: &TokenStore) -> Result<()> {
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
     tmp.write_all(serde_json::to_string_pretty(store)?.as_bytes())?;
     tmp.as_file().sync_all()?;
+    #[cfg(test)]
+    tests::BEFORE_PERSIST.with(|hook| {
+        if let Some(hook) = hook.borrow().as_ref() {
+            hook()
+        }
+    });
+    // Once more just before the replacement, after a sync that may take a while (a
+    // network file system): a caller that stopped meanwhile replaces nothing, and the
+    // temporary file is removed as it drops
+    run_check()?;
     tmp.persist(path)
         .with_context(|| format!("could not write {}", path.display()))?;
     Ok(())
@@ -270,6 +280,13 @@ pub fn delete_token_if(url: &Url, token: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// Run in `write_store` after the sync, before the last check and the
+        /// replacement, on the writing thread.
+        pub(super) static BEFORE_PERSIST: RefCell<Option<Box<dyn Fn()>>> =
+            const { RefCell::new(None) };
+    }
 
     /// These tests share the store's in-process lock, which one of them holds while
     /// it waits; one at a time, none waits on another's.
@@ -431,6 +448,53 @@ mod tests {
         assert_eq!(get_token_at(&path, &url(0)).unwrap(), Some("old".into()));
         // The check ends with the work
         assert!(delete_token_if_at(&path, &url(0), "old").unwrap());
+    }
+
+    #[test]
+    fn a_writer_stopped_during_its_sync_replaces_nothing() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, mpsc};
+        let _serial = serial();
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("dvs/credentials.json");
+        store_token_at(&path, &url(0), "old").unwrap();
+
+        let stopped = Arc::new(AtomicBool::new(false));
+        let (paused_tx, paused) = mpsc::channel();
+        let (resume, resume_rx) = mpsc::channel::<()>();
+        let writer = {
+            let (stopped, path) = (Arc::clone(&stopped), path.clone());
+            std::thread::spawn(move || {
+                // The sync stalls: the writer has passed every earlier check
+                BEFORE_PERSIST.with(|hook| {
+                    *hook.borrow_mut() = Some(Box::new(move || {
+                        paused_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                    }))
+                });
+                with_check(
+                    move || {
+                        if stopped.load(Ordering::SeqCst) {
+                            anyhow::bail!("stopped")
+                        }
+                        Ok(())
+                    },
+                    || store_token_at(&path, &url(0), "new"),
+                )
+            })
+        };
+        paused.recv().unwrap();
+        stopped.store(true, Ordering::SeqCst);
+        resume.send(()).unwrap();
+        let e = writer.join().unwrap().unwrap_err();
+        assert_eq!(e.to_string(), "stopped");
+        assert_eq!(get_token_at(&path, &url(0)).unwrap(), Some("old".into()));
+        let mut left: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["credentials.json", "credentials.json.lock"]);
     }
 
     #[cfg(unix)]
