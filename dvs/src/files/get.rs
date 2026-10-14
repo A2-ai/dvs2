@@ -110,12 +110,11 @@ fn fetch_file(
 
     // Store retrieved file's hashes in cache
     let rel_str = relative_path.to_string_lossy();
-    if let Some(mtx) = cache {
-        if let Ok(stat) = cache::FileStat::from_path(&target_path) {
-            if let Err(e) = mtx.lock().unwrap().insert(&rel_str, &stat, &actual.hashes) {
-                log::warn!("Cache store failed after get for {rel_str}: {e}");
-            }
-        }
+    if let Some(mtx) = cache
+        && let Ok(stat) = cache::FileStat::from_path(&target_path)
+        && let Err(e) = mtx.lock().unwrap().insert(&rel_str, &stat, &actual.hashes)
+    {
+        log::warn!("Cache store failed after get for {rel_str}: {e}");
     }
 
     Ok(metadata.size)
@@ -234,10 +233,10 @@ pub fn get_files(
     }
     // A present file reports the size its metadata records
     for (path, detail) in &mut results {
-        if let GetDetail::Success { size, .. } = detail {
-            if let Ok(m) = FileMetadata::read(&paths.metadata_path(path)) {
-                *size = m.size;
-            }
+        if let GetDetail::Success { size, .. } = detail
+            && let Ok(m) = FileMetadata::read(&paths.metadata_path(path))
+        {
+            *size = m.size;
         }
     }
     let report = |results: &[(PathBuf, GetDetail)]| {

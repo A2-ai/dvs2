@@ -76,12 +76,12 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
     let config_path = root_dir.join(paths::CONFIG_FILE_NAME);
 
     log::debug!("Creating metadata folder: {}", metadata_dir.display());
-    if let Err(e) = fs::create_dir(&metadata_dir) {
-        if e.kind() != std::io::ErrorKind::AlreadyExists {
-            // Roll back the config file we just wrote.
-            let _ = fs::remove_file(&config_path);
-            return Err(e.into());
-        }
+    if let Err(e) = fs::create_dir(&metadata_dir)
+        && e.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        // Roll back the config file we just wrote.
+        let _ = fs::remove_file(&config_path);
+        return Err(e.into());
     }
 
     match &config.backend {

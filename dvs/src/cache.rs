@@ -181,10 +181,10 @@ pub fn hashes_for_file(
     let (hashes, size) = Hashes::compute_from_path(full_path, &[])?;
 
     // Store in cache (brief lock)
-    if let Some(mtx) = cache {
-        if let Err(e) = mtx.lock().unwrap().insert(relative_path, &stat, &hashes) {
-            log::warn!("Cache store failed for {relative_path}: {e}");
-        }
+    if let Some(mtx) = cache
+        && let Err(e) = mtx.lock().unwrap().insert(relative_path, &stat, &hashes)
+    {
+        log::warn!("Cache store failed for {relative_path}: {e}");
     }
 
     Ok((hashes, size))

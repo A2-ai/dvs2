@@ -106,7 +106,10 @@ is one; the text output shows the code after the message.
 
 A stored token is forgotten (by `dvs logout`, or when the server rejects it) only while it is still
 the one stored for that server, so a login made in the meantime is kept
-(`dvs::auth::delete_token_if`).
+(`dvs::auth::delete_token_if`). Every change to the credentials store (storing, forgetting) reads,
+changes and replaces it while holding an exclusive lock on `credentials.json.lock` beside it, so
+processes (the CLI, R sessions) changing it at once do not undo each other's changes. The lock is
+`std::fs::File::lock`, so dvs needs Rust 1.89 or newer (`rust-version` in `Cargo.toml`).
 
 #### R package
 

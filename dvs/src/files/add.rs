@@ -301,10 +301,10 @@ pub fn add_files(
             .filter(|r| !r.is_failure())
             .map(|r| r.path.clone())
             .collect();
-        if !recorded.is_empty() {
-            if let Err(e) = add_to_gitignore(paths.repo_root(), &recorded) {
-                log::warn!("Failed to update .gitignore: {e}");
-            }
+        if !recorded.is_empty()
+            && let Err(e) = add_to_gitignore(paths.repo_root(), &recorded)
+        {
+            log::warn!("Failed to update .gitignore: {e}");
         }
     }
 
