@@ -21,6 +21,9 @@ use crate::utils::http_agent;
 /// The API version this client speaks.
 pub const API_VERSION: u32 = 1;
 
+/// Login polls in a row that may get no answer before the login fails.
+const MAX_UNANSWERED_POLLS: u32 = 3;
+
 /// Overrides the stored token for every server, e.g. in CI.
 pub const TOKEN_ENV: &str = "DVS_TOKEN";
 
@@ -157,7 +160,7 @@ pub struct NoResponse(pub ureq::Error);
 
 impl fmt::Display for NoResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "no response from the server: {}", self.0)
+        write!(f, "no response: {}", self.0)
     }
 }
 
@@ -235,8 +238,9 @@ impl Client {
         }
     }
 
-    fn transport(e: ureq::Error) -> anyhow::Error {
-        NoResponse(e).into()
+    /// A request that got no answer, naming the server it was for.
+    pub fn transport(base: &Url) -> impl Fn(ureq::Error) -> anyhow::Error + '_ {
+        move |e| anyhow::Error::from(NoResponse(e)).context(format!("could not reach {base}"))
     }
 
     pub fn get(&self, base: &Url, url: &Url) -> Result<Response> {
@@ -244,7 +248,7 @@ impl Client {
             .get(url.as_str())
             .header("authorization", self.bearer(base)?)
             .call()
-            .map_err(Self::transport)
+            .map_err(Self::transport(base))
     }
 
     pub fn head(&self, base: &Url, url: &Url) -> Result<Response> {
@@ -252,7 +256,7 @@ impl Client {
             .head(url.as_str())
             .header("authorization", self.bearer(base)?)
             .call()
-            .map_err(Self::transport)
+            .map_err(Self::transport(base))
     }
 
     pub fn post_json<B: Serialize>(&self, base: &Url, url: &Url, body: &B) -> Result<Response> {
@@ -260,7 +264,62 @@ impl Client {
             .post(url.as_str())
             .header("authorization", self.bearer(base)?)
             .send_json(body)
-            .map_err(Self::transport)
+            .map_err(Self::transport(base))
+    }
+
+    /// `PATCH` a JSON body, with `If-Match` when `version` is given.
+    pub fn patch_json<B: Serialize>(
+        &self,
+        base: &Url,
+        url: &Url,
+        body: &B,
+        version: Option<i64>,
+    ) -> Result<Response> {
+        let mut req = http_agent()
+            .patch(url.as_str())
+            .header("authorization", self.bearer(base)?);
+        if let Some(v) = version {
+            req = req.header("if-match", format!("\"{v}\""));
+        }
+        req.send_json(body).map_err(Self::transport(base))
+    }
+
+    /// `PUT` a JSON body, with `If-Match` when `version` is given.
+    pub fn put_json<B: Serialize>(
+        &self,
+        base: &Url,
+        url: &Url,
+        body: &B,
+        version: Option<i64>,
+    ) -> Result<Response> {
+        let mut req = http_agent()
+            .put(url.as_str())
+            .header("authorization", self.bearer(base)?);
+        if let Some(v) = version {
+            req = req.header("if-match", format!("\"{v}\""));
+        }
+        req.send_json(body).map_err(Self::transport(base))
+    }
+
+    /// `DELETE`, with a JSON body when one is given and `If-Match` when `version` is.
+    pub fn delete<B: Serialize>(
+        &self,
+        base: &Url,
+        url: &Url,
+        body: Option<&B>,
+        version: Option<i64>,
+    ) -> Result<Response> {
+        let mut req = http_agent()
+            .delete(url.as_str())
+            .header("authorization", self.bearer(base)?);
+        if let Some(v) = version {
+            req = req.header("if-match", format!("\"{v}\""));
+        }
+        match body {
+            Some(body) => req.force_send_body().send_json(body),
+            None => req.call(),
+        }
+        .map_err(Self::transport(base))
     }
 
     /// `PUT` a streamed body.
@@ -275,7 +334,7 @@ impl Client {
             .header("authorization", self.bearer(base)?)
             .header("content-type", "application/octet-stream")
             .send(ureq::SendBody::from_reader(body))
-            .map_err(Self::transport)
+            .map_err(Self::transport(base))
     }
 
     /// `GET /api/server`, once per client. Fails when the server cannot serve this
@@ -315,7 +374,7 @@ pub fn server_info(base: &Url) -> Result<ServerInfo> {
     let resp = http_agent()
         .get(Client::url(base, "/api/server").as_str())
         .call()
-        .map_err(Client::transport)?;
+        .map_err(Client::transport(base))?;
     if resp.status().as_u16() == 404 {
         bail!(
             "{base} does not serve the dvs API v{API_VERSION}; is the URL right, and the server up to date?"
@@ -345,7 +404,7 @@ pub fn login(base: &Url, on_code: impl FnOnce(&DeviceAuthorization)) -> Result<D
     let resp = http_agent()
         .post(Client::url(base, "/api/v1/auth/device").as_str())
         .send_empty()
-        .map_err(Client::transport)?;
+        .map_err(Client::transport(base))?;
     let start: DeviceAuthorization = match resp.status().as_u16() {
         200 => read_json(resp)?,
         status => {
@@ -370,17 +429,32 @@ pub fn login(base: &Url, on_code: impl FnOnce(&DeviceAuthorization)) -> Result<D
 
     let mut interval = Duration::from_secs(start.interval.max(1));
     let deadline = std::time::Instant::now() + Duration::from_secs(start.expires_in);
+    // Polls that got no answer in a row: a proxy closing an idle connection, or a
+    // moment of network trouble, is tried again at the next poll
+    let mut unanswered = 0;
     loop {
         sleep(interval);
         if std::time::Instant::now() > deadline {
             bail!("the code expired before it was approved; run `dvs login` again");
         }
-        let mut resp = http_agent()
+        let polled = http_agent()
             .post(Client::url(base, "/api/v1/auth/token").as_str())
             .send_json(DeviceTokenRequest {
                 device_code: start.device_code.clone(),
             })
-            .map_err(Client::transport)?;
+            .map_err(Client::transport(base));
+        let mut resp = match polled {
+            Ok(resp) => {
+                unanswered = 0;
+                resp
+            }
+            Err(e) if unanswered < MAX_UNANSWERED_POLLS => {
+                unanswered += 1;
+                log::warn!("No answer while waiting for approval, trying again: {e:#}");
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         if resp.status().as_u16() == 200 {
             let token: DeviceToken = resp.body_mut().read_json()?;
             store_token(base, &token.access_token)?;
@@ -413,7 +487,7 @@ pub fn revoke(base: &Url, token: &str) -> Result<bool> {
         .delete(Client::url(base, "/api/v1/auth/token").as_str())
         .header("authorization", format!("Bearer {token}"))
         .call()
-        .map_err(Client::transport)?;
+        .map_err(Client::transport(base))?;
     match resp.status().as_u16() {
         200..=299 => Ok(true),
         401 => Ok(false),

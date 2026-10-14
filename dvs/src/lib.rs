@@ -12,6 +12,7 @@ mod hashes;
 pub mod init;
 pub mod paths;
 pub mod progress;
+pub mod queries;
 pub mod remote;
 pub(crate) mod utils;
 

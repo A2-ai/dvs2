@@ -12,17 +12,21 @@ use tempfile::NamedTempFile;
 use url::Url;
 
 use crate::api::v1::{
-    BatchKind, BatchView, CompleteBatch, CreateProject, GitContext, GrantRequest, Manifest,
-    ManifestEntry, ManifestResult, MeView, OpenBatch, Page, ProjectView, Role, ServerInfo,
-    StoredBlob, VersionView,
+    AccessView, ActivityBatch, ActivityItem, BatchKind, BatchView, CompleteBatch, CreateProject,
+    FileStatus, FileView, FilesSummary, GitContext, GrantRequest, GroupView, Manifest,
+    ManifestEntry, ManifestResult, MeView, OpenBatch, Page, PatchProject, ProjectView, PutGrant,
+    Role, ServerInfo, StatusFile, StatusRequest, StatusResult, StoredBlob, UnyankRequest,
+    VersionView, YankRequest, YankView,
 };
 use crate::audit::AuditEntry;
 use crate::auth::delete_token;
 use crate::backends::{
     Batch, ManifestItem, ManifestLimits, ManifestReply, PresentSize, RetrieveRequest, Stored,
 };
+use crate::queries::{ActivityQuery, FilesQuery, GroupsQuery, Pairs, ProjectsQuery};
 use crate::remote::{
-    ApiError, Client, NoResponse, Response, TokenSource, check, is_no_response, read_json,
+    ApiError, Client, NoResponse, Response, TOKEN_ENV, TokenSource, check, is_no_response,
+    read_json,
 };
 use crate::{Compression, Hashes};
 
@@ -77,6 +81,37 @@ impl PartialEq for ServerBackend {
     }
 }
 
+/// The server's wording where people know other words: its group directory is Arx,
+/// and a project name's rules read better than its pattern.
+fn plainer(api: &ApiError) -> Option<ApiError> {
+    let message = match api.code.as_str() {
+        "unknown_group" => {
+            api.message
+                .replace("the directory has no group named", "no Arx group is named")
+                .replace("the directory has no group", "no Arx group has the id")
+                + " (names are exact, case included); `dvs groups --search NAME` lists similar ones"
+        }
+        "invalid_parameter" if api.message.starts_with("invalid project name") => {
+            let name = api
+                .message
+                .split(':')
+                .next()
+                .unwrap_or("invalid project name");
+            if api.message.contains("reserved") {
+                return None;
+            }
+            format!(
+                "{name}: use lowercase letters, digits and hyphens, starting with a letter or \
+                 digit, at most 100 characters"
+            )
+        }
+        _ => return None,
+    };
+    let mut plain = api.clone();
+    plain.message = message;
+    Some(plain)
+}
+
 impl ServerBackend {
     pub fn new(name: String, group: Option<String>, url: Url) -> Self {
         Self {
@@ -104,19 +139,35 @@ impl ServerBackend {
         let Some(api) = crate::remote::api_error(&e) else {
             return e;
         };
-        if matches!(api.code.as_str(), "unauthenticated" | "token_expired")
-            && self.token_source() == Some(TokenSource::Stored)
-        {
-            if self.client.forget_once() {
-                if let Err(e) = delete_token(&self.url) {
-                    log::warn!("Could not remove the rejected token: {e}");
+        if let Some(plain) = plainer(api) {
+            return plain.into();
+        }
+        if !matches!(api.code.as_str(), "unauthenticated" | "token_expired") {
+            return e;
+        }
+        let mut api = api.clone();
+        let message = api.message.trim_end_matches('.').to_string();
+        match self.token_source() {
+            Some(TokenSource::Stored) => {
+                if self.client.forget_once() {
+                    if let Err(e) = delete_token(&self.url) {
+                        log::warn!("Could not remove the rejected token: {e}");
+                    }
+                }
+                if !message.contains("dvs login") {
+                    api.message = format!("{message}; run `dvs login`");
                 }
             }
-            let mut api = api.clone();
-            api.message = format!("{}; run `dvs login`", api.message.trim_end_matches('.'));
-            return api.into();
+            // `dvs login` would not help: the variable wins over a stored token
+            Some(TokenSource::Environment) => {
+                api.message = format!(
+                    "{message}: the server rejected the token in {TOKEN_ENV}. Set it to a \
+                     valid token, or unset it and run `dvs login`"
+                );
+            }
+            None => return e,
         }
-        e
+        api.into()
     }
 
     fn json<T: serde::de::DeserializeOwned>(&self, resp: Result<Response>) -> Result<T> {
@@ -126,7 +177,7 @@ impl ServerBackend {
     /// Create the project, with `group` as its admin.
     pub fn init(&self, compression: Compression) -> Result<bool> {
         let Some(group) = self.group.clone() else {
-            bail!("A group is required to create a project on the server");
+            bail!("An Arx group is required to create a project on the server: give --group NAME");
         };
         self.client.server_info(&self.url)?;
         let body = CreateProject {
@@ -451,6 +502,230 @@ impl ServerBackend {
         self.json(resp)
     }
 
+    /// `url` with `pairs` as its query string.
+    fn with_query(mut url: Url, pairs: &Pairs) -> Url {
+        if !pairs.is_empty() {
+            let mut q = url.query_pairs_mut();
+            for (k, v) in pairs {
+                q.append_pair(k, v);
+            }
+        }
+        url
+    }
+
+    fn get_json<T: serde::de::DeserializeOwned>(&self, url: Url) -> Result<T> {
+        self.client.server_info(&self.url)?;
+        let resp = self.client.get(&self.url, &url);
+        self.json(resp)
+    }
+
+    /// The caller's username on the server, for the `.dvs` files it writes.
+    pub fn username(&self) -> Option<String> {
+        self.me().ok().and_then(|me| me.username)
+    }
+
+    /// The projects the caller can read.
+    pub fn projects(&self, query: &ProjectsQuery) -> Result<Page<ProjectView>> {
+        let url = Self::with_query(Client::v1(&self.url, &["projects"]), &query.pairs());
+        self.get_json(url)
+    }
+
+    /// Lock or unlock the project, with an optional reason.
+    pub fn set_locked(&self, locked: bool, reason: Option<String>) -> Result<ProjectView> {
+        self.client.server_info(&self.url)?;
+        let body = PatchProject {
+            locked: Some(locked),
+            lock_reason: reason.filter(|r| !r.trim().is_empty()),
+            ..Default::default()
+        };
+        let resp = self
+            .client
+            .patch_json(&self.url, &self.project_url(&[]), &body, None);
+        self.json(resp)
+    }
+
+    /// Arx groups, the ones you belong to marked.
+    pub fn groups(&self, query: &GroupsQuery) -> Result<Page<GroupView>> {
+        let url = Self::with_query(Client::v1(&self.url, &["groups"]), &query.pairs());
+        self.get_json(url)
+    }
+
+    /// The project's grants and its version, for `If-Match`.
+    pub fn access(&self) -> Result<AccessView> {
+        self.get_json(self.project_url(&["access"]))
+    }
+
+    /// Give `group_id` `role`, if the project is still at `version`.
+    pub fn put_grant(
+        &self,
+        group_id: uuid::Uuid,
+        role: Role,
+        confirm_self_demotion: bool,
+        version: Option<i64>,
+    ) -> Result<AccessView> {
+        self.client.server_info(&self.url)?;
+        let body = PutGrant {
+            role: role.as_str().to_string(),
+            confirm_self_demotion,
+        };
+        let id = group_id.to_string();
+        let resp = self.client.put_json(
+            &self.url,
+            &self.project_url(&["access", &id]),
+            &body,
+            version,
+        );
+        self.json(resp)
+    }
+
+    /// Remove `group_id`'s grant, if the project is still at `version`.
+    pub fn delete_grant(
+        &self,
+        group_id: uuid::Uuid,
+        confirm_self_demotion: bool,
+        version: Option<i64>,
+    ) -> Result<()> {
+        self.client.server_info(&self.url)?;
+        let id = group_id.to_string();
+        let mut url = self.project_url(&["access", &id]);
+        if confirm_self_demotion {
+            url.query_pairs_mut()
+                .append_pair("confirm_self_demotion", "true");
+        }
+        let resp = self.client.delete::<()>(&self.url, &url, None, version);
+        resp.and_then(check).map_err(|e| self.fail(e))?;
+        Ok(())
+    }
+
+    /// Every path uploaded to the project, with its latest upload.
+    pub fn files(&self, query: &FilesQuery) -> Result<Page<FileView>> {
+        self.get_json(Self::with_query(
+            self.project_url(&["files"]),
+            &query.pairs(),
+        ))
+    }
+
+    /// What the files matching `query` add up to.
+    pub fn files_summary(&self, query: &FilesQuery) -> Result<FilesSummary> {
+        let url = Self::with_query(
+            self.project_url(&["files", "summary"]),
+            &query.summary_pairs(),
+        );
+        self.get_json(url)
+    }
+
+    /// Local files compared with the server, in requests within its limits.
+    pub fn remote_status(&self, files: &[StatusFile]) -> Result<Vec<FileStatus>> {
+        let info = self.client.server_info(&self.url)?;
+        if info.limits.max_status_paths == 0 {
+            bail!(
+                "{} cannot compare files yet; it needs a newer dvs-server",
+                self.url
+            );
+        }
+        let max_paths = info.limits.max_status_paths;
+        // Leave room for the envelope
+        let max_bytes = info
+            .limits
+            .max_status_body_bytes
+            .saturating_sub(64)
+            .max(1024);
+        let mut out = Vec::with_capacity(files.len());
+        let mut start = 0;
+        while start < files.len() {
+            let (mut end, mut bytes) = (start, 0);
+            while end < files.len() && end - start < max_paths {
+                let size = serde_json::to_vec(&files[end]).map_or(max_bytes, |v| v.len()) + 1;
+                if end > start && bytes + size > max_bytes {
+                    break;
+                }
+                bytes += size;
+                end += 1;
+            }
+            let body = StatusRequest {
+                files: files[start..end].to_vec(),
+            };
+            let resp = self
+                .client
+                .post_json(&self.url, &self.project_url(&["status"]), &body);
+            let result: StatusResult = self.json(resp)?;
+            out.extend(result.files);
+            start = end;
+        }
+        Ok(out)
+    }
+
+    /// Events, newest first.
+    pub fn activity(&self, query: &ActivityQuery) -> Result<Page<ActivityItem>> {
+        let mut query = query.clone();
+        query.group_by = None;
+        self.get_json(Self::with_query(
+            self.project_url(&["activity"]),
+            &query.pairs(),
+        ))
+    }
+
+    /// Runs of `dvs add` and `dvs get`, newest first.
+    pub fn activity_batches(&self, query: &ActivityQuery) -> Result<Page<ActivityBatch>> {
+        let mut query = query.clone();
+        query.group_by = Some("batch".into());
+        self.get_json(Self::with_query(
+            self.project_url(&["activity"]),
+            &query.pairs(),
+        ))
+    }
+
+    /// Every event matching `query` as CSV, oldest first, written to `out`.
+    pub fn activity_csv(&self, query: &ActivityQuery, out: &mut dyn std::io::Write) -> Result<u64> {
+        self.client.server_info(&self.url)?;
+        let mut query = query.clone();
+        query.group_by = None;
+        query.limit = None;
+        query.cursor = None;
+        let mut pairs = query.pairs();
+        pairs.push(("format", "csv".to_string()));
+        let url = Self::with_query(self.project_url(&["activity"]), &pairs);
+        let mut resp = self
+            .client
+            .get(&self.url, &url)
+            .and_then(check)
+            .map_err(|e| self.fail(e))?;
+        let n = std::io::copy(&mut resp.body_mut().as_reader(), out)
+            .context("the export was cut off")?;
+        Ok(n)
+    }
+
+    /// The yanks in force, newest first.
+    pub fn yanks(&self) -> Result<Vec<YankView>> {
+        self.get_json(self.project_url(&["yanks"]))
+    }
+
+    /// Block downloads of `hash` everywhere in the project.
+    pub fn yank(&self, hash: &str, reason: &str) -> Result<YankView> {
+        self.client.server_info(&self.url)?;
+        let body = YankRequest {
+            hash: hash.to_string(),
+            reason: reason.to_string(),
+        };
+        let resp = self
+            .client
+            .post_json(&self.url, &self.project_url(&["yanks"]), &body);
+        self.json(resp)
+    }
+
+    /// Allow downloads of `hash` again.
+    pub fn unyank(&self, hash: &str, reason: Option<String>) -> Result<YankView> {
+        self.client.server_info(&self.url)?;
+        let body = UnyankRequest { reason };
+        let resp = self.client.delete(
+            &self.url,
+            &self.project_url(&["yanks", hash]),
+            body.reason.is_some().then_some(&body),
+            None,
+        );
+        self.json(resp)
+    }
+
     pub fn get_audit_entries(&self, _files: &[PathBuf]) -> Result<Vec<AuditEntry>> {
         bail!(
             "{} is a server project: its history is on the server, in the web UI at {}. \
@@ -458,5 +733,33 @@ impl ServerBackend {
             self.name,
             self.url
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_wording_is_made_plain() {
+        let group = ApiError::new(422, "unknown_group", "the directory has no group named qc");
+        let plain = plainer(&group).unwrap();
+        assert!(
+            plain
+                .message
+                .starts_with("no Arx group is named qc (names are exact")
+        );
+        let name = ApiError::new(
+            400,
+            "invalid_parameter",
+            "invalid project name \"A\": must match ^[a-z0-9][a-z0-9-]{0,99}$",
+        );
+        let plain = plainer(&name).unwrap();
+        assert_eq!(
+            plain.message,
+            "invalid project name \"A\": use lowercase letters, digits and hyphens, starting \
+             with a letter or digit, at most 100 characters"
+        );
+        assert!(plainer(&ApiError::new(404, "project_not_found", "x")).is_none());
     }
 }

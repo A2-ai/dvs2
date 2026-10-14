@@ -367,6 +367,12 @@ fn upload(
     }
     let git = current_git_context(paths.repo_root());
     let batch = backend.open_batch(BatchKind::Upload, message.as_deref(), &git, compression)?;
+    // A server project's `.dvs` files name the person as the server knows them, as its
+    // pages do; local storage keeps the login name
+    let created_by = match backend {
+        Backend::Server(s) => s.username(),
+        Backend::Local(_) => None,
+    };
 
     // The manifest, in chunks. After a chunk fails, later chunks are not sent; the
     // contents of earlier chunks are still uploaded.
@@ -488,12 +494,15 @@ fn upload(
                 continue;
             }
         };
-        let metadata = FileMetadata::from_hashes(
+        let mut metadata = FileMetadata::from_hashes(
             h.hashes.clone(),
             h.size,
             project_compression,
             message.clone(),
         );
+        if let Some(name) = &created_by {
+            metadata.created_by = name.clone();
+        }
         let result = match metadata.write(&paths.metadata_path(&h.path)) {
             Ok(()) => {
                 log::info!("Added {} ({outcome:?})", h.path.display());
