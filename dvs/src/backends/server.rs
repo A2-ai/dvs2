@@ -97,6 +97,13 @@ impl ServerBackend {
         Client::v1(&self.url, &segments)
     }
 
+    /// Whether `url` reaches the same server as this backend's URL: both as requests
+    /// are built, so a trailing slash, the host's case, a default port or a path after
+    /// the host make no difference.
+    pub fn same_server(&self, url: &Url) -> bool {
+        Client::v1(&self.url, &[]) == Client::v1(url, &[])
+    }
+
     /// The token in use and where it came from.
     pub fn token_source(&self) -> Option<TokenSource> {
         self.client.token(&self.url).map(|(_, s)| *s)
@@ -699,5 +706,32 @@ impl ServerBackend {
             self.name,
             self.url
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_server_is_the_same_however_its_url_is_written() {
+        let backend = ServerBackend::new(
+            "p".into(),
+            None,
+            Url::parse("https://dvs.example.com/dvs").unwrap(),
+        );
+        for same in [
+            "https://dvs.example.com/dvs/",
+            "https://DVS.Example.com:443/dvs",
+            "https://dvs.example.com",
+        ] {
+            assert!(backend.same_server(&Url::parse(same).unwrap()), "{same}");
+        }
+        for other in [
+            "http://dvs.example.com/dvs",
+            "https://dvs.example.com:8443/dvs",
+        ] {
+            assert!(!backend.same_server(&Url::parse(other).unwrap()), "{other}");
+        }
     }
 }
