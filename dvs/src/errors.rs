@@ -27,10 +27,12 @@ pub enum ErrorCode {
     NothingToAdd,
     /// The paths and glob given match no tracked file
     NothingToGet,
+    /// Another dvs process held the credentials store's lock for too long
+    CredentialsBusy,
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 7] = [
+    pub const ALL: [ErrorCode; 8] = [
         ErrorCode::NotInRepository,
         ErrorCode::NotAServerProject,
         ErrorCode::AlreadyInitialized,
@@ -38,6 +40,7 @@ impl ErrorCode {
         ErrorCode::NotTracked,
         ErrorCode::NothingToAdd,
         ErrorCode::NothingToGet,
+        ErrorCode::CredentialsBusy,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -49,6 +52,7 @@ impl ErrorCode {
             ErrorCode::NotTracked => "not_tracked",
             ErrorCode::NothingToAdd => "nothing_to_add",
             ErrorCode::NothingToGet => "nothing_to_get",
+            ErrorCode::CredentialsBusy => "credentials_busy",
         }
     }
 }

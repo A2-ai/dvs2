@@ -100,6 +100,7 @@ Errors the client finds itself have stable codes too (`dvs::ErrorCode`, read fro
 | `nothing_to_add` | the paths and glob match no file to add |
 | `nothing_to_get` | the paths and glob match no tracked file |
 | `login_expired`, `login_denied` | a device login's code expired, or was denied in the browser |
+| `credentials_busy` | another dvs process kept the credentials store locked for 10 seconds; try again |
 
 In per-file results (`add`, `get`), `error` is the message alone and `code` the code, when there
 is one; the text output shows the code after the message.
@@ -109,7 +110,13 @@ the one stored for that server, so a login made in the meantime is kept
 (`dvs::auth::delete_token_if`). Every change to the credentials store (storing, forgetting) reads,
 changes and replaces it while holding an exclusive lock on `credentials.json.lock` beside it, so
 processes (the CLI, R sessions) changing it at once do not undo each other's changes. The lock is
-`std::fs::File::lock`, so dvs needs Rust 1.89 or newer (`rust-version` in `Cargo.toml`).
+taken with `std::fs::File::try_lock`, retried for up to 10 seconds before giving up with
+`credentials_busy`, so dvs needs Rust 1.89 or newer (`rust-version` in `Cargo.toml`). The lock
+file is the user's own and private (mode 0600, narrowed if an older dvs left it wider; refused if
+it is someone else's), since anyone who can open it can lock it. A caller that may stop waiting (an
+interrupted R session, or work it abandoned) passes a check (`dvs::auth::with_check`) that ends the
+wait and is run again once the lock is held, just before writing, so a stopped change writes
+nothing.
 
 #### R package
 
