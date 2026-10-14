@@ -210,6 +210,125 @@ fn insecure_tls_requested(value: Option<&str>) -> bool {
     value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
+/// How long a request may wait for the response headers, and for each read of a body,
+/// unless `DVS_HTTP_TIMEOUT` says otherwise
+const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The HTTP timeout from `DVS_HTTP_TIMEOUT` (whole seconds; 0 turns it off), or the default
+/// when it is unset or not a number.
+fn http_timeout(value: Option<&str>) -> Option<Duration> {
+    let Some(value) = value else {
+        return Some(DEFAULT_HTTP_TIMEOUT);
+    };
+    match value.trim().parse::<u64>() {
+        Ok(0) => None,
+        Ok(secs) => Some(Duration::from_secs(secs)),
+        Err(_) => {
+            log::warn!(
+                "DVS_HTTP_TIMEOUT={value:?} is not a whole number of seconds; using {}s",
+                DEFAULT_HTTP_TIMEOUT.as_secs()
+            );
+            Some(DEFAULT_HTTP_TIMEOUT)
+        }
+    }
+}
+
+/// An agent that gives up on a server that stops answering: when the response headers do not
+/// come within `timeout`, or a body read waits that long for a byte. A large body that keeps
+/// arriving may take as long as it needs, and so may an upload.
+fn build_http_agent(insecure: bool, timeout: Option<Duration>) -> ureq::Agent {
+    use ureq::unversioned::resolver::DefaultResolver;
+    use ureq::unversioned::transport::{Connector, DefaultConnector};
+
+    let config = ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .disable_verification(insecure)
+                .build(),
+        )
+        .http_status_as_error(false)
+        .user_agent(crate::remote::USER_AGENT.as_str())
+        .timeout_connect(Some(Duration::from_secs(5)))
+        .max_idle_connections(ENV_MAX_THREADS)
+        .max_idle_connections_per_host(ENV_MAX_THREADS)
+        .build();
+    match timeout {
+        // ureq's own receive timeouts will not do: the one for the headers keeps counting
+        // while the body is read, so it would cut a large download short.
+        Some(timeout) => ureq::Agent::with_parts(
+            config,
+            DefaultConnector::default().chain(ReadIdleTimeout(timeout)),
+            DefaultResolver::default(),
+        ),
+        None => config.new_agent(),
+    }
+}
+
+/// Wraps each connection so that no wait for incoming bytes lasts longer than its duration.
+#[derive(Debug)]
+struct ReadIdleTimeout(Duration);
+
+impl ureq::unversioned::transport::Connector<Box<dyn ureq::unversioned::transport::Transport>>
+    for ReadIdleTimeout
+{
+    type Out = ReadIdleTransport;
+
+    fn connect(
+        &self,
+        _details: &ureq::unversioned::transport::ConnectionDetails,
+        chained: Option<Box<dyn ureq::unversioned::transport::Transport>>,
+    ) -> Result<Option<Self::Out>, ureq::Error> {
+        Ok(chained.map(|inner| ReadIdleTransport {
+            inner,
+            idle: self.0,
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct ReadIdleTransport {
+    inner: Box<dyn ureq::unversioned::transport::Transport>,
+    idle: Duration,
+}
+
+impl ureq::unversioned::transport::Transport for ReadIdleTransport {
+    fn buffers(&mut self) -> &mut dyn ureq::unversioned::transport::Buffers {
+        self.inner.buffers()
+    }
+
+    fn transmit_output(
+        &mut self,
+        amount: usize,
+        timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<(), ureq::Error> {
+        self.inner.transmit_output(amount, timeout)
+    }
+
+    fn await_input(
+        &mut self,
+        mut timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<bool, ureq::Error> {
+        use ureq::unversioned::transport::time::Duration as Wait;
+        let sooner = match timeout.after {
+            Wait::Exact(after) => after > self.idle,
+            Wait::NotHappening => true,
+        };
+        if sooner {
+            timeout.after = Wait::Exact(self.idle);
+        }
+        self.inner.await_input(timeout)
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.inner.is_open()
+    }
+
+    fn is_tls(&self) -> bool {
+        self.inner.is_tls()
+    }
+}
+
 pub fn http_agent() -> &'static ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
@@ -217,20 +336,8 @@ pub fn http_agent() -> &'static ureq::Agent {
         if insecure {
             log::warn!("TLS certificate verification is disabled via DVS_INSECURE");
         }
-        ureq::Agent::config_builder()
-            .tls_config(
-                ureq::tls::TlsConfig::builder()
-                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-                    .disable_verification(insecure)
-                    .build(),
-            )
-            .http_status_as_error(false)
-            .user_agent(crate::remote::USER_AGENT.as_str())
-            .timeout_connect(Some(Duration::from_secs(5)))
-            .max_idle_connections(ENV_MAX_THREADS)
-            .max_idle_connections_per_host(ENV_MAX_THREADS)
-            .build()
-            .new_agent()
+        let timeout = http_timeout(std::env::var("DVS_HTTP_TIMEOUT").ok().as_deref());
+        build_http_agent(insecure, timeout)
     })
 }
 
@@ -247,6 +354,80 @@ mod tests {
         }
         assert!(!insecure_tls_requested(None));
     }
+    #[test]
+    fn http_timeout_comes_from_the_environment() {
+        assert_eq!(http_timeout(None), Some(DEFAULT_HTTP_TIMEOUT));
+        assert_eq!(http_timeout(Some("30")), Some(Duration::from_secs(30)));
+        assert_eq!(http_timeout(Some(" 600 ")), Some(Duration::from_secs(600)));
+        assert_eq!(http_timeout(Some("0")), None);
+        assert_eq!(http_timeout(Some("2m")), Some(DEFAULT_HTTP_TIMEOUT));
+        assert_eq!(http_timeout(Some("-1")), Some(DEFAULT_HTTP_TIMEOUT));
+    }
+
+    /// Serves one request: waits `before_headers`, sends the headers, then the body's
+    /// chunks with `between` before each one.
+    fn slow_server(before_headers: Duration, chunks: usize, between: Duration) -> String {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 2 {
+                line.clear();
+            }
+            let mut stream = stream;
+            std::thread::sleep(before_headers);
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {chunks}\r\n\r\n");
+            if stream.write_all(head.as_bytes()).is_err() {
+                return;
+            }
+            for _ in 0..chunks {
+                std::thread::sleep(between);
+                if stream.write_all(b"x").and_then(|_| stream.flush()).is_err() {
+                    return;
+                }
+            }
+        });
+        url
+    }
+
+    fn fetch(agent: &ureq::Agent, url: &str) -> std::result::Result<String, String> {
+        let mut response = agent.get(url).call().map_err(|e| e.to_string())?;
+        response
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn a_slow_server_times_out_but_a_slow_body_does_not() {
+        let agent = build_http_agent(false, Some(Duration::from_millis(600)));
+        let short = Duration::from_millis(250);
+        let long = Duration::from_millis(1500);
+
+        // Headers that never come in time
+        let err = fetch(&agent, &slow_server(long, 1, Duration::ZERO)).unwrap_err();
+        assert!(err.contains("timeout") || err.contains("Timeout"), "{err}");
+
+        // A body that keeps coming, for longer than the timeout in all
+        assert_eq!(
+            fetch(&agent, &slow_server(Duration::ZERO, 8, short)).unwrap(),
+            "x".repeat(8)
+        );
+
+        // Headers that take a while, then a body that keeps coming
+        assert_eq!(
+            fetch(&agent, &slow_server(Duration::from_millis(400), 4, short)).unwrap(),
+            "x".repeat(4)
+        );
+
+        // A body that stops
+        let err = fetch(&agent, &slow_server(Duration::ZERO, 2, long)).unwrap_err();
+        assert!(err.contains("timeout") || err.contains("Timeout"), "{err}");
+    }
+
     #[test]
     fn sizes_match_the_server() {
         assert_eq!(format_size(0), "0 B");

@@ -503,6 +503,13 @@ clamped to the number of files being processed.
 The threadpool size set directly by the R package takes precedence over the
 `DVS_NUM_THREADS` environment variable.
 
+### Network timeouts
+
+Requests to a dvs server give up when connecting takes more than 5 seconds, or when the server leaves
+them waiting 120 seconds with nothing sent: before the response headers, or between the bytes of a
+response body. A download or upload that keeps moving may take as long as it needs. The
+`DVS_HTTP_TIMEOUT` environment variable sets the 120 seconds, in whole seconds; `0` turns it off.
+
 ### Gitignore
 
 After a successful `add`, each data file gets a `/<filename>` entry in its own directory's `.gitignore`, keeping the
