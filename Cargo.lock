@@ -532,7 +532,6 @@ dependencies = [
  "dvs",
  "env_logger",
  "indicatif",
- "libc",
  "serde",
  "serde_json",
  "tabled",

@@ -1148,9 +1148,10 @@ pub fn activity(mode: Mode, target: &Target, cwd: &Path, args: ActivityArgs) -> 
 /// Write an export to `file` through a temporary file of its own beside it
 /// (`.<name>.<random>.partial`, created new and private), published when complete: a
 /// failed export keeps the old file and leaves nothing half-written. The published file
-/// gets the replaced file's permission bits (not ACLs or extended attributes), or a new
-/// file's (0666 less the umask). Without `force` an existing file is kept, also one
-/// that appears during the export. Only a killed run leaves its temporary file.
+/// gets the replaced file's permission bits (not ACLs or extended attributes), or those
+/// a plain create in the folder gives (the umask and any default ACL apply). Without
+/// `force` an existing file is kept, also one that appears during the export. Only a
+/// killed run leaves its temporary file.
 fn export_csv(
     file: &Path,
     force: bool,
@@ -1187,7 +1188,7 @@ fn export_csv(
     out.as_file().sync_all()?;
     let permissions = match existing {
         Some(p) => p,
-        None => new_file_permissions(out.as_file())?,
+        None => new_file_permissions(folder, &prefix)?,
     };
     out.as_file().set_permissions(permissions)?;
     if force {
@@ -1204,27 +1205,21 @@ fn export_csv(
     Ok(n)
 }
 
-/// The permissions a newly created file gets: 0666 less the umask.
-#[cfg(unix)]
-fn new_file_permissions(file: &std::fs::File) -> Result<std::fs::Permissions> {
-    use std::os::unix::fs::PermissionsExt;
-    // SAFETY: umask only swaps the process's file-mode mask, and the old one is put back
-    // at once; this program creates no file on another thread meanwhile
-    let mask = unsafe {
-        let mask = libc::umask(0o022);
-        libc::umask(mask);
-        mask
-    };
-    let mut permissions = file.metadata()?.permissions();
-    permissions.set_mode(0o666 & !(mask as u32));
-    Ok(permissions)
-}
-
-#[cfg(not(unix))]
-fn new_file_permissions(file: &std::fs::File) -> Result<std::fs::Permissions> {
-    let mut permissions = file.metadata()?.permissions();
-    permissions.set_readonly(false);
-    Ok(permissions)
+/// The permissions a file created normally in `folder` gets: those of an empty probe
+/// file created there (new, and deleted at once), so the umask and, on Linux, the
+/// folder's default ACL decide, as they would for a plain create.
+fn new_file_permissions(folder: &Path, prefix: &std::ffi::OsStr) -> Result<std::fs::Permissions> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix).suffix(".probe");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    let probe = builder
+        .tempfile_in(folder)
+        .with_context(|| format!("could not write in {}", folder.display()))?;
+    Ok(probe.as_file().metadata()?.permissions())
 }
 
 // ------------------------------------------------------------------------------- yanks
@@ -1560,11 +1555,18 @@ mod tests {
         std::fs::write(&victim, "keep").unwrap();
         symlink(&victim, dir.path().join(".out.csv.partial")).unwrap();
 
-        // A new file is made like any other, umask and all
+        // A new file gets exactly the mode a plain create there gives (umask, default
+        // ACL), and the probe that learned it is gone
         export_csv(&file, false, rows("a\n")).unwrap();
         let plain = dir.path().join("plain");
         std::fs::File::create(&plain).unwrap();
         assert_eq!(mode(&file), mode(&plain));
+        let probes = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".probe"))
+            .count();
+        assert_eq!(probes, 0);
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
 
         // Kept without --force; replaced with it, keeping its mode
