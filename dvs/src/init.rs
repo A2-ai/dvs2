@@ -102,7 +102,7 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
 /// Use an existing server project in `root_dir`: check that it exists and that you
 /// can read it, then write `dvs.toml` and create the metadata folder. Metadata files
 /// already in the folder, such as those of a fresh clone, are kept.
-pub fn attach(root_dir: impl AsRef<Path>, mut config: Config) -> Result<ProjectView> {
+pub fn attach(root_dir: impl AsRef<Path>, config: Config) -> Result<ProjectView> {
     let root_dir = root_dir.as_ref();
     let Backend::Server(server) = config.backend() else {
         return Err(DvsError::new(
@@ -117,15 +117,25 @@ pub fn attach(root_dir: impl AsRef<Path>, mut config: Config) -> Result<ProjectV
         ));
     }
     let project = server.project()?;
+    write_attached(root_dir, config)?;
+    Ok(project)
+}
+
+/// The writing half of [`attach`], for a caller that looks the project up itself
+/// (`ServerBackend::project`) and decides afterwards whether to go on: write
+/// `dvs.toml`, only if there is none yet ([`Config::save_new`]), and create the
+/// metadata folder.
+pub fn write_attached(root_dir: impl AsRef<Path>, mut config: Config) -> Result<()> {
+    let root_dir = root_dir.as_ref();
     // The server decides the compression
     config.set_compression(None);
-    config.save(root_dir)?;
+    config.save_new(root_dir)?;
     let metadata_dir = root_dir.join(config.metadata_folder_name());
     if let Err(e) = fs::create_dir_all(&metadata_dir) {
         let _ = fs::remove_file(root_dir.join(paths::CONFIG_FILE_NAME));
         return Err(e.into());
     }
-    Ok(project)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -163,6 +173,18 @@ mod tests {
             entries[0].action,
             crate::audit::Action::Init { .. }
         ));
+    }
+
+    #[test]
+    fn write_attached_keeps_a_config_already_there() {
+        let (_tmp, root) = create_temp_git_repo();
+        let url = url::Url::parse("https://dvs.example/").unwrap();
+        write_attached(&root, Config::new_server("a".into(), url.clone(), None)).unwrap();
+        assert!(root.join(".dvs").is_dir());
+        let e = write_attached(&root, Config::new_server("b".into(), url, None)).unwrap_err();
+        assert_eq!(crate::error_code(&e), Some("already_initialized"));
+        let kept = fs::read_to_string(root.join("dvs.toml")).unwrap();
+        assert!(kept.contains("\"a\""), "{kept}");
     }
 
     #[test]

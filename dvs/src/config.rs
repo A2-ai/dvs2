@@ -183,6 +183,36 @@ impl Config {
         Ok(())
     }
 
+    /// Like [`Config::save`], but only when `directory` has no `dvs.toml` yet, checked
+    /// as the file is created: one there already, even written a moment before by
+    /// someone else, is an `already_initialized` error and is left alone.
+    pub fn save_new(&self, directory: impl AsRef<Path>) -> Result<()> {
+        let config_path = directory.as_ref().join(CONFIG_FILE_NAME);
+        let content = toml::to_string_pretty(&self)?;
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&config_path)
+        {
+            Ok(f) => f,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                return Err(crate::errors::DvsError::new(
+                    crate::errors::ErrorCode::AlreadyInitialized,
+                    "dvs is already initialized (dvs.toml exists)",
+                )
+                .into());
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if let Err(e) = file.write_all(content.as_bytes()) {
+            drop(file);
+            let _ = fs::remove_file(&config_path);
+            return Err(e.into());
+        }
+        log::info!("Configuration saved to {}", config_path.display());
+        Ok(())
+    }
+
     /// The config of the project `current_directory` is in; outside any, an error with
     /// the code `not_in_repository`.
     pub fn find_required(current_directory: impl AsRef<Path>) -> Result<Self> {

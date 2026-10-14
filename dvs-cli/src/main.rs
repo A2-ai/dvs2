@@ -11,7 +11,7 @@ use serde_json::json;
 use tabled::Tabled;
 use url::Url;
 
-use dvs::auth::{delete_token, get_token};
+use dvs::auth::{delete_token_if, get_token};
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::{attach, init};
@@ -937,7 +937,10 @@ fn try_main(cli: Cli) -> Result<()> {
                             ),
                         }
                     }
-                    delete_token(&url)?;
+                    // Only the token revoked: a login since then is kept
+                    if !delete_token_if(&url, &token)? {
+                        eprintln!("A newer login to {url} was stored meanwhile; it is kept.");
+                    }
                     println!("Logged out of {url}");
                 }
             }

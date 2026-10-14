@@ -475,6 +475,16 @@ pub fn start_login(base: &Url) -> Result<PendingLogin> {
 /// `login_denied`; a request that got no answer is one [`is_no_response`] recognizes,
 /// which a caller may poll again after.
 pub fn poll_login(base: &Url, pending: &PendingLogin) -> Result<LoginPoll> {
+    let poll = poll_login_unstored(base, pending)?;
+    if let LoginPoll::Done(token) = &poll {
+        store_token(base, &token.access_token)?;
+    }
+    Ok(poll)
+}
+
+/// [`poll_login`] without storing the token on approval: for a caller that decides
+/// afterwards whether to keep it, and stores it with [`crate::auth::store_token`].
+pub fn poll_login_unstored(base: &Url, pending: &PendingLogin) -> Result<LoginPoll> {
     let expired = || {
         anyhow::Error::from(ApiError::new(
             400,
@@ -494,7 +504,6 @@ pub fn poll_login(base: &Url, pending: &PendingLogin) -> Result<LoginPoll> {
     let status = resp.status().as_u16();
     if status == 200 {
         let token: DeviceToken = resp.body_mut().read_json()?;
-        store_token(base, &token.access_token)?;
         return Ok(LoginPoll::Done(token));
     }
     let body = resp.body_mut().read_to_string().unwrap_or_default();

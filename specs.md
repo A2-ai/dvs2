@@ -104,15 +104,25 @@ Errors the client finds itself have stable codes too (`dvs::ErrorCode`, read fro
 In per-file results (`add`, `get`), `error` is the message alone and `code` the code, when there
 is one; the text output shows the code after the message.
 
+A stored token is forgotten (by `dvs logout`, or when the server rejects it) only while it is still
+the one stored for that server, so a login made in the meantime is kept
+(`dvs::auth::delete_token_if`).
+
 #### R package
 
 Error handling in the R package assumes interactive, long-lived sessions. Thus,
 the R package must provide comprehensive information, that the end-user can
 explore.
 
+Interrupting (Esc, Ctrl-C) while the R package waits for a server is an R interrupt, not an
+error, and leaves local state as it was: a request still running when R stops waiting does not
+store a login token, write `dvs.toml` or forget a token afterwards.
+
 ### init
 
 init will always error if a `dvs.toml` already exists in the target directory.
+`attach` too, checked again as `dvs.toml` is created, so of two attaches racing in one folder
+only the first writes it (`already_initialized` for the other).
 This check is local: a `dvs.toml` in a parent directory does not prevent initializing a nested project.
 
 init also rejects a storage path inside the repository root. This guard applies to local-filesystem backends.

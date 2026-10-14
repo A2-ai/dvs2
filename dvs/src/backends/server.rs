@@ -19,7 +19,7 @@ use crate::api::v1::{
     VersionView, YankRequest, YankView,
 };
 use crate::audit::AuditEntry;
-use crate::auth::delete_token;
+use crate::auth::delete_token_if;
 use crate::backends::{
     Batch, ManifestItem, ManifestLimits, ManifestReply, PresentSize, RetrieveRequest, Stored,
 };
@@ -122,10 +122,12 @@ impl ServerBackend {
         let message = api.message.trim_end_matches('.').to_string();
         match self.token_source() {
             Some(TokenSource::Stored) => {
-                if self.client.forget_once() {
-                    if let Err(e) = delete_token(&self.url) {
-                        log::warn!("Could not remove the rejected token: {e}");
-                    }
+                // Only the token the server rejected: a login since then is kept
+                if let Some((token, _)) = self.client.token(&self.url)
+                    && self.client.forget_once()
+                    && let Err(e) = delete_token_if(&self.url, token)
+                {
+                    log::warn!("Could not remove the rejected token: {e}");
                 }
                 if !message.contains("dvs login") {
                     api.message = format!("{message}; run `dvs login`");

@@ -100,6 +100,19 @@ fn delete_token_at(path: &Path, url: &Url) -> Result<bool> {
     Ok(true)
 }
 
+/// Forget the token for `url` only if it is still `token`: a token stored since (a
+/// newer login) is kept.
+fn delete_token_if_at(path: &Path, url: &Url, token: &str) -> Result<bool> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut store = read_store(path, false)?;
+    if store.get(url.as_str()).map(String::as_str) != Some(token) {
+        return Ok(false);
+    }
+    store.remove(url.as_str());
+    write_store(path, &store)?;
+    Ok(true)
+}
+
 pub fn store_token(url: &Url, token: &str) -> Result<()> {
     store_token_at(&get_token_store_path()?, url, token)
 }
@@ -111,6 +124,13 @@ pub fn get_token(url: &Url) -> Result<Option<String>> {
 /// Forget the token for `url`, keeping every other server's. False when there was none.
 pub fn delete_token(url: &Url) -> Result<bool> {
     delete_token_at(&get_token_store_path()?, url)
+}
+
+/// Forget the token for `url` if it is still `token`, the one being revoked or that
+/// the server rejected; a token stored since then, by a newer login, is kept. True
+/// when it was forgotten.
+pub fn delete_token_if(url: &Url, token: &str) -> Result<bool> {
+    delete_token_if_at(&get_token_store_path()?, url, token)
 }
 
 #[cfg(test)]
@@ -146,6 +166,21 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn a_conditional_delete_keeps_a_newer_token() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("dvs/credentials.json");
+        store_token_at(&path, &url(0), "old").unwrap();
+        store_token_at(&path, &url(1), "other").unwrap();
+        store_token_at(&path, &url(0), "new").unwrap();
+        assert!(!delete_token_if_at(&path, &url(0), "old").unwrap());
+        assert_eq!(get_token_at(&path, &url(0)).unwrap(), Some("new".into()));
+        assert!(delete_token_if_at(&path, &url(0), "new").unwrap());
+        assert_eq!(get_token_at(&path, &url(0)).unwrap(), None);
+        assert!(!delete_token_if_at(&path, &url(0), "new").unwrap());
+        assert_eq!(get_token_at(&path, &url(1)).unwrap(), Some("other".into()));
     }
 
     #[test]
