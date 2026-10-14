@@ -18,3 +18,8 @@ was none.
 Revokes the stored token on the server and forgets it here. A token in
 \code{DVS_TOKEN} is not revoked: unset the variable to stop using it.
 }
+\details{
+If you stop it with Esc or Ctrl-C, the token is kept here, though the server
+may already have revoked it; a token the server rejects is forgotten the
+next time it is used.
+}

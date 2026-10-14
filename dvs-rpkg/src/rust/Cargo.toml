@@ -2,7 +2,7 @@
 name = "dvs-rpkg"
 version = "0.5.0"
 edition = "2024"
-rust-version = '1.85'
+rust-version = '1.89'
 publish = false
 
 # Make this a standalone workspace (prevents inheriting from parent)

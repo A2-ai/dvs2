@@ -33,7 +33,7 @@ use dvs::remote::{self, LoginPoll, PendingLogin, TOKEN_ENV, TokenSource, token_f
 use dvs::{Backend, DvsError, ErrorCode, ProjectPath, parse_size, since};
 
 use crate::conditions::{client_error, or_raise, raise};
-use crate::interrupt::off_r_thread;
+use crate::interrupt::{is_interrupted, off_r_thread};
 
 /// Rows a page asks for; the server may give fewer.
 const PAGE_SIZE: usize = 1000;
@@ -365,7 +365,7 @@ pub(crate) struct LogoutResult {
 pub(crate) fn dvs_logout(
     #[miniextendr(default = "NULL")] url: Option<String>,
 ) -> AsSerialize<LogoutResult> {
-    or_raise(off_r_thread(move || {
+    or_raise((|| {
         let url = server_url(url)?;
         let mut notes = Vec::new();
         let env_token = std::env::var(TOKEN_ENV)
@@ -390,8 +390,11 @@ pub(crate) fn dvs_logout(
                  forgotten here."
             ));
         } else {
-            match remote::revoke(&url, &token) {
+            // Only the revoking runs off R's thread; an interrupted logout keeps the token
+            let (base, revoking) = (url.clone(), token.clone());
+            match off_r_thread(move || remote::revoke(&base, &revoking)) {
                 Ok(_) => {}
+                Err(e) if is_interrupted(&e) => return Err(e),
                 Err(e) if remote::is_no_response(&e) => notes.push(format!(
                     "Could not reach {url} to revoke the token ({e:#}). It is forgotten here, \
                      but stays valid on the server until it expires."
@@ -402,8 +405,7 @@ pub(crate) fn dvs_logout(
                 )),
             }
         }
-        // Only the token revoked: a login since then (an interrupted logout's request
-        // can end after one) is kept
+        // Only the token revoked: a login since then is kept
         if !delete_token_if(&url, &token)? {
             notes.push(format!(
                 "A newer login to {url} was stored meanwhile; it is kept."
@@ -414,7 +416,7 @@ pub(crate) fn dvs_logout(
             logged_out: true,
             notes,
         }))
-    }))
+    })())
 }
 
 // endregion

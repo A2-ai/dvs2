@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 
-use crate::conditions::client_error;
+use crate::conditions::{ClientError, client_error};
+
+const INTERRUPTED: &str = "interrupted";
 
 unsafe extern "C" {
     // R_ext/GraphicsDevice.h: set by R's SIGINT handler (Esc, Ctrl-C) until R acts on
@@ -43,16 +45,25 @@ pub(crate) fn off_r_thread<T: Send + 'static>(
         let _ = tx.send(work());
     });
     loop {
-        match rx.recv_timeout(Duration::from_millis(100)) {
+        let received = rx.recv_timeout(Duration::from_millis(100));
+        // An interrupt wins over a result that came in with it: the user asked to stop,
+        // so the caller must not go on to commit what the result says
+        if interrupted() {
+            return Err(client_error(INTERRUPTED, "Interrupted"));
+        }
+        match received {
             Ok(result) => return result,
-            Err(RecvTimeoutError::Timeout) => {
-                if interrupted() {
-                    return Err(client_error("interrupted", "Interrupted"));
-                }
-            }
+            Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
                 return Err(anyhow!("the request stopped without an answer"));
             }
         }
     }
+}
+
+/// Whether `e` is the error [`off_r_thread`] stops with on an interrupt.
+pub(crate) fn is_interrupted(e: &anyhow::Error) -> bool {
+    e.chain()
+        .filter_map(|c| c.downcast_ref::<ClientError>())
+        .any(|c| c.code == INTERRUPTED)
 }

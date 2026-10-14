@@ -116,7 +116,7 @@ set_dvs_log_level("off")     # restore default (silent)
 - **miniextendr** (git: A2-ai/miniextendr) — Rust-to-R FFI framework with serde support, `log` feature enabled for R-console log routing
 - **dvs** (path: `../dvs`) — core DVS library (patched in Cargo.toml)
 - **R imports**: jsonlite
-- **Rust requires**: rustc >= 1.85.0
+- **Rust requires**: rustc >= 1.89.0 (`File::lock`, for the credentials store)
 
 ### Vendoring
 
