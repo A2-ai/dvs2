@@ -234,8 +234,9 @@ fn http_timeout(value: Option<&str>) -> Option<Duration> {
 }
 
 /// An agent that gives up on a server that stops answering: when the response headers do not
-/// come within `timeout`, or a body read waits that long for a byte. A large body that keeps
-/// arriving may take as long as it needs, and so may an upload.
+/// come within `timeout`, a body read waits that long for a byte, or a write waits that long
+/// for the server to take one. A large body that keeps moving, either way, may take as long
+/// as it needs.
 fn build_http_agent(insecure: bool, timeout: Option<Duration>) -> ureq::Agent {
     use ureq::unversioned::resolver::DefaultResolver;
     use ureq::unversioned::transport::{Connector, DefaultConnector};
@@ -254,32 +255,33 @@ fn build_http_agent(insecure: bool, timeout: Option<Duration>) -> ureq::Agent {
         .max_idle_connections_per_host(ENV_MAX_THREADS)
         .build();
     match timeout {
-        // ureq's own receive timeouts will not do: the one for the headers keeps counting
-        // while the body is read, so it would cut a large download short.
+        // ureq's own timeouts will not do: each one is for a whole phase (the headers' one
+        // even keeps counting while the body is read), so it would cut a large transfer short.
         Some(timeout) => ureq::Agent::with_parts(
             config,
-            DefaultConnector::default().chain(ReadIdleTimeout(timeout)),
+            DefaultConnector::default().chain(IdleTimeout(timeout)),
             DefaultResolver::default(),
         ),
         None => config.new_agent(),
     }
 }
 
-/// Wraps each connection so that no wait for incoming bytes lasts longer than its duration.
+/// Wraps each connection so that no wait to read or write a byte lasts longer than its
+/// duration. Each wait starts over once bytes move.
 #[derive(Debug)]
-struct ReadIdleTimeout(Duration);
+struct IdleTimeout(Duration);
 
 impl ureq::unversioned::transport::Connector<Box<dyn ureq::unversioned::transport::Transport>>
-    for ReadIdleTimeout
+    for IdleTimeout
 {
-    type Out = ReadIdleTransport;
+    type Out = IdleTransport;
 
     fn connect(
         &self,
         _details: &ureq::unversioned::transport::ConnectionDetails,
         chained: Option<Box<dyn ureq::unversioned::transport::Transport>>,
     ) -> Result<Option<Self::Out>, ureq::Error> {
-        Ok(chained.map(|inner| ReadIdleTransport {
+        Ok(chained.map(|inner| IdleTransport {
             inner,
             idle: self.0,
         }))
@@ -287,12 +289,30 @@ impl ureq::unversioned::transport::Connector<Box<dyn ureq::unversioned::transpor
 }
 
 #[derive(Debug)]
-struct ReadIdleTransport {
+struct IdleTransport {
     inner: Box<dyn ureq::unversioned::transport::Transport>,
     idle: Duration,
 }
 
-impl ureq::unversioned::transport::Transport for ReadIdleTransport {
+impl IdleTransport {
+    /// The wait ureq asks for, but no longer than `idle`
+    fn limit(
+        &self,
+        mut timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> ureq::unversioned::transport::NextTimeout {
+        use ureq::unversioned::transport::time::Duration as Wait;
+        let longer = match timeout.after {
+            Wait::Exact(after) => after > self.idle,
+            Wait::NotHappening => true,
+        };
+        if longer {
+            timeout.after = Wait::Exact(self.idle);
+        }
+        timeout
+    }
+}
+
+impl ureq::unversioned::transport::Transport for IdleTransport {
     fn buffers(&mut self) -> &mut dyn ureq::unversioned::transport::Buffers {
         self.inner.buffers()
     }
@@ -302,21 +322,17 @@ impl ureq::unversioned::transport::Transport for ReadIdleTransport {
         amount: usize,
         timeout: ureq::unversioned::transport::NextTimeout,
     ) -> Result<(), ureq::Error> {
+        // The socket's write timeout holds for each write call, which a partial write ends:
+        // a write that stops moving fails, a slow one carries on.
+        let timeout = self.limit(timeout);
         self.inner.transmit_output(amount, timeout)
     }
 
     fn await_input(
         &mut self,
-        mut timeout: ureq::unversioned::transport::NextTimeout,
+        timeout: ureq::unversioned::transport::NextTimeout,
     ) -> Result<bool, ureq::Error> {
-        use ureq::unversioned::transport::time::Duration as Wait;
-        let sooner = match timeout.after {
-            Wait::Exact(after) => after > self.idle,
-            Wait::NotHappening => true,
-        };
-        if sooner {
-            timeout.after = Wait::Exact(self.idle);
-        }
+        let timeout = self.limit(timeout);
         self.inner.await_input(timeout)
     }
 
@@ -426,6 +442,79 @@ mod tests {
         // A body that stops
         let err = fetch(&agent, &slow_server(Duration::ZERO, 2, long)).unwrap_err();
         assert!(err.contains("timeout") || err.contains("Timeout"), "{err}");
+    }
+
+    /// Takes one upload: reads the headers, then the body in `step`-byte reads, with `between`
+    /// before each until it has `slow_for` bytes, but stops for good after `stop_after` bytes.
+    /// Answers 200 once it has it all.
+    fn slow_reader(step: usize, between: Duration, slow_for: usize, stop_after: usize) -> String {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let (mut line, mut length) = (String::new(), 0);
+            while reader.read_line(&mut line).unwrap_or(0) > 2 {
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = v.trim().parse().unwrap();
+                }
+                line.clear();
+            }
+            let mut buf = vec![0; step];
+            let mut read = 0;
+            while read < length {
+                if read >= stop_after {
+                    // Keep the connection open without reading
+                    std::thread::sleep(Duration::from_secs(30));
+                    return;
+                }
+                if read < slow_for {
+                    std::thread::sleep(between);
+                }
+                let want = step.min(length - read);
+                match reader.read(&mut buf[..want]) {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => read += n,
+                }
+            }
+            let mut stream = stream;
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+        });
+        url
+    }
+
+    fn upload(agent: &ureq::Agent, url: &str, size: usize) -> std::result::Result<(), String> {
+        // Run it aside, so a hang fails the test rather than stalling it
+        let (agent, url) = (agent.clone(), url.to_string());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let body = vec![b'x'; size];
+            let result = agent
+                .put(&url)
+                .send(&body[..])
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+        rx.recv_timeout(Duration::from_secs(20))
+            .expect("the upload hung")
+    }
+
+    #[test]
+    fn a_stalled_upload_times_out_but_a_slow_one_does_not() {
+        let agent = build_http_agent(false, Some(Duration::from_millis(600)));
+        let mb = 1 << 20;
+
+        // Far more than the socket buffers hold, and the server stops taking it
+        let server = slow_reader(mb, Duration::ZERO, 0, mb);
+        let err = upload(&agent, &server, 64 * mb).unwrap_err();
+        assert!(err.contains("timeout") || err.contains("Timeout"), "{err}");
+
+        // Taken slowly but steadily, for longer than the timeout in all, then quickly: the
+        // buffered rest goes before the answer is awaited, which a slow end would hold up
+        let server = slow_reader(mb / 2, Duration::from_millis(150), 8 * mb, usize::MAX);
+        upload(&agent, &server, 32 * mb).unwrap();
     }
 
     #[test]

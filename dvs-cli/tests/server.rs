@@ -560,6 +560,12 @@ fn add_get_and_status_say_what_happened() {
     };
     assert_eq!(code(&["--json", "get", "notes.txt"]), "not_tracked");
     assert_eq!(code(&["--json", "add", "dvs.toml"]), "invalid_paths");
+    assert_eq!(code(&["--json", "add", "missing.csv"]), "invalid_paths");
+    let out = c.dvs(Some(TOKEN), &["add", "missing.csv"]);
+    assert!(
+        out.stderr.contains("Path not found: missing.csv"),
+        "{out:?}"
+    );
     assert_eq!(
         code(&["--json", "get", "--glob", "*.none"]),
         "nothing_to_get"

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use crate::errors::{DvsError, ErrorCode};
 use crate::paths::{DvsPaths, PathFilter};
-use anyhow::{Result, anyhow, bail};
+use anyhow::Result;
 use globset::{GlobBuilder, GlobMatcher};
 use walkdir::WalkDir;
 
@@ -45,11 +45,12 @@ pub fn resolve_paths_for_add(
     };
 
     for path in paths {
-        let full_path = dvs_paths
-            .cwd()
-            .join(&path)
-            .canonicalize()
-            .map_err(|_| anyhow!("Path not found: {}", path.display()))?;
+        let full_path = dvs_paths.cwd().join(&path).canonicalize().map_err(|_| {
+            DvsError::new(
+                ErrorCode::InvalidPaths,
+                format!("Path not found: {}", path.display()),
+            )
+        })?;
 
         // Explicit file: we ignore the glob and add it to the file
         if full_path.is_file() {
@@ -106,7 +107,11 @@ pub fn resolve_paths_for_add(
                 out.insert(relative_to_root);
             }
         } else {
-            bail!("Path is not a file or directory: {}", path.display());
+            return Err(DvsError::new(
+                ErrorCode::InvalidPaths,
+                format!("Path is not a file or directory: {}", path.display()),
+            )
+            .into());
         }
     }
 
@@ -286,7 +291,9 @@ mod tests {
         let result = resolve_paths_for_add(vec![PathBuf::from("nonexistent")], None, &dvs_paths);
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Path not found"));
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Path not found"));
+        assert_eq!(crate::error_code(&err), Some("invalid_paths"));
     }
 
     #[test]
