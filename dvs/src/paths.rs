@@ -233,17 +233,30 @@ impl DvsPaths {
         self.repo_root.join(relative)
     }
 
+    /// `dvs.toml` and the metadata folder as they really are, symlinks resolved, so a
+    /// link to either (or either being a link) cannot be added under another name.
+    pub(crate) fn protected(&self) -> (PathBuf, PathBuf) {
+        let real = |p: PathBuf| p.canonicalize().unwrap_or(p);
+        (
+            real(self.repo_root.join(CONFIG_FILE_NAME)),
+            real(self.metadata_folder()),
+        )
+    }
+
     pub fn validate_for_add(&self, paths: &[PathBuf]) -> Vec<(PathBuf, AddPathStatus)> {
         let mut found = Vec::new();
+        let (config_file, metadata_folder) = self.protected();
         for path in paths {
             let file_path = self.file_path(path);
             let status = match file_path.canonicalize() {
                 Ok(canonical) => {
                     if !canonical.starts_with(&self.repo_root) {
                         AddPathStatus::OutsideProject
-                    } else if canonical == self.repo_root.join(CONFIG_FILE_NAME) {
+                    } else if canonical == config_file {
                         AddPathStatus::ProjectConfig
-                    } else if canonical.starts_with(self.metadata_folder()) {
+                    } else if canonical.starts_with(&metadata_folder)
+                        || canonical.starts_with(self.metadata_folder())
+                    {
                         AddPathStatus::Metadata
                     } else if canonical.is_dir() {
                         AddPathStatus::IsDirectory
@@ -512,6 +525,26 @@ mod tests {
         assert_eq!(result[0].1, AddPathStatus::ProjectConfig);
         assert_eq!(result[1].1, AddPathStatus::Metadata);
         assert!(result[0].1.reason().unwrap().contains("Git"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_do_not_hide_dvs_files() {
+        use std::os::unix::fs::symlink;
+        let (_tmp, root) = create_temp_git_repo();
+        // The metadata folder is a link to another folder; dvs.toml is a link to a file
+        fs_err::create_dir_all(root.join(".meta/data")).unwrap();
+        fs_err::write(root.join(".meta/data/a.csv.dvs"), b"{}").unwrap();
+        symlink(root.join(".meta"), root.join(".dvs")).unwrap();
+        fs_err::write(root.join("settings.toml"), b"").unwrap();
+        symlink(root.join("settings.toml"), root.join(CONFIG_FILE_NAME)).unwrap();
+        let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs").unwrap();
+        let result = paths.validate_for_add(&[
+            PathBuf::from(".meta/data/a.csv.dvs"),
+            PathBuf::from("settings.toml"),
+        ]);
+        assert_eq!(result[0].1, AddPathStatus::Metadata);
+        assert_eq!(result[1].1, AddPathStatus::ProjectConfig);
     }
 
     #[test]

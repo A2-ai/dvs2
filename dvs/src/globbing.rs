@@ -32,9 +32,9 @@ pub fn resolve_paths_for_add(
     let mut out = HashSet::new();
     let glob_matcher = build_glob_matcher(glob_pattern)?;
     let repo_root = dvs_paths.repo_root().canonicalize()?;
-    let metadata_root = dvs_paths.metadata_folder().canonicalize()?;
-    // A glob never picks the project's settings; naming it is refused with the reason
-    let config_file = repo_root.join(crate::paths::CONFIG_FILE_NAME);
+    // A glob never picks the project's settings or metadata, even through a symlink;
+    // naming them is refused with the reason
+    let (config_file, metadata_root) = dvs_paths.protected();
 
     // If no paths given, default to cwd
     let paths = if paths.is_empty() {
@@ -215,6 +215,28 @@ mod tests {
         assert!(!result.contains(&PathBuf::from("data/b.txt")));
         // *.csv should not match subdir/c.csv due to literal_separator
         assert!(!result.contains(&PathBuf::from("data/subdir/c.csv")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_add_glob_skips_dvs_files_behind_symlinks() {
+        use std::os::unix::fs::symlink;
+        let (temp, _) = setup_test_repo();
+        let root = temp.path().canonicalize().unwrap();
+        // Make `.dvs` a link to `.meta`, and dvs.toml a link to settings.toml
+        fs::rename(root.join(".dvs"), root.join(".meta")).unwrap();
+        symlink(root.join(".meta"), root.join(".dvs")).unwrap();
+        File::create(root.join("settings.toml")).unwrap();
+        symlink(root.join("settings.toml"), root.join("dvs.toml")).unwrap();
+        let dvs_paths = DvsPaths::new(root.clone(), root.clone(), ".dvs").unwrap();
+        let result = resolve_paths_for_add(vec![], Some("**/*"), &dvs_paths).unwrap();
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+        assert!(
+            result
+                .iter()
+                .all(|p| !p.starts_with(".meta") && !p.ends_with("settings.toml")),
+            "{result:?}"
+        );
     }
 
     #[test]
