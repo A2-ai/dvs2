@@ -16,9 +16,9 @@ tabled = "0.22"
 walkdir.workspace = true
 url = "2.5.8"
 toml.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
 blake3.workspace = true
 zstd.workspace = true
 

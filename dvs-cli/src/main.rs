@@ -386,9 +386,13 @@ fn run_device_login(url: &Url) -> Result<()> {
 }
 
 /// Explain why `dvs status PATHS` lists nothing for some of the paths.
+/// `tracked` is every tracked file the paths match, `shown` those left after the
+/// `--current`/`--absent`/`--unsynced` filters, named by `states` when there are any.
 fn unmatched_paths(
     user_paths: &[PathBuf],
-    statuses: &[dvs::FileStatus],
+    tracked: &[dvs::FileStatus],
+    shown: &[dvs::FileStatus],
+    states: Option<&str>,
     recursive: bool,
     dvs_paths: &DvsPaths,
 ) -> Vec<String> {
@@ -399,11 +403,22 @@ fn unmatched_paths(
             continue;
         };
         let wanted = Path::new(&wanted);
-        if statuses.iter().any(|s| s.path.starts_with(wanted)) {
+        let matches = |list: &[dvs::FileStatus]| list.iter().any(|s| s.path.starts_with(wanted));
+        if matches(shown) {
             continue;
         }
         let shown = user_path.display();
         let full = dvs_paths.file_path(wanted);
+        if let Some(states) = states
+            && matches(tracked)
+        {
+            notes.push(if full.is_dir() {
+                format!("No tracked files in {shown} are {states}")
+            } else {
+                format!("{shown} is tracked, but not {states}")
+            });
+            continue;
+        }
         notes.push(if full.is_dir() {
             if recursive {
                 format!("No tracked files in {shown}")
@@ -653,6 +668,16 @@ fn try_main(cli: Cli) -> Result<()> {
                 ))
             };
             let mut statuses = get_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
+            let tracked = statuses.clone();
+            let states = [
+                (current, "current"),
+                (absent, "absent"),
+                (unsynced, "unsynced"),
+            ]
+            .into_iter()
+            .filter_map(|(on, name)| on.then_some(name))
+            .collect::<Vec<_>>()
+            .join(" or ");
             if !show_all {
                 statuses.retain(|x| match &x.detail {
                     StatusDetail::Success { status, .. } => {
@@ -668,7 +693,14 @@ fn try_main(cli: Cli) -> Result<()> {
                 .any(|s| matches!(s.detail, StatusDetail::Error { .. }));
             // Paths given that match nothing tracked: say why, instead of a bare "none"
             let unmatched = if glob.is_none() {
-                unmatched_paths(&user_paths, &statuses, recursive, &dvs_paths)
+                unmatched_paths(
+                    &user_paths,
+                    &tracked,
+                    &statuses,
+                    (!show_all).then_some(states.as_str()),
+                    recursive,
+                    &dvs_paths,
+                )
             } else {
                 Vec::new()
             };
@@ -974,8 +1006,39 @@ fn try_main(cli: Cli) -> Result<()> {
     Ok(())
 }
 
+/// Parse the command line. A usage error under `--json` is reported in the JSON error
+/// form, with exit code 2 like any usage error; help and version print as usual.
+fn parse() -> Cli {
+    let e = match Cli::try_parse() {
+        Ok(cli) => return cli,
+        Err(e) => e,
+    };
+    use clap::error::ErrorKind;
+    let json = std::env::args_os()
+        .skip(1)
+        .take_while(|a| a != "--")
+        .any(|a| a == "--json" || a == "--json-lines");
+    let shown = matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion);
+    if !json || shown {
+        e.exit()
+    }
+    let rendered = e.render().to_string();
+    // The first paragraph, without clap's `error: `, is the message
+    let message = rendered
+        .split("\n\n")
+        .next()
+        .unwrap_or(&rendered)
+        .trim()
+        .trim_start_matches("error: ");
+    eprintln!(
+        "{}",
+        json!({"error": {"code": "usage", "message": message}})
+    );
+    ::std::process::exit(2)
+}
+
 fn main() {
-    let cli = Cli::parse();
+    let cli = parse();
     let json_errors = cli.json || cli.json_lines;
     if let Err(e) = try_main(cli) {
         if json_errors {

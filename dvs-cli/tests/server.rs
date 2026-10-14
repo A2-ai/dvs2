@@ -528,8 +528,53 @@ fn add_get_and_status_say_what_happened() {
     let out = c.dvs_ok(&["status", "missing.txt"]);
     assert!(out.stdout.contains("missing.txt does not exist"), "{out:?}");
 
-    // --json errors are JSON
+    // A filter that hides a tracked file says so, rather than "not tracked"
+    c.dvs_ok(&["get", "a.csv"]);
+    let out = c.dvs_ok(&["status", "a.csv", "--unsynced"]);
+    assert_eq!(out.stdout.trim(), "a.csv is tracked, but not unsynced");
+    let out = c.dvs_ok(&["status", ".", "--absent", "--unsynced"]);
+    assert!(
+        out.stdout
+            .contains("No tracked files in . are absent or unsynced"),
+        "{out:?}"
+    );
+
+    // --json errors are JSON, usage errors too
     let out = c.dvs(None, &["--json", "add", "notes.txt"]);
     let error: serde_json::Value = serde_json::from_str(out.stderr.trim()).unwrap();
     assert_eq!(error["error"]["code"], "not_logged_in", "{out:?}");
+    let out = c.dvs(None, &["--json", "status", "--no-such-flag"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    let error: serde_json::Value = serde_json::from_str(out.stderr.trim()).unwrap();
+    assert_eq!(error["error"]["code"], "usage", "{out:?}");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--no-such-flag"),
+        "{out:?}"
+    );
+    let out = c.dvs(None, &["--json", "--help"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains("Exit codes:"), "{out:?}");
+    // Without --json, clap's own text
+    let out = c.dvs(None, &["status", "--no-such-flag"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.starts_with("error:"), "{out:?}");
+}
+
+#[test]
+fn a_yank_by_an_unreadable_dvs_file_stops() {
+    let fake = Fake::start();
+    let c = attached(&fake);
+    c.write("a.csv", b"alpha");
+    c.dvs_ok(&["add", "a.csv"]);
+    c.write(
+        ".dvs/a.csv.dvs",
+        b"<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> other\n",
+    );
+    let out = c.dvs(Some(TOKEN), &["yank", "a.csv", "--reason", "x"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("could not read"), "{out:?}");
+    assert_eq!(fake.count("POST", "/yanks"), 0);
 }

@@ -71,14 +71,27 @@ pub fn backend(target: &Target, cwd: &Path, need_project: bool) -> Result<Server
     Ok(ServerBackend::new(name, None, url))
 }
 
-/// The paths a command was given, as the server names them (relative to the project's
-/// top folder): from where the command runs when in a checkout, else as typed.
-fn project_path(cwd: &Path, path: &str) -> Result<String> {
-    let config = match Config::find(cwd) {
-        Some(config) => config?,
-        None => return Ok(path.trim_start_matches("./").to_string()),
+/// The checkout `cwd` is in, when it is `server`'s project: only then do its paths
+/// name the project's paths and its `.dvs` files describe the project's content.
+fn checkout_of(server: &ServerBackend, cwd: &Path) -> Result<Option<DvsPaths>> {
+    let Some(config) = Config::find(cwd) else {
+        return Ok(None);
     };
-    let paths = DvsPaths::from_cwd(&config)?;
+    let config = config?;
+    match config.backend() {
+        Backend::Server(s) if s.url == server.url && s.name == server.name => {
+            Ok(Some(DvsPaths::from_cwd(&config)?))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// A path a command was given, as the server names it (relative to the project's top
+/// folder): from where the command runs in the project's checkout, else as typed.
+fn project_path(server: &ServerBackend, cwd: &Path, path: &str) -> Result<String> {
+    let Some(paths) = checkout_of(server, cwd)? else {
+        return Ok(path.trim_start_matches("./").to_string());
+    };
     let folder = path.ends_with('/');
     let mut relative = paths
         .project_relative(Path::new(path))
@@ -451,10 +464,15 @@ fn change_access<T>(
         other => other,
     };
     result.map_err(|e| match api_error(&e) {
-        Some(a) if a.code == "precondition_failed" => anyhow::anyhow!(
-            "{project}'s access changed while this ran, so nothing was changed; run it again \
-             to apply it to the new list"
-        ),
+        // The code (and so the exit code and --json's code) stays the server's
+        Some(a) if a.code == "precondition_failed" => {
+            let mut a = a.clone();
+            a.message = format!(
+                "{project}'s access changed while this ran, so nothing was changed; run it \
+                 again to apply it to the new list"
+            );
+            a.into()
+        }
         _ => e,
     })
 }
@@ -464,17 +482,24 @@ fn group_id(server: &ServerBackend, access: &AccessView, name: &str) -> Result<U
     if let Some(g) = access.grants.iter().find(|g| g.group == name && !g.removed) {
         return Ok(g.group_id);
     }
-    let found = server.groups(&GroupsQuery {
+    // The search matches names containing `name`: follow its pages to the exact one
+    let mut query = GroupsQuery {
         q: Some(name.to_string()),
         limit: Some(1000),
         ..Default::default()
-    })?;
-    match found.items.iter().find(|g| g.name == name) {
-        Some(g) => Ok(g.id),
-        None => bail!(
-            "No Arx group is named {name:?} (names are exact, case included); `dvs groups \
-             --search {name}` lists similar ones"
-        ),
+    };
+    loop {
+        let page = server.groups(&query)?;
+        if let Some(g) = page.items.iter().find(|g| g.name == name) {
+            return Ok(g.id);
+        }
+        match page.next_cursor {
+            Some(cursor) => query.cursor = Some(cursor),
+            None => bail!(
+                "No Arx group is named {name:?} (names are exact, case included); `dvs groups \
+                 --search {name}` lists similar ones"
+            ),
+        }
     }
 }
 
@@ -525,11 +550,28 @@ pub fn access(
             if mode.is_text() {
                 println!("{group} no longer has access to {project}.");
             }
-            server.access().unwrap_or(AccessView {
-                grants: vec![],
-                your_role: None,
-                version: view.version,
-            })
+            match server.access() {
+                Ok(after) => after,
+                // The revoke took the caller's own access
+                Err(e) if api_error(&e).is_some_and(|a| a.code == "project_not_found") => {
+                    AccessView {
+                        grants: vec![],
+                        your_role: None,
+                        version: view.version,
+                    }
+                }
+                // The revoke is done, so this is no failure: say what is not known
+                Err(e) => {
+                    eprintln!(
+                        "warning: the grant was revoked, but {project}'s access could not be \
+                         read again ({e:#}); `dvs access` shows it"
+                    );
+                    if !mode.is_text() {
+                        output::json(&Value::Null)?;
+                    }
+                    return Ok(());
+                }
+            }
         }
     };
     if mode.is_text() {
@@ -815,7 +857,7 @@ fn version_row(v: &VersionView, latest: bool) -> VersionRow {
 /// `dvs log <path>`: every version uploaded at the path, newest first.
 pub fn log(mode: Mode, target: &Target, cwd: &Path, path: &str) -> Result<()> {
     let server = backend(target, cwd, true)?;
-    let path = project_path(cwd, path)?;
+    let path = project_path(&server, cwd, path)?;
     let first = server.versions(&path, None, Some(1000))?;
     if !mode.is_text() {
         return output::list(
@@ -882,6 +924,9 @@ pub struct ActivityArgs {
     /// Write every matching event as CSV to this file (`-` for the screen), oldest first
     #[clap(long, conflicts_with = "batches")]
     csv: Option<PathBuf>,
+    /// Replace the `--csv` file if it exists
+    #[clap(long, requires = "csv")]
+    force: bool,
     #[clap(long, default_value_t = 50)]
     limit: usize,
     /// Continue a `--json` listing from its `next_cursor`
@@ -1037,15 +1082,33 @@ pub fn activity(mode: Mode, target: &Target, cwd: &Path, args: ActivityArgs) -> 
         ..Default::default()
     };
     if let Some(path) = &args.path {
-        query.set_path(&project_path(cwd, path)?);
+        query.set_path(&project_path(&server, cwd, path)?);
     }
     if let Some(file) = args.csv {
         if file.as_os_str() == "-" {
             server.activity_csv(&query, &mut std::io::stdout().lock())?;
         } else {
-            let mut out = std::fs::File::create(&file)
-                .with_context(|| format!("could not create {}", file.display()))?;
-            let n = server.activity_csv(&query, &mut out)?;
+            if file.exists() && !args.force {
+                bail!(
+                    "{} exists; give --force to replace it, or another file name",
+                    file.display()
+                );
+            }
+            // Written beside it, then renamed: a failed export leaves no partial file and
+            // keeps the old one
+            let folder = match file.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p,
+                _ => Path::new("."),
+            };
+            let mut out = tempfile::NamedTempFile::new_in(folder)
+                .with_context(|| format!("could not write in {}", folder.display()))?;
+            let n = server.activity_csv(&query, out.as_file_mut())?;
+            let written = if args.force {
+                out.persist(&file).map_err(|e| e.error)
+            } else {
+                out.persist_noclobber(&file).map_err(|e| e.error)
+            };
+            written.with_context(|| format!("could not write {}", file.display()))?;
             eprintln!(
                 "Wrote {} ({}): one row per event, oldest first",
                 file.display(),
@@ -1100,13 +1163,55 @@ fn is_hash_prefix(s: &str) -> bool {
     (8..64).contains(&s.len()) && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// The hash a checkout's `.dvs` file records for `path`, if it tracks it.
-fn tracked_hash(cwd: &Path, path: &str) -> Option<(String, String)> {
-    let config = Config::find(cwd)?.ok()?;
-    let paths = DvsPaths::from_cwd(&config).ok()?;
-    let relative = paths.project_relative(Path::new(path))?;
-    let metadata = dvs::FileMetadata::read(&paths.metadata_path(Path::new(&relative))).ok()?;
-    Some((relative, metadata.hashes.blake3))
+/// The path and hash `path`'s `.dvs` file records, when the checkout here is `server`'s
+/// project and tracks it. A `.dvs` file that cannot be read is an error, not "untracked":
+/// guessing another version would yank the wrong content.
+fn tracked_hash(
+    server: &ServerBackend,
+    cwd: &Path,
+    path: &str,
+) -> Result<Option<(String, String)>> {
+    let Some(paths) = checkout_of(server, cwd)? else {
+        return Ok(None);
+    };
+    let Some(relative) = paths.project_relative(Path::new(path)) else {
+        return Ok(None);
+    };
+    if relative.is_empty() {
+        return Ok(None);
+    }
+    let pointer = paths.metadata_path(Path::new(&relative));
+    if !pointer.exists() {
+        return Ok(None);
+    }
+    let metadata = dvs::FileMetadata::read(&pointer).with_context(|| {
+        format!(
+            "could not read {}, the .dvs file for {relative}; fix it (or finish its merge) \
+             first, or give the content hash",
+            pointer.display()
+        )
+    })?;
+    Ok(Some((relative, metadata.hashes.blake3)))
+}
+
+/// The distinct uploaded contents whose hash starts with `prefix`: every page is read,
+/// stopping once two are found, as that already makes the prefix ambiguous.
+fn hashes_starting(server: &ServerBackend, prefix: &str) -> Result<Vec<String>> {
+    let mut query = ActivityQuery {
+        hash: Some(prefix.to_string()),
+        kind: vec!["upload".into()],
+        limit: Some(1000),
+        ..Default::default()
+    };
+    let mut found = std::collections::BTreeSet::new();
+    loop {
+        let page = server.activity(&query)?;
+        found.extend(page.items.into_iter().filter_map(|i| i.hash));
+        match page.next_cursor {
+            Some(cursor) if found.len() < 2 => query.cursor = Some(cursor),
+            _ => return Ok(found.into_iter().collect()),
+        }
+    }
 }
 
 /// The content a yank is about, and how it was found, for the message.
@@ -1114,29 +1219,17 @@ fn content_to_yank(server: &ServerBackend, cwd: &Path, target: &str) -> Result<(
     if is_full_hash(target) {
         return Ok((target.to_string(), "the content".into()));
     }
-    if let Some((path, hash)) = tracked_hash(cwd, target) {
+    if let Some((path, hash)) = tracked_hash(server, cwd, target)? {
         return Ok((hash, format!("the version this checkout records at {path}")));
     }
     if is_hash_prefix(target) {
-        let uploads = server.activity(&ActivityQuery {
-            hash: Some(target.to_string()),
-            kind: vec!["upload".into()],
-            limit: Some(1000),
-            ..Default::default()
-        })?;
-        let mut hashes: Vec<String> = uploads.items.into_iter().filter_map(|i| i.hash).collect();
-        hashes.sort();
-        hashes.dedup();
-        match hashes.as_slice() {
+        match hashes_starting(server, target)?.as_slice() {
             [one] => return Ok((one.clone(), "the content".into())),
             [] => {}
-            many => bail!(
-                "{target} starts {} different contents; give more of the hash",
-                many.len()
-            ),
+            _ => bail!("More than one content's hash starts {target}; give more of the hash"),
         }
     }
-    let path = project_path(cwd, target)?;
+    let path = project_path(server, cwd, target)?;
     let latest = server.versions(&path, None, Some(1))?;
     match latest.items.first() {
         Some(v) => Ok((
@@ -1179,39 +1272,50 @@ pub fn yank(mode: Mode, target: &Target, cwd: &Path, what: &str, reason: &str) -
     Ok(())
 }
 
-/// The yank in force that `target` names: a hash, its start, or a path it blocks.
+/// The yank in force that `target` names: a hash, its start, a tracked file's version,
+/// or a path one of the yanked versions was uploaded at.
 fn yank_to_end(server: &ServerBackend, cwd: &Path, target: &str) -> Result<String> {
     if is_full_hash(target) {
         return Ok(target.to_string());
     }
-    let yanks = server.yanks()?;
     if is_hash_prefix(target) {
+        // Every yank in force: the list is not paged
+        let yanks = server.yanks()?;
         let found: Vec<&YankView> = yanks
             .iter()
             .filter(|y| y.hash.starts_with(target))
             .collect();
-        if let [one] = found.as_slice() {
-            return Ok(one.hash.clone());
+        match found.as_slice() {
+            [one] => return Ok(one.hash.clone()),
+            [] => {}
+            many => bail!(
+                "{} yanked contents' hashes start {target}; give more of the hash",
+                many.len()
+            ),
         }
     }
-    if let Some((_, hash)) = tracked_hash(cwd, target)
-        && yanks.iter().any(|y| y.hash == hash)
+    if let Some((_, hash)) = tracked_hash(server, cwd, target)?
+        && server.yanks()?.iter().any(|y| y.hash == hash)
     {
         return Ok(hash);
     }
-    let path = project_path(cwd, target)?;
-    let found: Vec<&YankView> = yanks.iter().filter(|y| y.paths.contains(&path)).collect();
-    match found.as_slice() {
+    // The path's own versions, all of them, not a yank's sample of its paths
+    let path = project_path(server, cwd, target)?;
+    let versions = output::all(server.versions(&path, None, Some(1000))?, |c| {
+        server.versions(&path, Some(c), Some(1000))
+    })?;
+    let yanked: Vec<&VersionView> = versions.iter().filter(|v| v.yanked).collect();
+    match yanked.as_slice() {
         [one] => Ok(one.hash.clone()),
         [] => bail!(
-            "Nothing yanked in {} is at {path} or has that hash",
+            "Nothing yanked in {} was uploaded at {path} or has that hash",
             server.name
         ),
         many => bail!(
-            "{} yanked contents were at {path}: {}; give the hash to unyank",
+            "{} yanked versions were uploaded at {path}: {}; give the hash to unyank",
             many.len(),
             many.iter()
-                .map(|y| short_hash(&y.hash))
+                .map(|v| short_hash(&v.hash))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -1273,6 +1377,17 @@ mod tests {
             describe(&access),
             "access: qc read → write, new granted read, old removed"
         );
+    }
+
+    #[test]
+    fn a_concurrent_access_change_keeps_its_code() {
+        let e = change_access("p", true, Mode::Json, |_| -> Result<()> {
+            Err(dvs::remote::ApiError::new(412, "precondition_failed", "stale").into())
+        })
+        .unwrap_err();
+        let api = api_error(&e).unwrap();
+        assert_eq!(api.code, "precondition_failed");
+        assert!(api.message.contains("p's access changed while this ran"));
     }
 
     #[test]
