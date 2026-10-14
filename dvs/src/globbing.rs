@@ -33,6 +33,8 @@ pub fn resolve_paths_for_add(
     let glob_matcher = build_glob_matcher(glob_pattern)?;
     let repo_root = dvs_paths.repo_root().canonicalize()?;
     let metadata_root = dvs_paths.metadata_folder().canonicalize()?;
+    // A glob never picks the project's settings; naming it is refused with the reason
+    let config_file = repo_root.join(crate::paths::CONFIG_FILE_NAME);
 
     // If no paths given, default to cwd
     let paths = if paths.is_empty() {
@@ -63,8 +65,11 @@ pub fn resolve_paths_for_add(
             } else if let Some(matcher) = &glob_matcher {
                 for entry in WalkDir::new(&full_path).into_iter().filter_map(|e| e.ok()) {
                     let entry_path = entry.path().canonicalize()?;
-                    // Skip directories and metadata root folder
-                    if !entry_path.is_file() || entry_path.starts_with(&metadata_root) {
+                    // Skip directories, the metadata folder and dvs.toml
+                    if !entry_path.is_file()
+                        || entry_path.starts_with(&metadata_root)
+                        || entry_path == config_file
+                    {
                         continue;
                     }
 
@@ -210,6 +215,15 @@ mod tests {
         assert!(!result.contains(&PathBuf::from("data/b.txt")));
         // *.csv should not match subdir/c.csv due to literal_separator
         assert!(!result.contains(&PathBuf::from("data/subdir/c.csv")));
+    }
+
+    #[test]
+    fn an_add_glob_never_picks_dvs_toml() {
+        let (temp, dvs_paths) = setup_test_repo();
+        File::create(temp.path().join("dvs.toml")).unwrap();
+        let result = resolve_paths_for_add(vec![], Some("*"), &dvs_paths).unwrap();
+        assert!(result.contains(&PathBuf::from("foo.txt")));
+        assert!(!result.contains(&PathBuf::from("dvs.toml")));
     }
 
     #[test]

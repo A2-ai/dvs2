@@ -25,6 +25,10 @@ pub enum AddPathStatus {
     IsDirectory,
     /// Path resolves to outside the project root
     OutsideProject,
+    /// The project's `dvs.toml`, which belongs in Git
+    ProjectConfig,
+    /// Inside the metadata folder, which dvs manages
+    Metadata,
 }
 
 impl AddPathStatus {
@@ -34,6 +38,12 @@ impl AddPathStatus {
             AddPathStatus::NotFound => Some("file not found"),
             AddPathStatus::OutsideProject => Some("path is outside project"),
             AddPathStatus::IsDirectory => Some("path is a directory"),
+            AddPathStatus::ProjectConfig => {
+                Some("dvs.toml is the project's settings: commit it to Git instead")
+            }
+            AddPathStatus::Metadata => {
+                Some("it is in the metadata folder, which dvs manages: commit it to Git instead")
+            }
         }
     }
 }
@@ -198,6 +208,26 @@ impl DvsPaths {
             .filter(|p| !p.as_os_str().is_empty())
     }
 
+    /// A path as the user typed it (relative to where they are, or absolute) as a path
+    /// in the project, `/`-separated: what the server calls it. None when it is outside
+    /// the project.
+    pub fn project_relative(&self, user_path: &Path) -> Option<String> {
+        let relative = if user_path.is_absolute() {
+            user_path.strip_prefix(&self.repo_root).ok()?.to_path_buf()
+        } else {
+            match self.cwd_relative_to_root() {
+                Some(prefix) => prefix.join(user_path),
+                None => user_path.to_path_buf(),
+            }
+        };
+        let normal = normalize_path(relative)?;
+        let parts: Vec<String> = normal
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        Some(parts.join("/"))
+    }
+
     /// Construct the full file path from a repo-relative path
     pub fn file_path(&self, relative: &Path) -> PathBuf {
         self.repo_root.join(relative)
@@ -211,6 +241,10 @@ impl DvsPaths {
                 Ok(canonical) => {
                     if !canonical.starts_with(&self.repo_root) {
                         AddPathStatus::OutsideProject
+                    } else if canonical == self.repo_root.join(CONFIG_FILE_NAME) {
+                        AddPathStatus::ProjectConfig
+                    } else if canonical.starts_with(self.metadata_folder()) {
+                        AddPathStatus::Metadata
                     } else if canonical.is_dir() {
                         AddPathStatus::IsDirectory
                     } else if canonical.is_file() {
@@ -424,6 +458,23 @@ mod tests {
     }
 
     #[test]
+    fn typed_paths_become_project_paths() {
+        let (_tmp, root) = create_temp_git_repo();
+        fs_err::create_dir_all(root.join("data/raw")).unwrap();
+        let paths = DvsPaths::new(root.join("data"), root.clone(), ".dvs").unwrap();
+        let at = |p: &str| paths.project_relative(Path::new(p));
+        assert_eq!(at("raw/pk.csv").as_deref(), Some("data/raw/pk.csv"));
+        assert_eq!(at("../top.csv").as_deref(), Some("top.csv"));
+        assert_eq!(at("./raw/../x.csv").as_deref(), Some("data/x.csv"));
+        assert_eq!(at("../../outside.csv"), None);
+        let absolute = root.join("data/a.csv");
+        assert_eq!(
+            paths.project_relative(&absolute).as_deref(),
+            Some("data/a.csv")
+        );
+    }
+
+    #[test]
     fn validate_for_add() {
         let (_tmp, root) = create_temp_git_repo();
         let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs").unwrap();
@@ -449,6 +500,18 @@ mod tests {
         assert_eq!(result[1].1, AddPathStatus::NotFound);
         assert_eq!(result[2].1, AddPathStatus::OutsideProject);
         assert_eq!(result[3].1, AddPathStatus::IsDirectory);
+
+        // dvs's own files are refused with the reason
+        fs_err::write(root.join(CONFIG_FILE_NAME), b"").unwrap();
+        fs_err::create_dir_all(root.join(".dvs/data")).unwrap();
+        fs_err::write(root.join(".dvs/data/a.csv.dvs"), b"{}").unwrap();
+        let result = paths.validate_for_add(&[
+            PathBuf::from(CONFIG_FILE_NAME),
+            PathBuf::from(".dvs/data/a.csv.dvs"),
+        ]);
+        assert_eq!(result[0].1, AddPathStatus::ProjectConfig);
+        assert_eq!(result[1].1, AddPathStatus::Metadata);
+        assert!(result[0].1.reason().unwrap().contains("Git"));
     }
 
     #[test]
