@@ -81,37 +81,6 @@ impl PartialEq for ServerBackend {
     }
 }
 
-/// The server's wording where people know other words: its group directory is Arx,
-/// and a project name's rules read better than its pattern.
-fn plainer(api: &ApiError) -> Option<ApiError> {
-    let message = match api.code.as_str() {
-        "unknown_group" => {
-            api.message
-                .replace("the directory has no group named", "no Arx group is named")
-                .replace("the directory has no group", "no Arx group has the id")
-                + " (names are exact, case included); `dvs groups --search NAME` lists similar ones"
-        }
-        "invalid_parameter" if api.message.starts_with("invalid project name") => {
-            let name = api
-                .message
-                .split(':')
-                .next()
-                .unwrap_or("invalid project name");
-            if api.message.contains("reserved") {
-                return None;
-            }
-            format!(
-                "{name}: use lowercase letters, digits and hyphens, starting with a letter or \
-                 digit, at most 100 characters"
-            )
-        }
-        _ => return None,
-    };
-    let mut plain = api.clone();
-    plain.message = message;
-    Some(plain)
-}
-
 impl ServerBackend {
     pub fn new(name: String, group: Option<String>, url: Url) -> Self {
         Self {
@@ -139,9 +108,6 @@ impl ServerBackend {
         let Some(api) = crate::remote::api_error(&e) else {
             return e;
         };
-        if let Some(plain) = plainer(api) {
-            return plain.into();
-        }
         if !matches!(api.code.as_str(), "unauthenticated" | "token_expired") {
             return e;
         }
@@ -733,33 +699,5 @@ impl ServerBackend {
             self.name,
             self.url
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn server_wording_is_made_plain() {
-        let group = ApiError::new(422, "unknown_group", "the directory has no group named qc");
-        let plain = plainer(&group).unwrap();
-        assert!(
-            plain
-                .message
-                .starts_with("no Arx group is named qc (names are exact")
-        );
-        let name = ApiError::new(
-            400,
-            "invalid_parameter",
-            "invalid project name \"A\": must match ^[a-z0-9][a-z0-9-]{0,99}$",
-        );
-        let plain = plainer(&name).unwrap();
-        assert_eq!(
-            plain.message,
-            "invalid project name \"A\": use lowercase letters, digits and hyphens, starting \
-             with a letter or digit, at most 100 characters"
-        );
-        assert!(plainer(&ApiError::new(404, "project_not_found", "x")).is_none());
     }
 }
