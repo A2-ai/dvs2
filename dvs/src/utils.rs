@@ -49,20 +49,68 @@ const MB: u64 = 1_024 * 1_024;
 const GB: u64 = 1_024 * 1_024 * 1_024;
 const TB: u64 = 1_024 * 1_024 * 1_024 * 1_024;
 
-/// Formats a byte count into a human-readable string (e.g. "10.5 MB").
-/// Uses base-1024 divisors to match `ls -h` / `du -h` output.
+/// A size as the server's pages show it: bytes below 1 KiB, then binary units with one
+/// decimal (`40.5 KiB`, `1.2 GiB`), the units `--min-size` and `--max-size` take.
 pub fn format_size(bytes: u64) -> String {
-    if bytes >= TB {
-        format!("{:.1} TB", bytes as f64 / TB as f64)
-    } else if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes} B")
+    const UNITS: [&str; 5] = ["KiB", "MiB", "GiB", "TiB", "PiB"];
+    if bytes < KB {
+        return format!("{bytes} B");
     }
+    let mut n = bytes as f64 / KB as f64;
+    let mut unit = 0;
+    // 1023.96 KiB would round to "1024.0 KiB"
+    while n >= 1023.95 && unit < UNITS.len() - 1 {
+        n /= KB as f64;
+        unit += 1;
+    }
+    format!("{n:.1} {}", UNITS[unit])
+}
+
+/// A time as the server's pages show it: `2026-10-13 14:05 UTC`.
+pub fn format_time(t: &jiff::Timestamp) -> String {
+    t.strftime("%Y-%m-%d %H:%M UTC").to_string()
+}
+
+/// The first 12 characters of a content hash, as shown everywhere; the full hash is in
+/// `--json`.
+pub fn short_hash(hash: &str) -> &str {
+    hash.get(..12).unwrap_or(hash)
+}
+
+/// The first 10 characters of a commit.
+pub fn short_commit(commit: &str) -> &str {
+    commit.get(..10).unwrap_or(commit)
+}
+
+/// `from` for "since": `7d`, `12h` or `2w` ago, as RFC 3339; a date (`2026-10-01`) or a
+/// timestamp is passed through for the server to read.
+pub fn since(value: &str) -> Result<String> {
+    let value = value.trim();
+    let hours_per = |unit: char| match unit {
+        'h' => Some(1),
+        'd' => Some(24),
+        'w' => Some(24 * 7),
+        _ => None,
+    };
+    if let Some(unit) = value.chars().last().filter(|c| c.is_ascii_alphabetic())
+        && let Ok(n) = value[..value.len() - 1].parse::<i64>()
+    {
+        let Some(per) = hours_per(unit.to_ascii_lowercase()) else {
+            bail!("{value:?}: use a number of hours, days or weeks, such as 12h, 7d or 2w");
+        };
+        if n < 0 {
+            bail!("{value:?}: the number cannot be negative");
+        }
+        let ago = jiff::SignedDuration::from_hours(n.saturating_mul(per));
+        let t = jiff::Timestamp::now()
+            .checked_sub(ago)
+            .map_err(|_| anyhow::anyhow!("{value:?} is too long ago"))?;
+        return Ok(t.round(jiff::Unit::Second).unwrap_or(t).to_string());
+    }
+    if value.is_empty() {
+        bail!("give a time, such as 7d, 12h, 2w or 2026-10-01");
+    }
+    Ok(value.to_string())
 }
 
 /// Takes a human formatted byte size and convert it to the number of bytes
@@ -199,6 +247,38 @@ mod tests {
         }
         assert!(!insecure_tls_requested(None));
     }
+    #[test]
+    fn sizes_match_the_server() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(1023), "1023 B");
+        assert_eq!(format_size(1024), "1.0 KiB");
+        assert_eq!(format_size(41_463), "40.5 KiB");
+        assert_eq!(format_size(1_048_524), "1023.9 KiB");
+        assert_eq!(format_size(1_048_535), "1.0 MiB");
+        assert_eq!(format_size(5 * GB / 2), "2.5 GiB");
+        assert_eq!(format_size(3 * TB), "3.0 TiB");
+    }
+
+    #[test]
+    fn times_hashes_and_commits_are_short() {
+        let t: jiff::Timestamp = "2026-10-13T14:05:59Z".parse().unwrap();
+        assert_eq!(format_time(&t), "2026-10-13 14:05 UTC");
+        assert_eq!(short_hash(&"a".repeat(64)), "a".repeat(12));
+        assert_eq!(short_hash("abc"), "abc");
+        assert_eq!(short_commit(&"b".repeat(40)), "b".repeat(10));
+    }
+
+    #[test]
+    fn since_is_a_time_ago() {
+        let week: jiff::Timestamp = since("7d").unwrap().parse().unwrap();
+        let ago = jiff::Timestamp::now().duration_since(week);
+        assert!((ago.as_secs() - 7 * 86_400).abs() < 5, "{ago:?}");
+        assert!(since("12h").is_ok() && since("2W").is_ok());
+        assert_eq!(since("2026-10-01").unwrap(), "2026-10-01");
+        assert!(since("3y").is_err());
+        assert!(since("").is_err());
+    }
+
     #[test]
     fn parse_size_basic() {
         assert_eq!(parse_size("0").unwrap(), 0);

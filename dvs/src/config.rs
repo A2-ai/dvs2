@@ -13,7 +13,8 @@ use fs_err as fs;
 use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
 
-const DEFAULT_PROGRESS_BYTE_SIZE_THRESHOLD: u64 = 524_288_000;
+/// Files above 10 MiB get a progress bar; `[cli] progress_threshold` changes it
+const DEFAULT_PROGRESS_BYTE_SIZE_THRESHOLD: u64 = 10 * 1024 * 1024;
 
 fn deserialize_size_option<'de, D: Deserializer<'de>>(
     deserializer: D,
@@ -130,7 +131,7 @@ impl Compression {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct CliConfig {
-    /// Defaults to 500MB if not set in the config file
+    /// Defaults to 10 MiB if not set in the config file
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

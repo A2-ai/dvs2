@@ -30,7 +30,7 @@ test_that("2.5 GiB u64 from Rust survives the trip to dvs_bytes and formats corr
   expect_false(is.na(unclass(x)))
 
   expect_match(format_byte_size(size_bytes), "2\\.5")
-  expect_match(format_byte_size(size_bytes), "GB")
+  expect_match(format_byte_size(size_bytes), "GiB")
 })
 
 test_that("dvs_bytes + and - preserve class", {
@@ -93,8 +93,8 @@ test_that("pillar_shaft.dvs_bytes formats bytes via format_byte_size", {
   expect_s3_class(shaft, "pillar_shaft")
   out <- as.character(format(shaft, width = pillar::get_max_extent(shaft)))
   expect_match(out[1], "B$")
-  expect_match(out[2], "KB$")
-  expect_match(out[3], "MB$")
+  expect_match(out[2], "KiB$")
+  expect_match(out[3], "MiB$")
 })
 
 test_that("pillar_shaft.dvs_bytes on empty input returns empty output", {
@@ -121,11 +121,11 @@ test_that("tibble print shows 'bytes' type and human-readable sizes", {
   )
   out <- capture.output(print(tbl))
   expect_true(any(grepl("bytes", out)))
-  expect_true(any(grepl("KB|MB", out)))
+  expect_true(any(grepl("KiB|MiB", out)))
 })
 
 test_that("format_byte_size returns a human-readable string", {
   expect_match(format_byte_size(0), "B")
-  expect_match(format_byte_size(1024), "KB")
-  expect_match(format_byte_size(1048576), "MB")
+  expect_match(format_byte_size(1024), "KiB")
+  expect_match(format_byte_size(1048576), "MiB")
 })

@@ -25,7 +25,9 @@ pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use paths::{AddPathStatus, DvsPaths, PathFilter, ProjectPath, find_repo_root};
 pub use progress::FileProgress;
-pub use utils::{format_size, set_num_threads};
+pub use utils::{
+    format_size, format_time, parse_size, set_num_threads, short_commit, short_hash, since,
+};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
