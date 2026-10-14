@@ -705,6 +705,17 @@ fn try_main(cli: Cli) -> Result<()> {
                 Vec::new()
             };
             if remote {
+                if !json_out {
+                    // The table leaves out files whose status failed: name each first
+                    for file_status in &statuses {
+                        if let StatusDetail::Error { error } = &file_status.detail {
+                            eprintln!(
+                                "Error getting status for {}: {error}",
+                                file_status.path.display()
+                            );
+                        }
+                    }
+                }
                 server_cmds::remote_status(mode, &target, &current_dir, &statuses)?;
                 if !json_out {
                     for note in &unmatched {

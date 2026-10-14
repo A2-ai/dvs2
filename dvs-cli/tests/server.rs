@@ -576,5 +576,46 @@ fn a_yank_by_an_unreadable_dvs_file_stops() {
     let out = c.dvs(Some(TOKEN), &["yank", "a.csv", "--reason", "x"]);
     assert_eq!(out.code, 1, "{out:?}");
     assert!(out.stderr.contains("could not read"), "{out:?}");
+    // The same server written another way is still this checkout's
+    let same = format!("{}/dvs/", fake.url.trim_end_matches('/'));
+    let out = c.dvs(
+        Some(TOKEN),
+        &["--server", &same, "yank", "a.csv", "--reason", "x"],
+    );
+    assert!(out.stderr.contains("could not read"), "{out:?}");
+    // status --remote names the file it could not read
+    let out = c.dvs(Some(TOKEN), &["status", "--remote"]);
+    assert!(
+        out.stderr.contains("Error getting status for a.csv"),
+        "{out:?}"
+    );
+    assert_eq!(fake.count("POST", "/yanks"), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dvs_file_that_cannot_be_looked_for_stops_a_yank() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let fake = Fake::start();
+    let c = attached(&fake);
+    c.write("data/a.csv", b"alpha");
+    c.write("b.csv", b"beta");
+    c.dvs_ok(&["add", "data/a.csv", "b.csv"]);
+
+    // A dangling link is there, but cannot be read
+    let pointer = c.repo().join(".dvs/b.csv.dvs");
+    std::fs::remove_file(&pointer).unwrap();
+    symlink(c.repo().join("nowhere.dvs"), &pointer).unwrap();
+    let out = c.dvs(Some(TOKEN), &["yank", "b.csv", "--reason", "x"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("could not read"), "{out:?}");
+
+    // A folder that cannot be searched
+    let folder = c.repo().join(".dvs/data");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let out = c.dvs(Some(TOKEN), &["yank", "data/a.csv", "--reason", "x"]);
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("could not look for"), "{out:?}");
     assert_eq!(fake.count("POST", "/yanks"), 0);
 }

@@ -41,13 +41,16 @@ pub struct Target {
 pub fn backend(target: &Target, cwd: &Path, need_project: bool) -> Result<ServerBackend> {
     let config = Config::find(cwd).transpose()?;
     let (configured, local) = match config.as_ref().map(Config::backend) {
-        Some(Backend::Server(s)) => (Some((s.name.clone(), s.url.clone())), false),
+        Some(Backend::Server(s)) => (Some(s), false),
         Some(Backend::Local(_)) => (None, true),
         None => (None, false),
     };
     let url = match (&target.server, &configured) {
+        // The checkout's server written another way: its own URL, which its stored
+        // login is filed under
+        (Some(url), Some(s)) if s.same_server(url) => s.url.clone(),
         (Some(url), _) => url.clone(),
-        (None, Some((_, url))) => url.clone(),
+        (None, Some(s)) => s.url.clone(),
         (None, None) if local => bail!(
             "This project keeps its files in local storage, not on a dvs server; give \
              --server URL to ask a server"
@@ -64,7 +67,7 @@ pub fn backend(target: &Target, cwd: &Path, need_project: bool) -> Result<Server
     let name = match (&target.project, &configured) {
         (Some(name), _) => name.clone(),
         // dvs.toml's project, unless --server points somewhere else
-        (None, Some((name, configured_url))) if *configured_url == url => name.clone(),
+        (None, Some(s)) if s.same_server(&url) => s.name.clone(),
         _ if need_project => bail!("Which project on {url}? Give --project NAME"),
         _ => String::new(),
     };
@@ -79,7 +82,7 @@ fn checkout_of(server: &ServerBackend, cwd: &Path) -> Result<Option<DvsPaths>> {
     };
     let config = config?;
     match config.backend() {
-        Backend::Server(s) if s.url == server.url && s.name == server.name => {
+        Backend::Server(s) if server.same_server(&s.url) && s.name == server.name => {
             Ok(Some(DvsPaths::from_cwd(&config)?))
         }
         _ => Ok(None),
@@ -921,7 +924,9 @@ pub struct ActivityArgs {
     /// List runs of `dvs add` and `dvs get` instead of single files
     #[clap(long, conflicts_with = "batch")]
     batches: bool,
-    /// Write every matching event as CSV to this file (`-` for the screen), oldest first
+    /// Write every matching event as CSV to this file (`-` for the screen), oldest first.
+    /// It is written as `.<name>.partial` beside it and renamed when complete; an
+    /// interrupted export leaves that partial file, which the next export replaces.
     #[clap(long, conflicts_with = "batches")]
     csv: Option<PathBuf>,
     /// Replace the `--csv` file if it exists
@@ -1094,21 +1099,7 @@ pub fn activity(mode: Mode, target: &Target, cwd: &Path, args: ActivityArgs) -> 
                     file.display()
                 );
             }
-            // Written beside it, then renamed: a failed export leaves no partial file and
-            // keeps the old one
-            let folder = match file.parent() {
-                Some(p) if !p.as_os_str().is_empty() => p,
-                _ => Path::new("."),
-            };
-            let mut out = tempfile::NamedTempFile::new_in(folder)
-                .with_context(|| format!("could not write in {}", folder.display()))?;
-            let n = server.activity_csv(&query, out.as_file_mut())?;
-            let written = if args.force {
-                out.persist(&file).map_err(|e| e.error)
-            } else {
-                out.persist_noclobber(&file).map_err(|e| e.error)
-            };
-            written.with_context(|| format!("could not write {}", file.display()))?;
+            let n = export_csv(&file, args.force, |out| server.activity_csv(&query, out))?;
             eprintln!(
                 "Wrote {} ({}): one row per event, oldest first",
                 file.display(),
@@ -1153,6 +1144,62 @@ pub fn activity(mode: Mode, target: &Target, cwd: &Path, args: ActivityArgs) -> 
     )
 }
 
+/// Write an export to `file` through `.<name>.partial` beside it, renamed into place
+/// when complete: a failed export keeps the old file and leaves nothing half-written.
+/// The partial file is created like any new file (the umask applies); one left by an
+/// interrupted run is overwritten by the next. A replaced file keeps its permission
+/// bits (not ACLs or extended attributes). Without `force` an existing file is kept.
+fn export_csv(
+    file: &Path,
+    force: bool,
+    write: impl FnOnce(&mut dyn Write) -> Result<u64>,
+) -> Result<u64> {
+    let name = file
+        .file_name()
+        .with_context(|| format!("{} is not a file name", file.display()))?;
+    let mut partial_name = std::ffi::OsString::from(".");
+    partial_name.push(name);
+    partial_name.push(".partial");
+    let partial = file.with_file_name(partial_name);
+    let existing = match std::fs::metadata(file) {
+        Ok(m) if !force => bail!(
+            "{} exists; give --force to replace it, or another file name{}",
+            file.display(),
+            if m.is_dir() { " (it is a folder)" } else { "" }
+        ),
+        Ok(m) => Some(m),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e).with_context(|| format!("could not look at {}", file.display())),
+    };
+    let result: Result<u64> = (|| {
+        let mut out = std::fs::File::create(&partial)
+            .with_context(|| format!("could not create {}", partial.display()))?;
+        let n = write(&mut out)?;
+        out.sync_all()?;
+        if let Some(m) = &existing {
+            out.set_permissions(m.permissions())?;
+        }
+        drop(out);
+        if force {
+            std::fs::rename(&partial, file)?;
+        } else {
+            // A link fails if the name was taken meanwhile, where a rename would replace it
+            std::fs::hard_link(&partial, file).map_err(|e| match e.kind() {
+                std::io::ErrorKind::AlreadyExists => {
+                    anyhow::anyhow!("{} appeared while exporting; it is kept", file.display())
+                }
+                _ => anyhow::Error::from(e),
+            })?;
+            std::fs::remove_file(&partial)?;
+        }
+        Ok(n)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    result.with_context(|| format!("could not write {}", file.display()))
+}
+
 // ------------------------------------------------------------------------------- yanks
 
 fn is_full_hash(s: &str) -> bool {
@@ -1181,8 +1228,24 @@ fn tracked_hash(
         return Ok(None);
     }
     let pointer = paths.metadata_path(Path::new(&relative));
-    if !pointer.exists() {
-        return Ok(None);
+    // Only a pointer that is not there means "not tracked": a folder that cannot be
+    // searched, or a dangling link, is an error, not a reason to guess
+    match std::fs::symlink_metadata(&pointer) {
+        Ok(_) => {}
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(e) => {
+            return Err(anyhow::Error::from(e).context(format!(
+                "could not look for {}, the .dvs file for {relative}",
+                pointer.display()
+            )));
+        }
     }
     let metadata = dvs::FileMetadata::read(&pointer).with_context(|| {
         format!(
@@ -1224,7 +1287,12 @@ fn content_to_yank(server: &ServerBackend, cwd: &Path, target: &str) -> Result<(
     }
     if is_hash_prefix(target) {
         match hashes_starting(server, target)?.as_slice() {
-            [one] => return Ok((one.clone(), "the content".into())),
+            [one] => {
+                return Ok((
+                    one.clone(),
+                    format!("the content whose hash starts {target}"),
+                ));
+            }
             [] => {}
             _ => bail!("More than one content's hash starts {target}; give more of the hash"),
         }
@@ -1272,13 +1340,22 @@ pub fn yank(mode: Mode, target: &Target, cwd: &Path, what: &str, reason: &str) -
     Ok(())
 }
 
-/// The yank in force that `target` names: a hash, its start, a tracked file's version,
-/// or a path one of the yanked versions was uploaded at.
-fn yank_to_end(server: &ServerBackend, cwd: &Path, target: &str) -> Result<String> {
+/// The yank in force that `target` names, and how it was found, for the message. The
+/// same order as `yank`: a full hash, then a file this checkout tracks, then the start
+/// of a hash, then a path on the server.
+fn yank_to_end(server: &ServerBackend, cwd: &Path, target: &str) -> Result<(String, String)> {
     if is_full_hash(target) {
-        return Ok(target.to_string());
+        return Ok((target.to_string(), "the content".into()));
     }
-    if is_hash_prefix(target) {
+    let tracked = tracked_hash(server, cwd, target)?;
+    if let Some((path, hash)) = &tracked {
+        if server.yanks()?.iter().any(|y| &y.hash == hash) {
+            return Ok((
+                hash.clone(),
+                format!("the version this checkout records at {path}"),
+            ));
+        }
+    } else if is_hash_prefix(target) {
         // Every yank in force: the list is not paged
         let yanks = server.yanks()?;
         let found: Vec<&YankView> = yanks
@@ -1286,7 +1363,12 @@ fn yank_to_end(server: &ServerBackend, cwd: &Path, target: &str) -> Result<Strin
             .filter(|y| y.hash.starts_with(target))
             .collect();
         match found.as_slice() {
-            [one] => return Ok(one.hash.clone()),
+            [one] => {
+                return Ok((
+                    one.hash.clone(),
+                    format!("the content whose hash starts {target}"),
+                ));
+            }
             [] => {}
             many => bail!(
                 "{} yanked contents' hashes start {target}; give more of the hash",
@@ -1294,19 +1376,24 @@ fn yank_to_end(server: &ServerBackend, cwd: &Path, target: &str) -> Result<Strin
             ),
         }
     }
-    if let Some((_, hash)) = tracked_hash(server, cwd, target)?
-        && server.yanks()?.iter().any(|y| y.hash == hash)
-    {
-        return Ok(hash);
-    }
     // The path's own versions, all of them, not a yank's sample of its paths
-    let path = project_path(server, cwd, target)?;
+    let path = match &tracked {
+        Some((path, _)) => path.clone(),
+        None => project_path(server, cwd, target)?,
+    };
     let versions = output::all(server.versions(&path, None, Some(1000))?, |c| {
         server.versions(&path, Some(c), Some(1000))
     })?;
     let yanked: Vec<&VersionView> = versions.iter().filter(|v| v.yanked).collect();
     match yanked.as_slice() {
-        [one] => Ok(one.hash.clone()),
+        [one] => Ok((
+            one.hash.clone(),
+            format!("the yanked version uploaded at {path}"),
+        )),
+        [] if tracked.is_some() => bail!(
+            "{target} is a file this checkout tracks, and nothing uploaded at {path} is \
+             yanked; to unyank by hash, give the full hash"
+        ),
         [] => bail!(
             "Nothing yanked in {} was uploaded at {path} or has that hash",
             server.name
@@ -1330,13 +1417,13 @@ pub fn unyank(
     reason: Option<String>,
 ) -> Result<()> {
     let server = backend(target, cwd, true)?;
-    let hash = yank_to_end(&server, cwd, what)?;
+    let (hash, found) = yank_to_end(&server, cwd, what)?;
     let y = server.unyank(&hash, reason)?;
     if !mode.is_text() {
         return output::json(&y);
     }
     println!(
-        "Unyanked {}: it can be downloaded again.",
+        "Unyanked {} ({found}): it can be downloaded again.",
         short_hash(&y.hash)
     );
     print_yank(&y);
@@ -1388,6 +1475,46 @@ mod tests {
         let api = api_error(&e).unwrap();
         assert_eq!(api.code, "precondition_failed");
         assert!(api.message.contains("p's access changed while this ran"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_csv_export_replaces_only_when_whole() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("out.csv");
+        let partial = dir.path().join(".out.csv.partial");
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let rows = |text: &'static str| {
+            move |out: &mut dyn Write| -> Result<u64> {
+                out.write_all(text.as_bytes())?;
+                Ok(text.len() as u64)
+            }
+        };
+
+        // A new file is made like any other, umask and all
+        std::fs::write(partial.as_path(), "left by a ^C").unwrap();
+        export_csv(&file, false, rows("a\n")).unwrap();
+        let plain = dir.path().join("plain");
+        std::fs::File::create(&plain).unwrap();
+        assert_eq!(mode(&file), mode(&plain));
+        assert!(!partial.exists());
+
+        // Kept without --force; replaced with it, keeping its mode
+        assert!(export_csv(&file, false, rows("b\n")).is_err());
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o640)).unwrap();
+        export_csv(&file, true, rows("c\n")).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "c\n");
+        assert_eq!(mode(&file), 0o640);
+
+        // A failed export keeps the old file and leaves no partial one
+        let failed = export_csv(&file, true, |out| {
+            out.write_all(b"half")?;
+            bail!("connection reset")
+        });
+        assert!(failed.is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "c\n");
+        assert!(!partial.exists());
     }
 
     #[test]
