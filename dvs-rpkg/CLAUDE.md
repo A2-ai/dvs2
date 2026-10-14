@@ -160,6 +160,13 @@ Defined in `src/rust/lib.rs` with `#[miniextendr]` unless noted:
 | `set_dvs_log_level` | Set the Rust log level | NULL |
 | `format_byte_size` | Human-readable byte size | String |
 | `new_dvs_bytes` | Construct a `dvs_bytes` vector (R side, `R/pillar.R`) | `dvs_bytes` numeric |
+| `dvs_login` / `dvs_logout` | Device login (polled from R, interruptible) / revoke and forget the token | `TRUE`/`FALSE`, invisibly |
+| `dvs_info` | Identity, token source and expiry, versions, role here | `dvs_info` list |
+| `dvs_attach` | Attach the working directory to a server project | `dvs_project`, invisibly |
+| `dvs_project_info` / `dvs_access` / `dvs_projects` | The project (lock, grants) / its grants / projects you can read | `dvs_project` list / tibble / tibble |
+| `dvs_remote_files` / `dvs_log` / `dvs_activity` | Files uploaded / a path's versions / activity, every page up to `max_rows` | tibble |
+
+The server functions live in `src/rust/server.rs` (Rust) and `R/dvs-server.R` (R). Lists come back a page at a time through a `Pager` external pointer that `dvs_collect()` (`R/dvs-frames.R`) reads, so R can be interrupted between pages; `dvs_frame()` gives every result a fixed, typed set of columns (`dvs_spec`), also when empty. Errors from Rust go through `conditions::raise()` with a `code`, and `dvs_call()` (`R/dvs-conditions.R`) turns them into `dvs_error_<code>` conditions; wrap every `*_impl()` call in it, assigned to a variable first so the condition's call is the exported function's.
 
 This table is a high-level index only. The authoritative parameter signatures live in the `#[miniextendr]` definitions in `src/rust/lib.rs` and the R help pages (`?dvs_get` and `man/*.Rd`).
 
@@ -196,6 +203,13 @@ R wrappers are auto-generated during build. The build compiles a cdylib, loads i
 ```bash
 just rpkg-test            # Rust unit tests + R tests
 devtools::test()          # All R tests via testthat (from R console)
+```
+
+`tests/testthat/test-server.R` runs against a real dvs-server and is skipped unless `DVS_TEST_SERVER` is set. `tests/server/server.cjs` starts one on a scratch database (needs `DATABASE_URL`, `DVS_SERVER_ROOT` pointing at a dvs-server checkout, and a `--features debug` server build) and runs a command with it:
+
+```bash
+DATABASE_URL=postgres://dvs@127.0.0.1:5432/postgres DVS_SERVER_ROOT=../../dvs-server \
+  node tests/server/server.cjs serve -- Rscript -e 'devtools::test()'
 ```
 
 Tests live in `tests/testthat/`. The package uses testthat edition 3.

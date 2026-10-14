@@ -4,7 +4,13 @@
 \alias{dvs_get}
 \title{Retrieve files from DVS storage into the working directory}
 \usage{
-dvs_get(paths = character(0), glob = NULL, recursive = NULL, dry_run = NULL)
+dvs_get(
+  paths = character(0),
+  glob = NULL,
+  recursive = NULL,
+  dry_run = NULL,
+  on_error = c("stop", "collect")
+)
 }
 \arguments{
 \item{paths}{Character vector of file paths to retrieve from DVS storage.}
@@ -20,7 +26,23 @@ are returned. With no explicit \code{paths} the directory is the working
 directory. Mutually exclusive with \code{glob}.}
 
 \item{dry_run}{If \code{TRUE}, report what would be retrieved without writing files.}
+
+\item{on_error}{What to do when some files fail: \code{"stop"} (the default)
+raises a \code{dvs_error_files_failed} error whose \code{results} field holds every
+file's result; \code{"collect"} returns the results, with the failures' \code{error}
+and \code{code}.}
+}
+\value{
+A tibble, one row per file: \code{path}, \code{outcome}, \code{size}, and for
+failed files \code{error} and \code{code}.
 }
 \description{
 Fetches the specified files from DVS storage and writes them to their original paths in the working directory. With no \code{paths} or \code{glob}, \code{dvs_get()} scopes to the working directory: it restores the files directly under it, and \code{dvs_get(recursive = TRUE)} restores every tracked file beneath it at any depth.
+}
+\details{
+\code{dvs_get()} makes each file match its \code{.dvs} pointer: a file you
+changed locally is overwritten with the version the pointer names.
+}
+\seealso{
+\link{dvs_error} for the error's fields.
 }

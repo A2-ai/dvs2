@@ -112,7 +112,7 @@ test_that("dvs_add refuses the whole batch when any path is invalid", {
   expect_false(file.exists(file.path(getwd(), ".dvs", "ok.csv.dvs")))
 })
 
-test_that("dvs_add reports per-file failures in the result, not as a warning", {
+test_that("dvs_add stops on per-file failures with every file's result, or collects them", {
   # This test forces a per-file failure by revoking all permissions on
   # noperm.csv, so opening it for hashing fails with EACCES. root bypasses
   # Unix permission bits and can still read a mode-000 file, which would make
@@ -125,19 +125,27 @@ test_that("dvs_add reports per-file failures in the result, not as a warning", {
   Sys.chmod("noperm.csv", "000")
   on.exit(Sys.chmod("noperm.csv", "644"), add = TRUE)
 
-  # A per-file runtime failure must not raise an R warning or error. dvs does
-  # not turn its own failures into R conditions. The failure is reported only
-  # through the returned data frame.
+  # By default a failed file stops with a files_failed error that carries
+  # every file's result; the good file is still added.
+  e <- tryCatch(
+    dvs_add(paths = file.path(getwd(), c("good.csv", "noperm.csv"))),
+    error = function(e) e
+  )
+  expect_s3_class(e, c("dvs_error_files_failed", "dvs_error", "error", "condition"), exact = TRUE)
+  expect_match(conditionMessage(e), "1 of 2 files failed to add")
+  expect_match(conditionMessage(e), "noperm.csv: ")
+  expect_true(file.exists(file.path(getwd(), ".dvs", "good.csv.dvs")))
+  expect_s3_class(e$results, "tbl_df")
+  expect_equal(e$results$outcome[basename(e$results$path) == "noperm.csv"], "failed")
+
+  # Collected, the failure is reported only through the returned data frame,
+  # without a warning.
   result <- NULL
   expect_no_warning(
-    result <- dvs_add(paths = file.path(getwd(), c("good.csv", "noperm.csv")))
+    result <- dvs_add(paths = file.path(getwd(), c("good.csv", "noperm.csv")), on_error = "collect")
   )
-
-  # The good file is added. The bad file's row is `failed`, with the error
-  # message in the `error` column.
-  expect_true(file.exists(file.path(getwd(), ".dvs", "good.csv.dvs")))
   good <- result[basename(result$path) == "good.csv", ]
-  expect_equal(good$outcome, "added")
+  expect_equal(good$outcome, "skipped")
   bad <- result[basename(result$path) == "noperm.csv", ]
   expect_equal(nrow(bad), 1L)
   expect_true(nzchar(bad$error))

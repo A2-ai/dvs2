@@ -8,7 +8,8 @@ dvs_status(
   paths = character(0),
   recursive = NULL,
   glob = NULL,
-  status = c("current", "absent", "unsynced")
+  status = c("current", "absent", "unsynced"),
+  remote = FALSE
 )
 }
 \arguments{
@@ -28,6 +29,16 @@ match recursively across subdirectories. Mutually exclusive with \code{recursive
 \item{status}{Character vector of statuses to include. Valid values are
 \code{"current"}, \code{"absent"}, and \code{"unsynced"}. When empty (default), all
 statuses are shown.}
+
+\item{remote}{If \code{TRUE}, also compare each file with the server project:
+adds the columns \code{remote_status} (\code{"latest"}: your content is the newest
+uploaded at its path; \code{"newer_upload_exists"}: something was uploaded
+there since, maybe from a branch that is never merged;
+\code{"unknown_path"}: nothing was ever uploaded there;
+\code{"not_placed_here"}: other content was), \code{on_server} (the server has
+this content), \code{yanked}, \code{yank_reason}, \code{newer_uploads}, and the newest
+upload's \code{latest_hash}, \code{latest_at}, \code{latest_by} and \code{latest_branch}.
+Server projects only.}
 }
 \description{
 Reports the sync status of DVS-managed files. By default all statuses are shown; pass a character vector of status names (e.g. \code{c("current", "absent")}) to restrict output.

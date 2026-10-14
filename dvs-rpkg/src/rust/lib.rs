@@ -3,6 +3,8 @@
 //! This crate provides R bindings for the DVS (Data Version Control System).
 
 mod cli_progress;
+mod conditions;
+mod server;
 mod test_support;
 
 use std::path::{Path, PathBuf};
@@ -30,6 +32,11 @@ use dvs::{
 };
 
 use cli_progress::CliProgressBar;
+use conditions::{client_error, or_raise};
+
+fn not_in_repository() -> anyhow::Error {
+    client_error("not_in_repository", "Not in a DVS repository")
+}
 
 // region: Progress channel protocol
 
@@ -51,8 +58,9 @@ where
     F: FnOnce(SyncSender<ProgressBytes>) -> Result<T> + Send,
 {
     let mut bar = CliProgressBar::new();
+    // The task's own error passes through untouched, so a server error keeps its code
     let result = WorkerPump::<ProgressBytes>::new().channel_capacity(64).run(
-        |tx| task(tx).map_err(Into::into),
+        |tx| Ok(task(tx)),
         |bytes| {
             if bytes < 0 {
                 bar.grow_total((-bytes) as f64);
@@ -62,7 +70,7 @@ where
         },
     );
     bar.done();
-    result.map_err(|e| anyhow!("{e}"))
+    result.map_err(|e| anyhow!("{e}"))?
 }
 
 /// Build the `on_file_start` closure that feeds byte-level progress.
@@ -161,32 +169,34 @@ pub(crate) fn dvs_init(
     #[miniextendr(default = "NULL")] group: Option<String>,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
     #[miniextendr(match_arg, default = "\"zstd\"")] compression: CompressionChoice,
-) -> Result<DataFrame> {
-    let root_dir = match root_dir {
-        Some(d) => d,
-        None => std::env::current_dir()?,
-    };
-    let mut config = Config::new_local(&storage_path, group)?;
+) -> DataFrame {
+    or_raise((|| -> Result<DataFrame> {
+        let root_dir = match root_dir {
+            Some(d) => d,
+            None => std::env::current_dir()?,
+        };
+        let mut config = Config::new_local(&storage_path, group)?;
 
-    config.set_compression(Some(compression.into()));
-    if let Some(m) = metadata_folder_name {
-        config.set_metadata_folder_name(m);
-    }
+        config.set_compression(Some(compression.into()));
+        if let Some(m) = metadata_folder_name {
+            config.set_metadata_folder_name(m);
+        }
 
-    // Re-read the config from disk after init so the returned frame reflects
-    // exactly what was persisted to dvs.toml — notably the absolute
-    // `backend_path` that dvs core canonicalizes — rather than the pre-init
-    // input. Keeps this rpkg-only: core canonicalizes, we just read the result.
-    let repo_root = init(&root_dir, config)?;
-    let config = Config::find(&repo_root)
-        .ok_or_else(|| anyhow!("dvs.toml not found after init at {}", repo_root.display()))??;
+        // Re-read the config from disk after init so the returned frame reflects
+        // exactly what was persisted to dvs.toml — notably the absolute
+        // `backend_path` that dvs core canonicalizes — rather than the pre-init
+        // input. Keeps this rpkg-only: core canonicalizes, we just read the result.
+        let repo_root = init(&root_dir, config)?;
+        let config = Config::find(&repo_root)
+            .ok_or_else(|| anyhow!("dvs.toml not found after init at {}", repo_root.display()))??;
 
-    // `metadata_folder_name` is an `Option<String>`: when set it comes back as a
-    // plain character scalar, when unset (None) as a scalar `NA` (logical)
-    // column. Neither is a list-column, so init rows stack with
-    // rbind()/bind_rows(). Relies on miniextendr#307 (fixed); the R tests in
-    // test-init.R guard both the set and unset cases.
-    Ok(miniextendr_api::serde::vec_to_dataframe(&[config])?)
+        // `metadata_folder_name` is an `Option<String>`: when set it comes back as a
+        // plain character scalar, when unset (None) as a scalar `NA` (logical)
+        // column. Neither is a list-column, so init rows stack with
+        // rbind()/bind_rows(). Relies on miniextendr#307 (fixed); the R tests in
+        // test-init.R guard both the set and unset cases.
+        Ok(miniextendr_api::serde::vec_to_dataframe(&[config])?)
+    })())
 }
 
 /// Add files to DVS-managed storage.
@@ -209,45 +219,47 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<DataFrame> {
-    let current_dir = std::env::current_dir()?;
-    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-    let dvs_paths = DvsPaths::from_cwd(&config)?;
+) -> DataFrame {
+    or_raise((|| -> Result<DataFrame> {
+        let current_dir = std::env::current_dir()?;
+        let config = Config::find(&current_dir).ok_or_else(not_in_repository)??;
+        let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
-        .into_iter()
-        .collect();
-    if all_paths.is_empty() {
-        return Err(anyhow!("No files to add"));
-    }
+        let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
+            .into_iter()
+            .collect();
+        if all_paths.is_empty() {
+            return Err(anyhow!("No files to add"));
+        }
 
-    let dry_run = dry_run.unwrap_or(false);
-    let results = if progress_callback.is_some() {
-        run_with_progress(|tx| {
-            let on_file_start = progress_on_file_start(tx);
+        let dry_run = dry_run.unwrap_or(false);
+        let results = if progress_callback.is_some() {
+            run_with_progress(|tx| {
+                let on_file_start = progress_on_file_start(tx);
+                add_files(
+                    all_paths.clone(),
+                    &dvs_paths,
+                    config.backend(),
+                    message.clone(),
+                    config.compression(),
+                    dry_run,
+                    Some(&on_file_start),
+                )
+            })?
+        } else {
             add_files(
-                all_paths.clone(),
+                all_paths,
                 &dvs_paths,
                 config.backend(),
-                message.clone(),
+                message,
                 config.compression(),
                 dry_run,
-                Some(&on_file_start),
-            )
-        })?
-    } else {
-        add_files(
-            all_paths,
-            &dvs_paths,
-            config.backend(),
-            message,
-            config.compression(),
-            dry_run,
-            None,
-        )?
-    };
+                None,
+            )?
+        };
 
-    Ok(miniextendr_api::serde::vec_to_dataframe(&results)?)
+        Ok(miniextendr_api::serde::vec_to_dataframe(&results)?)
+    })())
 }
 
 /// Valid status filter choices for [`dvs_status`].
@@ -301,60 +313,62 @@ pub(crate) fn dvs_status(
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
-) -> Result<DataFrame> {
-    let current_dir = std::env::current_dir()?;
+) -> DataFrame {
+    or_raise((|| -> Result<DataFrame> {
+        let current_dir = std::env::current_dir()?;
 
-    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-    let dvs_paths = DvsPaths::from_cwd(&config)?;
+        let config = Config::find(&current_dir).ok_or_else(not_in_repository)??;
+        let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    if glob.is_some() && recursive.unwrap_or(false) {
-        return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
-    }
+        if glob.is_some() && recursive.unwrap_or(false) {
+            return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
+        }
 
-    let show_all = status.is_empty() || status.len() == StatusChoice::CHOICES.len();
+        let show_all = status.is_empty() || status.len() == StatusChoice::CHOICES.len();
 
-    let filter = if paths.is_empty() {
-        None
-    } else {
-        Some(PathFilter::from_user_paths(
-            paths,
-            recursive.unwrap_or(false),
-            &dvs_paths,
-        ))
-    };
-    let mut statuses = get_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
-    if !show_all {
-        statuses.retain(|x| match &x.detail {
-            StatusDetail::Success { status: s, .. } => {
-                status.iter().any(|c| *s == Status::from(*c))
-            }
-            StatusDetail::Error { .. } => true,
-        });
-    }
+        let filter = if paths.is_empty() {
+            None
+        } else {
+            Some(PathFilter::from_user_paths(
+                paths,
+                recursive.unwrap_or(false),
+                &dvs_paths,
+            ))
+        };
+        let mut statuses = get_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
+        if !show_all {
+            statuses.retain(|x| match &x.detail {
+                StatusDetail::Success { status: s, .. } => {
+                    status.iter().any(|c| *s == Status::from(*c))
+                }
+                StatusDetail::Error { .. } => true,
+            });
+        }
 
-    // Serialize through a local view that omits `add_time` from the serde
-    // path — jiff's `Timestamp` serde format is RFC 3339, and stringifying
-    // into a character column only to throw it away when appending the
-    // POSIXct column below is wasted work. The jiff timestamps are instead
-    // passed straight through to `time::OffsetDateTime` → POSIXct.
-    let views: Vec<FileStatusView<'_>> = statuses.iter().map(FileStatusView::from).collect();
-    let add_times: Vec<Option<OffsetDateTime>> = statuses
-        .iter()
-        .map(|s| match &s.detail {
-            StatusDetail::Success {
-                metadata: Some(m), ..
-            } => OffsetDateTime::from_unix_timestamp_nanos(m.add_time.as_nanosecond()).ok(),
-            _ => None,
-        })
-        .collect();
-    let add_time_sexp = add_times.into_sexp();
+        // Serialize through a local view that omits `add_time` from the serde
+        // path — jiff's `Timestamp` serde format is RFC 3339, and stringifying
+        // into a character column only to throw it away when appending the
+        // POSIXct column below is wasted work. The jiff timestamps are instead
+        // passed straight through to `time::OffsetDateTime` → POSIXct.
+        let views: Vec<FileStatusView<'_>> = statuses.iter().map(FileStatusView::from).collect();
+        let add_times: Vec<Option<OffsetDateTime>> = statuses
+            .iter()
+            .map(|s| match &s.detail {
+                StatusDetail::Success {
+                    metadata: Some(m), ..
+                } => OffsetDateTime::from_unix_timestamp_nanos(m.add_time.as_nanosecond()).ok(),
+                _ => None,
+            })
+            .collect();
+        let add_time_sexp = add_times.into_sexp();
 
-    Ok(miniextendr_api::serde::vec_to_dataframe(&views)?
-        .drop("metadata_hashes_md5")
-        .strip_prefix("metadata_hashes_")
-        .strip_prefix("metadata_")
-        .rename("blake3", "hash")
-        .with_column("add_time", add_time_sexp))
+        Ok(miniextendr_api::serde::vec_to_dataframe(&views)?
+            .drop("metadata_hashes_md5")
+            .strip_prefix("metadata_hashes_")
+            .strip_prefix("metadata_")
+            .rename("blake3", "hash")
+            .with_column("add_time", add_time_sexp))
+    })())
 }
 
 /// Materialize the audit log as a data frame.
@@ -375,18 +389,20 @@ pub(crate) fn dvs_status(
 #[miniextendr(r_name = "dvs_audit_log_impl")]
 pub(crate) fn dvs_audit_log(
     #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
-) -> Result<DataFrame> {
-    let current_dir = std::env::current_dir()?;
-    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+) -> DataFrame {
+    or_raise((|| -> Result<DataFrame> {
+        let current_dir = std::env::current_dir()?;
+        let config = Config::find(&current_dir).ok_or_else(not_in_repository)??;
 
-    // An empty `paths` slice returns the whole audit log. A non-empty filter
-    // keeps only `add` entries recording one of those repo-root-relative paths
-    // and drops `init` entries. Entries are deserialized off the JSONL via the
-    // dvs crate's own serde impls and handed straight to the dataframe
-    // serializer, so the structure is inherited through serde. vec_to_dataframe
-    // returns an empty data frame when the filter matches nothing.
-    let entries = config.backend().get_audit_entries(&paths)?;
-    Ok(miniextendr_api::serde::vec_to_dataframe(&entries)?)
+        // An empty `paths` slice returns the whole audit log. A non-empty filter
+        // keeps only `add` entries recording one of those repo-root-relative paths
+        // and drops `init` entries. Entries are deserialized off the JSONL via the
+        // dvs crate's own serde impls and handed straight to the dataframe
+        // serializer, so the structure is inherited through serde. vec_to_dataframe
+        // returns an empty data frame when the filter matches nothing.
+        let entries = config.backend().get_audit_entries(&paths)?;
+        Ok(miniextendr_api::serde::vec_to_dataframe(&entries)?)
+    })())
 }
 
 // region: FileStatus serde view (skips add_time)
@@ -488,44 +504,46 @@ pub(crate) fn dvs_get(
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<DataFrame> {
-    let current_dir = std::env::current_dir()?;
+) -> DataFrame {
+    or_raise((|| -> Result<DataFrame> {
+        let current_dir = std::env::current_dir()?;
 
-    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-    let dvs_paths = DvsPaths::from_cwd(&config)?;
+        let config = Config::find(&current_dir).ok_or_else(not_in_repository)??;
+        let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    if glob.is_some() && recursive.unwrap_or(false) {
-        return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
-    }
+        if glob.is_some() && recursive.unwrap_or(false) {
+            return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
+        }
 
-    let all_paths: Vec<_> = resolve_paths_for_get(
-        paths,
-        glob.as_deref(),
-        &dvs_paths,
-        recursive.unwrap_or(false),
-    )?
-    .into_iter()
-    .collect();
-    if all_paths.is_empty() {
-        return Err(anyhow!("No files to get"));
-    }
+        let all_paths: Vec<_> = resolve_paths_for_get(
+            paths,
+            glob.as_deref(),
+            &dvs_paths,
+            recursive.unwrap_or(false),
+        )?
+        .into_iter()
+        .collect();
+        if all_paths.is_empty() {
+            return Err(anyhow!("No files to get"));
+        }
 
-    let dry_run = dry_run.unwrap_or(false);
-    let results = if progress_callback.is_some() {
-        run_with_progress(|tx| {
-            let on_file_start = progress_on_file_start(tx);
-            get_files(
-                all_paths.clone(),
-                &dvs_paths,
-                config.backend(),
-                dry_run,
-                Some(&on_file_start),
-            )
-        })?
-    } else {
-        get_files(all_paths, &dvs_paths, config.backend(), dry_run, None)?
-    };
-    Ok(miniextendr_api::serde::vec_to_dataframe(&results)?)
+        let dry_run = dry_run.unwrap_or(false);
+        let results = if progress_callback.is_some() {
+            run_with_progress(|tx| {
+                let on_file_start = progress_on_file_start(tx);
+                get_files(
+                    all_paths.clone(),
+                    &dvs_paths,
+                    config.backend(),
+                    dry_run,
+                    Some(&on_file_start),
+                )
+            })?
+        } else {
+            get_files(all_paths, &dvs_paths, config.backend(), dry_run, None)?
+        };
+        Ok(miniextendr_api::serde::vec_to_dataframe(&results)?)
+    })())
 }
 
 /// Set the number of threads used by DVS parallel operations.
