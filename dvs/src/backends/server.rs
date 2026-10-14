@@ -84,6 +84,19 @@ pub struct UploadManifestResponse {
     pub compression: Compression,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct AccessUser {
+    pub username: String,
+    pub email: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AccessResponse {
+    pub access: String,
+    pub user: AccessUser,
+    pub groups: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ServerBackend {
     pub name: String,
@@ -213,24 +226,32 @@ impl ServerBackend {
         }
     }
 
-    pub fn check_access(&self) -> anyhow::Result<()> {
+    /// What the current user can do on the project. `None` when they are not a member.
+    pub fn access(&self) -> anyhow::Result<Option<AccessResponse>> {
         let mut resp = http_agent()
             .get(self.access_url().as_str())
             .header("authorization", self.bearer()?)
             .call()?;
 
         match resp.status().as_u16() {
-            200 => Ok(()),
-            401 => return Err(self.login_expired()),
-            403 => bail!(
-                "You are not allowed to access this project, make sure you are logged in with the right user."
-            ),
+            200 => Ok(Some(resp.body_mut().read_json()?)),
+            401 => Err(self.login_expired()),
+            403 => Ok(None),
             404 => bail!("The project {} does not exist on the server", self.name),
             code => bail!(
                 "access check failed ({code}): {}",
                 resp.body_mut().read_to_string().unwrap_or_default()
             ),
         }
+    }
+
+    pub fn check_access(&self) -> anyhow::Result<()> {
+        if self.access()?.is_none() {
+            bail!(
+                "You are not allowed to access this project, make sure you are logged in with the right user."
+            );
+        }
+        Ok(())
     }
 
     /// Declares what an add is about to store. The server records every entry and

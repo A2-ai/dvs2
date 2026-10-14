@@ -135,6 +135,8 @@ pub enum Command {
         #[clap(long)]
         dry_run: bool,
     },
+    /// Show the project configuration and the server info is using a dvs-server backend
+    Info,
     /// Log in to a DVS server, the one in the config unless a URL is given
     Login { url: Option<Url> },
     /// Log out from a DVS server
@@ -564,6 +566,77 @@ fn try_main() -> Result<()> {
             }
             if has_errors {
                 return Err(anyhow!("Some files failed to get"));
+            }
+        }
+        Command::Info => {
+            let config =
+                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let compression = config.compression().to_string();
+
+            match config.backend() {
+                Backend::Local(l) => {
+                    if cli.json {
+                        println!(
+                            "{}",
+                            json!({
+                                "version": dvs::VERSION,
+                                "backend": "local",
+                                "storage": l.path,
+                                "compression": compression,
+                            })
+                        );
+                    } else {
+                        println!("dvs {}", dvs::VERSION);
+                        println!("backend     local");
+                        println!("storage     {}", l.path.display());
+                        println!("compression {compression}");
+                    }
+                }
+                Backend::Server(s) => {
+                    // Not logged in is an answer, not an error
+                    let logged_in = get_token(&s.url)?.is_some();
+                    let access = if logged_in { s.access()? } else { None };
+                    if cli.json {
+                        println!(
+                            "{}",
+                            json!({
+                                "version": dvs::VERSION,
+                                "backend": "server",
+                                "project": s.name,
+                                "server": s.url,
+                                "compression": compression,
+                                "logged_in": logged_in,
+                                "user": access.as_ref().map(|a| &a.user),
+                                "access": access.as_ref().map_or("none", |a| a.access.as_str()),
+                                "groups": access.as_ref().map_or(&[][..], |a| &a.groups),
+                            })
+                        );
+                    } else {
+                        let project = match (&access, logged_in) {
+                            (Some(a), _) => format!("{} ({})", s.name, a.access),
+                            (None, true) => format!("{} (no access)", s.name),
+                            (None, false) => s.name.clone(),
+                        };
+                        println!("dvs {}", dvs::VERSION);
+                        println!("backend     server");
+                        println!("project     {project}");
+                        println!("server      {}", s.url);
+                        if !logged_in {
+                            println!("user        not logged in, run `dvs login`");
+                        } else if let Some(a) = &access {
+                            match &a.user.email {
+                                Some(email) => {
+                                    println!("user        {} ({email})", a.user.username)
+                                }
+                                None => println!("user        {}", a.user.username),
+                            }
+                            if !a.groups.is_empty() {
+                                println!("groups      {}", a.groups.join(", "));
+                            }
+                        }
+                        println!("compression {compression}");
+                    }
+                }
             }
         }
         Command::Login { url: Some(url) } => {
