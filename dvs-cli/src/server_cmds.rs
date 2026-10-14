@@ -925,8 +925,9 @@ pub struct ActivityArgs {
     #[clap(long, conflicts_with = "batch")]
     batches: bool,
     /// Write every matching event as CSV to this file (`-` for the screen), oldest first.
-    /// It is written as `.<name>.partial` beside it and renamed when complete; an
-    /// interrupted export leaves that partial file, which the next export replaces.
+    /// It is written to a private `.<name>.<random>.partial` beside it and moved into
+    /// place when complete; an export killed midway (Ctrl-C) leaves that file behind, to
+    /// delete.
     #[clap(long, conflicts_with = "batches")]
     csv: Option<PathBuf>,
     /// Replace the `--csv` file if it exists
@@ -1144,11 +1145,12 @@ pub fn activity(mode: Mode, target: &Target, cwd: &Path, args: ActivityArgs) -> 
     )
 }
 
-/// Write an export to `file` through `.<name>.partial` beside it, renamed into place
-/// when complete: a failed export keeps the old file and leaves nothing half-written.
-/// The partial file is created like any new file (the umask applies); one left by an
-/// interrupted run is overwritten by the next. A replaced file keeps its permission
-/// bits (not ACLs or extended attributes). Without `force` an existing file is kept.
+/// Write an export to `file` through a temporary file of its own beside it
+/// (`.<name>.<random>.partial`, created new and private), published when complete: a
+/// failed export keeps the old file and leaves nothing half-written. The published file
+/// gets the replaced file's permission bits (not ACLs or extended attributes), or a new
+/// file's (0666 less the umask). Without `force` an existing file is kept, also one
+/// that appears during the export. Only a killed run leaves its temporary file.
 fn export_csv(
     file: &Path,
     force: bool,
@@ -1157,47 +1159,72 @@ fn export_csv(
     let name = file
         .file_name()
         .with_context(|| format!("{} is not a file name", file.display()))?;
-    let mut partial_name = std::ffi::OsString::from(".");
-    partial_name.push(name);
-    partial_name.push(".partial");
-    let partial = file.with_file_name(partial_name);
     let existing = match std::fs::metadata(file) {
-        Ok(m) if !force => bail!(
-            "{} exists; give --force to replace it, or another file name{}",
-            file.display(),
-            if m.is_dir() { " (it is a folder)" } else { "" }
+        Ok(m) if m.is_dir() => bail!("{} is a folder", file.display()),
+        Ok(_) if !force => bail!(
+            "{} exists; give --force to replace it, or another file name",
+            file.display()
         ),
-        Ok(m) => Some(m),
+        Ok(m) => Some(m.permissions()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e).with_context(|| format!("could not look at {}", file.display())),
     };
-    let result: Result<u64> = (|| {
-        let mut out = std::fs::File::create(&partial)
-            .with_context(|| format!("could not create {}", partial.display()))?;
-        let n = write(&mut out)?;
-        out.sync_all()?;
-        if let Some(m) = &existing {
-            out.set_permissions(m.permissions())?;
-        }
-        drop(out);
-        if force {
-            std::fs::rename(&partial, file)?;
-        } else {
-            // A link fails if the name was taken meanwhile, where a rename would replace it
-            std::fs::hard_link(&partial, file).map_err(|e| match e.kind() {
-                std::io::ErrorKind::AlreadyExists => {
-                    anyhow::anyhow!("{} appeared while exporting; it is kept", file.display())
-                }
-                _ => anyhow::Error::from(e),
-            })?;
-            std::fs::remove_file(&partial)?;
-        }
-        Ok(n)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&partial);
+    let folder = match file.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let mut prefix = std::ffi::OsString::from(".");
+    prefix.push(name);
+    prefix.push(".");
+    // Dropped (and so deleted) on any error below
+    let mut out = tempfile::Builder::new()
+        .prefix(&prefix)
+        .suffix(".partial")
+        .tempfile_in(folder)
+        .with_context(|| format!("could not write in {}", folder.display()))?;
+    let n =
+        write(out.as_file_mut()).with_context(|| format!("could not write {}", file.display()))?;
+    out.as_file().sync_all()?;
+    let permissions = match existing {
+        Some(p) => p,
+        None => new_file_permissions(out.as_file())?,
+    };
+    out.as_file().set_permissions(permissions)?;
+    if force {
+        out.persist(file).map_err(|e| e.error)
+    } else {
+        out.persist_noclobber(file).map_err(|e| e.error)
     }
-    result.with_context(|| format!("could not write {}", file.display()))
+    .map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => {
+            anyhow::anyhow!("{} appeared while exporting; it is kept", file.display())
+        }
+        _ => anyhow::Error::from(e).context(format!("could not write {}", file.display())),
+    })?;
+    Ok(n)
+}
+
+/// The permissions a newly created file gets: 0666 less the umask.
+#[cfg(unix)]
+fn new_file_permissions(file: &std::fs::File) -> Result<std::fs::Permissions> {
+    use std::os::unix::fs::PermissionsExt;
+    // SAFETY: umask only swaps the process's file-mode mask, and the old one is put back
+    // at once; this program creates no file on another thread meanwhile
+    let mask = unsafe {
+        let mask = libc::umask(0o022);
+        libc::umask(mask);
+        mask
+    };
+    let mut permissions = file.metadata()?.permissions();
+    permissions.set_mode(0o666 & !(mask as u32));
+    Ok(permissions)
+}
+
+#[cfg(not(unix))]
+fn new_file_permissions(file: &std::fs::File) -> Result<std::fs::Permissions> {
+    let mut permissions = file.metadata()?.permissions();
+    permissions.set_readonly(false);
+    Ok(permissions)
 }
 
 // ------------------------------------------------------------------------------- yanks
@@ -1228,24 +1255,8 @@ fn tracked_hash(
         return Ok(None);
     }
     let pointer = paths.metadata_path(Path::new(&relative));
-    // Only a pointer that is not there means "not tracked": a folder that cannot be
-    // searched, or a dangling link, is an error, not a reason to guess
-    match std::fs::symlink_metadata(&pointer) {
-        Ok(_) => {}
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            return Ok(None);
-        }
-        Err(e) => {
-            return Err(anyhow::Error::from(e).context(format!(
-                "could not look for {}, the .dvs file for {relative}",
-                pointer.display()
-            )));
-        }
+    if !pointer_exists(&paths.metadata_folder(), &pointer, &relative)? {
+        return Ok(None);
     }
     let metadata = dvs::FileMetadata::read(&pointer).with_context(|| {
         format!(
@@ -1255,6 +1266,52 @@ fn tracked_hash(
         )
     })?;
     Ok(Some((relative, metadata.hashes.blake3)))
+}
+
+/// Whether the `.dvs` file `pointer` is there. Only one that is plainly not there is
+/// "not tracked": a metadata folder that is not a folder (a dangling link, a file),
+/// something in the way that is not a folder, or a lookup that fails is an error, since
+/// guessing another version would act on the wrong content.
+fn pointer_exists(metadata_folder: &Path, pointer: &Path, relative: &str) -> Result<bool> {
+    let trouble = |what: String| {
+        anyhow::anyhow!(
+            "{what}, so the .dvs file for {relative} cannot be looked for; fix it first, or \
+             give the content hash"
+        )
+    };
+    match std::fs::metadata(metadata_folder) {
+        Ok(m) if m.is_dir() => {}
+        Ok(_) => bail!(trouble(format!(
+            "{} is not a folder",
+            metadata_folder.display()
+        ))),
+        Err(e) => bail!(trouble(format!(
+            "the metadata folder {} cannot be opened ({e})",
+            metadata_folder.display()
+        ))),
+    }
+    // Each folder between it and the pointer, then the pointer itself
+    let inner = pointer.strip_prefix(metadata_folder).unwrap_or(pointer);
+    let mut at = metadata_folder.to_path_buf();
+    let parts: Vec<_> = inner.components().collect();
+    for (i, part) in parts.iter().enumerate() {
+        at.push(part);
+        let last = i + 1 == parts.len();
+        match std::fs::symlink_metadata(&at) {
+            Ok(_) if last => return Ok(true),
+            Ok(_) => match std::fs::metadata(&at) {
+                Ok(m) if m.is_dir() => {}
+                Ok(_) => bail!(trouble(format!("{} is not a folder", at.display()))),
+                Err(e) => bail!(trouble(format!("{} cannot be opened ({e})", at.display()))),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => bail!(trouble(format!(
+                "{} cannot be looked at ({e})",
+                at.display()
+            ))),
+        }
+    }
+    Ok(false)
 }
 
 /// The distinct uploaded contents whose hash starts with `prefix`: every page is read,
@@ -1480,11 +1537,17 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_csv_export_replaces_only_when_whole() {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{PermissionsExt, symlink};
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("out.csv");
-        let partial = dir.path().join(".out.csv.partial");
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let partials = || {
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".partial"))
+                .count()
+        };
         let rows = |text: &'static str| {
             move |out: &mut dyn Write| -> Result<u64> {
                 out.write_all(text.as_bytes())?;
@@ -1492,13 +1555,17 @@ mod tests {
             }
         };
 
+        // A partial-looking name someone planted is never opened
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        symlink(&victim, dir.path().join(".out.csv.partial")).unwrap();
+
         // A new file is made like any other, umask and all
-        std::fs::write(partial.as_path(), "left by a ^C").unwrap();
         export_csv(&file, false, rows("a\n")).unwrap();
         let plain = dir.path().join("plain");
         std::fs::File::create(&plain).unwrap();
         assert_eq!(mode(&file), mode(&plain));
-        assert!(!partial.exists());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
 
         // Kept without --force; replaced with it, keeping its mode
         assert!(export_csv(&file, false, rows("b\n")).is_err());
@@ -1507,14 +1574,64 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "c\n");
         assert_eq!(mode(&file), 0o640);
 
-        // A failed export keeps the old file and leaves no partial one
+        // A failed export keeps the old file and leaves no temporary file
         let failed = export_csv(&file, true, |out| {
             out.write_all(b"half")?;
             bail!("connection reset")
         });
         assert!(failed.is_err());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "c\n");
-        assert!(!partial.exists());
+        // Only the planted link is left
+        assert_eq!(partials(), 1);
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pointer_is_absent_only_when_plainly_not_there() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let meta = dir.path().join(".dvs");
+        let pointer = meta.join("data/a.csv.dvs");
+        let exists = |m: &Path| pointer_exists(m, &m.join("data/a.csv.dvs"), "data/a.csv");
+
+        // A dangling metadata folder link, or a file in its place
+        symlink(dir.path().join("gone"), &meta).unwrap();
+        assert!(
+            exists(&meta)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot be opened")
+        );
+        std::fs::remove_file(&meta).unwrap();
+        std::fs::write(&meta, "").unwrap();
+        assert!(
+            exists(&meta)
+                .unwrap_err()
+                .to_string()
+                .contains("is not a folder")
+        );
+        std::fs::remove_file(&meta).unwrap();
+
+        std::fs::create_dir(&meta).unwrap();
+        assert!(!exists(&meta).unwrap());
+        // A file where a folder should be
+        std::fs::write(meta.join("data"), "").unwrap();
+        assert!(
+            exists(&meta)
+                .unwrap_err()
+                .to_string()
+                .contains("is not a folder")
+        );
+        std::fs::remove_file(meta.join("data")).unwrap();
+        std::fs::create_dir(meta.join("data")).unwrap();
+        assert!(!exists(&meta).unwrap());
+        std::fs::write(&pointer, "{}").unwrap();
+        assert!(exists(&meta).unwrap());
+        // A dangling pointer link is there (and then fails to read)
+        std::fs::remove_file(&pointer).unwrap();
+        symlink(dir.path().join("nowhere"), &pointer).unwrap();
+        assert!(exists(&meta).unwrap());
     }
 
     #[test]

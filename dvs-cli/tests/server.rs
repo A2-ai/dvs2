@@ -616,6 +616,21 @@ fn a_dvs_file_that_cannot_be_looked_for_stops_a_yank() {
     let out = c.dvs(Some(TOKEN), &["yank", "data/a.csv", "--reason", "x"]);
     std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(out.code, 1, "{out:?}");
-    assert!(out.stderr.contains("could not look for"), "{out:?}");
+    assert!(
+        out.stderr
+            .contains("so the .dvs file for data/a.csv cannot be looked for"),
+        "{out:?}"
+    );
+
+    // A metadata folder that is a dangling link
+    let meta = c.repo().join(".dvs");
+    std::fs::rename(&meta, c.repo().join(".dvs-moved")).unwrap();
+    symlink(c.repo().join("gone"), &meta).unwrap();
+    let out = c.dvs(Some(TOKEN), &["yank", "data/a.csv", "--reason", "x"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stderr.contains("the metadata folder") && out.stderr.contains("cannot be opened"),
+        "{out:?}"
+    );
     assert_eq!(fake.count("POST", "/yanks"), 0);
 }

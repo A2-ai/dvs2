@@ -16,9 +16,13 @@ tabled = "0.22"
 walkdir.workspace = true
 url = "2.5.8"
 toml.workspace = true
+tempfile.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# To read the umask, for the mode of a file written through a private temporary file
+libc = "0.2"
 
 [dev-dependencies]
-tempfile = "3"
 blake3.workspace = true
 zstd.workspace = true
 
