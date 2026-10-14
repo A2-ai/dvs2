@@ -532,11 +532,13 @@ dependencies = [
  "dvs",
  "env_logger",
  "indicatif",
+ "serde",
  "serde_json",
  "tabled",
  "tempfile",
  "toml",
  "url",
+ "uuid",
  "walkdir",
  "zstd",
 ]

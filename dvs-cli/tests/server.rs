@@ -485,3 +485,51 @@ fn info_shows_who_and_what() {
     assert_eq!(out.code, 3, "{out:?}");
     assert!(out.stdout.contains("dvs-server 0.5.0"), "{out:?}");
 }
+
+#[test]
+fn add_get_and_status_say_what_happened() {
+    let fake = Fake::start();
+    let c = attached(&fake);
+    c.write("a.csv", b"alpha");
+    let out = c.dvs_ok(&["add", "a.csv"]);
+    assert!(out.stdout.starts_with("Added: a.csv [5 B]"), "{out:?}");
+    assert!(out.stderr.contains("commit the new .dvs files"), "{out:?}");
+
+    // Unchanged: said so, and a message for it is not dropped silently
+    let out = c.dvs_ok(&["add", "a.csv", "-m", "again"]);
+    assert!(
+        out.stdout.starts_with("Unchanged: a.csv [5 B] as "),
+        "{out:?}"
+    );
+    assert!(out.stderr.contains("message was not recorded"), "{out:?}");
+    assert!(!out.stderr.contains("commit the new"), "{out:?}");
+    // The hint is for people only
+    let out = c.dvs_ok(&["--json", "add", "a.csv"]);
+    assert!(out.stderr.is_empty(), "{out:?}");
+
+    // dvs.toml and the metadata folder are Git's
+    let out = c.dvs(Some(TOKEN), &["add", "dvs.toml"]);
+    assert_ne!(out.code, 0, "{out:?}");
+    assert!(out.stderr.contains("commit it to Git"), "{out:?}");
+
+    let out = c.dvs_ok(&["get", "a.csv"]);
+    assert_eq!(
+        out.stdout.trim(),
+        "Nothing to get: 1 file already matches its .dvs file"
+    );
+    std::fs::remove_file(c.repo().join("a.csv")).unwrap();
+    let out = c.dvs_ok(&["get", "--dry-run", "a.csv"]);
+    assert!(out.stdout.starts_with("Would get: a.csv [5 B]"), "{out:?}");
+    assert!(!c.repo().join("a.csv").exists());
+
+    c.write("notes.txt", b"n");
+    let out = c.dvs_ok(&["status", "notes.txt"]);
+    assert!(out.stdout.contains("notes.txt is not tracked"), "{out:?}");
+    let out = c.dvs_ok(&["status", "missing.txt"]);
+    assert!(out.stdout.contains("missing.txt does not exist"), "{out:?}");
+
+    // --json errors are JSON
+    let out = c.dvs(None, &["--json", "add", "notes.txt"]);
+    let error: serde_json::Value = serde_json::from_str(out.stderr.trim()).unwrap();
+    assert_eq!(error["error"]["code"], "not_logged_in", "{out:?}");
+}

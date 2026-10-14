@@ -1,12 +1,14 @@
+mod output;
+mod server_cmds;
+
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde_json::json;
 use tabled::Tabled;
-use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
 use url::Url;
 
 use dvs::auth::{delete_token, get_token};
@@ -17,8 +19,12 @@ use dvs::paths::DvsPaths;
 use dvs::remote::{self, ApiError, TOKEN_ENV, TokenSource, api_error, token_for};
 use dvs::{
     AddOutcome, Backend, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter,
-    Status, StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
+    Status, StatusDetail, add_files, format_size, format_time, get_files, get_status,
+    set_num_threads, short_hash,
 };
+
+use output::Mode;
+use server_cmds::Target;
 
 #[derive(Debug, Subcommand)]
 pub enum Init {
@@ -39,14 +45,15 @@ pub enum Init {
         no_compression: bool,
     },
     Server {
-        /// The project name
+        /// The project name: lowercase letters, digits and hyphens, starting with a letter
+        /// or digit, at most 100 characters
         name: String,
         /// The URL of the dvs server
         url: Url,
         /// If you want to use a folder name other than `.dvs` for storing the metadata files
         #[clap(long)]
         metadata_folder_name: Option<String>,
-        /// Unix group to use for permissions
+        /// The Arx group that gets admin on the new project, by its exact name
         #[clap(long)]
         group: String,
         /// Disable compression of stored files. Compression defaults to zstd
@@ -114,6 +121,10 @@ pub enum Command {
         /// Show all metadata columns in the table output
         #[clap(long)]
         with_metadata: bool,
+        /// Also compare each file's `.dvs` content with the server: the latest upload at
+        /// its path, a newer one, or one the server does not have
+        #[clap(long)]
+        remote: bool,
     },
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
@@ -143,6 +154,45 @@ pub enum Command {
         /// A server to ask, instead of this project's
         url: Option<Url>,
     },
+    /// Projects on the server: list them, show this one, lock or unlock it
+    #[command(subcommand)]
+    Project(server_cmds::ProjectCommand),
+    /// List Arx groups: the names `dvs access grant` takes
+    Groups(server_cmds::GroupsArgs),
+    /// Show which Arx groups have access to the project, or grant or revoke it
+    Access {
+        #[command(subcommand)]
+        command: Option<server_cmds::AccessCommand>,
+    },
+    /// List the files uploaded to the project, each in its latest version
+    LsRemote(server_cmds::LsRemoteArgs),
+    /// Show every version uploaded at a path, newest first
+    Log {
+        /// The file, from where you are in the checkout (or from the project's top folder
+        /// outside one)
+        path: String,
+    },
+    /// Show what happened in the project, newest first: uploads, downloads, and changes
+    /// such as locks, access and yanks
+    Activity(server_cmds::ActivityArgs),
+    /// Stop everyone downloading a content, wherever it was uploaded, until it is
+    /// unyanked. Nothing is deleted.
+    Yank {
+        /// A tracked file (its `.dvs` version), a path on the server (its latest
+        /// version), or a content hash or its first 8 or more characters
+        target: String,
+        /// Why, shown to anyone who tries to download it
+        #[clap(long)]
+        reason: String,
+    },
+    /// Allow a yanked content to be downloaded again
+    Unyank {
+        /// A path the yanked content was at, or its hash or first 8 or more characters
+        target: String,
+        /// Why, kept in the project's activity
+        #[clap(long)]
+        reason: Option<String>,
+    },
 }
 
 /// Some files failed; the codes the server gave decide the exit code.
@@ -159,6 +209,26 @@ impl std::fmt::Display for FilesFailed {
 }
 
 impl std::error::Error for FilesFailed {}
+
+/// The stable code of an error, for `--json`: the server's, or `files_failed`, or
+/// `error`.
+fn error_code(e: &anyhow::Error) -> &str {
+    if e.downcast_ref::<FilesFailed>().is_some() {
+        return "files_failed";
+    }
+    api_error(e).map_or("error", |a| a.code.as_str())
+}
+
+const EXIT_CODES: &str = "\
+Exit codes:
+  0  success
+  1  any other failure, such as some files failing
+  2  usage error
+  3  not logged in, or the token was rejected
+  4  the project already exists
+  5  project not found, or you have no access to it
+
+With --json, an error is printed on stderr as {\"error\":{\"code\":…,\"message\":…}}.";
 
 /// 3 not logged in or token rejected, 5 project not found or no access, 4 project
 /// exists, 1 anything else. When several apply, the first in that list wins. Clap
@@ -194,11 +264,23 @@ fn server_url(url: Option<Url>, current_dir: &std::path::Path) -> Result<Url> {
 }
 
 #[derive(Parser)]
-#[clap(version, author, about, subcommand_negates_reqs = true)]
+#[clap(version, author, about, subcommand_negates_reqs = true, after_help = EXIT_CODES)]
 pub struct Cli {
-    /// Output results as JSON
+    /// Output results as JSON: a list as {"items", "next_cursor"}
     #[clap(long, global = true, display_order = 0)]
     pub json: bool,
+
+    /// Output a list as one JSON object a line, following every page
+    #[clap(long, global = true, conflicts_with = "json", display_order = 0)]
+    pub json_lines: bool,
+
+    /// The project to ask, instead of the one in dvs.toml
+    #[clap(long, global = true, display_order = 2)]
+    pub project: Option<String>,
+
+    /// The server to ask, instead of the one in dvs.toml
+    #[clap(long, global = true, display_order = 2)]
+    pub server: Option<Url>,
 
     /// Number of threads for parallel operations (0 = auto-detect)
     #[clap(long, global = true, display_order = 1)]
@@ -231,9 +313,9 @@ impl<'a> From<&'a FileMetadata> for StatusRowFull<'a> {
     fn from(m: &'a FileMetadata) -> Self {
         Self {
             size: format_size(m.size),
-            hash: m.hashes.blake3.as_str(),
+            hash: short_hash(&m.hashes.blake3),
             created_by: m.created_by.as_str(),
-            add_time: m.add_time.to_string(),
+            add_time: format_time(&m.add_time),
             compression: m.compression.to_string(),
             message: m.message.as_deref().unwrap_or(""),
             ..Default::default()
@@ -296,11 +378,51 @@ fn run_device_login(url: &Url) -> Result<()> {
             start.verification_uri_complete, start.user_code
         );
     })?;
-    eprintln!("You are now logged in to {url} until {}", token.expires_at);
+    eprintln!(
+        "You are now logged in to {url} until {}",
+        format_time(&token.expires_at)
+    );
     Ok(())
 }
 
-fn try_main() -> Result<()> {
+/// Explain why `dvs status PATHS` lists nothing for some of the paths.
+fn unmatched_paths(
+    user_paths: &[PathBuf],
+    statuses: &[dvs::FileStatus],
+    recursive: bool,
+    dvs_paths: &DvsPaths,
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    for user_path in user_paths {
+        let Some(wanted) = dvs_paths.project_relative(user_path) else {
+            notes.push(format!("{} is outside this project", user_path.display()));
+            continue;
+        };
+        let wanted = Path::new(&wanted);
+        if statuses.iter().any(|s| s.path.starts_with(wanted)) {
+            continue;
+        }
+        let shown = user_path.display();
+        let full = dvs_paths.file_path(wanted);
+        notes.push(if full.is_dir() {
+            if recursive {
+                format!("No tracked files in {shown}")
+            } else {
+                format!(
+                    "No tracked files directly in {shown}; add --recursive to include its \
+                     subfolders"
+                )
+            }
+        } else if full.exists() {
+            format!("{shown} is not tracked: `dvs add {shown}` tracks it")
+        } else {
+            format!("{shown} does not exist and is not tracked")
+        });
+    }
+    notes
+}
+
+fn try_main(cli: Cli) -> Result<()> {
     // Warnings (a failed `complete`, a retried upload) show unless RUST_LOG says otherwise,
     // as `warning: ...` unless RUST_LOG asks for the full format
     let mut logger =
@@ -314,11 +436,22 @@ fn try_main() -> Result<()> {
     }
     logger.init();
 
-    let cli = Cli::parse();
     if let Some(n) = cli.threads {
         set_num_threads(n);
     }
     let current_dir = std::env::current_dir()?;
+    let mode = if cli.json_lines {
+        Mode::JsonLines
+    } else if cli.json {
+        Mode::Json
+    } else {
+        Mode::Text
+    };
+    let json_out = !mode.is_text();
+    let target = Target {
+        project: cli.project.clone(),
+        server: cli.server.clone(),
+    };
 
     match cli.command {
         Command::Init(init_cmd) => {
@@ -362,7 +495,7 @@ fn try_main() -> Result<()> {
             let root = root_dir.unwrap_or(current_dir);
 
             let repo_root = init(&root, config)?;
-            if cli.json {
+            if json_out {
                 println!("{}", json!({"status": "initialized"}));
             } else {
                 println!("DVS Initialized at {repo_root:?}");
@@ -382,7 +515,7 @@ fn try_main() -> Result<()> {
                 config.set_metadata_folder_name(m);
             }
             let project = attach(&current_dir, config)?;
-            if cli.json {
+            if json_out {
                 println!("{}", json!({"status": "attached", "project": project}));
             } else {
                 println!(
@@ -413,9 +546,10 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("No files to add"));
             }
 
-            let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
+            let show_progress = !json_out && !dry_run && std::io::stderr().is_terminal();
 
             let on_file_start = make_progress_callback(config.progress_bytes_threshold());
+            let had_message = message.is_some();
             let results = add_files(
                 all_paths,
                 &dvs_paths,
@@ -434,13 +568,13 @@ fn try_main() -> Result<()> {
                 .filter(|r| r.is_failure())
                 .map(|r| r.code.clone().unwrap_or_default())
                 .collect();
-            if cli.json {
+            if json_out {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
                 for result in &results {
                     let path = result.path.display();
                     let size = format_size(result.size.unwrap_or(0));
-                    let hash = result.hash.as_deref().unwrap_or("");
+                    let hash = result.hash.as_deref().map(short_hash).unwrap_or("");
                     let error = result.error.as_deref().unwrap_or("");
                     match result.outcome {
                         AddOutcome::Added => {
@@ -457,10 +591,33 @@ fn try_main() -> Result<()> {
                             let msg = if dry_run { "To record" } else { "Recorded" };
                             println!("{msg}: {path} [{size}] as {hash} (content already stored)");
                         }
-                        AddOutcome::Skipped => {}
+                        AddOutcome::Skipped => {
+                            println!("Unchanged: {path} [{size}] as {hash} (already tracked)")
+                        }
                         AddOutcome::Failed => eprintln!("Error adding {path}: {error}"),
                         AddOutcome::NotAttempted => eprintln!("Not attempted: {path}: {error}"),
                     }
+                }
+                let unchanged = results
+                    .iter()
+                    .filter(|r| r.outcome == AddOutcome::Skipped)
+                    .count();
+                if had_message && unchanged > 0 {
+                    eprintln!(
+                        "The message was not recorded for the {unchanged} unchanged file{}: a \
+                         message is kept only with a new version",
+                        if unchanged == 1 { "" } else { "s" }
+                    );
+                }
+                let recorded = results
+                    .iter()
+                    .any(|r| matches!(r.outcome, AddOutcome::Added | AddOutcome::Present));
+                if recorded && !dry_run {
+                    eprintln!(
+                        "Next: commit the new .dvs files in {}/ and .gitignore to Git, so others \
+                         can `dvs get` these files",
+                        config.metadata_folder_name()
+                    );
                 }
             }
             if !codes.is_empty() {
@@ -479,6 +636,7 @@ fn try_main() -> Result<()> {
             unsynced,
             with_metadata,
             glob,
+            remote,
         } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -489,7 +647,9 @@ fn try_main() -> Result<()> {
                 None
             } else {
                 Some(PathFilter::from_user_paths(
-                    user_paths, recursive, &dvs_paths,
+                    user_paths.clone(),
+                    recursive,
+                    &dvs_paths,
                 ))
             };
             let mut statuses = get_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
@@ -506,15 +666,39 @@ fn try_main() -> Result<()> {
             let has_errors = statuses
                 .iter()
                 .any(|s| matches!(s.detail, StatusDetail::Error { .. }));
-            if cli.json {
+            // Paths given that match nothing tracked: say why, instead of a bare "none"
+            let unmatched = if glob.is_none() {
+                unmatched_paths(&user_paths, &statuses, recursive, &dvs_paths)
+            } else {
+                Vec::new()
+            };
+            if remote {
+                server_cmds::remote_status(mode, &target, &current_dir, &statuses)?;
+                if !json_out {
+                    for note in &unmatched {
+                        eprintln!("{note}");
+                    }
+                }
+            } else if json_out {
                 println!("{}", serde_json::to_string(&statuses)?);
             } else if statuses.is_empty() {
-                if show_all {
-                    println!("No tracked files");
+                if !unmatched.is_empty() {
+                    for note in &unmatched {
+                        println!("{note}");
+                    }
+                } else if let Some(g) = &glob {
+                    println!("No tracked file matches {g}");
+                } else if !show_all {
+                    println!("No tracked files have the status asked for");
+                } else if user_paths.is_empty() {
+                    println!("No tracked files: `dvs add PATH` tracks one");
                 } else {
-                    println!("No tracked files matching the filter")
+                    println!("No tracked files there");
                 }
             } else {
+                for note in &unmatched {
+                    eprintln!("{note}");
+                }
                 for file_status in &statuses {
                     if let StatusDetail::Error { error } = &file_status.detail {
                         eprintln!(
@@ -525,49 +709,35 @@ fn try_main() -> Result<()> {
                 }
 
                 if with_metadata {
-                    let rows: Vec<StatusRowFull> = statuses
-                        .iter()
-                        .filter_map(|fs| match &fs.detail {
-                            StatusDetail::Success { status, metadata } => {
-                                let mut row = metadata
-                                    .as_ref()
-                                    .map(StatusRowFull::from)
-                                    .unwrap_or_default();
-                                row.path = fs.path.display().to_string();
-                                row.status = status.to_string();
-                                Some(row)
-                            }
-                            StatusDetail::Error { .. } => None,
-                        })
-                        .collect();
-                    let mut table = tabled::Table::new(rows);
-                    table
-                        .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
-                        .with(Modify::new(Rows::first()).with(Alignment::left()));
-                    println!("{table}");
+                    let rows = statuses.iter().filter_map(|fs| match &fs.detail {
+                        StatusDetail::Success { status, metadata } => {
+                            let mut row = metadata
+                                .as_ref()
+                                .map(StatusRowFull::from)
+                                .unwrap_or_default();
+                            row.path = fs.path.display().to_string();
+                            row.status = status.to_string();
+                            Some(row)
+                        }
+                        StatusDetail::Error { .. } => None,
+                    });
+                    output::table(rows, &["size"]);
                 } else {
-                    let rows: Vec<StatusRow> = statuses
-                        .iter()
-                        .filter_map(|fs| match &fs.detail {
-                            StatusDetail::Success { status, metadata } => {
-                                let size = match metadata {
-                                    Some(m) => format_size(m.size),
-                                    None => String::new(),
-                                };
-                                Some(StatusRow {
-                                    path: fs.path.display().to_string(),
-                                    status: status.to_string(),
-                                    size,
-                                })
-                            }
-                            StatusDetail::Error { .. } => None,
-                        })
-                        .collect();
-                    let mut table = tabled::Table::new(rows);
-                    table
-                        .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
-                        .with(Modify::new(Rows::first()).with(Alignment::left()));
-                    println!("{table}");
+                    let rows = statuses.iter().filter_map(|fs| match &fs.detail {
+                        StatusDetail::Success { status, metadata } => {
+                            let size = match metadata {
+                                Some(m) => format_size(m.size),
+                                None => String::new(),
+                            };
+                            Some(StatusRow {
+                                path: fs.path.display().to_string(),
+                                status: status.to_string(),
+                                size,
+                            })
+                        }
+                        StatusDetail::Error { .. } => None,
+                    });
+                    output::table(rows, &["size"]);
                 }
             }
             if has_errors {
@@ -591,7 +761,7 @@ fn try_main() -> Result<()> {
                 return Err(anyhow!("No files to get"));
             }
 
-            let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
+            let show_progress = !json_out && !dry_run && std::io::stderr().is_terminal();
 
             let on_file_start = make_progress_callback(config.progress_bytes_threshold());
             let results = get_files(
@@ -612,18 +782,26 @@ fn try_main() -> Result<()> {
                     GetDetail::Success { .. } => None,
                 })
                 .collect();
-            if cli.json {
+            if json_out {
                 println!("{}", serde_json::to_string(&results)?);
             } else {
                 let mut total_files = 0u64;
                 let mut total_bytes = 0u64;
+                let mut matching = 0u64;
                 for result in &results {
                     match &result.detail {
                         GetDetail::Success { outcome, size } => {
                             if *outcome == Outcome::Copied {
-                                println!("{} [{}]", result.path.display(), format_size(*size));
+                                println!(
+                                    "{}{} [{}]",
+                                    if dry_run { "Would get: " } else { "" },
+                                    result.path.display(),
+                                    format_size(*size)
+                                );
                                 total_files += 1;
                                 total_bytes += size;
+                            } else {
+                                matching += 1;
                             }
                         }
                         GetDetail::Error { error, .. } => {
@@ -632,7 +810,21 @@ fn try_main() -> Result<()> {
                     }
                 }
                 if total_files > 0 {
-                    println!("Total: {} files, {}", total_files, format_size(total_bytes));
+                    println!(
+                        "{}: {} file{}, {}",
+                        if dry_run { "Would get" } else { "Total" },
+                        total_files,
+                        if total_files == 1 { "" } else { "s" },
+                        format_size(total_bytes)
+                    );
+                } else if codes.is_empty() {
+                    println!(
+                        "Nothing to get: {matching} file{} already match{} {} .dvs file{}",
+                        if matching == 1 { "" } else { "s" },
+                        if matching == 1 { "es" } else { "" },
+                        if matching == 1 { "its" } else { "their" },
+                        if matching == 1 { "" } else { "s" },
+                    );
                 }
             }
             if !codes.is_empty() {
@@ -709,7 +901,7 @@ fn try_main() -> Result<()> {
                 (Some(p), Ok(_)) => Some(p.project()),
                 _ => None,
             };
-            if cli.json {
+            if json_out {
                 println!(
                     "{}",
                     json!({
@@ -739,7 +931,10 @@ fn try_main() -> Result<()> {
                         _ => "dvs login",
                     };
                     match &me.token {
-                        Some(t) => println!("Token:   from {from}, expires {}", t.expires_at),
+                        Some(t) => println!(
+                            "Token:   from {from}, expires {}",
+                            format_time(&t.expires_at)
+                        ),
                         None => println!("Token:   from {from}"),
                     }
                 }
@@ -761,13 +956,40 @@ fn try_main() -> Result<()> {
                 role?;
             }
         }
+        Command::Project(command) => server_cmds::project(mode, &target, &current_dir, command)?,
+        Command::Groups(args) => server_cmds::groups(mode, &target, &current_dir, args)?,
+        Command::Access { command } => server_cmds::access(mode, &target, &current_dir, command)?,
+        Command::LsRemote(args) => server_cmds::ls_remote(mode, &target, &current_dir, args)?,
+        Command::Log { path } => server_cmds::log(mode, &target, &current_dir, &path)?,
+        Command::Activity(args) => server_cmds::activity(mode, &target, &current_dir, args)?,
+        Command::Yank {
+            target: what,
+            reason,
+        } => server_cmds::yank(mode, &target, &current_dir, &what, &reason)?,
+        Command::Unyank {
+            target: what,
+            reason,
+        } => server_cmds::unyank(mode, &target, &current_dir, &what, reason)?,
     }
     Ok(())
 }
 
 fn main() {
-    if let Err(e) = try_main() {
-        eprintln!("Error: {e:#}");
+    let cli = Cli::parse();
+    let json_errors = cli.json || cli.json_lines;
+    if let Err(e) = try_main(cli) {
+        if json_errors {
+            // The code has its own field, so the message drops its `(code)` suffix
+            let code = error_code(&e);
+            let message = format!("{e:#}");
+            let message = message
+                .strip_suffix(&format!(" ({code})"))
+                .unwrap_or(&message);
+            let error = json!({"error": {"code": code, "message": message}});
+            eprintln!("{error}");
+        } else {
+            eprintln!("Error: {e:#}");
+        }
         ::std::process::exit(exit_code(&e))
     }
 }
@@ -782,6 +1004,22 @@ mod tests {
             codes: codes.iter().map(|c| c.to_string()).collect(),
         }
         .into()
+    }
+
+    #[test]
+    fn the_command_line_is_well_formed() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn json_errors_carry_a_stable_code() {
+        assert_eq!(error_code(&files(&["hash_mismatch"])), "files_failed");
+        assert_eq!(
+            error_code(&ApiError::new(423, "project_locked", "locked").into()),
+            "project_locked"
+        );
+        assert_eq!(error_code(&anyhow!("plain")), "error");
     }
 
     #[test]

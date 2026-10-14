@@ -9,7 +9,9 @@ anyhow.workspace = true
 clap = { version = "4.5.54", features = ["derive"] }
 env_logger = "0.11.8"
 indicatif = "0.18"
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+uuid.workspace = true
 tabled = "0.22"
 walkdir.workspace = true
 url = "2.5.8"

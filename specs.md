@@ -10,7 +10,11 @@
 
 All configuration is handled in a `dvs.toml` config file.
 
-All CLI commands take a `--json` flag if you want to get JSON output.
+All CLI commands take a `--json` flag if you want to get JSON output. A list from the server comes as
+`{"items": [...], "next_cursor": ...}` (one page, sized by `--limit`); `--json-lines` prints one item a
+line instead, following every page. Sizes in JSON are bytes, times RFC 3339 and hashes in full; text output
+shows sizes in B/KiB/MiB/GiB/TiB with one decimal, times as `YYYY-MM-DD HH:MM UTC`, hashes as their first
+12 characters and commits as their first 10.
 
 The Rust library must not contain anything specific to the CLI or the R package: no `miniextendr-*` dependency, no `println!`/`eprintln!`/`dbg!`. It may depend on the `log` facade but must not pull in a `log` implementer. Logger setup belongs in `dvs-cli` and `dvs-rpkg`.
 
@@ -68,6 +72,20 @@ All input must be evaluated, and errors as well as successes must be collected a
 
 Error handling in CLI must be designed around the use case of being a part
 of pipelines, or non-interactive workflows. Returning error codes is necessary.
+
+| Exit code | Meaning |
+|-----------|---------|
+| 0 | success |
+| 1 | any other failure, such as some files failing |
+| 2 | usage error |
+| 3 | not logged in, or the token was rejected |
+| 4 | the project already exists |
+| 5 | project not found, or no access to it |
+
+When several apply (some files failed for different reasons), the first of 3, 5, 4 that applies wins.
+With `--json` (or `--json-lines`), an error is printed on stderr as
+`{"error": {"code": "...", "message": "..."}}`: the server's code (`project_locked`, `not_logged_in`, ...),
+`files_failed` when some files failed (each file's error is in the JSON on stdout), or `error`.
 
 #### R package
 
@@ -301,9 +319,13 @@ By default (no flags), `dvs status` shows all tracked files regardless of state.
 
 This will exit with `1` if one or more files could not be inspected.
 
-Each named path filters independently. A path that matches no tracked file is dropped silently rather than
-failing the command, so a partly misspelled invocation such as `dvs status good.bin bogus.bin` still exits
-`0` and shows only the paths that matched.
+Each named path filters independently. A path that matches no tracked file does not fail the command, so a
+partly misspelled invocation such as `dvs status good.bin bogus.bin` still exits `0` and shows the paths
+that matched; a note says why `bogus.bin` matched nothing (it is not tracked, or does not exist, or is a
+folder whose tracked files are in subfolders and `--recursive` was not given).
+
+`dvs status --remote` also compares each file's `.dvs` content with the server: the latest upload at its
+path, a newer upload (by whom and when), content the server does not have, and whether it is yanked.
 
 #### Rust library
 
@@ -327,6 +349,26 @@ dvs_status(
   When omitted, all three states are present in the returned data-frame, otherwise serval filtering status can be provided
 
 Returns a data frame with one row per tracked file.
+
+### Server commands
+
+These ask the dvs server of the project in `dvs.toml`; `--server URL` and `--project NAME` ask another.
+Every request is a function of the `dvs` library's `ServerBackend`, returning the API's v1 types, so the
+R package can wrap the same calls.
+
+- `dvs project ls [--role R] [--locked] [--search Q]`, `dvs project info`,
+  `dvs project lock [--reason]`, `dvs project unlock [--reason]`. Rename, delete and the commit link are
+  web-only.
+- `dvs groups [--mine] [--search Q]`: Arx groups, by the exact names `dvs access grant` takes.
+- `dvs access`, `dvs access grant GROUP ROLE`, `dvs access revoke GROUP`. A change that removes your own
+  admin role asks first on a terminal; `--yes` confirms it, and without a terminal it is refused.
+- `dvs ls-remote [PREFIX] [--glob] [--min-size] [--max-size] [--user] [--since|--from --to] [--yanked]
+  [--sort] [--limit]`: each path in its latest version, with a total.
+- `dvs log PATH`: every version uploaded at the path.
+- `dvs activity [--kind] [--user] [--since|--from --to] [--path] [--hash] [--branch] [--commit]
+  [--batch ID] [--batches] [--csv FILE]`.
+- `dvs yank TARGET --reason R` and `dvs unyank TARGET [--reason R]`: TARGET is a tracked file (the
+  version its `.dvs` file records), a path on the server, or a hash or its first 8 or more characters.
 
 ## Internals
 
