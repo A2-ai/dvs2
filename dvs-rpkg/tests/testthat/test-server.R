@@ -79,6 +79,12 @@ test_that("dvs_attach: a project created on the server, attached here", {
   expect_identical(project$name, shared$project)
   expect_true(file.exists("dvs.toml"))
   expect_true(dir.exists(".dvs"))
+
+  # Attaching again leaves the config alone
+  config <- readLines("dvs.toml")
+  e <- catch(dvs_attach(shared$project, server_url))
+  expect_s3_class(e, "dvs_error_already_initialized")
+  expect_identical(readLines("dvs.toml"), config)
 })
 
 test_that("dvs_add and dvs_status(remote = TRUE): what the server has", {

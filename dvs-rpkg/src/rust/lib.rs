@@ -28,12 +28,12 @@ use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileMetadata, FileProgress, FileStatus, Hashes, PathFilter, Status, StatusDetail,
-    add_files, get_files, get_status, set_num_threads,
+    Compression, DvsError, ErrorCode, FileMetadata, FileProgress, FileStatus, Hashes, PathFilter,
+    Status, StatusDetail, add_files, get_files, get_status, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
-use conditions::or_raise;
+use conditions::{client_error, or_raise};
 
 // region: Progress channel protocol
 
@@ -226,7 +226,7 @@ pub(crate) fn dvs_add(
             .into_iter()
             .collect();
         if all_paths.is_empty() {
-            return Err(anyhow!("No files to add"));
+            return Err(DvsError::new(ErrorCode::NothingToAdd, "No files to add").into());
         }
 
         let dry_run = dry_run.unwrap_or(false);
@@ -318,7 +318,10 @@ pub(crate) fn dvs_status(
         let dvs_paths = DvsPaths::from_cwd(&config)?;
 
         if glob.is_some() && recursive.unwrap_or(false) {
-            return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
+            return Err(client_error(
+                "invalid_argument",
+                "`glob` and `recursive` are mutually exclusive",
+            ));
         }
 
         let show_all = status.is_empty() || status.len() == StatusChoice::CHOICES.len();
@@ -509,7 +512,10 @@ pub(crate) fn dvs_get(
         let dvs_paths = DvsPaths::from_cwd(&config)?;
 
         if glob.is_some() && recursive.unwrap_or(false) {
-            return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
+            return Err(client_error(
+                "invalid_argument",
+                "`glob` and `recursive` are mutually exclusive",
+            ));
         }
 
         let all_paths: Vec<_> = resolve_paths_for_get(
@@ -521,7 +527,7 @@ pub(crate) fn dvs_get(
         .into_iter()
         .collect();
         if all_paths.is_empty() {
-            return Err(anyhow!("No files to get"));
+            return Err(DvsError::new(ErrorCode::NothingToGet, "No files to get").into());
         }
 
         let dry_run = dry_run.unwrap_or(false);

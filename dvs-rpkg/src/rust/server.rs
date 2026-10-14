@@ -23,11 +23,11 @@ use dvs::api::v1::{
     ActivityItem, FileStatus as RemoteStatus, FileView, GrantView, Page, ProjectView, StatusFile,
     StatusRelation, VersionView,
 };
-use dvs::auth::{delete_token, get_token};
+use dvs::auth::{delete_token_if, get_token, store_token};
 use dvs::backends::server::ServerBackend;
 use dvs::config::Config;
-use dvs::init::attach;
-use dvs::paths::DvsPaths;
+use dvs::init::write_attached;
+use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::queries::{ActivityQuery, FilesQuery, ProjectsQuery};
 use dvs::remote::{self, LoginPoll, PendingLogin, TOKEN_ENV, TokenSource, token_for};
 use dvs::{Backend, DvsError, ErrorCode, ProjectPath, parse_size, since};
@@ -308,10 +308,18 @@ pub(crate) fn dvs_login_poll(handle: ExternalPtr<LoginHandle>) -> AsSerialize<Lo
         .pending
         .clone();
     let base = handle.url.clone();
-    let poll = off_r_thread(move || remote::poll_login(&base, &pending));
+    // The token is stored here, after an answer R waited for: an interrupted poll that
+    // ends in an approval stores nothing
+    let poll = off_r_thread(move || remote::poll_login_unstored(&base, &pending));
     let mut wait = handle.wait.lock().unwrap_or_else(|p| p.into_inner());
     let expires_at = match poll {
-        Ok(LoginPoll::Done(token)) => Some(token.expires_at.to_string()),
+        Ok(LoginPoll::Done(token)) => {
+            if let Err(e) = store_token(&handle.url, &token.access_token) {
+                drop(wait);
+                raise(e)
+            }
+            Some(token.expires_at.to_string())
+        }
         Ok(LoginPoll::Pending) => {
             wait.unanswered = 0;
             None
@@ -394,7 +402,13 @@ pub(crate) fn dvs_logout(
                 )),
             }
         }
-        delete_token(&url)?;
+        // Only the token revoked: a login since then (an interrupted logout's request
+        // can end after one) is kept
+        if !delete_token_if(&url, &token)? {
+            notes.push(format!(
+                "A newer login to {url} was stored meanwhile; it is kept."
+            ));
+        }
         Ok(AsSerialize(LogoutResult {
             url: url.to_string(),
             logged_out: true,
@@ -546,15 +560,30 @@ pub(crate) fn dvs_attach(
     url: String,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
 ) -> AsSerialize<ProjectResult> {
-    or_raise(off_r_thread(move || {
+    or_raise((|| {
         let url = parse_url(&url)?;
         let mut config = Config::new_server(name, url.clone(), None);
         if let Some(m) = metadata_folder_name {
             config.set_metadata_folder_name(m);
         }
-        let project = attach(std::env::current_dir()?, config)?;
+        let root = std::env::current_dir()?;
+        if root.join(CONFIG_FILE_NAME).exists() {
+            return Err(DvsError::new(
+                ErrorCode::AlreadyInitialized,
+                "dvs is already initialized (dvs.toml exists)",
+            )
+            .into());
+        }
+        let Backend::Server(server) = config.backend() else {
+            unreachable!("a server config")
+        };
+        let server = server.clone();
+        // Only the lookup runs off R's thread: dvs.toml is written here, once R has
+        // the answer, so an interrupted attach writes nothing
+        let project = off_r_thread(move || server.project())?;
+        write_attached(&root, config)?;
         Ok(AsSerialize(project_result(project, &url)))
-    }))
+    })())
 }
 
 /// The project here as the server describes it to you.

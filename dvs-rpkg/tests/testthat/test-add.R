@@ -80,8 +80,15 @@ test_that("dvs_add dry_run returns a tibble but writes nothing to storage", {
 test_that("dvs_add on nonexistent path errors", {
   new_dvs_test_repo()
   expect_error(
-    dvs_add(paths = file.path(getwd(), "does-not-exist.csv"))
+    dvs_add(paths = file.path(getwd(), "does-not-exist.csv")),
+    class = "dvs_error_invalid_paths"
   )
+})
+
+test_that("dvs_add with nothing to add is nothing_to_add", {
+  new_dvs_test_repo()
+  writeLines("other", "notes.txt")
+  expect_error(dvs_add(glob = "*.csv"), class = "dvs_error_nothing_to_add")
 })
 
 test_that("dvs_add with glob picks up matching files", {

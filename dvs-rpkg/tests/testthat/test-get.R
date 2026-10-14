@@ -47,7 +47,14 @@ test_that("dvs_get when file is already present reports 'present'", {
 
 test_that("dvs_get on never-added path errors", {
   new_dvs_test_repo()
-  expect_error(dvs_get(paths = "never-added.csv"))
+  expect_error(dvs_get(paths = "never-added.csv"), class = "dvs_error_not_tracked")
+})
+
+test_that("dvs_get with nothing tracked is nothing_to_get", {
+  new_dvs_test_repo()
+  expect_error(dvs_get(), class = "dvs_error_nothing_to_get")
+  expect_error(dvs_get(recursive = TRUE), class = "dvs_error_nothing_to_get")
+  expect_error(dvs_get(glob = "*.csv", recursive = TRUE), class = "dvs_error_invalid_argument")
 })
 
 test_that("dvs_get(recursive = TRUE) with no paths restores every tracked file at every depth", {
