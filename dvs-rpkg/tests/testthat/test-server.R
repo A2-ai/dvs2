@@ -178,6 +178,14 @@ test_that("dvs_activity: every page, filters, max_rows and an empty result", {
   expect_identical(nrow(dvs_activity(user = "carol")), 0L)
   batch <- dvs_activity(batch = uploads$batch[1])
   expect_identical(batch$path, "data/a.csv")
+  both <- dvs_activity(kind = "upload", path = c("data/a.csv", "notes.txt"))
+  expect_identical(nrow(both), 3L)
+  expect_setequal(both$path, c("data/a.csv", "notes.txt"))
+  # `from` keeps fractional seconds: from the first upload on leaves out the
+  # project's creation, moments before it
+  since_first <- dvs_activity(from = min(activity$at[activity$kind == "upload"]))
+  expect_identical(sum(since_first$kind == "upload"), 4L)
+  expect_false("project_create" %in% since_first$kind)
 
   expect_warning(three <- dvs_activity(max_rows = 3), "dvs_activity\\(\\) stopped at max_rows = 3 rows")
   expect_identical(nrow(three), 3L)
@@ -305,5 +313,20 @@ test_that("dvs_login, dvs_info and dvs_logout with a stored token", {
   expect_no_match(conditionMessage(e), "dvs login", fixed = TRUE)
 
   # The rejected token was forgotten
+  expect_message(expect_false(dvs_logout(server_url)), "not logged in")
+})
+
+test_that("dvs_login: a login denied in the browser is login_denied", {
+  skip_without_server()
+  local_user(NULL)
+  local_mocked_bindings(
+    dvs_interactive = function() TRUE,
+    dvs_login_prompt = function(uri, code) {
+      system2(Sys.which("node"), c(shQuote(helper), "approve", shQuote(uri), "bob", "deny"), wait = FALSE)
+    }
+  )
+  e <- catch(dvs_login(server_url))
+  expect_s3_class(e, "dvs_error_login_denied")
+  expect_identical(deparse(e$call), "dvs_login(server_url)")
   expect_message(expect_false(dvs_logout(server_url)), "not logged in")
 })

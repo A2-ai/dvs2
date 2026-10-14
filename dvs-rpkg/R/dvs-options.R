@@ -24,10 +24,9 @@
 #' @export
 set_dvs_threads <- function(threads) {
   if (!is.null(threads)) {
-    stopifnot(
-      "'threads' must be a single positive integer" =
-        is.numeric(threads) && length(threads) == 1L && !is.na(threads) && threads > 0
-    )
+    if (!(is.numeric(threads) && length(threads) == 1L && !is.na(threads) && threads > 0)) {
+      dvs_abort("invalid_argument", "`threads` must be a single positive integer, or NULL")
+    }
     threads <- as.integer(threads)
   }
   old <- getOption("dvs.num_threads")

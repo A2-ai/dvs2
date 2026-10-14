@@ -7,8 +7,9 @@
 //! Lists come back a page at a time through a [`Pager`], so the R side can stop
 //! between pages (an interrupt, or `max_rows`).
 
-use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use miniextendr_api::externalptr::ExternalPtr;
@@ -28,10 +29,11 @@ use dvs::config::Config;
 use dvs::init::attach;
 use dvs::paths::DvsPaths;
 use dvs::queries::{ActivityQuery, FilesQuery, ProjectsQuery};
-use dvs::remote::{self, TOKEN_ENV, TokenSource, token_for};
-use dvs::{Backend, parse_size, since};
+use dvs::remote::{self, LoginPoll, PendingLogin, TOKEN_ENV, TokenSource, token_for};
+use dvs::{Backend, DvsError, ErrorCode, ProjectPath, parse_size, since};
 
 use crate::conditions::{client_error, or_raise, raise};
+use crate::interrupt::off_r_thread;
 
 /// Rows a page asks for; the server may give fewer.
 const PAGE_SIZE: usize = 1000;
@@ -47,14 +49,16 @@ fn config_here() -> Result<Option<Config>> {
 fn project_here() -> Result<ServerBackend> {
     match config_here()?.as_ref().map(Config::backend) {
         Some(Backend::Server(s)) => Ok(s.clone()),
-        Some(Backend::Local(_)) => Err(client_error(
-            "server_projects_only",
+        Some(Backend::Local(_)) => Err(DvsError::new(
+            ErrorCode::NotAServerProject,
             "This works on server projects only: this project keeps its files in local storage",
-        )),
-        None => Err(client_error(
-            "not_in_repository",
+        )
+        .into()),
+        None => Err(DvsError::new(
+            ErrorCode::NotInRepository,
             "Not in a DVS repository; use dvs_attach() to attach this folder to a server project",
-        )),
+        )
+        .into()),
     }
 }
 
@@ -70,15 +74,17 @@ fn server_url(url: Option<String>) -> Result<Url> {
     }
     match config_here()?.as_ref().map(Config::backend) {
         Some(Backend::Server(s)) => Ok(s.url.clone()),
-        Some(Backend::Local(_)) => Err(client_error(
-            "server_projects_only",
+        Some(Backend::Local(_)) => Err(DvsError::new(
+            ErrorCode::NotAServerProject,
             "This project keeps its files in local storage, not on a dvs server; give `url` \
              to ask a server",
-        )),
-        None => Err(client_error(
-            "not_in_repository",
+        )
+        .into()),
+        None => Err(DvsError::new(
+            ErrorCode::NotInRepository,
             "Not in a DVS repository; give the server's `url`",
-        )),
+        )
+        .into()),
     }
 }
 
@@ -89,14 +95,12 @@ fn project_path(path: &str) -> Result<String> {
         return Ok(path.trim_start_matches("./").to_string());
     };
     let paths = DvsPaths::from_cwd(&config)?;
-    let mut relative = paths
-        .project_relative(std::path::Path::new(path))
-        .ok_or_else(|| {
-            client_error(
-                "invalid_argument",
-                format!("{path} is outside this project"),
-            )
-        })?;
+    let mut relative = paths.project_relative(Path::new(path)).ok_or_else(|| {
+        client_error(
+            "invalid_argument",
+            format!("{path} is outside this project"),
+        )
+    })?;
     if path.ends_with('/') && !relative.is_empty() {
         relative.push('/');
     }
@@ -129,36 +133,37 @@ fn size_arg(name: &str, value: Option<String>) -> Result<Option<u64>> {
 
 // region: Pages
 
-type FetchPage = Box<dyn FnMut(Option<String>) -> Result<(DataFrame, Option<String>)> + Send>;
+/// The rows of a page, made into a data frame on R's thread.
+type Rows = Box<dyn FnOnce() -> Result<DataFrame> + Send>;
+type FetchPage = Box<dyn FnMut(Option<String>) -> Result<(Rows, Option<String>)> + Send>;
 
 struct PagerState {
-    fetch: FetchPage,
     cursor: Option<String>,
     done: bool,
 }
 
-/// A list read a page at a time.
+/// A list read a page at a time. Each page is fetched off R's thread, so waiting for
+/// it can be interrupted.
 #[derive(miniextendr_api::ExternalPtr)]
 pub struct Pager {
+    fetch: Arc<Mutex<FetchPage>>,
     state: Mutex<PagerState>,
 }
 
 impl Pager {
-    fn new<T: 'static, R: Serialize>(
+    fn new<T: 'static, R: Serialize + Send + 'static>(
         mut page: impl FnMut(Option<String>) -> Result<Page<T>> + Send + 'static,
         row: impl Fn(&T) -> R + Send + 'static,
     ) -> ExternalPtr<Pager> {
         let fetch: FetchPage = Box::new(move |cursor| {
             let page = page(cursor)?;
             let rows: Vec<R> = page.items.iter().map(&row).collect();
-            Ok((
-                miniextendr_api::serde::vec_to_dataframe(&rows)?,
-                page.next_cursor,
-            ))
+            let rows: Rows = Box::new(move || Ok(miniextendr_api::serde::vec_to_dataframe(&rows)?));
+            Ok((rows, page.next_cursor))
         });
         ExternalPtr::new(Pager {
+            fetch: Arc::new(Mutex::new(fetch)),
             state: Mutex::new(PagerState {
-                fetch,
                 cursor: None,
                 done: false,
             }),
@@ -172,12 +177,22 @@ impl Pager {
 /// @keywords internal
 #[miniextendr(r_name = "dvs_pager_next_impl")]
 pub(crate) fn dvs_pager_next(pager: ExternalPtr<Pager>) -> DataFrame {
+    let cursor = {
+        let mut state = pager.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.done {
+            return or_raise(
+                miniextendr_api::serde::vec_to_dataframe::<u8>(&[]).map_err(Into::into),
+            );
+        }
+        state.cursor.take()
+    };
+    let fetch = Arc::clone(&pager.fetch);
+    let page = off_r_thread(move || {
+        let mut fetch = fetch.lock().unwrap_or_else(|p| p.into_inner());
+        fetch(cursor)
+    });
     let mut state = pager.state.lock().unwrap_or_else(|p| p.into_inner());
-    if state.done {
-        return or_raise(miniextendr_api::serde::vec_to_dataframe::<u8>(&[]).map_err(Into::into));
-    }
-    let cursor = state.cursor.take();
-    match (state.fetch)(cursor) {
+    match page.and_then(|(rows, next)| Ok((rows()?, next))) {
         Ok((rows, next)) => {
             state.done = next.is_none();
             state.cursor = next;
@@ -204,29 +219,51 @@ pub(crate) fn dvs_pager_done(pager: ExternalPtr<Pager>) -> bool {
 
 // region: Login
 
-enum LoginEvent {
-    Code { uri: String, code: String },
-    Done(Result<String>),
+/// Polls in a row that got no answer and still count as waiting: a proxy closing an
+/// idle connection, or a moment of network trouble.
+const MAX_UNANSWERED_POLLS: u32 = 3;
+
+/// A device login waiting for approval. Each poll is one request made when R asks
+/// for it, so when R stops waiting nothing goes on polling.
+#[derive(miniextendr_api::ExternalPtr)]
+pub struct LoginHandle {
+    url: Url,
+    wait: Mutex<LoginWait>,
 }
 
-#[derive(Default, Clone, Serialize)]
+struct LoginWait {
+    pending: PendingLogin,
+    unanswered: u32,
+}
+
+#[derive(Serialize)]
 pub(crate) struct LoginState {
     url: String,
-    uri: Option<String>,
-    code: Option<String>,
+    /// Where to approve the login, and the code that page must show
+    uri: String,
+    code: String,
+    /// Seconds to wait before the next poll
+    interval: f64,
     done: bool,
+    /// When the token expires, once the login is done
     expires_at: Option<String>,
 }
 
-/// A device login running on its own thread, so R can wait for it without blocking.
-#[derive(miniextendr_api::ExternalPtr)]
-pub struct LoginHandle {
-    events: Mutex<Receiver<LoginEvent>>,
-    state: Mutex<LoginState>,
+impl LoginHandle {
+    fn state(&self, wait: &LoginWait, expires_at: Option<String>) -> LoginState {
+        let auth = &wait.pending.authorization;
+        LoginState {
+            url: self.url.to_string(),
+            uri: auth.verification_uri_complete.clone(),
+            code: auth.user_code.clone(),
+            interval: wait.pending.interval as f64,
+            done: expires_at.is_some(),
+            expires_at,
+        }
+    }
 }
 
-/// Start a device login with the server: ask for a code, then wait for its approval
-/// on a thread that stores the token once approved.
+/// Start a device login with the server: ask it for the code to approve.
 ///
 /// @param url The server's URL, or `NULL` for the server of the project here.
 /// @keywords internal
@@ -235,61 +272,65 @@ pub(crate) fn dvs_login_start(
     #[miniextendr(default = "NULL")] url: Option<String>,
 ) -> ExternalPtr<LoginHandle> {
     let url = or_raise(server_url(url));
-    let (tx, rx) = channel();
     let base = url.clone();
-    std::thread::spawn(move || {
-        let shown = tx.clone();
-        let done = remote::login(&base, move |start| {
-            let _ = shown.send(LoginEvent::Code {
-                uri: start.verification_uri_complete.clone(),
-                code: start.user_code.clone(),
-            });
-        });
-        let _ = tx.send(LoginEvent::Done(done.map(|t| t.expires_at.to_string())));
-    });
+    let pending = or_raise(off_r_thread(move || remote::start_login(&base)));
     ExternalPtr::new(LoginHandle {
-        events: Mutex::new(rx),
-        state: Mutex::new(LoginState {
-            url: url.to_string(),
-            ..Default::default()
+        url,
+        wait: Mutex::new(LoginWait {
+            pending,
+            unanswered: 0,
         }),
     })
 }
 
-/// Where a login is: its approval URL and code once the server gave them, and whether
-/// it is done. Raises the error a failed login ended with.
+/// Where a login is, without asking the server: its approval URL and code, and how
+/// long to wait before polling.
+///
+/// @param handle The handle `dvs_login_start_impl()` returned.
+/// @keywords internal
+#[miniextendr(r_name = "dvs_login_state_impl")]
+pub(crate) fn dvs_login_state(handle: ExternalPtr<LoginHandle>) -> AsSerialize<LoginState> {
+    let wait = handle.wait.lock().unwrap_or_else(|p| p.into_inner());
+    AsSerialize(handle.state(&wait, None))
+}
+
+/// Ask the server once whether the login was approved; once it was, the token is
+/// stored. Raises `login_expired` or `login_denied` when it will not be.
 ///
 /// @param handle The handle `dvs_login_start_impl()` returned.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_login_poll_impl")]
 pub(crate) fn dvs_login_poll(handle: ExternalPtr<LoginHandle>) -> AsSerialize<LoginState> {
-    let events = handle.events.lock().unwrap_or_else(|p| p.into_inner());
-    let mut state = handle.state.lock().unwrap_or_else(|p| p.into_inner());
-    loop {
-        match events.try_recv() {
-            Ok(LoginEvent::Code { uri, code }) => {
-                state.uri = Some(uri);
-                state.code = Some(code);
-            }
-            Ok(LoginEvent::Done(Ok(expires_at))) => {
-                state.done = true;
-                state.expires_at = Some(expires_at);
-            }
-            Ok(LoginEvent::Done(Err(e))) => {
-                drop((events, state));
-                raise(e)
-            }
-            Err(TryRecvError::Empty) => break,
-            Err(TryRecvError::Disconnected) => {
-                if !state.done {
-                    drop((events, state));
-                    raise(anyhow::anyhow!("the login stopped without an answer"))
-                }
-                break;
-            }
+    let pending = handle
+        .wait
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .pending
+        .clone();
+    let base = handle.url.clone();
+    let poll = off_r_thread(move || remote::poll_login(&base, &pending));
+    let mut wait = handle.wait.lock().unwrap_or_else(|p| p.into_inner());
+    let expires_at = match poll {
+        Ok(LoginPoll::Done(token)) => Some(token.expires_at.to_string()),
+        Ok(LoginPoll::Pending) => {
+            wait.unanswered = 0;
+            None
         }
-    }
-    AsSerialize(state.clone())
+        Ok(LoginPoll::SlowDown) => {
+            wait.unanswered = 0;
+            wait.pending.slow_down();
+            None
+        }
+        Err(e) if remote::is_no_response(&e) && wait.unanswered < MAX_UNANSWERED_POLLS => {
+            wait.unanswered += 1;
+            None
+        }
+        Err(e) => {
+            drop(wait);
+            raise(e)
+        }
+    };
+    AsSerialize(handle.state(&wait, expires_at))
 }
 
 /// Whether there is a token for the server: `DVS_TOKEN`, or one `dvs_login()` stored.
@@ -316,7 +357,7 @@ pub(crate) struct LogoutResult {
 pub(crate) fn dvs_logout(
     #[miniextendr(default = "NULL")] url: Option<String>,
 ) -> AsSerialize<LogoutResult> {
-    or_raise((|| {
+    or_raise(off_r_thread(move || {
         let url = server_url(url)?;
         let mut notes = Vec::new();
         let env_token = std::env::var(TOKEN_ENV)
@@ -359,7 +400,7 @@ pub(crate) fn dvs_logout(
             logged_out: true,
             notes,
         }))
-    })())
+    }))
 }
 
 // endregion
@@ -392,7 +433,7 @@ pub(crate) struct InfoResult {
 pub(crate) fn dvs_info(
     #[miniextendr(default = "NULL")] url: Option<String>,
 ) -> AsSerialize<InfoResult> {
-    or_raise((|| {
+    or_raise(off_r_thread(move || {
         let project = match &url {
             Some(_) => None,
             None => match config_here()?.as_ref().map(Config::backend) {
@@ -434,7 +475,7 @@ pub(crate) fn dvs_info(
             project_role: role.as_ref().map(|r| r.your_role.to_string()),
             project_locked: role.as_ref().map(|r| r.locked),
         }))
-    })())
+    }))
 }
 
 #[derive(Serialize)]
@@ -505,7 +546,7 @@ pub(crate) fn dvs_attach(
     url: String,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
 ) -> AsSerialize<ProjectResult> {
-    or_raise((|| {
+    or_raise(off_r_thread(move || {
         let url = parse_url(&url)?;
         let mut config = Config::new_server(name, url.clone(), None);
         if let Some(m) = metadata_folder_name {
@@ -513,7 +554,7 @@ pub(crate) fn dvs_attach(
         }
         let project = attach(std::env::current_dir()?, config)?;
         Ok(AsSerialize(project_result(project, &url)))
-    })())
+    }))
 }
 
 /// The project here as the server describes it to you.
@@ -521,10 +562,10 @@ pub(crate) fn dvs_attach(
 /// @keywords internal
 #[miniextendr(r_name = "dvs_project_info_impl")]
 pub(crate) fn dvs_project_info() -> AsSerialize<ProjectResult> {
-    or_raise((|| {
+    or_raise(off_r_thread(move || {
         let server = project_here()?;
         Ok(AsSerialize(project_result(server.project()?, &server.url)))
-    })())
+    }))
 }
 
 #[derive(Serialize)]
@@ -623,7 +664,8 @@ fn grant_row(g: &GrantView) -> GrantRow {
 #[miniextendr(r_name = "dvs_access_impl")]
 pub(crate) fn dvs_access() -> DataFrame {
     or_raise((|| {
-        let access = project_here()?.access()?;
+        let server = project_here()?;
+        let access = off_r_thread(move || server.access())?;
         let rows: Vec<GrantRow> = access.grants.iter().map(grant_row).collect();
         Ok(miniextendr_api::serde::vec_to_dataframe(&rows)?)
     })())
@@ -862,6 +904,20 @@ pub(crate) fn dvs_activity(
             limit: Some(PAGE_SIZE),
             ..Default::default()
         };
+        // The server takes any number of exact paths, or one folder or one pattern;
+        // the filters combine with AND, so a folder with anything else matches less
+        // than asked
+        let narrowing = path
+            .iter()
+            .filter(|p| p.ends_with('/') || p.contains('*'))
+            .count();
+        if narrowing > 0 && path.len() > 1 {
+            return Err(client_error(
+                "invalid_argument",
+                "path: give any number of files, or one folder (ending in `/`) or one \
+                 pattern (with `*`) alone",
+            ));
+        }
         for p in &path {
             query.set_path(&project_path(p)?);
         }
@@ -890,9 +946,10 @@ struct RemoteStatusRow {
     latest_branch: Option<String>,
 }
 
-fn remote_status_row(s: &RemoteStatus) -> RemoteStatusRow {
+/// `s` as a row for the local file at `path`, as `dvs_status()` wrote it.
+fn remote_status_row(path: &str, s: &RemoteStatus) -> RemoteStatusRow {
     RemoteStatusRow {
-        path: s.path.clone(),
+        path: path.to_string(),
         remote_status: match s.relation {
             StatusRelation::Latest => "latest",
             StatusRelation::NewerUploadExists => "newer_upload_exists",
@@ -913,22 +970,39 @@ fn remote_status_row(s: &RemoteStatus) -> RemoteStatusRow {
 /// Local files compared with the server: how each file's content relates to what
 /// was uploaded at its path.
 ///
-/// @param paths Paths from the project's top folder, as `dvs_status()` gives them.
+/// @param paths Paths from the project's top folder, as `dvs_status()` gives them
+///   (with the platform's separator).
 /// @param hashes Their content hashes.
+/// @return One row per path, its `path` as given.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_remote_status_impl")]
 pub(crate) fn dvs_remote_status(paths: Vec<String>, hashes: Vec<String>) -> DataFrame {
     or_raise((|| {
         let server = project_here()?;
-        let files: Vec<StatusFile> = paths
-            .into_iter()
-            .zip(hashes)
-            .map(|(path, hash)| StatusFile { path, hash })
-            .collect();
-        let rows: Vec<RemoteStatusRow> = server
-            .remote_status(&files)?
+        // The server names paths with `/`, whatever the platform
+        let keys = paths
             .iter()
-            .map(remote_status_row)
+            .map(|p| {
+                ProjectPath::from_path(Path::new(p))
+                    .map(|k| k.as_str().to_string())
+                    .map_err(|e| client_error("invalid_argument", format!("{p}: {e}")))
+            })
+            .collect::<Result<Vec<String>>>()?;
+        let files: Vec<StatusFile> = keys
+            .iter()
+            .zip(hashes)
+            .map(|(path, hash)| StatusFile {
+                path: path.clone(),
+                hash,
+            })
+            .collect();
+        let remote = off_r_thread(move || server.remote_status(&files))?;
+        let by_key: HashMap<&str, &RemoteStatus> =
+            remote.iter().map(|r| (r.path.as_str(), r)).collect();
+        let rows: Vec<RemoteStatusRow> = paths
+            .iter()
+            .zip(&keys)
+            .filter_map(|(path, key)| by_key.get(key.as_str()).map(|r| remote_status_row(path, r)))
             .collect();
         Ok(miniextendr_api::serde::vec_to_dataframe(&rows)?)
     })())

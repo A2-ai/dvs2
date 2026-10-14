@@ -16,10 +16,13 @@ Its fields:
 \itemize{
 \item \code{code}: stable and machine-readable; branch on this. Codes from the server
 include \code{unauthenticated}, \code{token_expired}, \code{not_logged_in},
-\code{project_not_found}, \code{insufficient_role} and \code{project_locked}. dvs gives its
-own errors the codes \code{not_in_repository}, \code{server_projects_only},
-\code{not_interactive}, \code{invalid_argument} and \code{files_failed}, and anything
-else the code \code{error}.
+\code{project_not_found}, \code{insufficient_role} and \code{project_locked}. dvs gives
+its own errors the codes \code{not_in_repository}, \code{not_a_server_project},
+\code{already_initialized}, \code{invalid_paths}, \code{not_tracked}, \code{nothing_to_add},
+\code{nothing_to_get}, \code{login_expired}, \code{login_denied}, \code{not_interactive},
+\code{invalid_argument} and \code{files_failed}, and anything else the code
+\code{error}. Interrupting (Esc, Ctrl-C) while dvs waits for
+the server is an interrupt, not an error.
 \item \code{status}: the server's HTTP status, or \code{NA} when no server answered.
 \item \code{message}: for people.
 \item \code{request_id}: finds the server's log line when reporting a problem, or

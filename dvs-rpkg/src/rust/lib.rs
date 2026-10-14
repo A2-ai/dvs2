@@ -4,6 +4,7 @@
 
 mod cli_progress;
 mod conditions;
+mod interrupt;
 mod server;
 mod test_support;
 
@@ -32,11 +33,7 @@ use dvs::{
 };
 
 use cli_progress::CliProgressBar;
-use conditions::{client_error, or_raise};
-
-fn not_in_repository() -> anyhow::Error {
-    client_error("not_in_repository", "Not in a DVS repository")
-}
+use conditions::or_raise;
 
 // region: Progress channel protocol
 
@@ -222,7 +219,7 @@ pub(crate) fn dvs_add(
 ) -> DataFrame {
     or_raise((|| -> Result<DataFrame> {
         let current_dir = std::env::current_dir()?;
-        let config = Config::find(&current_dir).ok_or_else(not_in_repository)??;
+        let config = Config::find_required(&current_dir)?;
         let dvs_paths = DvsPaths::from_cwd(&config)?;
 
         let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
@@ -317,7 +314,7 @@ pub(crate) fn dvs_status(
     or_raise((|| -> Result<DataFrame> {
         let current_dir = std::env::current_dir()?;
 
-        let config = Config::find(&current_dir).ok_or_else(not_in_repository)??;
+        let config = Config::find_required(&current_dir)?;
         let dvs_paths = DvsPaths::from_cwd(&config)?;
 
         if glob.is_some() && recursive.unwrap_or(false) {
@@ -392,7 +389,7 @@ pub(crate) fn dvs_audit_log(
 ) -> DataFrame {
     or_raise((|| -> Result<DataFrame> {
         let current_dir = std::env::current_dir()?;
-        let config = Config::find(&current_dir).ok_or_else(not_in_repository)??;
+        let config = Config::find_required(&current_dir)?;
 
         // An empty `paths` slice returns the whole audit log. A non-empty filter
         // keeps only `add` entries recording one of those repo-root-relative paths
@@ -508,7 +505,7 @@ pub(crate) fn dvs_get(
     or_raise((|| -> Result<DataFrame> {
         let current_dir = std::env::current_dir()?;
 
-        let config = Config::find(&current_dir).ok_or_else(not_in_repository)??;
+        let config = Config::find_required(&current_dir)?;
         let dvs_paths = DvsPaths::from_cwd(&config)?;
 
         if glob.is_some() && recursive.unwrap_or(false) {

@@ -111,7 +111,7 @@ dvs_time_arg <- function(x, name, call = sys.call(-1)) {
     dvs_abort("invalid_argument", sprintf("`%s` must be a single date or time", name), call = call)
   }
   if (inherits(x, "POSIXt")) {
-    return(format(as.POSIXct(x), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"))
+    return(dvs_rfc3339(x))
   }
   if (inherits(x, "Date")) {
     return(format(x, "%Y-%m-%d"))
@@ -126,6 +126,19 @@ dvs_time_arg <- function(x, name, call = sys.call(-1)) {
   )
 }
 
+# A time as RFC 3339 in UTC, to the microsecond (the server's precision).
+dvs_rfc3339 <- function(x) {
+  seconds <- as.numeric(as.POSIXct(x))
+  whole <- floor(seconds)
+  micros <- round((seconds - whole) * 1e6)
+  if (micros >= 1e6) {
+    whole <- whole + 1
+    micros <- 0
+  }
+  stamp <- format(as.POSIXct(whole, origin = "1970-01-01", tz = "UTC"), "%Y-%m-%dT%H:%M:%S", tz = "UTC")
+  if (micros > 0) sprintf("%s.%06dZ", stamp, as.integer(micros)) else paste0(stamp, "Z")
+}
+
 # A size argument: bytes, or a string such as "100MiB".
 dvs_size_arg <- function(x, name, call = sys.call(-1)) {
   force(call)
@@ -138,7 +151,10 @@ dvs_size_arg <- function(x, name, call = sys.call(-1)) {
   if (is.numeric(x)) {
     return(format(round(unclass(x)), scientific = FALSE, trim = TRUE))
   }
-  as.character(x)
+  if (!is.character(x)) {
+    dvs_abort("invalid_argument", sprintf("`%s` must be a number of bytes, or a size such as \"100MiB\"", name), call = call)
+  }
+  x
 }
 
 # A character argument of any length; NULL as character(0).

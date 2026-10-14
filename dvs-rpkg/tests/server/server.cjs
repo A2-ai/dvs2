@@ -6,7 +6,13 @@
 //       carol; tokens tok-<name>) behind a stand-in for the edge, run the command
 //       with DVS_TEST_SERVER set to the edge's URL, then stop and clean up. Exits
 //       with the command's status.
-//   node server.cjs approve <verification uri> <user>
+//   node server.cjs approve <verification uri> <user> [deny]
+//   node server.cjs interrupt <seconds> -- <command…>
+//       Run the command with the URL of a server that accepts connections and never
+//       answers as its last argument, send it SIGINT after <seconds>, and print its
+//       output and `elapsed <seconds>`. A command started here does not inherit an
+//       ignored SIGINT, as one started in the background by a shell does. Killed
+//       after 30 seconds; exits with the command's status.
 //   node server.cjs create <url> <user> <project> <admin group>
 //   node server.cjs lock <url> <user> <project> <reason>
 //   node server.cjs yank <url> <user> <project> <hash> <reason>
@@ -163,7 +169,7 @@ function api(url, user, method, route, body) {
 }
 
 // Approve a device login in the browser's place, as `user`.
-async function approve(uri, user) {
+async function approve(uri, user, decision = 'approve') {
   const who = { 'auth-username': user, 'auth-email': `${user}@example.com` };
   const page = await fetch(uri, { headers: who });
   const html = await page.text();
@@ -174,10 +180,30 @@ async function approve(uri, user) {
   const done = await fetch(new URL('/device/approve', uri), {
     method: 'POST',
     headers: { ...who, cookie, 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ csrf_token: csrf, user_code: code, decision: 'approve' }),
+    body: new URLSearchParams({ csrf_token: csrf, user_code: code, decision }),
     redirect: 'manual',
   });
   if (done.status >= 400) throw new Error(`approving: ${done.status} ${await done.text()}`);
+}
+
+async function interrupt(seconds, command) {
+  const silent = net.createServer(() => {});
+  await new Promise(resolve => silent.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${silent.address().port}/`;
+  const start = Date.now();
+  const child = spawn(command[0], [...command.slice(1), url], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = '';
+  child.stdout.on('data', d => (out += d));
+  child.stderr.on('data', d => (out += d));
+  const int = setTimeout(() => child.kill('SIGINT'), seconds * 1000);
+  const kill = setTimeout(() => child.kill('SIGKILL'), 30000);
+  const status = await new Promise(resolve => child.on('close', code => resolve(code ?? 1)));
+  clearTimeout(int);
+  clearTimeout(kill);
+  silent.close();
+  process.stdout.write(out);
+  console.log(`elapsed ${((Date.now() - start) / 1000).toFixed(1)}`);
+  return status;
 }
 
 async function main() {
@@ -188,7 +214,11 @@ async function main() {
       process.exit(await serve(dash < 0 ? args : args.slice(dash + 1)));
     }
     case 'approve':
-      return approve(args[0], args[1]);
+      return approve(args[0], args[1], args[2] === 'deny' ? 'deny' : 'approve');
+    case 'interrupt': {
+      const dash = args.indexOf('--');
+      process.exit(await interrupt(Number(args[0]), args.slice(dash + 1)));
+    }
     case 'create': {
       const [url, user, project, group] = args;
       return api(url, user, 'POST', 'api/v1/projects', { name: project, grants: [{ group, role: 'admin' }] });

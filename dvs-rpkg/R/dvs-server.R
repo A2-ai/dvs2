@@ -16,8 +16,8 @@ dvs_login_prompt <- function(uri, code) {
 #'
 #' Starts a login in the browser: prints the page where you approve it and the
 #' code that page must show, then waits for the approval and stores the token
-#' for later sessions. You can stop waiting with Esc or Ctrl-C; a code approved
-#' after that still logs you in.
+#' for later sessions. You can stop waiting with Esc or Ctrl-C, which ends
+#' the login: approving the code after that does not log you in.
 #'
 #' Logging in needs a browser, so it works only in interactive sessions. In
 #' scripts and scheduled jobs, set the `DVS_TOKEN` environment variable to a
@@ -26,6 +26,8 @@ dvs_login_prompt <- function(uri, code) {
 #' @param url The server's URL, such as `"https://dvs.example.com"`. `NULL`
 #'   (the default) uses the server of the project in the working directory.
 #' @return `TRUE`, invisibly, once the login is approved.
+#'   A code that expires first is a `dvs_error_login_expired`, and a login
+#'   denied in the browser a `dvs_error_login_denied` (see [dvs_error]).
 #' @seealso [dvs_logout()], [dvs_info()]
 #' @examples
 #' \dontrun{
@@ -33,6 +35,7 @@ dvs_login_prompt <- function(uri, code) {
 #' }
 #' @export
 dvs_login <- function(url = NULL) {
+  check_string(url, "url")
   if (!dvs_interactive()) {
     dvs_abort("not_interactive", c(
       "dvs_login() approves a login in a browser, so it needs an interactive session.",
@@ -43,17 +46,16 @@ dvs_login <- function(url = NULL) {
     cli::cli_inform(c("!" = "DVS_TOKEN is set, so dvs will keep using it instead of this login."))
   }
   handle <- dvs_call(dvs_login_start_impl(url))
-  shown <- FALSE
+  state <- dvs_call(dvs_login_state_impl(handle))
+  dvs_login_prompt(state$uri, state$code)
+  # One request per poll, at the pace the server asks for; Esc or Ctrl-C stops
+  # the wait, and with it the login
   repeat {
+    Sys.sleep(state$interval)
     state <- dvs_call(dvs_login_poll_impl(handle))
-    if (!shown && !is.null(state$uri)) {
-      dvs_login_prompt(state$uri, state$code)
-      shown <- TRUE
-    }
     if (isTRUE(state$done)) {
       break
     }
-    Sys.sleep(0.2)
   }
   until <- dvs_format_time(dvs_time(state$expires_at))
   cli::cli_inform("You are now logged in to {.url {state$url}} until {until}.")
@@ -70,6 +72,7 @@ dvs_login <- function(url = NULL) {
 #'   was none.
 #' @export
 dvs_logout <- function(url = NULL) {
+  check_string(url, "url")
   result <- dvs_call(dvs_logout_impl(url))
   for (note in unlist(result$notes)) {
     cli::cli_inform(c("!" = "{note}"))
@@ -101,6 +104,7 @@ dvs_logout <- function(url = NULL) {
 #' }
 #' @export
 dvs_info <- function(url = NULL) {
+  check_string(url, "url")
   x <- dvs_call(dvs_info_impl(url))
   structure(
     list(
@@ -209,6 +213,9 @@ new_dvs_project <- function(x) {
 #' }
 #' @export
 dvs_attach <- function(name, url, metadata_folder_name = NULL) {
+  check_string(name, "name", null_ok = FALSE)
+  check_string(url, "url", null_ok = FALSE)
+  check_string(metadata_folder_name, "metadata_folder_name")
   if (!dvs_call(dvs_has_token_impl(url)) && dvs_interactive()) {
     dvs_login(url)
   }
@@ -296,9 +303,9 @@ print.dvs_project <- function(x, ...) {
 #' }
 #' @export
 dvs_projects <- function(role = NULL, locked = NULL, url = NULL) {
-  if (!is.null(role)) {
-    role <- match.arg(role, c("read", "write", "admin"))
-  }
+  role <- check_choice(role, "role", c("read", "write", "admin"), null_ok = TRUE)
+  check_flag(locked, "locked")
+  check_string(url, "url")
   pager <- dvs_call(dvs_projects_impl(role = role, locked = locked, url = url))
   dvs_collect(pager, dvs_spec$projects)
 }
@@ -365,6 +372,15 @@ dvs_remote_files <- function(
   sort = NULL,
   max_rows = 1e5
 ) {
+  check_string(prefix, "prefix")
+  check_string(glob, "glob")
+  check_strings(user, "user")
+  check_string(since, "since")
+  check_strings(branch, "branch")
+  check_string(hash, "hash")
+  check_flag(yanked, "yanked")
+  check_string(sort, "sort")
+  check_max_rows(max_rows)
   min_size <- dvs_size_arg(min_size, "min_size")
   max_size <- dvs_size_arg(max_size, "max_size")
   from <- dvs_time_arg(from, "from")
@@ -403,6 +419,7 @@ dvs_remote_files <- function(
 #' }
 #' @export
 dvs_log <- function(path) {
+  check_string(path, "path", null_ok = FALSE)
   pager <- dvs_call(dvs_log_impl(path))
   versions <- dvs_collect(pager, dvs_spec$versions)
   versions$latest <- seq_len(nrow(versions)) == 1L
@@ -456,6 +473,15 @@ dvs_activity <- function(
   batch = NULL,
   max_rows = 1e5
 ) {
+  check_strings(kind, "kind")
+  check_strings(user, "user")
+  check_string(since, "since")
+  check_strings(path, "path")
+  check_string(hash, "hash")
+  check_strings(branch, "branch")
+  check_string(commit, "commit")
+  check_string(batch, "batch")
+  check_max_rows(max_rows)
   from <- dvs_time_arg(from, "from")
   to <- dvs_time_arg(to, "to")
   pager <- dvs_call(dvs_activity_impl(

@@ -1,15 +1,17 @@
 //! Errors as R conditions. Every error raised from Rust carries a stable `code`: the
-//! server's, one this package gives its own errors, or `error`. The R wrappers turn
+//! server's, the dvs client's, one this package gives its own errors, or `error`. The R wrappers turn
 //! it into a `dvs_error_<code>` condition (see `R/dvs-conditions.R`).
 
 use std::fmt;
 
-use dvs::remote::{ApiError, api_error};
+use dvs::remote::api_error;
+use dvs::{error_code, error_message};
 
 /// R's `NA_integer_`: the status of an error no server answered.
 const NA_INTEGER: i32 = i32::MIN;
 
-/// An error this package raises itself, with a stable code like the server's.
+/// An error only this package raises (a bad argument, an interrupt), with a stable
+/// code like the server's and the dvs client's.
 #[derive(Debug)]
 pub(crate) struct ClientError {
     pub code: &'static str,
@@ -41,21 +43,20 @@ fn for_r(message: &str) -> String {
 /// (NA when no server answered) and `request_id` (empty when there is none).
 pub(crate) fn raise(e: anyhow::Error) -> ! {
     let client = e.chain().find_map(|c| c.downcast_ref::<ClientError>());
-    let (code, status, request_id) = match (client, api_error(&e)) {
-        (Some(c), _) => (c.code.to_string(), NA_INTEGER, String::new()),
-        (None, Some(a)) => (
-            a.code.clone(),
+    let code = client
+        .map(|c| c.code)
+        .or_else(|| error_code(&e))
+        .unwrap_or("error")
+        .to_string();
+    let (status, request_id) = match api_error(&e) {
+        Some(a) => (
             i32::from(a.status),
             a.request_id.clone().unwrap_or_default(),
         ),
-        (None, None) => ("error".to_string(), NA_INTEGER, String::new()),
+        None => (NA_INTEGER, String::new()),
     };
-    // The server's own words, without the " (code)" its Display adds: the code is a
-    // field of the condition
-    let message = match e.downcast_ref::<ApiError>() {
-        Some(a) => a.message.clone(),
-        None => format!("{e:#}"),
-    };
+    // Without the " (code)" a server error's Display adds: the code is a field
+    let message = error_message(&e);
     miniextendr_api::error!(
         class = "dvs_rust_error",
         data = [

@@ -12,12 +12,14 @@ dvs_login(url = NULL)
 }
 \value{
 \code{TRUE}, invisibly, once the login is approved.
+A code that expires first is a \code{dvs_error_login_expired}, and a login
+denied in the browser a \code{dvs_error_login_denied} (see \link{dvs_error}).
 }
 \description{
 Starts a login in the browser: prints the page where you approve it and the
 code that page must show, then waits for the approval and stores the token
-for later sessions. You can stop waiting with Esc or Ctrl-C; a code approved
-after that still logs you in.
+for later sessions. You can stop waiting with Esc or Ctrl-C, which ends
+the login: approving the code after that does not log you in.
 }
 \details{
 Logging in needs a browser, so it works only in interactive sessions. In

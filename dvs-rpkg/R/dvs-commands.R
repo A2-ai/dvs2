@@ -9,7 +9,11 @@ dvs_init <- function(
   metadata_folder_name = NULL,
   compression = c("zstd", "none")
 ) {
-  compression <- match.arg(compression)
+  check_string(storage_path, "storage_path", null_ok = FALSE)
+  check_string(root_dir, "root_dir")
+  check_string(group, "group")
+  check_string(metadata_folder_name, "metadata_folder_name")
+  compression <- check_choice(compression, "compression", c("zstd", "none"))
   result <- dvs_call(dvs_init_impl(
     storage_path = storage_path,
     root_dir = root_dir,
@@ -37,7 +41,11 @@ dvs_add <- function(
   dry_run = NULL,
   on_error = c("stop", "collect")
 ) {
-  on_error <- match.arg(on_error)
+  check_strings(paths, "paths")
+  check_string(message, "message")
+  check_string(glob, "glob")
+  check_flag(dry_run, "dry_run")
+  on_error <- check_choice(on_error, "on_error", c("stop", "collect"))
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   progress_callback <- NULL
   # Only show a progress bar in interactive sessions; non-interactive callers
@@ -85,6 +93,11 @@ dvs_status <- function(
   status = c("current", "absent", "unsynced"),
   remote = FALSE
 ) {
+  check_strings(paths, "paths")
+  check_flag(recursive, "recursive")
+  check_string(glob, "glob")
+  status <- check_choices(status, "status", c("current", "absent", "unsynced"))
+  check_flag(remote, "remote", null_ok = FALSE)
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   status_data_frame <-
     dvs_call(dvs_status_impl(
@@ -133,6 +146,7 @@ dvs_with_remote_status <- function(result, call = sys.call(-1)) {
 #' @rdname dvs_audit_log
 #' @keywords internal
 dvs_audit_log <- function(paths = character(0)) {
+  check_strings(paths, "paths")
   entries <- dvs_call(dvs_audit_log_impl(paths = paths))
   tibble::as_tibble(entries)
 }
@@ -156,7 +170,11 @@ dvs_get <- function(
   dry_run = NULL,
   on_error = c("stop", "collect")
 ) {
-  on_error <- match.arg(on_error)
+  check_strings(paths, "paths")
+  check_string(glob, "glob")
+  check_flag(recursive, "recursive")
+  check_flag(dry_run, "dry_run")
+  on_error <- check_choice(on_error, "on_error", c("stop", "collect"))
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   progress_callback <- NULL
   # Only show a progress bar in interactive sessions; non-interactive callers

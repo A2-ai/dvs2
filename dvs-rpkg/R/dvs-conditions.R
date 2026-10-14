@@ -12,10 +12,13 @@
 #'
 #' * `code`: stable and machine-readable; branch on this. Codes from the server
 #'   include `unauthenticated`, `token_expired`, `not_logged_in`,
-#'   `project_not_found`, `insufficient_role` and `project_locked`. dvs gives its
-#'   own errors the codes `not_in_repository`, `server_projects_only`,
-#'   `not_interactive`, `invalid_argument` and `files_failed`, and anything
-#'   else the code `error`.
+#'   `project_not_found`, `insufficient_role` and `project_locked`. dvs gives
+#'   its own errors the codes `not_in_repository`, `not_a_server_project`,
+#'   `already_initialized`, `invalid_paths`, `not_tracked`, `nothing_to_add`,
+#'   `nothing_to_get`, `login_expired`, `login_denied`, `not_interactive`,
+#'   `invalid_argument` and `files_failed`, and anything else the code
+#'   `error`. Interrupting (Esc, Ctrl-C) while dvs waits for
+#'   the server is an interrupt, not an error.
 #' * `status`: the server's HTTP status, or `NA` when no server answered.
 #' * `message`: for people.
 #' * `request_id`: finds the server's log line when reporting a problem, or
@@ -63,6 +66,12 @@ dvs_call <- function(expr, call = sys.call(-1)) {
       e$code
     } else {
       "error"
+    }
+    if (identical(code, "interrupted")) {
+      # The user pressed Esc or Ctrl-C while dvs waited for the server: stop as
+      # an interrupt does
+      signalCondition(structure(list(message = "", call = call), class = c("interrupt", "condition")))
+      invokeRestart("abort")
     }
     status <- if (is.numeric(e$status) && length(e$status) == 1L) {
       e$status

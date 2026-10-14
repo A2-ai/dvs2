@@ -59,7 +59,7 @@ test_that("on a local project the server functions say they are for server proje
   )
   for (call in calls) {
     e <- catch(eval(call))
-    expect_s3_class(e, "dvs_error_server_projects_only")
+    expect_s3_class(e, "dvs_error_not_a_server_project")
     expect_identical(e$call, call)
   }
 })
@@ -76,6 +76,70 @@ test_that("bad arguments are invalid_argument errors", {
   expect_s3_class(catch(dvs_remote_files(from = 3)), "dvs_error_invalid_argument")
   expect_s3_class(catch(dvs_activity(from = c("2026-01-01", "2026-02-01"))), "dvs_error_invalid_argument")
   expect_s3_class(catch(dvs_info("not a url")), "dvs_error_invalid_argument")
+  # A folder or a pattern goes alone: the server would AND it with the rest
+  e <- catch(dvs_activity(path = c("raw/", "derived/")))
+  expect_s3_class(e, "dvs_error_invalid_argument")
+  expect_match(conditionMessage(e), "one folder")
+  expect_s3_class(catch(dvs_activity(path = c("raw/*.csv", "a.csv"))), "dvs_error_invalid_argument")
+})
+
+test_that("arguments are checked in R, naming the function called", {
+  new_dvs_test_repo()
+  calls <- list(
+    quote(dvs_projects(role = "owner")),
+    quote(dvs_add(paths = 1)),
+    quote(dvs_get(on_error = "x")),
+    quote(dvs_status(status = "bogus")),
+    quote(dvs_status(remote = NA)),
+    quote(dvs_activity(max_rows = 0)),
+    quote(dvs_log(NULL)),
+    quote(dvs_attach(1, "x")),
+    quote(dvs_remote_files(min_size = TRUE)),
+    quote(set_dvs_threads(-1)),
+    quote(dvs_init(tempfile(), compression = "lz4"))
+  )
+  for (call in calls) {
+    e <- catch(eval(call))
+    expect_s3_class(e, "dvs_error_invalid_argument")
+    expect_identical(e$call, call)
+  }
+})
+
+test_that("an interrupted wait for the server is an interrupt, not an error", {
+  interrupted <- function() {
+    stop(structure(
+      list(message = "Interrupted", call = NULL, code = "interrupted", status = NA_integer_, request_id = ""),
+      class = c("rust_error", "error", "condition")
+    ))
+  }
+  r <- tryCatch(dvs_call(interrupted()), interrupt = function(e) "interrupt", error = function(e) "error")
+  expect_identical(r, "interrupt")
+})
+
+test_that("Esc or Ctrl-C stops waiting for a server that does not answer", {
+  skip_on_cran()
+  skip_on_os("windows")
+  helper <- normalizePath(test_path("..", "server", "server.cjs"), mustWork = FALSE)
+  skip_if_not(file.exists(helper), "tests/server/server.cjs is missing")
+  skip_if(Sys.which("node") == "", "node is not on PATH")
+  script <- withr::local_tempfile(fileext = ".R")
+  writeLines(c(
+    "library(dvs)",
+    "Sys.setenv(DVS_TOKEN = 'tok')",
+    "r <- tryCatch(dvs_projects(url = commandArgs(TRUE)[1]), interrupt = function(e) 'interrupted')",
+    "cat(r, '\\n')"
+  ), script)
+  rscript <- file.path(R.home("bin"), "Rscript")
+  withr::local_envvar(R_LIBS = paste(.libPaths(), collapse = .Platform$path.sep))
+  out <- system2(
+    Sys.which("node"),
+    c(shQuote(helper), "interrupt", "2", "--", shQuote(rscript), shQuote(script)),
+    stdout = TRUE, stderr = TRUE
+  )
+  expect_true("interrupted " %in% out, info = paste(out, collapse = "\n"))
+  # Well within the HTTP agent's timeouts
+  elapsed <- as.numeric(sub("^elapsed ", "", grep("^elapsed ", out, value = TRUE)))
+  expect_lt(elapsed, 5)
 })
 
 test_that("a server that does not answer gives a dvs error with no status", {
@@ -153,6 +217,12 @@ test_that("date and size arguments are written as the server reads them", {
     dvs_time_arg(as.POSIXct("2026-10-01 12:00:00", tz = "America/New_York"), "from"),
     "2026-10-01T16:00:00Z"
   )
+  expect_identical(
+    dvs_time_arg(as.POSIXct("2026-10-01 12:00:00.750", tz = "UTC"), "from"),
+    "2026-10-01T12:00:00.750000Z"
+  )
+  expect_identical(dvs_rfc3339(as.POSIXct("2026-10-13T08:30:01.123456Z", format = "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC")), "2026-10-13T08:30:01.123456Z")
+  expect_s3_class(catch(dvs_size_arg(TRUE, "min_size")), "dvs_error_invalid_argument")
   expect_identical(dvs_time_arg("7d", "from"), "7d")
   expect_null(dvs_time_arg(NULL, "from"))
   expect_identical(dvs_size_arg(1048576, "min_size"), "1048576")
