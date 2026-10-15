@@ -1,7 +1,7 @@
 pub mod audit;
 pub mod auth;
 pub mod backends;
-mod cache;
+pub mod cache;
 pub mod config;
 mod files;
 pub mod git;
@@ -11,7 +11,7 @@ mod hashes;
 pub mod init;
 pub mod paths;
 pub mod progress;
-pub(crate) mod utils;
+pub mod utils;
 
 pub use backends::{Backend, RetrieveRequest, StoreRequest, StoreResult};
 pub use config::Compression;

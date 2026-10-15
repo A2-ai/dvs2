@@ -225,7 +225,7 @@ pub fn open_cache(paths: &DvsPaths) -> Result<HashCache> {
 
 /// Open a thread safe cache, ignoring errors when it encounters them since
 /// the cache is optional and shouldn't block actual operation
-pub(crate) fn try_open_cache(paths: &DvsPaths) -> Option<Mutex<HashCache>> {
+pub fn try_open_cache(paths: &DvsPaths) -> Option<Mutex<HashCache>> {
     #[cfg(feature = "cache")]
     {
         match open_cache(paths) {
