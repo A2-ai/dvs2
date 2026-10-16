@@ -11,7 +11,7 @@ use url::Url;
 
 use dvs::auth::{
     delete_token, get_client_approve_url, get_token, initiate_device_approval, poll_for_token,
-    store_token,
+    revoke_token, store_token,
 };
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
@@ -657,12 +657,17 @@ fn try_main() -> Result<()> {
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
 
             if let Some(url) = config.server_url() {
-                let removed = delete_token(url)?;
-                if removed {
-                    println!("Logged out successfully");
-                } else {
+                let Some(token) = get_token(url)? else {
                     println!("You were not logged in");
+                    return Ok(());
+                };
+                // The local copy goes regardless: the server may be unreachable, and keeping
+                // a token the user asked to drop is worse than one revoke call too few.
+                if let Err(e) = revoke_token(url, &token) {
+                    eprintln!("Warning: could not revoke the token on the server: {e}");
                 }
+                delete_token(url)?;
+                println!("Logged out successfully");
             } else {
                 bail!("This project is not using a dvs server");
             }

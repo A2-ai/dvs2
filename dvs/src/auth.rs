@@ -170,3 +170,16 @@ pub fn poll_for_token(base_url: &Url, device_code: &str) -> Result<TokenResponse
         }
     }
 }
+
+/// Ask the server to revoke `token` so it stops working everywhere, not just on this machine.
+pub fn revoke_token(base_url: &Url, token: &str) -> Result<()> {
+    let url = base_url.join("/api/oauth/token")?;
+    let resp = http_agent()
+        .delete(url.as_str())
+        .header("authorization", format!("Bearer {token}"))
+        .call()?;
+    if !resp.status().is_success() {
+        bail!("Server error: {}", resp.status());
+    }
+    Ok(())
+}
