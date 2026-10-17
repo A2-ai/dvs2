@@ -154,7 +154,7 @@ Defined in `src/rust/lib.rs` with `#[miniextendr]` unless noted:
 | `dvs_init` | Initialize a DVS repository | Single-row data frame (the resulting config) |
 | `dvs_add` | Add files to content-addressable storage | DataFrame |
 | `dvs_status` | Report sync status of managed files | DataFrame |
-| `dvs_get` | Retrieve files from storage | DataFrame |
+| `dvs_get` | Retrieve files from storage | `dvs_get_result` tibble (see `dvs_result_info()`) |
 | `dvs_version` | Crate version | String |
 | `set_dvs_threads` | Set the `dvs.num_threads` option (R side, `R/dvs-options.R`) | Previous value, invisibly |
 | `set_dvs_log_level` | Set the Rust log level | NULL |

@@ -111,49 +111,74 @@ pub fn resolve_paths_for_add(
 /// - Explicit files or directories: filtered to tracked files under them
 /// - Glob: matched relative to each path argument, or relative to cwd when no paths are given
 /// - No paths + no glob: returns all tracked files directly under cwd
+///
+/// Errors if any explicit path matches nothing. `select_paths_for_get` reports
+/// those paths instead, so they can become result rows.
 pub fn resolve_paths_for_get(
     paths: Vec<PathBuf>,
     glob_pattern: Option<&str>,
     dvs_paths: &DvsPaths,
     recursive: bool,
 ) -> Result<HashSet<PathBuf>> {
+    let selection = select_paths_for_get(paths, glob_pattern, dvs_paths, recursive)?;
+    if !selection.unmatched.is_empty() {
+        let missing = selection
+            .unmatched
+            .iter()
+            .map(|p| format!("  {}", p.display()))
+            .collect::<Vec<_>>();
+        bail!(
+            "The following paths are not tracked by DVS:\n{}",
+            missing.join("\n")
+        );
+    }
+    Ok(selection.tracked)
+}
+
+/// What a `get` request selected: repo-root-relative tracked files, plus the
+/// explicit paths (as the user wrote them) that matched no tracked file.
+#[derive(Debug, Default)]
+pub struct GetSelection {
+    pub tracked: HashSet<PathBuf>,
+    pub unmatched: Vec<PathBuf>,
+}
+
+pub fn select_paths_for_get(
+    paths: Vec<PathBuf>,
+    glob_pattern: Option<&str>,
+    dvs_paths: &DvsPaths,
+    recursive: bool,
+) -> Result<GetSelection> {
     let glob_matcher = build_glob_matcher(glob_pattern)?;
     let tracked = dvs_paths.tracked_paths();
 
     // No explicit paths: scope to cwd and return whatever matches.
     if paths.is_empty() {
         let filter = PathFilter::cwd_scoped(recursive, dvs_paths);
-        return Ok(tracked
-            .into_iter()
-            .filter(|t| filter.matches(t, glob_matcher.as_ref()))
-            .collect());
+        return Ok(GetSelection {
+            tracked: tracked
+                .into_iter()
+                .filter(|t| filter.matches(t, glob_matcher.as_ref()))
+                .collect(),
+            unmatched: Vec::new(),
+        });
     }
 
-    // Explicit paths: every one must resolve to at least one tracked file,
-    // otherwise we refuse the whole batch rather than silently skipping it.
-    let mut out = HashSet::new();
-    let mut missing = Vec::new();
+    let mut selection = GetSelection::default();
     for path in paths {
         let filter = PathFilter::from_user_paths(vec![path.clone()], recursive, dvs_paths);
         let mut matched_any = false;
         for tracked_path in &tracked {
             if filter.matches(tracked_path, glob_matcher.as_ref()) {
-                out.insert(tracked_path.clone());
+                selection.tracked.insert(tracked_path.clone());
                 matched_any = true;
             }
         }
         if !matched_any {
-            missing.push(format!("  {}", path.display()));
+            selection.unmatched.push(path);
         }
     }
-    if !missing.is_empty() {
-        bail!(
-            "The following paths are not tracked by DVS:\n{}",
-            missing.join("\n")
-        );
-    }
-
-    Ok(out)
+    Ok(selection)
 }
 
 #[cfg(test)]

@@ -4,7 +4,14 @@
 \alias{dvs_get}
 \title{Retrieve files from DVS storage into the working directory}
 \usage{
-dvs_get(paths = character(0), glob = NULL, recursive = NULL, dry_run = NULL)
+dvs_get(
+  paths = character(0),
+  glob = NULL,
+  recursive = FALSE,
+  dry_run = FALSE,
+  on_conflict = NULL,
+  on_error = getOption("dvs.on_error", "return")
+)
 }
 \arguments{
 \item{paths}{Character vector of file paths to retrieve from DVS storage.}
@@ -15,12 +22,40 @@ target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} 
 match recursively across subdirectories. Mutually exclusive with \code{recursive}.}
 
 \item{recursive}{If \code{TRUE}, directory inputs include all descendants;
-if \code{FALSE} or \code{NULL} (default), only direct children of the directory
-are returned. With no explicit \code{paths} the directory is the working
-directory. Mutually exclusive with \code{glob}.}
+otherwise only direct children of the directory. With no explicit \code{paths}
+the directory is the working directory. Mutually exclusive with \code{glob}.}
 
-\item{dry_run}{If \code{TRUE}, report what would be retrieved without writing files.}
+\item{dry_run}{If \code{TRUE}, report what would happen without writing files.}
+
+\item{on_conflict}{\code{NULL} (use \code{DVS_GET_ON_CONFLICT}, then \verb{[get] on_conflict}
+in dvs.toml, then \code{"abort"}), or one of \code{"abort"} (change no files if any
+requested file has local changes or another problem), \code{"skip"} (leave those
+files and get the rest) or \code{"overwrite"} (replace them; local changes are lost).}
+
+\item{on_error}{What to do when the request is not complete (some file is
+not at its tracked version afterwards): \code{"return"} (the default) only
+returns the result, \code{"warn"} also warns and \code{"error"} raises an error. The
+condition has class \code{dvs_get_incomplete} and carries the result as
+\code{cnd$result}. Pipelines can set \code{options(dvs.on_error = "error")}.}
+}
+\value{
+A tibble of class \code{dvs_get_result} with one row per requested file
+and always the same columns: \code{path}, \code{local_path}, \code{before} (\code{"absent"},
+\code{"current"}, \code{"clean"}, \code{"modified"}, \code{"unknown"}, \code{"not_tracked"},
+\code{"not_a_file"}, \code{"unsafe_path"}), \code{action} (\code{"restored"}, \code{"replaced"},
+\code{"unchanged"}, \code{"skipped"}, \code{"not_run"}, \code{"failed"}, \code{"would_restore"},
+\code{"would_replace"}), \code{satisfied}, \code{size}, \code{target_hash}, \code{local_hash},
+\code{stored_copy}, \code{code}, \code{message} and \code{hint}. \code{\link[=dvs_result_info]{dvs_result_info()}} returns
+the outcome and the policy that applied. Configuration errors (for example
+\code{on_conflict = "overwrite"} in dvs.toml) raise a \code{dvs_config_error}.
 }
 \description{
 Fetches the specified files from DVS storage and writes them to their original paths in the working directory. With no \code{paths} or \code{glob}, \code{dvs_get()} scopes to the working directory: it restores the files directly under it, and \code{dvs_get(recursive = TRUE)} restores every tracked file beneath it at any depth.
+}
+\examples{
+\dontrun{
+res <- dvs_get(recursive = TRUE)
+res[!res$satisfied, c("path", "code", "hint")]
+dvs_get("data/derived.csv", on_conflict = "overwrite")
+}
 }

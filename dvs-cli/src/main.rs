@@ -1,3 +1,5 @@
+mod get_cmd;
+
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -13,12 +15,12 @@ use dvs::auth::{
     delete_token, get_client_approve_url, get_token, initiate_device_approval, poll_for_token,
     revoke_token, store_token,
 };
-use dvs::config::Config;
-use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
+use dvs::config::{Config, ConfigError, OnConflict};
+use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, Backend, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter,
+    AddDetail, Backend, Compression, FileMetadata, FileProgress, GetOptions, Outcome, PathFilter,
     Status, StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
 };
 
@@ -134,6 +136,15 @@ pub enum Command {
         /// Show what would be retrieved without making any actual changes
         #[clap(long)]
         dry_run: bool,
+        /// What to do with files whose local version dvs did not put there
+        /// (local changes, or no record): abort changes nothing, skip leaves
+        /// them and gets the rest, overwrite replaces them. Defaults to
+        /// DVS_GET_ON_CONFLICT, then [get] on_conflict in dvs.toml, then abort
+        #[clap(long, value_name = "POLICY", value_parser = clap::builder::PossibleValuesParser::new(OnConflict::CHOICES))]
+        on_conflict: Option<String>,
+        /// Replace files with local changes (same as --on-conflict overwrite)
+        #[clap(long, short, conflicts_with = "on_conflict")]
+        force: bool,
     },
     /// Show the project configuration and the server info is using a dvs-server backend
     Info,
@@ -512,60 +523,47 @@ fn try_main() -> Result<()> {
             glob,
             recursive,
             dry_run,
+            on_conflict,
+            force,
         } => {
             let config =
                 Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let explicit = if force {
+                Some(OnConflict::Overwrite)
+            } else {
+                on_conflict
+                    .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
+                    .transpose()?
+            };
+            let (on_conflict, source) = config.get_on_conflict(explicit)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let all_paths: Vec<_> =
-                resolve_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?
-                    .into_iter()
-                    .collect();
-            if all_paths.is_empty() {
-                return Err(anyhow!("No files to get"));
-            }
+            let selection = select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
-
             let on_file_start = make_progress_callback(config.progress_bytes_threshold());
-            let results = get_files(
-                all_paths,
+            let report = get_files(
+                selection,
                 &dvs_paths,
                 config.backend(),
-                dry_run,
+                GetOptions {
+                    dry_run,
+                    on_conflict,
+                    source,
+                },
                 if show_progress {
                     Some(&on_file_start)
                 } else {
                     None
                 },
-            )?;
-            let has_errors = results
-                .iter()
-                .any(|r| matches!(r.detail, GetDetail::Error { .. }));
+            );
             if cli.json {
-                println!("{}", serde_json::to_string(&results)?);
+                println!("{}", get_cmd::to_json(&report));
             } else {
-                let mut total_files = 0u64;
-                let mut total_bytes = 0u64;
-                for result in &results {
-                    match &result.detail {
-                        GetDetail::Success { outcome, size } => {
-                            if *outcome == Outcome::Copied {
-                                println!("{} [{}]", result.path.display(), format_size(*size));
-                                total_files += 1;
-                                total_bytes += size;
-                            }
-                        }
-                        GetDetail::Error { error } => {
-                            eprintln!("Error: {} - {}", result.path.display(), error)
-                        }
-                    }
-                }
-                if total_files > 0 {
-                    println!("Total: {} files, {}", total_files, format_size(total_bytes));
-                }
+                get_cmd::print_human(&report);
             }
-            if has_errors {
-                return Err(anyhow!("Some files failed to get"));
+            let code = get_cmd::exit_code(&report);
+            if code != get_cmd::EXIT_OK {
+                return Err(Exit(code).into());
             }
         }
         Command::Info => {
@@ -676,9 +674,31 @@ fn try_main() -> Result<()> {
     Ok(())
 }
 
+/// A command that already reported its own result and only needs to set the
+/// exit status.
+#[derive(Debug)]
+struct Exit(i32);
+
+impl std::fmt::Display for Exit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "exit {}", self.0)
+    }
+}
+
+impl std::error::Error for Exit {}
+
 fn main() {
     if let Err(e) = try_main() {
+        if let Some(Exit(code)) = e.downcast_ref::<Exit>() {
+            ::std::process::exit(*code)
+        }
         eprintln!("Error: {e}");
-        ::std::process::exit(1)
+        // Configuration problems are usage errors, like clap's: nothing ran.
+        let code = if e.downcast_ref::<ConfigError>().is_some() {
+            2
+        } else {
+            1
+        };
+        ::std::process::exit(code)
     }
 }

@@ -16,7 +16,10 @@ pub(crate) mod utils;
 pub use backends::{Backend, RetrieveRequest, StoreRequest, StoreResult};
 pub use config::Compression;
 pub use files::add::{AddDetail, AddResult, add_files};
-pub use files::get::{GetDetail, GetResult, get_files};
+pub use files::get::{
+    Action, Before, GetCode, GetCounts, GetOptions, GetOutcome, GetReport, GetRow, StoredCopy,
+    get_files,
+};
 pub use files::metadata::FileMetadata;
 pub use files::status::{FileStatus, StatusDetail, get_status};
 pub use files::types::{Outcome, Status};

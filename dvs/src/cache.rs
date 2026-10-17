@@ -91,8 +91,45 @@ impl HashCache {
                  md5       TEXT
              );",
         )?;
+        // What dvs itself last wrote or added at each path in this clone. Unlike
+        // hash_cache (a stat -> hash memo that any hashing fills), this only
+        // records verified get installs and successful adds, so `get` can tell a
+        // file it left behind (safe to replace) from one somebody changed.
+        // Kept across hash_cache schema bumps; losing it only makes `get` more
+        // careful, never less.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS baseline (
+                 path    TEXT PRIMARY KEY,
+                 blake3  TEXT NOT NULL,
+                 size    INTEGER NOT NULL
+             );",
+        )?;
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
         Ok(Self { conn })
+    }
+
+    pub fn baseline(&self, relative_path: &str) -> Result<Option<(String, u64)>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT blake3, size FROM baseline WHERE path = ?1")?;
+        let mut rows = stmt.query(rusqlite::params![relative_path])?;
+        match rows.next()? {
+            Some(row) => {
+                let blake3: String = row.get(0)?;
+                let size: i64 = row.get(1)?;
+                Ok(Some((blake3, size as u64)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn set_baseline(&self, relative_path: &str, blake3: &str, size: u64) -> Result<()> {
+        let mut stmt = self.conn.prepare_cached(
+            "INSERT INTO baseline (path, blake3, size) VALUES (?1, ?2, ?3)
+             ON CONFLICT(path) DO UPDATE SET blake3=?2, size=?3",
+        )?;
+        stmt.execute(rusqlite::params![relative_path, blake3, size as i64])?;
+        Ok(())
     }
 
     pub fn lookup(&self, relative_path: &str, stat: &FileStat) -> Result<Option<Hashes>> {
@@ -148,6 +185,48 @@ impl HashCache {
 
     pub fn insert(&self, _relative_path: &str, _stat: &FileStat, _hashes: &Hashes) -> Result<()> {
         Ok(())
+    }
+
+    pub fn baseline(&self, _relative_path: &str) -> Result<Option<(String, u64)>> {
+        Ok(None)
+    }
+
+    pub fn set_baseline(&self, _relative_path: &str, _blake3: &str, _size: u64) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// The baseline recorded for `relative_path`, if any. Any failure reads as
+/// "no baseline", which makes `get` treat a differing file as unknown.
+pub(crate) fn baseline_for(
+    cache: Option<&Mutex<HashCache>>,
+    relative_path: &str,
+) -> Option<(String, u64)> {
+    let mtx = cache?;
+    match mtx.lock().unwrap().baseline(relative_path) {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("Baseline lookup failed for {relative_path}: {e}");
+            None
+        }
+    }
+}
+
+/// Record that dvs wrote or added exactly these bytes at `relative_path`.
+pub(crate) fn record_baseline(
+    cache: Option<&Mutex<HashCache>>,
+    relative_path: &str,
+    blake3: &str,
+    size: u64,
+) {
+    if let Some(mtx) = cache {
+        if let Err(e) = mtx
+            .lock()
+            .unwrap()
+            .set_baseline(relative_path, blake3, size)
+        {
+            log::warn!("Baseline store failed for {relative_path}: {e}");
+        }
     }
 }
 
