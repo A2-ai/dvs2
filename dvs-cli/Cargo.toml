@@ -10,8 +10,10 @@ clap = { version = "4.5.54", features = ["derive"] }
 env_logger = "0.11.8"
 indicatif = "0.18"
 serde_json.workspace = true
-tabled = "0.20"
+tabled = "0.22"
 walkdir.workspace = true
+url = "2.5.8"
+toml.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

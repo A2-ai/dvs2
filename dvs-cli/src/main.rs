@@ -1,29 +1,30 @@
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde_json::json;
 use tabled::Tabled;
 use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
+use url::Url;
 
+use dvs::auth::{
+    delete_token, get_client_approve_url, get_token, initiate_device_approval, poll_for_token,
+    revoke_token, store_token,
+};
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
 use dvs::init::init;
-use dvs::paths::DvsPaths;
+use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter, Status,
-    StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
+    AddDetail, Backend, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter,
+    Status, StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
-pub enum Command {
-    /// Starts a new dvs project.
-    /// This will create a `dvs.toml` file in the current folder of where the user is calling the CLI
-    /// from.
-    #[command(next_display_order = 100)]
-    Init {
+pub enum Init {
+    Local {
         /// Where the data will be stored
         path: PathBuf,
         /// If you want to use a root folder other than the current directory
@@ -38,6 +39,43 @@ pub enum Command {
         /// Disable compression of stored files. Compression defaults to zstd
         #[clap(long)]
         no_compression: bool,
+    },
+    Server {
+        /// The project name
+        name: String,
+        /// The URL of the dvs server
+        url: Url,
+        /// If you want to use a folder name other than `.dvs` for storing the metadata files
+        #[clap(long)]
+        metadata_folder_name: Option<String>,
+        /// Unix group to use for permissions
+        #[clap(long)]
+        group: String,
+        /// Disable compression of stored files. Compression defaults to zstd
+        #[clap(long)]
+        no_compression: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Starts a new dvs project.
+    /// This will create a `dvs.toml` file in the current folder of where the user is calling the CLI
+    /// from.
+    #[command(next_display_order = 100, subcommand)]
+    Init(Init),
+    /// Attach to a project created via the dvs server UI.
+    /// If the project is found, it will write a `dvs.toml` file based on the information from
+    /// the server
+    #[command(next_display_order = 100)]
+    Attach {
+        /// Project name: has to match the existing project on the server
+        name: String,
+        /// The URL of the dvs server
+        url: Url,
+        /// If you want to use a folder name other than `.dvs` for storing the metadata files
+        #[clap(long)]
+        metadata_folder_name: Option<String>,
     },
     /// Adds the given files to dvs. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
@@ -97,6 +135,12 @@ pub enum Command {
         #[clap(long)]
         dry_run: bool,
     },
+    /// Show the project configuration and the server info is using a dvs-server backend
+    Info,
+    /// Log in to a DVS server, the one in the config unless a URL is given
+    Login { url: Option<Url> },
+    /// Log out from a DVS server
+    Logout,
 }
 
 #[derive(Parser)]
@@ -191,6 +235,20 @@ fn make_progress_callback(threshold: u64) -> impl Fn(&std::path::Path, u64) -> F
     }
 }
 
+/// Runs the interactive device-authorization flow and stores the resulting token.
+fn run_device_login(url: &Url) -> Result<()> {
+    let device_auth = initiate_device_approval(url)?;
+    let approve_url = get_client_approve_url(url, &device_auth.user_code)?;
+    println!(
+        "Go to {approve_url} and enter the code {}",
+        device_auth.user_code
+    );
+    let polling_result = poll_for_token(url, &device_auth.device_code)?;
+    store_token(url, &polling_result.access_token)?;
+    println!("You are now logged in!");
+    Ok(())
+}
+
 fn try_main() -> Result<()> {
     env_logger::init();
 
@@ -201,31 +259,78 @@ fn try_main() -> Result<()> {
     let current_dir = std::env::current_dir()?;
 
     match cli.command {
-        Command::Init {
-            path: storage_path,
-            root_dir,
-            metadata_folder_name,
-            group,
-            no_compression,
-        } => {
-            let mut config = Config::new_local(&storage_path, group)?;
-            if no_compression {
-                config.set_compression(Compression::None);
-            }
+        Command::Init(init_cmd) => {
+            let (config, root_dir, metadata_folder_name) = match init_cmd {
+                Init::Local {
+                    path: storage_path,
+                    root_dir,
+                    metadata_folder_name,
+                    group,
+                    no_compression,
+                } => {
+                    let mut config = Config::new_local(&storage_path, group)?;
+                    if no_compression {
+                        config.set_compression(Some(Compression::None));
+                    }
+                    (config, root_dir, metadata_folder_name)
+                }
+                Init::Server {
+                    name,
+                    url,
+                    metadata_folder_name,
+                    group,
+                    no_compression,
+                } => {
+                    // Initializing on the server requires authentication, so run the
+                    // login flow first if we don't have a token for it yet.
+                    if get_token(&url)?.is_none() {
+                        run_device_login(&url)?;
+                    }
+                    let mut config = Config::new_server(name, url, Some(group));
+                    if no_compression {
+                        config.set_compression(Some(Compression::None));
+                    }
+                    (config, None, metadata_folder_name)
+                }
+            };
+
+            let mut config = config;
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
             }
-            let root = if let Some(root) = root_dir {
-                root
-            } else {
-                current_dir
-            };
+            let root = root_dir.unwrap_or(current_dir);
 
             let repo_root = init(&root, config)?;
             if cli.json {
                 println!("{}", json!({"status": "initialized"}));
             } else {
                 println!("DVS Initialized at {repo_root:?}");
+            }
+        }
+        Command::Attach {
+            name,
+            url,
+            metadata_folder_name,
+        } => {
+            let config_path = current_dir.join(CONFIG_FILE_NAME);
+            if config_path.exists() {
+                bail!("Configuration file already exists");
+            }
+
+            // Initializing on the server requires authentication, so run the
+            // login flow first if we don't have a token for it yet.
+            if get_token(&url)?.is_none() {
+                run_device_login(&url)?;
+            }
+            let mut config = Config::new_server(name, url, None);
+            config.set_compression(None);
+            if let Some(m) = metadata_folder_name {
+                config.set_metadata_folder_name(m);
+            }
+
+            if let Backend::Server(s) = config.backend() {
+                s.attach()?;
+                config.save(current_dir)?;
             }
         }
         Command::Add {
@@ -461,6 +566,110 @@ fn try_main() -> Result<()> {
             }
             if has_errors {
                 return Err(anyhow!("Some files failed to get"));
+            }
+        }
+        Command::Info => {
+            let config =
+                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let compression = config.compression().to_string();
+
+            match config.backend() {
+                Backend::Local(l) => {
+                    if cli.json {
+                        println!(
+                            "{}",
+                            json!({
+                                "version": dvs::VERSION,
+                                "backend": "local",
+                                "storage": l.path,
+                                "compression": compression,
+                            })
+                        );
+                    } else {
+                        println!("dvs {}", dvs::VERSION);
+                        println!("backend     local");
+                        println!("storage     {}", l.path.display());
+                        println!("compression {compression}");
+                    }
+                }
+                Backend::Server(s) => {
+                    // Not logged in is an answer, not an error
+                    let logged_in = get_token(&s.url)?.is_some();
+                    let access = if logged_in { s.access()? } else { None };
+                    if cli.json {
+                        println!(
+                            "{}",
+                            json!({
+                                "version": dvs::VERSION,
+                                "backend": "server",
+                                "project": s.name,
+                                "server": s.url,
+                                "compression": compression,
+                                "logged_in": logged_in,
+                                "user": access.as_ref().map(|a| &a.user),
+                                "access": access.as_ref().map_or("none", |a| a.access.as_str()),
+                                "groups": access.as_ref().map_or(&[][..], |a| &a.groups),
+                            })
+                        );
+                    } else {
+                        let project = match (&access, logged_in) {
+                            (Some(a), _) => format!("{} ({})", s.name, a.access),
+                            (None, true) => format!("{} (no access)", s.name),
+                            (None, false) => s.name.clone(),
+                        };
+                        println!("dvs {}", dvs::VERSION);
+                        println!("backend     server");
+                        println!("project     {project}");
+                        println!("server      {}", s.url);
+                        if !logged_in {
+                            println!("user        not logged in, run `dvs login`");
+                        } else if let Some(a) = &access {
+                            match &a.user.email {
+                                Some(email) => {
+                                    println!("user        {} ({email})", a.user.username)
+                                }
+                                None => println!("user        {}", a.user.username),
+                            }
+                            if !a.groups.is_empty() {
+                                println!("groups      {}", a.groups.join(", "));
+                            }
+                        }
+                        println!("compression {compression}");
+                    }
+                }
+            }
+        }
+        Command::Login { url: Some(url) } => {
+            run_device_login(&url)?;
+        }
+        Command::Login { url: None } => {
+            let config =
+                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+
+            if let Some(url) = config.server_url() {
+                run_device_login(url)?;
+            } else {
+                bail!("This project is not using a dvs server");
+            }
+        }
+        Command::Logout => {
+            let config =
+                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+
+            if let Some(url) = config.server_url() {
+                let Some(token) = get_token(url)? else {
+                    println!("You were not logged in");
+                    return Ok(());
+                };
+                // The local copy goes regardless: the server may be unreachable, and keeping
+                // a token the user asked to drop is worse than one revoke call too few.
+                if let Err(e) = revoke_token(url, &token) {
+                    eprintln!("Warning: could not revoke the token on the server: {e}");
+                }
+                delete_token(url)?;
+                println!("Logged out successfully");
+            } else {
+                bail!("This project is not using a dvs server");
             }
         }
     }
