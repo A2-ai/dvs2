@@ -168,7 +168,7 @@ pub(crate) fn dvs_init(
     };
     let mut config = Config::new_local(&storage_path, group)?;
 
-    config.set_compression(compression.into());
+    config.set_compression(Some(compression.into()));
     if let Some(m) = metadata_folder_name {
         config.set_metadata_folder_name(m);
     }
@@ -385,7 +385,7 @@ pub(crate) fn dvs_audit_log(
     // dvs crate's own serde impls and handed straight to the dataframe
     // serializer, so the structure is inherited through serde. vec_to_dataframe
     // returns an empty data frame when the filter matches nothing.
-    let entries = config.backend().read_audit_file(&paths)?;
+    let entries = config.backend().get_audit_entries(&paths)?;
     Ok(miniextendr_api::serde::vec_to_dataframe(&entries)?)
 }
 
