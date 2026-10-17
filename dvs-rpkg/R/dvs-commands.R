@@ -108,8 +108,19 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   `stored_copy`, `code`, `message` and `hint`. [dvs_result_info()] returns
 #'   the outcome and the policy that applied. Configuration errors (for example
 #'   `on_conflict = "overwrite"` in dvs.toml) raise a `dvs_config_error`.
+#'
+#'   In a dry run, `satisfied` is the prediction: `TRUE` when the file would be
+#'   at its tracked version afterwards.
+#'
+#'   In scripts and pipelines, use `on_error = "error"` (or set
+#'   `options(dvs.on_error = "error")`) so the analysis cannot continue on data
+#'   that was not updated.
 #' @examples
 #' \dontrun{
+#' # In a script: stop unless every file is at its tracked version
+#' dvs_get(recursive = TRUE, on_error = "error")
+#'
+#' # Interactively: look at what needs attention
 #' res <- dvs_get(recursive = TRUE)
 #' res[!res$satisfied, c("path", "code", "hint")]
 #' dvs_get("data/derived.csv", on_conflict = "overwrite")
@@ -183,7 +194,7 @@ dvs_get <- function(
 #'   `"partial"` or `"failed"`), `dry_run`, `on_conflict` and its `source`
 #'   (`"argument"`, `"env"`, `"config"` for dvs.toml, or `"default"`), `counts` (a named
 #'   list of row counts per action) and `problem` (an operation-level message,
-#'   or `NULL`).
+#'   or `NA` when there is none).
 #' @export
 dvs_result_info <- function(x) {
   info <- attr(x, "dvs_info", exact = TRUE)
@@ -193,7 +204,7 @@ dvs_result_info <- function(x) {
   info
 }
 
-dvs_get_summary <- function(info) {
+dvs_get_summary <- function(info, files = NULL) {
   counts <- info$counts
   phrases <- c(
     restored = "restored %d",
@@ -201,7 +212,7 @@ dvs_get_summary <- function(info) {
     would_restore = "would restore %d",
     would_replace = "would replace %d",
     unchanged = "%d already current",
-    skipped = "skipped %d with local changes",
+    skipped = "skipped %d",
     not_run = "%d held back",
     failed = "%d failed"
   )
@@ -212,13 +223,23 @@ dvs_get_summary <- function(info) {
       parts <- c(parts, sprintf(phrases[[name]], n))
     }
   }
-  what <- if (!is.null(info$problem)) {
+  what <- if (!is.na(info$problem)) {
     info$problem
   } else if (info$outcome == "aborted") {
+    reasons <- character(0)
+    if (!is.null(files)) {
+      n_conflicts <- sum(files$code %in% c("local_changes", "unknown_local"))
+      if (n_conflicts > 0) {
+        reasons <- sprintf("%d with local changes or no record", n_conflicts)
+      }
+    }
+    if (counts$failed > 0) {
+      reasons <- c(reasons, sprintf("%d cannot be retrieved", counts$failed))
+    }
     sprintf(
       "nothing %schanged (%s)",
       if (isTRUE(info$dry_run)) "would be " else "",
-      paste(parts, collapse = ", ")
+      paste(reasons, collapse = ", ")
     )
   } else if (length(parts) == 0) {
     "nothing to do"
@@ -235,10 +256,31 @@ dvs_get_summary <- function(info) {
   )
 }
 
+# Rows that need attention, as short lines for print and conditions. Files
+# merely held back by another file are summarised, not listed.
+dvs_get_attention <- function(files, max = 5L) {
+  todo <- files[!files$satisfied & !(files$code %in% "batch_aborted"), , drop = FALSE]
+  if (nrow(todo) == 0L) {
+    return(character(0))
+  }
+  shown <- utils::head(todo, max)
+  lines <- sprintf("! %s: %s", shown$local_path, shown$message)
+  hints <- ifelse(is.na(shown$hint), "", paste0("\n    ", shown$hint))
+  lines <- paste0(lines, hints)
+  if (nrow(todo) > max) {
+    lines <- c(lines, sprintf("... and %d more: res[!res$satisfied, ]", nrow(todo) - max))
+  }
+  lines
+}
+
 signal_incomplete <- function(result, on_error, call) {
-  message <- paste0(
-    dvs_get_summary(dvs_result_info(result)),
-    "\nSee the `code`, `message` and `hint` columns of the result."
+  message <- paste(
+    c(
+      dvs_get_summary(dvs_result_info(result), result),
+      dvs_get_attention(result),
+      "See the `code`, `message` and `hint` columns of `cnd$result`."
+    ),
+    collapse = "\n"
   )
   type <- if (on_error == "error") c("dvs_error", "error") else c("dvs_warning", "warning")
   cnd <- structure(
@@ -252,7 +294,21 @@ signal_incomplete <- function(result, on_error, call) {
 print.dvs_get_result <- function(x, ...) {
   info <- attr(x, "dvs_info", exact = TRUE)
   if (!is.null(info)) {
-    cat("# ", dvs_get_summary(info), "\n", sep = "")
+    n_request <- sum(unlist(info$counts))
+    if (nrow(x) == n_request) {
+      cat("# ", dvs_get_summary(info, x), "\n", sep = "")
+      attention <- dvs_get_attention(x)
+      if (length(attention) > 0) {
+        cat(paste0("# ", gsub("\n", "\n# ", attention, fixed = TRUE)), sep = "\n")
+      }
+    } else {
+      # Filtered or modified: the operation info describes the whole request.
+      cat(
+        "# ", nrow(x), " of ", n_request, " rows from: ",
+        dvs_get_summary(info), "\n",
+        sep = ""
+      )
+    }
   }
   NextMethod()
   invisible(x)

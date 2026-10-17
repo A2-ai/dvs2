@@ -14,7 +14,7 @@ A list: \code{command}, \code{outcome} (\code{"complete"}, \code{"aborted"},
 \code{"partial"} or \code{"failed"}), \code{dry_run}, \code{on_conflict} and its \code{source}
 (\code{"argument"}, \code{"env"}, \code{"config"} for dvs.toml, or \code{"default"}), \code{counts} (a named
 list of row counts per action) and \code{problem} (an operation-level message,
-or \code{NULL}).
+or \code{NA} when there is none).
 }
 \description{
 The rows of a \code{\link[=dvs_get]{dvs_get()}} result describe each file. This returns what

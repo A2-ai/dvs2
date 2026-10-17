@@ -11,6 +11,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::backends::server::Unreachable;
 use crate::cache::{FileStat, HashCache, baseline_for, record_baseline, try_open_cache};
 use crate::config::{OnConflict, SettingSource};
 use crate::files::metadata::FileMetadata;
@@ -127,6 +128,7 @@ pub enum GetCode {
     SourceMissing,
     HashMismatch,
     AccessDenied,
+    ServerUnavailable,
     DestinationChanged,
     PermissionDenied,
     FileInUse,
@@ -154,6 +156,7 @@ impl GetCode {
             GetCode::SourceMissing => "source_missing",
             GetCode::HashMismatch => "hash_mismatch",
             GetCode::AccessDenied => "access_denied",
+            GetCode::ServerUnavailable => "server_unavailable",
             GetCode::DestinationChanged => "destination_changed",
             GetCode::PermissionDenied => "permission_denied",
             GetCode::FileInUse => "file_in_use",
@@ -313,12 +316,12 @@ impl Planned {
     }
 
     /// Detected before anything is written: under abort/overwrite, any of these
-    /// holds the whole batch back.
+    /// holds the whole batch back. That includes every file the plan could not
+    /// classify (unreadable or malformed metadata, e.g. a merge conflict in a
+    /// `.dvs` file).
     fn is_known_problem(&self, on_conflict: OnConflict) -> bool {
-        matches!(
-            self.row.before,
-            Before::NotTracked | Before::NotAFile | Before::UnsafePath
-        ) || (self.is_conflict() && on_conflict != OnConflict::Overwrite)
+        self.row.action == Action::Failed
+            || (self.is_conflict() && on_conflict != OnConflict::Overwrite)
     }
 
     fn set(&mut self, action: Action, code: Option<GetCode>, message: Option<String>) {
@@ -670,12 +673,17 @@ pub fn get_files(
             metadata: None,
             stat: None,
         };
+        let is_dir = paths.file_path(&p.row.path).is_dir();
         p.row.local_path = user_path;
         p.row.before = Before::NotTracked;
         p.set(
             Action::Failed,
             Some(GetCode::NotTracked),
-            Some("not tracked by dvs".to_string()),
+            Some(if is_dir {
+                "no tracked files selected in this directory".to_string()
+            } else {
+                "not tracked by dvs".to_string()
+            }),
         );
         planned.push(p);
     }
@@ -704,7 +712,14 @@ pub fn get_files(
         .iter()
         .any(|p| p.needs_transfer(on_conflict) || p.is_conflict());
     let access = if needs_remote {
-        backend.check_access().map_err(|e| format!("{e:#}"))
+        backend.check_access().map_err(|e| {
+            let code = if e.is::<Unreachable>() {
+                GetCode::ServerUnavailable
+            } else {
+                GetCode::AccessDenied
+            };
+            (code, format!("{e:#}"))
+        })
     } else {
         Ok(())
     };
@@ -761,13 +776,9 @@ pub fn get_files(
         .filter(|(_, p)| p.needs_transfer(on_conflict))
         .map(|(i, _)| i)
         .collect();
-    if let Err(message) = &access {
+    if let Err((code, message)) = &access {
         for &i in &transfer_idx {
-            planned[i].set(
-                Action::Failed,
-                Some(GetCode::AccessDenied),
-                Some(message.clone()),
-            );
+            planned[i].set(Action::Failed, Some(*code), Some(message.clone()));
         }
         return finish(planned, dry_run, on_conflict, source, false);
     }
@@ -828,10 +839,11 @@ pub fn get_files(
                     (false, false) => Action::Replaced,
                 };
                 let message = was_conflict.then(|| {
-                    if dry_run {
-                        "local changes would be discarded"
-                    } else {
-                        "local changes were discarded"
+                    match (dry_run, p.row.before == Before::Modified) {
+                        (true, true) => "local changes would be discarded",
+                        (false, true) => "local changes were discarded",
+                        (true, false) => "the local version would be replaced",
+                        (false, false) => "the local version was replaced",
                     }
                     .to_string()
                 });
@@ -1200,6 +1212,39 @@ mod tests {
         let report = repo.get_with(&["a.csv"], &["typo.csv"], OnConflict::Skip, false);
         assert_eq!(report.outcome, GetOutcome::Partial);
         assert_eq!(row(&report, "a.csv").action, Action::Restored);
+    }
+
+    // Spec 8b: a merge conflict in a .dvs file is detected before anything is written
+    #[test]
+    fn malformed_metadata_blocks_the_batch_unless_skip() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        repo.add("b.csv", b"b");
+        fs::remove_file(repo.root.join("a.csv")).unwrap();
+        repo.set_metadata_bytes("b.csv", b"<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> other\n");
+
+        let report = repo.get(&["a.csv", "b.csv"], OnConflict::Abort);
+        assert_eq!(report.outcome, GetOutcome::Aborted);
+        assert_eq!(row(&report, "b.csv").code, Some(GetCode::BadMetadata));
+        assert_eq!(row(&report, "a.csv").code, Some(GetCode::BatchAborted));
+        assert!(!repo.root.join("a.csv").exists());
+
+        let report = repo.get(&["a.csv", "b.csv"], OnConflict::Skip);
+        assert_eq!(row(&report, "a.csv").action, Action::Restored);
+    }
+
+    #[test]
+    fn a_directory_without_selected_files_says_so() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        fs::create_dir_all(repo.root.join("empty")).unwrap();
+        let report = repo.get_with(&["a.csv"], &["empty"], OnConflict::Skip, false);
+        let r = row(&report, "empty");
+        assert_eq!(r.code, Some(GetCode::NotTracked));
+        assert_eq!(
+            r.message.as_deref(),
+            Some("no tracked files selected in this directory")
+        );
     }
 
     // Spec 9

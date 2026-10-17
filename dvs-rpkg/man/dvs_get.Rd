@@ -48,12 +48,23 @@ and always the same columns: \code{path}, \code{local_path}, \code{before} (\cod
 \code{stored_copy}, \code{code}, \code{message} and \code{hint}. \code{\link[=dvs_result_info]{dvs_result_info()}} returns
 the outcome and the policy that applied. Configuration errors (for example
 \code{on_conflict = "overwrite"} in dvs.toml) raise a \code{dvs_config_error}.
+
+In a dry run, \code{satisfied} is the prediction: \code{TRUE} when the file would be
+at its tracked version afterwards.
+
+In scripts and pipelines, use \code{on_error = "error"} (or set
+\code{options(dvs.on_error = "error")}) so the analysis cannot continue on data
+that was not updated.
 }
 \description{
 Fetches the specified files from DVS storage and writes them to their original paths in the working directory. With no \code{paths} or \code{glob}, \code{dvs_get()} scopes to the working directory: it restores the files directly under it, and \code{dvs_get(recursive = TRUE)} restores every tracked file beneath it at any depth.
 }
 \examples{
 \dontrun{
+# In a script: stop unless every file is at its tracked version
+dvs_get(recursive = TRUE, on_error = "error")
+
+# Interactively: look at what needs attention
 res <- dvs_get(recursive = TRUE)
 res[!res$satisfied, c("path", "code", "hint")]
 dvs_get("data/derived.csv", on_conflict = "overwrite")

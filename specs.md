@@ -221,13 +221,14 @@ Each requested file is classified before anything is written:
 | `clean` | differs, but is exactly what dvs last wrote or added at this path in this clone (the baseline) | replaces it, e.g. after switching git branches |
 | `modified` | differs, and differs from the baseline | conflict |
 | `unknown` | differs, and there is no baseline | conflict |
-| `not_tracked` | no metadata for the path | known problem |
+| `not_tracked` | no metadata for the path (or a directory with no selected tracked files) | known problem |
 | `not_a_file` | a directory or special file is in the way | known problem, never replaced |
 | `unsafe_path` | a parent is a symlink, or the path leaves the project | known problem, never written |
 
 Conflicts follow `on_conflict`:
 
-- `abort` (default): if any conflict or other known problem exists, nothing is written. Every row is returned,
+- `abort` (default): if any conflict or other known problem exists (including a `.dvs` file that cannot be read,
+  e.g. after a git merge conflict: `bad_metadata`), nothing is written. Every row is returned,
   with the rest held back as `batch_aborted`.
 - `skip`: conflicts and known problems are left as they are; everything else is retrieved.
 - `overwrite`: conflicts are replaced. Other known problems still abort.
@@ -259,7 +260,7 @@ be able to discard someone's local changes. Use the flag or the environment vari
 
 ```shell
 ❯ dvs get --help
-Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided; to restore every tracked file, pass `--glob '**/*'`
+Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. With no paths, gets the tracked files directly in the current directory; add -r for everything beneath it
 
 Usage: dvs get [OPTIONS] [PATHS]...
 
@@ -285,7 +286,9 @@ restores every tracked file in the project.)
 Human output lists each file that changed or needs attention, then a summary naming the policy and where it came
 from, then the commands to keep or discard local changes.
 
-`--json` prints one envelope (this replaced the earlier bare array):
+`--json` prints one envelope (this replaced the earlier bare array), also when `get` cannot start (not in a project,
+invalid configuration): then `files` is empty, `outcome` is `failed`, `problem` says why, and `on_conflict`/`source`
+are null.
 
 ```json
 {"v": 1, "command": "get", "outcome": "aborted", "dry_run": false,
@@ -298,9 +301,11 @@ from, then the commands to keep or discard local changes.
 ```
 
 - `outcome`: `complete`, `aborted` (nothing written), `partial` or `failed`.
+- `satisfied`: the file is at its tracked version afterwards; in a dry run, that it would be.
+- A shared cause (`access_denied`, `server_unavailable`) is printed once in human output, not per file.
 - `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run`, `failed`, `would_restore`, `would_replace`.
 - `code`: `local_changes`, `unknown_local`, `batch_aborted`, `not_tracked`, `not_a_file`, `unsafe_path`,
-  `source_missing`, `hash_mismatch`, `access_denied`, `destination_changed`, `permission_denied`, `file_in_use`,
+  `source_missing`, `hash_mismatch`, `access_denied`, `server_unavailable`, `destination_changed`, `permission_denied`, `file_in_use`,
   `io_error`, `bad_metadata`.
 
 Exit codes: `0` complete; `1` any failure or operation problem (takes priority); `3` only conflicts held files

@@ -28,7 +28,7 @@ use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
     Compression, FileMetadata, FileProgress, FileStatus, GetCode, GetOptions, GetReport, GetRow,
-    Hashes, PathFilter, Status, StatusDetail, StoredCopy, add_files, get_files, get_status,
+    Hashes, PathFilter, Status, StatusDetail, add_files, get_files, get_status,
     set_num_threads,
 };
 
@@ -558,25 +558,33 @@ fn config_error_list(message: &str, dry_run: bool, (policy, source): (OnConflict
 /// The next step for a row, in R syntax.
 fn r_hint(row: &GetRow) -> Option<String> {
     let p = row.local_path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+    let choices = format!(
+        "keep your version: dvs_add(\"{p}\") (makes it the tracked version); take the tracked version: dvs_get(\"{p}\", on_conflict = \"overwrite\") (replaces yours)"
+    );
     match row.code? {
-        GetCode::LocalChanges | GetCode::UnknownLocal => Some(match row.stored_copy {
-            Some(StoredCopy::Present) => format!(
-                "a copy of your version appears to be stored; to replace it: dvs_get(\"{p}\", on_conflict = \"overwrite\")"
-            ),
-            _ => format!(
-                "keep your version: dvs_add(\"{p}\"); discard it: dvs_get(\"{p}\", on_conflict = \"overwrite\")"
-            ),
-        }),
+        GetCode::LocalChanges => Some(choices),
+        GetCode::UnknownLocal => Some(format!(
+            "dvs has no record of writing this file (a clone from before dvs recorded this, or a cleared cache); {choices}"
+        )),
         GetCode::BatchAborted => {
-            Some("another requested file has a problem; to get the rest: on_conflict = \"skip\"".into())
+            Some("held back by another file; to get the rest: on_conflict = \"skip\"".into())
         }
+        GetCode::NotTracked if row.local_path.is_dir() => Some(
+            "nothing tracked is selected here; use recursive = TRUE to include subdirectories, or check the path".into(),
+        ),
         GetCode::NotTracked => Some("check the path; see tracked files with dvs_status()".into()),
         GetCode::SourceMissing => Some(
-            "the upload of this version may have been interrupted; ask whoever added it to dvs_add() it again"
-                .into(),
+            "the stored content of this version is missing (probably an interrupted upload); tell whoever added it".into(),
         ),
+        GetCode::AccessDenied => Some("check you are logged in with access to this project".into()),
+        GetCode::ServerUnavailable => {
+            Some("check your network or VPN and the server, then run dvs_get() again".into())
+        }
         GetCode::DestinationChanged => Some("run again once nothing is writing the file".into()),
         GetCode::FileInUse => Some("close the program using the file, then run dvs_get() again".into()),
+        GetCode::BadMetadata => Some(
+            "fix the .dvs file (for example a git merge conflict), then run dvs_get() again".into(),
+        ),
         _ => None,
     }
 }

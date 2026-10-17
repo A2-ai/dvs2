@@ -121,11 +121,10 @@ pub enum Command {
     },
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
-    /// At least one path or --glob must be provided; to restore every tracked file,
-    /// pass `--glob '**/*'`.
+    /// With no paths, gets the tracked files directly in the current directory;
+    /// add -r for everything beneath it.
     #[command(next_display_order = 100)]
     Get {
-        #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
         #[clap(long, short, conflicts_with = "recursive")]
         glob: Option<String>,
@@ -526,18 +525,36 @@ fn try_main() -> Result<()> {
             on_conflict,
             force,
         } => {
-            let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
-            let explicit = if force {
-                Some(OnConflict::Overwrite)
-            } else {
-                on_conflict
-                    .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
-                    .transpose()?
+            let setup = || -> Result<_> {
+                let config = Config::find(&current_dir)
+                    .ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+                let explicit = if force {
+                    Some(OnConflict::Overwrite)
+                } else {
+                    on_conflict
+                        .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
+                        .transpose()?
+                };
+                let (on_conflict, source) = config.get_on_conflict(explicit)?;
+                let dvs_paths = DvsPaths::from_cwd(&config)?;
+                let selection =
+                    select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
+                Ok((config, on_conflict, source, dvs_paths, selection))
             };
-            let (on_conflict, source) = config.get_on_conflict(explicit)?;
-            let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let selection = select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
+            // Scripts get the same envelope when get cannot start at all.
+            let (config, on_conflict, source, dvs_paths, selection) = match setup() {
+                Ok(v) => v,
+                Err(e) if cli.json => {
+                    println!("{}", get_cmd::problem_json(&format!("{e:#}"), dry_run));
+                    let code = if e.downcast_ref::<ConfigError>().is_some() {
+                        get_cmd::EXIT_USAGE
+                    } else {
+                        get_cmd::EXIT_FAILED
+                    };
+                    return Err(Exit(code).into());
+                }
+                Err(e) => return Err(e),
+            };
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let on_file_start = make_progress_callback(config.progress_bytes_threshold());

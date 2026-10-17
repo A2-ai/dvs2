@@ -2,13 +2,15 @@
 
 use std::path::Path;
 
-use dvs::{Action, GetCode, GetOutcome, GetReport, GetRow, StoredCopy, format_size};
+use dvs::config::{OnConflict, SettingSource};
+use dvs::{Action, Before, GetCode, GetOutcome, GetReport, GetRow, StoredCopy, format_size};
 use serde_json::json;
 
 /// Exit codes for `get`. Usage and configuration errors exit 2 (clap and
-/// `main`), before any of this runs.
+/// `main`).
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAILED: i32 = 1;
+pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_CONFLICTS: i32 = 3;
 
 pub fn exit_code(report: &GetReport) -> i32 {
@@ -33,24 +35,61 @@ fn shell_path(path: &Path) -> String {
     }
 }
 
+/// Failures with one cause shared by every affected file (no access, server
+/// down): their message and hint are printed once, not per file.
+fn is_shared(code: Option<GetCode>) -> bool {
+    matches!(
+        code,
+        Some(GetCode::AccessDenied | GetCode::ServerUnavailable)
+    )
+}
+
+fn is_conflict_row(row: &GetRow) -> bool {
+    matches!(
+        row.code,
+        Some(GetCode::LocalChanges | GetCode::UnknownLocal)
+    )
+}
+
 /// The next command to run for a row, in CLI syntax.
 pub fn hint(row: &GetRow) -> Option<String> {
     let p = shell_path(&row.local_path);
+    let choices = format!(
+        "keep your version: dvs add {p} (makes it the tracked version); \
+         take the tracked version: dvs get --force {p} (replaces yours)"
+    );
     match row.code? {
-        GetCode::LocalChanges | GetCode::UnknownLocal => Some(match row.stored_copy {
-            Some(StoredCopy::Present) => format!(
-                "a copy of your version appears to be stored; to replace it: dvs get --force {p}"
-            ),
-            _ => format!("keep your version: dvs add {p}; discard it: dvs get --force {p}"),
-        }),
-        GetCode::NotTracked => Some("check the path; list tracked files with: dvs status".into()),
-        GetCode::SourceMissing => Some(
-            "the upload of this version may have been interrupted; ask whoever added it to run dvs add again"
+        GetCode::LocalChanges => Some(choices),
+        GetCode::UnknownLocal => Some(format!(
+            "dvs has no record of writing this file (a clone from before dvs recorded this, \
+             or a cleared cache); {choices}"
+        )),
+        GetCode::BatchAborted => {
+            Some("held back by another file; to get the rest: --on-conflict skip".into())
+        }
+        GetCode::NotTracked if row.local_path.is_dir() => Some(
+            "nothing tracked is selected here; add -r to include subdirectories, or check the path"
                 .into(),
         ),
-        GetCode::AccessDenied => Some("check you are logged in with access: dvs info, dvs login".into()),
+        GetCode::NotTracked => Some("check the path; list tracked files with: dvs status".into()),
+        GetCode::SourceMissing => Some(
+            "the stored content of this version is missing (probably an interrupted upload); \
+             tell whoever added it"
+                .into(),
+        ),
+        GetCode::AccessDenied => {
+            Some("check you are logged in with access: dvs info, dvs login".into())
+        }
+        GetCode::ServerUnavailable => {
+            Some("check your network or VPN and the server, then run dvs get again".into())
+        }
         GetCode::DestinationChanged => Some(format!("run again once nothing is writing {p}")),
-        GetCode::FileInUse => Some("close the program using the file, then run dvs get again".into()),
+        GetCode::FileInUse => {
+            Some("close the program using the file, then run dvs get again".into())
+        }
+        GetCode::BadMetadata => Some(format!(
+            "fix the .dvs file for {p} (for example a git merge conflict), then run dvs get again"
+        )),
         _ => None,
     }
 }
@@ -68,6 +107,10 @@ fn label(action: Action) -> &'static str {
     }
 }
 
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 /// The non-zero counts, in a fixed order: "restored 2, 3 already current".
 fn counts_phrase(report: &GetReport) -> String {
     let c = &report.counts;
@@ -77,7 +120,7 @@ fn counts_phrase(report: &GetReport) -> String {
         (c.would_restore, "would restore {}"),
         (c.would_replace, "would replace {}"),
         (c.unchanged, "{} already current"),
-        (c.skipped, "skipped {} with local changes"),
+        (c.skipped, "skipped {}"),
         (c.not_run, "{} held back"),
         (c.failed, "{} failed"),
     ];
@@ -93,45 +136,59 @@ fn counts_phrase(report: &GetReport) -> String {
     }
 }
 
+/// Why conflicts stopped things, separating edits from files with no record.
+fn conflict_reasons(report: &GetReport) -> Vec<String> {
+    let count = |b: Before| {
+        report
+            .files
+            .iter()
+            .filter(|r| is_conflict_row(r) && r.before == b)
+            .count()
+    };
+    let (modified, unknown) = (count(Before::Modified), count(Before::Unknown));
+    let mut reasons = Vec::new();
+    if modified > 0 {
+        reasons.push(format!(
+            "{} local changes",
+            plural(modified, "file has", "files have")
+        ));
+    }
+    if unknown > 0 {
+        reasons.push(format!(
+            "{} from the tracked version and dvs has no record of writing {}",
+            plural(unknown, "file differs", "files differ"),
+            if unknown == 1 { "it" } else { "them" }
+        ));
+    }
+    reasons
+}
+
 fn summary(report: &GetReport) -> String {
-    let conflicts = report
-        .files
-        .iter()
-        .filter(|r| matches!(r.code, Some(GetCode::LocalChanges | GetCode::UnknownLocal)))
-        .count();
+    let c = &report.counts;
     let what = match report.outcome {
         GetOutcome::Complete
-            if report.counts.restored
-                + report.counts.replaced
-                + report.counts.would_restore
-                + report.counts.would_replace
-                == 0 =>
+            if c.restored + c.replaced + c.would_restore + c.would_replace == 0 =>
         {
-            format!("nothing to do, {} already current", report.counts.unchanged)
+            format!("nothing to do, {} already current", c.unchanged)
         }
         GetOutcome::Complete => counts_phrase(report),
         GetOutcome::Aborted => {
-            let mut reasons = Vec::new();
-            if conflicts > 0 {
-                reasons.push(format!(
-                    "{conflicts} file{} {} local changes",
-                    if conflicts == 1 { "" } else { "s" },
-                    if conflicts == 1 { "has" } else { "have" }
-                ));
-            }
-            if report.counts.failed > 0 {
-                reasons.push(format!("{} cannot be retrieved", report.counts.failed));
+            let mut reasons = conflict_reasons(report);
+            if c.failed > 0 {
+                reasons.push(format!("{} cannot be retrieved", c.failed));
             }
             let dry = if report.dry_run { "would be " } else { "" };
-            format!("aborted, nothing {dry}changed: {}", reasons.join(", "))
+            format!("aborted, nothing {dry}changed: {}", reasons.join("; "))
         }
         GetOutcome::Partial | GetOutcome::Failed => {
             format!("{}: {}", report.outcome.as_str(), counts_phrase(report))
         }
     };
     format!(
-        "dvs get: {what} (on_conflict = {}, {})",
-        report.on_conflict, report.source
+        "dvs get{}: {what} (on_conflict = {}, {})",
+        if report.dry_run { " (dry run)" } else { "" },
+        report.on_conflict,
+        report.source
     )
 }
 
@@ -155,14 +212,13 @@ pub fn print_human(report: &GetReport) {
         .filter(|r| r.action != Action::Unchanged)
     {
         let detail = match (r.satisfied, &r.message) {
+            _ if is_shared(r.code) => String::new(),
             (true, None) => r.size.map(format_size).unwrap_or_default(),
             (_, Some(m)) => m.clone(),
             (false, None) => String::new(),
         };
-        let extra = match (r.code, r.stored_copy) {
-            (Some(GetCode::LocalChanges | GetCode::UnknownLocal), Some(StoredCopy::Present)) => {
-                " (a copy appears to be stored)"
-            }
+        let extra = match (is_conflict_row(r), r.stored_copy) {
+            (true, Some(StoredCopy::Present)) => " (a copy of your version appears to be stored)",
             _ => "",
         };
         let line = format!(
@@ -183,32 +239,50 @@ pub fn print_human(report: &GetReport) {
         eprintln!("{summary}");
     }
 
+    let mut shown: Vec<GetCode> = Vec::new();
+    for r in report.files.iter().filter(|r| is_shared(r.code)) {
+        let code = r.code.expect("shared rows have a code");
+        if shown.contains(&code) {
+            continue;
+        }
+        shown.push(code);
+        if let Some(m) = &r.message {
+            eprintln!("  {m}");
+        }
+        if let Some(h) = hint(r) {
+            eprintln!("  {h}");
+        }
+    }
+
     // Next steps for conflicts, in one place rather than per row.
-    let conflicts: Vec<&GetRow> = report
-        .files
-        .iter()
-        .filter(|r| matches!(r.code, Some(GetCode::LocalChanges | GetCode::UnknownLocal)))
-        .collect();
+    let conflicts: Vec<&GetRow> = report.files.iter().filter(|r| is_conflict_row(r)).collect();
     if !conflicts.is_empty() {
         let paths = conflicts
             .iter()
             .map(|r| shell_path(&r.local_path))
             .collect::<Vec<_>>()
             .join(" ");
-        eprintln!("  keep your changes:     dvs add {paths}");
+        if conflicts.iter().any(|r| r.before == Before::Unknown) {
+            eprintln!(
+                "  no record usually means a clone from before dvs recorded what it writes, or a cleared cache"
+            );
+        }
+        eprintln!("  keep your version:         dvs add {paths}   (makes it the tracked version)");
         let held_back = report
             .files
             .iter()
             .any(|r| r.code == Some(GetCode::BatchAborted));
         if held_back && report.counts.failed == 0 {
-            eprintln!("  get the other files:   rerun with --on-conflict skip");
+            eprintln!("  get the other files:       rerun with --on-conflict skip");
         }
-        eprintln!("  discard your changes:  dvs get --force {paths}");
+        eprintln!(
+            "  take the tracked version:  dvs get --force {paths}   (replaces yours; copy it first to keep both)"
+        );
     }
     for r in report
         .files
         .iter()
-        .filter(|r| !r.satisfied && !r.code.is_some_and(GetCode::is_conflict))
+        .filter(|r| !r.satisfied && !r.code.is_some_and(GetCode::is_conflict) && !is_shared(r.code))
     {
         if let Some(h) = hint(r) {
             eprintln!("  {}: {h}", r.local_path.display());
@@ -237,4 +311,14 @@ pub fn to_json(report: &GetReport) -> serde_json::Value {
         "problem": report.problem,
         "files": files,
     })
+}
+
+/// The envelope for a get that could not start (not in a project, invalid
+/// configuration): zero rows, the reason in `problem`, and no policy.
+pub fn problem_json(problem: &str, dry_run: bool) -> serde_json::Value {
+    let report = GetReport::problem(problem, dry_run, OnConflict::Abort, SettingSource::Default);
+    let mut v = to_json(&report);
+    v["on_conflict"] = serde_json::Value::Null;
+    v["source"] = serde_json::Value::Null;
+    v
 }

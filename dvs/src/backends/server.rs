@@ -8,6 +8,18 @@ use tempfile::NamedTempFile;
 use url::Url;
 
 use crate::audit::AuditEntry;
+
+/// The server could not be reached or is failing, as opposed to refusing access.
+#[derive(Debug)]
+pub struct Unreachable(pub String);
+
+impl std::fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unreachable {}
 use crate::auth::{delete_token, get_token};
 use crate::utils::http_agent;
 use crate::{Compression, Hashes, ProjectPath, RetrieveRequest, StoreRequest, StoreResult};
@@ -231,13 +243,21 @@ impl ServerBackend {
         let mut resp = http_agent()
             .get(self.access_url().as_str())
             .header("authorization", self.bearer()?)
-            .call()?;
+            .call()
+            .map_err(|e| {
+                Unreachable(format!("cannot reach the dvs server at {}: {e}", self.url))
+            })?;
 
         match resp.status().as_u16() {
             200 => Ok(Some(resp.body_mut().read_json()?)),
             401 => Err(self.login_expired()),
             403 => Ok(None),
             404 => bail!("The project {} does not exist on the server", self.name),
+            code @ 500.. => Err(Unreachable(format!(
+                "the dvs server at {} is not working ({code})",
+                self.url
+            ))
+            .into()),
             code => bail!(
                 "access check failed ({code}): {}",
                 resp.body_mut().read_to_string().unwrap_or_default()
