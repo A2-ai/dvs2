@@ -11,7 +11,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::backends::server::Unreachable;
+use crate::backends::server::{Denied, Unreachable};
 use crate::cache::{FileStat, HashCache, baseline_for, record_baseline, try_open_cache};
 use crate::config::{OnConflict, SettingSource};
 use crate::files::metadata::FileMetadata;
@@ -355,6 +355,19 @@ impl Planned {
     }
 }
 
+/// An absolute path as a path from the project root, if it is inside it
+/// (also when one side has symlinks resolved, e.g. macOS /var -> /private/var).
+fn project_relative(root: &Path, absolute: &Path) -> Option<PathBuf> {
+    let absolute = normalize(absolute);
+    if let Ok(rel) = absolute.strip_prefix(root) {
+        return Some(rel.to_path_buf());
+    }
+    let root = root.canonicalize().ok()?;
+    let parent = absolute.parent()?.canonicalize().ok()?;
+    let rel = parent.join(absolute.file_name()?);
+    rel.strip_prefix(&root).ok().map(Path::to_path_buf)
+}
+
 /// `target` lexically relative to `base`; both absolute.
 fn relative_to(base: &Path, target: &Path) -> PathBuf {
     let base: Vec<_> = base.components().collect();
@@ -549,7 +562,14 @@ fn io_code(e: &io::Error) -> GetCode {
     }
 }
 
+/// The code for a failure: server unreachable or refusing, else by I/O kind.
 fn code_for(e: &anyhow::Error) -> GetCode {
+    if e.is::<Unreachable>() {
+        return GetCode::ServerUnavailable;
+    }
+    if e.is::<Denied>() {
+        return GetCode::AccessDenied;
+    }
     e.chain()
         .find_map(|cause| cause.downcast_ref::<io::Error>())
         .map(io_code)
@@ -668,13 +688,22 @@ pub fn get_files(
         .map(Path::to_path_buf)
         .unwrap_or_default();
     for user_path in selection.unmatched {
+        // Report it like a tracked file: `path` from the project root, and
+        // `local_path` from the cwd, however the user wrote it.
+        let inside = if user_path.is_absolute() {
+            project_relative(paths.repo_root(), &user_path)
+        } else {
+            Some(normalize(&cwd_rel.join(&user_path)))
+        };
         let mut p = Planned {
-            row: blank_row(paths, &normalize(&cwd_rel.join(&user_path))),
+            row: blank_row(paths, inside.as_deref().unwrap_or(&user_path)),
             metadata: None,
             stat: None,
         };
         let is_dir = paths.file_path(&p.row.path).is_dir();
-        p.row.local_path = user_path;
+        if inside.is_none() {
+            p.row.local_path = user_path;
+        }
         p.row.before = Before::NotTracked;
         p.set(
             Action::Failed,
@@ -713,10 +742,11 @@ pub fn get_files(
         .any(|p| p.needs_transfer(on_conflict) || p.is_conflict());
     let access = if needs_remote {
         backend.check_access().map_err(|e| {
-            let code = if e.is::<Unreachable>() {
-                GetCode::ServerUnavailable
-            } else {
-                GetCode::AccessDenied
+            // Short of an unreachable server (no token, expired login, no
+            // access), the user cannot get files: access_denied.
+            let code = match code_for(&e) {
+                GetCode::ServerUnavailable => GetCode::ServerUnavailable,
+                _ => GetCode::AccessDenied,
             };
             (code, format!("{e:#}"))
         })
@@ -803,7 +833,7 @@ pub fn get_files(
                                 GetCode::SourceMissing,
                                 "this version is not in storage".to_string(),
                             )),
-                            Err(e) => Err((GetCode::IoError, format!("{e:#}"))),
+                            Err(e) => Err((code_for(&e), format!("{e:#}"))),
                         },
                     );
                 }
@@ -1037,7 +1067,8 @@ mod tests {
             #[allow(clippy::permissions_set_readonly_false)]
             perms.set_readonly(false);
             fs::set_permissions(&blob, perms).unwrap();
-            fs::write(&blob, b"CORRUPTED BLOB BYTES").unwrap();
+            // Valid zstd of other bytes: decompression works, the hash check must catch it.
+            fs::write(&blob, zstd::encode_all(&b"other bytes"[..], 0).unwrap()).unwrap();
         }
     }
 
@@ -1131,22 +1162,6 @@ mod tests {
         assert_eq!(repo.read("a.csv"), b"a2", "nothing may change on abort");
         assert_eq!(repo.read("b.csv"), b"my edits");
         assert!(report.has_conflicts() && !report.has_failures());
-    }
-
-    // Spec 4s
-    #[test]
-    fn skip_keeps_local_changes_and_gets_the_rest() {
-        let repo = TestRepo::new();
-        repo.switched_branch("a.csv", b"a1", b"a2");
-        repo.switched_branch("b.csv", b"b1", b"b2");
-        fs::write(repo.root.join("b.csv"), b"my edits").unwrap();
-
-        let report = repo.get(&["a.csv", "b.csv"], OnConflict::Skip);
-        assert_eq!(report.outcome, GetOutcome::Partial);
-        assert_eq!(row(&report, "a.csv").action, Action::Replaced);
-        assert_eq!(row(&report, "b.csv").action, Action::Skipped);
-        assert_eq!(repo.read("a.csv"), b"a1");
-        assert_eq!(repo.read("b.csv"), b"my edits");
     }
 
     // Spec 4o
@@ -1286,7 +1301,11 @@ mod tests {
         // switched_branch's first add stored "original content": corrupt that one.
         repo.corrupt_blob("a.csv");
         let report = repo.get(&["a.csv"], OnConflict::Abort);
-        assert_eq!(row(&report, "a.csv").action, Action::Failed);
+        let r = row(&report, "a.csv");
+        assert_eq!(
+            (r.action, r.code),
+            (Action::Failed, Some(GetCode::HashMismatch))
+        );
         assert_eq!(repo.read("a.csv"), b"newer content");
         let tmp_left = fs::read_dir(&repo.root)
             .unwrap()
@@ -1355,7 +1374,6 @@ mod tests {
         let path = create_file(&repo.root, "a.csv", b"before");
         let stat = Some(FileStat::from_path(&path).unwrap());
         assert!(destination_unchanged(&path, &stat));
-        std::thread::sleep(std::time::Duration::from_millis(5));
         fs::write(&path, b"edited meanwhile").unwrap();
         assert!(!destination_unchanged(&path, &stat));
         let absent = repo.root.join("new.csv");
@@ -1380,37 +1398,120 @@ mod tests {
         assert!(!repo.root.join("b.csv").exists());
     }
 
-    // Spec 21
+    // Spec 4s and 21
     #[test]
-    fn a_mixed_batch_under_skip() {
+    fn skip_keeps_local_changes_and_gets_the_rest() {
         let repo = TestRepo::new();
         repo.add("a.csv", b"a");
         fs::remove_file(repo.root.join("a.csv")).unwrap();
         repo.switched_branch("b.csv", b"b1", b"b2");
         fs::write(repo.root.join("b.csv"), b"edited").unwrap();
         repo.add("c.csv", b"c");
+        repo.switched_branch("d.csv", b"d1", b"d2");
 
-        let report = repo.get(&["a.csv", "b.csv", "c.csv"], OnConflict::Skip);
+        let report = repo.get(&["a.csv", "b.csv", "c.csv", "d.csv"], OnConflict::Skip);
         assert_eq!(row(&report, "a.csv").action, Action::Restored);
         assert_eq!(row(&report, "b.csv").action, Action::Skipped);
         assert_eq!(row(&report, "c.csv").action, Action::Unchanged);
+        assert_eq!(row(&report, "d.csv").action, Action::Replaced);
         assert_eq!(report.outcome, GetOutcome::Partial);
         assert!(report.has_conflicts() && !report.has_failures());
+        assert_eq!(repo.read("b.csv"), b"edited");
+        assert_eq!(repo.read("d.csv"), b"d1");
     }
 
+    // Run from a subdirectory: paths in the report are from the project root
+    // and from the cwd, also for requests that match nothing, absolute or not.
     #[test]
-    fn local_paths_are_relative_to_the_cwd() {
+    fn paths_from_a_subdirectory() {
+        let repo = TestRepo::new();
+        repo.add("data/x.csv", b"x");
+        fs::remove_file(repo.root.join("data/x.csv")).unwrap();
+        let in_data = DvsPaths::new(
+            repo.root.join("data"),
+            repo.root.clone(),
+            repo.config.metadata_folder_name(),
+        )
+        .unwrap();
+        let selection = GetSelection {
+            tracked: HashSet::from([PathBuf::from("data/x.csv")]),
+            unmatched: vec!["typo.csv".into(), repo.root.join("data/abs-typo.csv")],
+        };
+        let options = GetOptions {
+            dry_run: false,
+            on_conflict: OnConflict::Skip,
+            source: SettingSource::Argument,
+        };
+        let report = get_files(selection, &in_data, repo.backend(), options, None);
+        let local = |name: &str| row(&report, name).local_path.clone();
+        assert_eq!(local("data/x.csv"), PathBuf::from("x.csv"));
+        assert_eq!(local("data/typo.csv"), PathBuf::from("typo.csv"));
+        assert_eq!(local("data/abs-typo.csv"), PathBuf::from("abs-typo.csv"));
+        assert!(repo.root.join("data/x.csv").exists());
+    }
+
+    // Upgrading: an existing cache db without baseline rows. Changed files are
+    // unknown until a get sees them current; dry runs never record anything.
+    #[cfg(feature = "cache")]
+    #[test]
+    fn an_upgraded_clone_learns_the_baseline_from_a_real_get() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"one");
+        let one = repo.metadata_bytes("a.csv");
+        repo.add("a.csv", b"two");
+        let two = repo.metadata_bytes("a.csv");
+        rusqlite::Connection::open(repo.paths.cache_folder().join("dvs.db"))
+            .unwrap()
+            .execute_batch("DROP TABLE baseline;")
+            .unwrap();
+
+        let report = repo.get_with(&["a.csv"], &[], OnConflict::Abort, true);
+        assert_eq!(row(&report, "a.csv").action, Action::Unchanged);
+        repo.set_metadata_bytes("a.csv", &one);
+        let report = repo.get(&["a.csv"], OnConflict::Abort);
         assert_eq!(
-            relative_to(Path::new("/r/data"), Path::new("/r/data/x.csv")),
-            PathBuf::from("x.csv")
+            row(&report, "a.csv").before,
+            Before::Unknown,
+            "dry run recorded"
         );
+
+        repo.set_metadata_bytes("a.csv", &two);
+        repo.get(&["a.csv"], OnConflict::Abort);
+        repo.set_metadata_bytes("a.csv", &one);
+        let report = repo.get(&["a.csv"], OnConflict::Abort);
+        let r = row(&report, "a.csv");
+        assert_eq!((r.before, r.action), (Before::Clean, Action::Replaced));
+        assert_eq!(repo.read("a.csv"), b"one");
+    }
+
+    // Spec 16: a destination that can't be written fails alone, keeps what
+    // was there, and a rerun finishes once it is fixed.
+    #[cfg(unix)]
+    #[test]
+    fn an_unwritable_destination_fails_alone_and_a_rerun_finishes() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = TestRepo::new();
+        repo.add("locked/a.csv", b"a");
+        repo.add("b.csv", b"b");
+        fs::remove_file(repo.root.join("locked/a.csv")).unwrap();
+        fs::remove_file(repo.root.join("b.csv")).unwrap();
+        let locked = repo.root.join("locked");
+        fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if fs::write(locked.join("probe"), b"").is_ok() {
+            return; // running as root: permissions are not enforced
+        }
+
+        let report = repo.get(&["locked/a.csv", "b.csv"], OnConflict::Abort);
+        fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(report.outcome, GetOutcome::Partial);
         assert_eq!(
-            relative_to(Path::new("/r/data"), Path::new("/r/other/y.csv")),
-            PathBuf::from("../other/y.csv")
+            row(&report, "locked/a.csv").code,
+            Some(GetCode::PermissionDenied)
         );
-        assert_eq!(
-            normalize(Path::new("data/../x.csv")),
-            PathBuf::from("x.csv")
-        );
+        assert_eq!(row(&report, "b.csv").action, Action::Restored);
+
+        let report = repo.get(&["locked/a.csv", "b.csv"], OnConflict::Abort);
+        assert_eq!(report.outcome, GetOutcome::Complete);
+        assert_eq!(repo.read("locked/a.csv"), b"a");
     }
 }

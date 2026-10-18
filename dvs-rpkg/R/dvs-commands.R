@@ -192,7 +192,8 @@ dvs_get <- function(
 #' @param x A result returned by [dvs_get()].
 #' @return A list: `command`, `outcome` (`"complete"`, `"aborted"`,
 #'   `"partial"` or `"failed"`), `dry_run`, `on_conflict` and its `source`
-#'   (`"argument"`, `"env"`, `"config"` for dvs.toml, or `"default"`), `counts` (a named
+#'   (`"argument"`, `"env"`, `"config"` for dvs.toml, or `"default"`; both `NA`
+#'   when the get could not start, e.g. outside a project), `counts` (a named
 #'   list of row counts per action) and `problem` (an operation-level message,
 #'   or `NA` when there is none).
 #' @export
@@ -227,14 +228,16 @@ dvs_get_summary <- function(info, files = NULL) {
     info$problem
   } else if (info$outcome == "aborted") {
     reasons <- character(0)
-    if (!is.null(files)) {
+    if (!is.null(files) && "code" %in% names(files)) {
       n_conflicts <- sum(files$code %in% c("local_changes", "unknown_local"))
       if (n_conflicts > 0) {
         reasons <- sprintf("%d with local changes or no record", n_conflicts)
       }
-    }
-    if (counts$failed > 0) {
-      reasons <- c(reasons, sprintf("%d cannot be retrieved", counts$failed))
+      if (counts$failed > 0) {
+        reasons <- c(reasons, sprintf("%d cannot be retrieved", counts$failed))
+      }
+    } else {
+      reasons <- parts
     }
     sprintf(
       "nothing %schanged (%s)",
@@ -246,13 +249,17 @@ dvs_get_summary <- function(info, files = NULL) {
   } else {
     paste(parts, collapse = ", ")
   }
+  policy <- if (is.na(info$on_conflict)) {
+    ""
+  } else {
+    sprintf("; on_conflict = %s (%s)", info$on_conflict, info$source)
+  }
   sprintf(
-    "dvs get%s: %s, %s; on_conflict = %s (%s)",
+    "dvs get%s: %s, %s%s",
     if (isTRUE(info$dry_run)) " (dry run)" else "",
     info$outcome,
     what,
-    info$on_conflict,
-    info$source
+    policy
   )
 }
 
@@ -295,14 +302,15 @@ print.dvs_get_result <- function(x, ...) {
   info <- attr(x, "dvs_info", exact = TRUE)
   if (!is.null(info)) {
     n_request <- sum(unlist(info$counts))
-    if (nrow(x) == n_request) {
+    as_returned <- c("local_path", "satisfied", "code", "message", "hint")
+    if (nrow(x) == n_request && all(as_returned %in% names(x))) {
       cat("# ", dvs_get_summary(info, x), "\n", sep = "")
       attention <- dvs_get_attention(x)
       if (length(attention) > 0) {
         cat(paste0("# ", gsub("\n", "\n# ", attention, fixed = TRUE)), sep = "\n")
       }
     } else {
-      # Filtered or modified: the operation info describes the whole request.
+      # Filtered or columns selected: the info describes the whole request.
       cat(
         "# ", nrow(x), " of ", n_request, " rows from: ",
         dvs_get_summary(info), "\n",

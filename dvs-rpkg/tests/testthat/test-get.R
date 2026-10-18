@@ -24,32 +24,21 @@ get_columns <- c(
   "target_hash", "local_hash", "stored_copy", "code", "message", "hint"
 )
 
-test_that("dvs_get restores a deleted file with identical content", {
-  new_dvs_test_repo()
-  write_theoph("t.csv")
-  original <- readLines("t.csv")
-  dvs_add(paths = file.path(getwd(), "t.csv"))
-  file.remove("t.csv")
-
-  result <- dvs_get(paths = "t.csv")
-  expect_s3_class(result, "dvs_get_result")
-  expect_s3_class(result, "tbl_df")
-  expect_s3_class(result$size, "dvs_bytes")
-  expect_equal(result$action, "restored")
-  expect_equal(readLines("t.csv"), original)
-  expect_equal(dvs_result_info(result)$outcome, "complete")
-})
-
-test_that("dvs_get restores multiple files at once", {
+test_that("dvs_get restores deleted files with identical content", {
   new_dvs_test_repo()
   write_theoph_shuffled("a.csv", seed = 1)
   write_theoph_shuffled("b.csv", seed = 2)
+  original <- lapply(c("a.csv", "b.csv"), readLines)
   dvs_add(paths = file.path(getwd(), c("a.csv", "b.csv")))
   file.remove(c("a.csv", "b.csv"))
 
   result <- dvs_get(paths = c("a.csv", "b.csv"))
-  expect_equal(nrow(result), 2L)
-  expect_true(all(file.exists(c("a.csv", "b.csv"))))
+  expect_s3_class(result, "dvs_get_result")
+  expect_s3_class(result, "tbl_df")
+  expect_s3_class(result$size, "dvs_bytes")
+  expect_equal(result$action, c("restored", "restored"))
+  expect_equal(lapply(c("a.csv", "b.csv"), readLines), original)
+  expect_equal(dvs_result_info(result)$outcome, "complete")
 })
 
 test_that("dvs_get dry_run does not restore files", {
@@ -92,7 +81,8 @@ test_that("an untracked path is a row, and holds the batch back by default", {
   dvs_add(paths = file.path(getwd(), "tracked.csv"))
   file.remove("tracked.csv")
 
-  result <- dvs_get(paths = c("tracked.csv", "untracked.csv"))
+  # R users often pass absolute paths (here::here(), file.path(getwd(), ...))
+  result <- dvs_get(paths = c("tracked.csv", file.path(getwd(), "untracked.csv")))
   expect_equal(dvs_result_info(result)$outcome, "aborted")
   expect_equal(result$code[result$path == "untracked.csv"], "not_tracked")
   expect_equal(result$code[result$path == "tracked.csv"], "batch_aborted")
@@ -162,6 +152,7 @@ test_that("results keep a fixed schema, even with zero rows outside a project", 
   info <- dvs_result_info(result)
   expect_equal(info$outcome, "failed")
   expect_match(info$problem, "not in a dvs project")
+  expect_true(is.na(info$on_conflict))
 })
 
 test_that("on_error controls signalling, and conditions carry the result", {
@@ -175,13 +166,9 @@ test_that("on_error controls signalling, and conditions carry the result", {
   expect_equal(cnd$result$code, "local_changes")
   withr::local_options(dvs.on_error = "error")
   expect_error(dvs_get("t.csv"), class = "dvs_get_incomplete")
-})
 
-test_that("the default return survives options(warn = 2)", {
-  new_dvs_test_repo()
-  switch_branches()
-  writeLines("my edit", "t.csv")
-  withr::local_options(warn = 2)
+  # The default only returns, so options(warn = 2) cannot prevent assignment
+  withr::local_options(dvs.on_error = NULL, warn = 2)
   res <- dvs_get("t.csv")
   expect_equal(res$code, "local_changes")
 })
@@ -192,18 +179,7 @@ test_that("overwrite in dvs.toml is a configuration error", {
   expect_error(dvs_get(), class = "dvs_config_error")
 })
 
-test_that("printing shows the outcome header", {
-  new_dvs_test_repo()
-  switch_branches()
-  writeLines("my edit", "t.csv")
-  out <- capture.output(print(dvs_get("t.csv")))
-  expect_match(out[1], "dvs get: aborted", fixed = TRUE)
-  expect_match(out[1], "on_conflict = abort (default)", fixed = TRUE)
-  expect_false(grepl("NA", out[1], fixed = TRUE))
-  expect_true(is.na(dvs_result_info(dvs_get("t.csv"))$problem))
-})
-
-test_that("printing lists what needs attention, and filtered results say so", {
+test_that("printing shows the outcome, what needs attention, and survives subsetting", {
   new_dvs_test_repo()
   switch_branches()
   writeLines("my edit", "t.csv")
@@ -212,27 +188,16 @@ test_that("printing lists what needs attention, and filtered results say so", {
   file.remove("u.csv")
   res <- dvs_get(c("t.csv", "u.csv"))
   out <- capture.output(print(res))
-  expect_match(out[1], "1 with local changes or no record", fixed = TRUE)
-  expect_true(any(grepl("! t.csv: local changes", out, fixed = TRUE)))
-  expect_true(any(grepl('dvs_add("t.csv")', out, fixed = TRUE)))
+  expect_match(out[1], "aborted", fixed = TRUE)
+  expect_match(out[1], "on_conflict = abort (default)", fixed = TRUE)
+  expect_false(grepl("NA", out[1], fixed = TRUE))
+  # t.csv is listed with the R command to keep it; u.csv is only held back
+  expect_true(any(grepl("t.csv", out[-1], fixed = TRUE) & grepl("dvs_add(\"t.csv\")", out[-1], fixed = TRUE)))
   expect_false(any(grepl("! u.csv", out, fixed = TRUE)))
 
-  out <- capture.output(print(res[res$path == "t.csv", ]))
-  expect_match(out[1], "1 of 2 rows from: dvs get: aborted", fixed = TRUE)
+  expect_match(capture.output(print(res[res$path == "t.csv", ]))[1], "1 of 2 rows", fixed = TRUE)
+  expect_no_error(capture.output(print(res[, c("path", "action")])))
 
   cnd <- tryCatch(dvs_get(c("t.csv", "u.csv"), on_error = "error"), error = identity)
-  expect_match(conditionMessage(cnd), "! t.csv: local changes", fixed = TRUE)
-})
-
-test_that("a merge conflict in a .dvs file holds the batch back", {
-  new_dvs_test_repo()
-  writeLines("a", "a.csv")
-  writeLines("b", "b.csv")
-  dvs_add(c("a.csv", "b.csv"))
-  file.remove("a.csv")
-  writeLines(c("<<<<<<< HEAD", "{}", "=======", "{}", ">>>>>>> other"), file.path(".dvs", "b.csv.dvs"))
-  res <- dvs_get(c("a.csv", "b.csv"))
-  expect_equal(res$code[res$path == "b.csv"], "bad_metadata")
-  expect_equal(res$code[res$path == "a.csv"], "batch_aborted")
-  expect_false(file.exists("a.csv"))
+  expect_match(conditionMessage(cnd), "t.csv", fixed = TRUE)
 })

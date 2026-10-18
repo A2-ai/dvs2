@@ -340,33 +340,15 @@ impl Config {
 
     /// The `on_conflict` policy for `get`: an explicit argument, else
     /// `DVS_GET_ON_CONFLICT`, else `[get] on_conflict` in dvs.toml, else abort.
-    ///
-    /// dvs.toml is shared by everyone working on the project, so it may not say
-    /// `overwrite`: that would discard collaborators' unsaved work without them
-    /// asking. It is a configuration error, never silently replaced.
     pub fn get_on_conflict(
         &self,
         explicit: Option<OnConflict>,
     ) -> std::result::Result<(OnConflict, SettingSource), ConfigError> {
-        if let Some(policy) = explicit {
-            return Ok((policy, SettingSource::Argument));
-        }
-        if let Ok(value) = std::env::var(GET_ON_CONFLICT_ENV) {
-            let policy = value
-                .parse()
-                .map_err(|e| ConfigError(format!("{GET_ON_CONFLICT_ENV}: {e}")))?;
-            return Ok((policy, SettingSource::Env));
-        }
-        match self.get.as_ref().and_then(|g| g.on_conflict) {
-            Some(OnConflict::Overwrite) => Err(ConfigError(format!(
-                "{CONFIG_FILE_NAME}: [get] on_conflict = \"overwrite\" is not allowed in project \
-                 configuration, because it would discard collaborators' local changes. Use \
-                 \"abort\" or \"skip\" here; pass --force (or on_conflict = \"overwrite\" in R, \
-                 or {GET_ON_CONFLICT_ENV}=overwrite) when you mean it."
-            ))),
-            Some(policy) => Ok((policy, SettingSource::Config)),
-            None => Ok((OnConflict::default(), SettingSource::Default)),
-        }
+        resolve_on_conflict(
+            explicit,
+            std::env::var(GET_ON_CONFLICT_ENV).ok().as_deref(),
+            self.get.as_ref().and_then(|g| g.on_conflict),
+        )
     }
 
     pub fn progress_bytes_threshold(&self) -> u64 {
@@ -426,10 +408,43 @@ mod tests {
     }
 }
 
+/// Precedence for `on_conflict`, validating every layer whichever wins, so a
+/// bad setting is reported to everyone, not only to those who don't override it.
+///
+/// dvs.toml is shared by everyone working on the project, so it may not say
+/// `overwrite`: that would discard collaborators' unsaved work without them
+/// asking. It is a configuration error, never silently replaced.
+fn resolve_on_conflict(
+    explicit: Option<OnConflict>,
+    env: Option<&str>,
+    project: Option<OnConflict>,
+) -> std::result::Result<(OnConflict, SettingSource), ConfigError> {
+    let env = env
+        .map(|v| {
+            v.parse::<OnConflict>()
+                .map_err(|e| ConfigError(format!("{GET_ON_CONFLICT_ENV}: {e}")))
+        })
+        .transpose()?;
+    if project == Some(OnConflict::Overwrite) {
+        return Err(ConfigError(format!(
+            "{CONFIG_FILE_NAME}: [get] on_conflict = \"overwrite\" is not allowed in project \
+             configuration, because it would discard collaborators' local changes. Use \
+             \"abort\" or \"skip\" here; pass --force (or on_conflict = \"overwrite\" in R, \
+             or {GET_ON_CONFLICT_ENV}=overwrite) when you mean it."
+        )));
+    }
+    Ok(explicit
+        .map(|p| (p, SettingSource::Argument))
+        .or(env.map(|p| (p, SettingSource::Env)))
+        .or(project.map(|p| (p, SettingSource::Config)))
+        .unwrap_or((OnConflict::default(), SettingSource::Default)))
+}
+
 #[cfg(test)]
 mod get_config_tests {
     use super::*;
     use crate::testutil::create_temp_git_repo;
+    use OnConflict::*;
 
     fn config_with(get_section: &str) -> std::result::Result<Config, String> {
         let (_tmp, root) = create_temp_git_repo();
@@ -445,38 +460,34 @@ mod get_config_tests {
         Config::find(&root).unwrap().map_err(|e| e.to_string())
     }
 
-    // These tests never set DVS_GET_ON_CONFLICT; an explicit argument wins over it anyway.
     #[test]
-    fn explicit_argument_wins() {
-        let config = config_with("\n[get]\non_conflict = \"skip\"\n").unwrap();
+    fn precedence_is_argument_env_project_default() {
+        use SettingSource as S;
+        let r = resolve_on_conflict;
         assert_eq!(
-            config.get_on_conflict(Some(OnConflict::Overwrite)).unwrap(),
-            (OnConflict::Overwrite, SettingSource::Argument)
+            r(Some(Overwrite), Some("skip"), Some(Skip)).unwrap(),
+            (Overwrite, S::Argument)
         );
+        assert_eq!(
+            r(None, Some("overwrite"), Some(Skip)).unwrap(),
+            (Overwrite, S::Env)
+        );
+        assert_eq!(r(None, None, Some(Skip)).unwrap(), (Skip, S::Config));
+        assert_eq!(r(None, None, None).unwrap(), (Abort, S::Default));
     }
 
     #[test]
-    fn project_config_may_choose_skip() {
+    fn bad_settings_are_errors_even_when_overridden() {
+        let err = resolve_on_conflict(Some(Skip), Some("sometimes"), None).unwrap_err();
+        assert!(err.0.contains(GET_ON_CONFLICT_ENV), "{err}");
+        let err = resolve_on_conflict(Some(Abort), Some("overwrite"), Some(Overwrite)).unwrap_err();
+        assert!(err.0.contains("not allowed"), "{err}");
+    }
+
+    #[test]
+    fn dvs_toml_get_section_is_read_and_checked() {
         let config = config_with("\n[get]\non_conflict = \"skip\"\n").unwrap();
-        if std::env::var(GET_ON_CONFLICT_ENV).is_err() {
-            assert_eq!(
-                config.get_on_conflict(None).unwrap(),
-                (OnConflict::Skip, SettingSource::Config)
-            );
-        }
-    }
-
-    #[test]
-    fn project_config_may_not_choose_overwrite() {
-        let config = config_with("\n[get]\non_conflict = \"overwrite\"\n").unwrap();
-        if std::env::var(GET_ON_CONFLICT_ENV).is_err() {
-            let err = config.get_on_conflict(None).unwrap_err();
-            assert!(err.0.contains("not allowed"), "{err}");
-        }
-    }
-
-    #[test]
-    fn unknown_get_keys_and_values_are_config_errors() {
+        assert_eq!(config.get.unwrap().on_conflict, Some(Skip));
         let err = config_with("\n[get]\non_conflicts = \"skip\"\n").unwrap_err();
         assert!(err.contains("unknown field"), "{err}");
         let err = config_with("\n[get]\non_conflict = \"sometimes\"\n").unwrap_err();

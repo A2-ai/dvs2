@@ -508,26 +508,18 @@ pub(crate) fn dvs_get(
     if glob.is_some() && recursive.unwrap_or(false) {
         return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
     }
-    let fallback = || explicit.map_or((OnConflict::Abort, SettingSource::Default), |p| (p, SettingSource::Argument));
-
     let current_dir = std::env::current_dir()?;
     let config = match Config::find(&current_dir) {
         None => {
-            let (policy, source) = fallback();
-            let report = GetReport::problem(
-                format!("not in a dvs project: no dvs.toml in {} or its parents", current_dir.display()),
-                dry_run,
-                policy,
-                source,
-            );
-            return Ok(get_result_list(&report, None));
+            let problem = format!("not in a dvs project: no dvs.toml in {} or its parents", current_dir.display());
+            return Ok(setup_failed_list(&problem, dry_run, false));
         }
-        Some(Err(e)) => return Ok(config_error_list(&e.to_string(), dry_run, fallback())),
+        Some(Err(e)) => return Ok(setup_failed_list(&e.to_string(), dry_run, true)),
         Some(Ok(c)) => c,
     };
     let (policy, source) = match config.get_on_conflict(explicit) {
         Ok(p) => p,
-        Err(ConfigError(message)) => return Ok(config_error_list(&message, dry_run, fallback())),
+        Err(ConfigError(message)) => return Ok(setup_failed_list(&message, dry_run, true)),
     };
     let dvs_paths = DvsPaths::from_cwd(&config)?;
     let selection = select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive.unwrap_or(false))?;
@@ -548,11 +540,12 @@ pub(crate) fn dvs_get(
     Ok(get_result_list(&report, None))
 }
 
-/// Configuration problems are reported to R as data (`config_error`) so the R
-/// wrapper can raise a classed `dvs_config_error`.
-fn config_error_list(message: &str, dry_run: bool, (policy, source): (OnConflict, SettingSource)) -> List {
-    let report = GetReport::problem(message, dry_run, policy, source);
-    get_result_list(&report, Some(message))
+/// A get that could not start: zero rows, no policy (NA, like null in the CLI
+/// JSON). Configuration problems are flagged (`config_error`) so the R wrapper
+/// can raise a classed `dvs_config_error`.
+fn setup_failed_list(message: &str, dry_run: bool, config_error: bool) -> List {
+    let report = GetReport::problem(message, dry_run, OnConflict::Abort, SettingSource::Default);
+    get_result_list(&report, Some(config_error))
 }
 
 /// The next step for a row, in R syntax.
@@ -590,7 +583,8 @@ fn r_hint(row: &GetRow) -> Option<String> {
 }
 
 /// `list(files = <data.frame with a fixed schema>, info = <list>)`.
-fn get_result_list(report: &GetReport, config_error: Option<&str>) -> List {
+/// `setup_failed` is `Some(config_error)` when the get could not start.
+fn get_result_list(report: &GetReport, setup_failed: Option<bool>) -> List {
     fn strs<'a>(rows: &'a [GetRow], f: impl Fn(&'a GetRow) -> Option<String>) -> Vec<Option<String>> {
         rows.iter().map(f).collect()
     }
@@ -640,11 +634,12 @@ fn get_result_list(report: &GetReport, config_error: Option<&str>) -> List {
     field("command", "get".to_string().into_sexp());
     field("outcome", report.outcome.as_str().to_string().into_sexp());
     field("dry_run", report.dry_run.into_sexp());
-    field("on_conflict", report.on_conflict.as_str().to_string().into_sexp());
-    field("source", report.source.as_str().to_string().into_sexp());
+    let policy = setup_failed.is_none();
+    field("on_conflict", policy.then(|| report.on_conflict.as_str().to_string()).into_sexp());
+    field("source", policy.then(|| report.source.as_str().to_string()).into_sexp());
     field("counts", counts);
     field("problem", report.problem.clone().into_sexp());
-    field("config_error", config_error.is_some().into_sexp());
+    field("config_error", (setup_failed == Some(true)).into_sexp());
     let info = named(info);
 
     let mut result: Vec<(&'static str, SEXP)> = Vec::with_capacity(2);
