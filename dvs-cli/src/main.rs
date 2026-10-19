@@ -1,4 +1,5 @@
 mod get_cmd;
+mod output;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -15,7 +16,7 @@ use dvs::auth::{
     delete_token, get_client_approve_url, get_token, initiate_device_approval, poll_for_token,
     revoke_token, store_token,
 };
-use dvs::config::{Config, ConfigError, OnConflict};
+use dvs::config::{Config, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
@@ -146,7 +147,11 @@ pub enum Command {
         force: bool,
     },
     /// Show the project configuration and the server info is using a dvs-server backend
-    Info,
+    Info {
+        /// Discover local project configuration without contacting a server or reading credentials
+        #[clap(long)]
+        offline: bool,
+    },
     /// Log in to a DVS server, the one in the config unless a URL is given
     Login { url: Option<Url> },
     /// Log out from a DVS server
@@ -246,7 +251,13 @@ fn make_progress_callback(threshold: u64) -> impl Fn(&std::path::Path, u64) -> F
 }
 
 /// Runs the interactive device-authorization flow and stores the resulting token.
-fn run_device_login(url: &Url) -> Result<()> {
+fn run_device_login(url: &Url, machine: bool) -> Result<()> {
+    if machine {
+        return Err(output::coded(
+            "authentication_required",
+            "Device authorization requires interactive login; run dvs login without --json",
+        ));
+    }
     let device_auth = initiate_device_approval(url)?;
     let approve_url = get_client_approve_url(url, &device_auth.user_code)?;
     println!(
@@ -259,10 +270,7 @@ fn run_device_login(url: &Url) -> Result<()> {
     Ok(())
 }
 
-fn try_main() -> Result<()> {
-    env_logger::init();
-
-    let cli = Cli::parse();
+fn try_main(cli: Cli) -> Result<()> {
     if let Some(n) = cli.threads {
         set_num_threads(n);
     }
@@ -294,7 +302,7 @@ fn try_main() -> Result<()> {
                     // Initializing on the server requires authentication, so run the
                     // login flow first if we don't have a token for it yet.
                     if get_token(&url)?.is_none() {
-                        run_device_login(&url)?;
+                        run_device_login(&url, cli.json)?;
                     }
                     let mut config = Config::new_server(name, url, Some(group));
                     if no_compression {
@@ -312,7 +320,9 @@ fn try_main() -> Result<()> {
 
             let repo_root = init(&root, config)?;
             if cli.json {
-                println!("{}", json!({"status": "initialized"}));
+                let mut result = output::envelope("init", false, vec![], 0);
+                result["project_root"] = json!(repo_root);
+                output::emit(result);
             } else {
                 println!("DVS Initialized at {repo_root:?}");
             }
@@ -330,7 +340,7 @@ fn try_main() -> Result<()> {
             // Initializing on the server requires authentication, so run the
             // login flow first if we don't have a token for it yet.
             if get_token(&url)?.is_none() {
-                run_device_login(&url)?;
+                run_device_login(&url, cli.json)?;
             }
             let mut config = Config::new_server(name, url, None);
             config.set_compression(None);
@@ -341,6 +351,9 @@ fn try_main() -> Result<()> {
             if let Backend::Server(s) = config.backend() {
                 s.attach()?;
                 config.save(current_dir)?;
+                if cli.json {
+                    output::emit(output::envelope("attach", false, vec![], 0));
+                }
             }
         }
         Command::Add {
@@ -349,14 +362,13 @@ fn try_main() -> Result<()> {
             message,
             dry_run,
         } => {
-            let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let config = find_config(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
                 .into_iter()
                 .collect();
             if all_paths.is_empty() {
-                return Err(anyhow!("No files to add"));
+                return Err(output::coded("invalid_arguments", "No files to add"));
             }
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
@@ -379,7 +391,23 @@ fn try_main() -> Result<()> {
                 .iter()
                 .any(|r| matches!(r.detail, AddDetail::Error { .. }));
             if cli.json {
-                println!("{}", serde_json::to_string(&results)?);
+                let failed = results
+                    .iter()
+                    .filter(|r| matches!(r.detail, AddDetail::Error { .. }))
+                    .count();
+                let files = results
+                    .iter()
+                    .map(|r| {
+                        let mut value = serde_json::to_value(r).expect("add results serialize");
+                        value["code"] = if matches!(r.detail, AddDetail::Error { .. }) {
+                            json!("file_failed")
+                        } else {
+                            json!(null)
+                        };
+                        value
+                    })
+                    .collect();
+                output::emit(output::envelope("add", dry_run, files, failed));
             } else {
                 for result in &results {
                     match &result.detail {
@@ -411,7 +439,7 @@ fn try_main() -> Result<()> {
                 }
             }
             if has_errors {
-                return Err(anyhow!("Some files failed to add"));
+                return Err(Exit(1).into());
             }
         }
         Command::Status {
@@ -423,8 +451,7 @@ fn try_main() -> Result<()> {
             with_metadata,
             glob,
         } => {
-            let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let config = find_config(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !unsynced;
 
@@ -450,7 +477,23 @@ fn try_main() -> Result<()> {
                 .iter()
                 .any(|s| matches!(s.detail, StatusDetail::Error { .. }));
             if cli.json {
-                println!("{}", serde_json::to_string(&statuses)?);
+                let failed = statuses
+                    .iter()
+                    .filter(|r| matches!(r.detail, StatusDetail::Error { .. }))
+                    .count();
+                let files = statuses
+                    .iter()
+                    .map(|r| {
+                        let mut value = serde_json::to_value(r).expect("status results serialize");
+                        value["code"] = if matches!(r.detail, StatusDetail::Error { .. }) {
+                            json!("file_failed")
+                        } else {
+                            json!(null)
+                        };
+                        value
+                    })
+                    .collect();
+                output::emit(output::envelope("status", false, files, failed));
             } else if statuses.is_empty() {
                 if show_all {
                     println!("No tracked files");
@@ -514,7 +557,7 @@ fn try_main() -> Result<()> {
                 }
             }
             if has_errors {
-                return Err(anyhow!("Some files failed to get status"));
+                return Err(Exit(1).into());
             }
         }
         Command::Get {
@@ -526,8 +569,7 @@ fn try_main() -> Result<()> {
             force,
         } => {
             let setup = || -> Result<_> {
-                let config = Config::find(&current_dir)
-                    .ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+                let config = find_config(&current_dir)?;
                 let explicit = if force {
                     Some(OnConflict::Overwrite)
                 } else {
@@ -541,20 +583,7 @@ fn try_main() -> Result<()> {
                     select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
                 Ok((config, on_conflict, source, dvs_paths, selection))
             };
-            // Scripts get the same envelope when get cannot start at all.
-            let (config, on_conflict, source, dvs_paths, selection) = match setup() {
-                Ok(v) => v,
-                Err(e) if cli.json => {
-                    println!("{}", get_cmd::problem_json(&format!("{e:#}"), dry_run));
-                    let code = if e.downcast_ref::<ConfigError>().is_some() {
-                        get_cmd::EXIT_USAGE
-                    } else {
-                        get_cmd::EXIT_FAILED
-                    };
-                    return Err(Exit(code).into());
-                }
-                Err(e) => return Err(e),
-            };
+            let (config, on_conflict, source, dvs_paths, selection) = setup()?;
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let on_file_start = make_progress_callback(config.progress_bytes_threshold());
@@ -574,7 +603,13 @@ fn try_main() -> Result<()> {
                 },
             );
             if cli.json {
-                println!("{}", get_cmd::to_json(&report));
+                let mut value = get_cmd::to_json(&report);
+                value["error"] = report
+                    .problem
+                    .as_ref()
+                    .map(|message| json!({"code": "operation_failed", "message": message}))
+                    .unwrap_or(json!(null));
+                output::emit(value);
             } else {
                 get_cmd::print_human(&report);
             }
@@ -583,23 +618,31 @@ fn try_main() -> Result<()> {
                 return Err(Exit(code).into());
             }
         }
-        Command::Info => {
-            let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+        Command::Info { offline } => {
+            let config = find_config(&current_dir)?;
             let compression = config.compression().to_string();
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
+            let info_json = |fields: serde_json::Value| {
+                let mut result = output::envelope("info", false, vec![], 0);
+                for (key, value) in fields.as_object().expect("info fields are an object") {
+                    result[key] = value.clone();
+                }
+                result["project_root"] = json!(dvs_paths.repo_root());
+                result["metadata_directory"] = json!(dvs_paths.metadata_folder());
+                result["offline"] = json!(offline);
+                result["protocol"] = json!({"versions": [1], "capabilities": ["json_results", "get_conflict_policy", "offline_discovery"]});
+                output::emit(result);
+            };
 
             match config.backend() {
                 Backend::Local(l) => {
                     if cli.json {
-                        println!(
-                            "{}",
-                            json!({
-                                "version": dvs::VERSION,
-                                "backend": "local",
-                                "storage": l.path,
-                                "compression": compression,
-                            })
-                        );
+                        info_json(json!({
+                            "version": dvs::VERSION,
+                            "backend": "local",
+                            "storage": l.path,
+                            "compression": compression,
+                        }));
                     } else {
                         println!("dvs {}", dvs::VERSION);
                         println!("backend     local");
@@ -609,34 +652,39 @@ fn try_main() -> Result<()> {
                 }
                 Backend::Server(s) => {
                     // Not logged in is an answer, not an error
-                    let logged_in = get_token(&s.url)?.is_some();
-                    let access = if logged_in { s.access()? } else { None };
+                    let logged_in = if offline {
+                        None
+                    } else {
+                        Some(get_token(&s.url)?.is_some())
+                    };
+                    let access = if logged_in == Some(true) {
+                        s.access()?
+                    } else {
+                        None
+                    };
                     if cli.json {
-                        println!(
-                            "{}",
-                            json!({
-                                "version": dvs::VERSION,
-                                "backend": "server",
-                                "project": s.name,
-                                "server": s.url,
-                                "compression": compression,
-                                "logged_in": logged_in,
-                                "user": access.as_ref().map(|a| &a.user),
-                                "access": access.as_ref().map_or("none", |a| a.access.as_str()),
-                                "groups": access.as_ref().map_or(&[][..], |a| &a.groups),
-                            })
-                        );
+                        info_json(json!({
+                            "version": dvs::VERSION,
+                            "backend": "server",
+                            "project": s.name,
+                            "server": s.url,
+                            "compression": compression,
+                            "logged_in": logged_in,
+                            "user": access.as_ref().map(|a| &a.user),
+                            "access": if offline { None } else { Some(access.as_ref().map_or("none", |a| a.access.as_str())) },
+                            "groups": access.as_ref().map_or(&[][..], |a| &a.groups),
+                        }));
                     } else {
                         let project = match (&access, logged_in) {
                             (Some(a), _) => format!("{} ({})", s.name, a.access),
-                            (None, true) => format!("{} (no access)", s.name),
-                            (None, false) => s.name.clone(),
+                            (None, Some(true)) => format!("{} (no access)", s.name),
+                            (None, _) => s.name.clone(),
                         };
                         println!("dvs {}", dvs::VERSION);
                         println!("backend     server");
                         println!("project     {project}");
                         println!("server      {}", s.url);
-                        if !logged_in {
+                        if logged_in == Some(false) {
                             println!("user        not logged in, run `dvs login`");
                         } else if let Some(a) = &access {
                             match &a.user.email {
@@ -655,34 +703,53 @@ fn try_main() -> Result<()> {
             }
         }
         Command::Login { url: Some(url) } => {
-            run_device_login(&url)?;
+            run_device_login(&url, cli.json)?;
         }
         Command::Login { url: None } => {
-            let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let config = find_config(&current_dir)?;
 
             if let Some(url) = config.server_url() {
-                run_device_login(url)?;
+                run_device_login(url, cli.json)?;
             } else {
                 bail!("This project is not using a dvs server");
             }
         }
         Command::Logout => {
-            let config =
-                Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+            let config = find_config(&current_dir)?;
 
             if let Some(url) = config.server_url() {
                 let Some(token) = get_token(url)? else {
-                    println!("You were not logged in");
+                    if cli.json {
+                        let mut result = output::envelope("logout", false, vec![], 0);
+                        result["revoked"] = json!(null);
+                        result["warnings"] = json!([]);
+                        output::emit(result);
+                    } else {
+                        println!("You were not logged in");
+                    }
                     return Ok(());
                 };
                 // The local copy goes regardless: the server may be unreachable, and keeping
                 // a token the user asked to drop is worse than one revoke call too few.
-                if let Err(e) = revoke_token(url, &token) {
-                    eprintln!("Warning: could not revoke the token on the server: {e}");
-                }
+                let revoke_error = revoke_token(url, &token).err();
                 delete_token(url)?;
-                println!("Logged out successfully");
+                if cli.json {
+                    let mut result = output::envelope("logout", false, vec![], 0);
+                    result["revoked"] = json!(revoke_error.is_none());
+                    result["warnings"] = json!(
+                        revoke_error
+                            .as_ref()
+                            .map(|e| json!({"code": "revoke_failed", "message": e.to_string()}))
+                            .into_iter()
+                            .collect::<Vec<_>>()
+                    );
+                    output::emit(result);
+                } else {
+                    if let Some(e) = revoke_error {
+                        eprintln!("Warning: could not revoke the token on the server: {e}");
+                    }
+                    println!("Logged out successfully");
+                }
             } else {
                 bail!("This project is not using a dvs server");
             }
@@ -704,18 +771,62 @@ impl std::fmt::Display for Exit {
 
 impl std::error::Error for Exit {}
 
-fn main() {
-    if let Err(e) = try_main() {
-        if let Some(Exit(code)) = e.downcast_ref::<Exit>() {
-            ::std::process::exit(*code)
+fn find_config(current_dir: &std::path::Path) -> Result<Config> {
+    Config::find(current_dir)
+        .ok_or_else(|| output::coded("not_in_project", "Not in a DVS repository"))?
+}
+
+impl Command {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Init(_) => "init",
+            Self::Attach { .. } => "attach",
+            Self::Add { .. } => "add",
+            Self::Status { .. } => "status",
+            Self::Get { .. } => "get",
+            Self::Info { .. } => "info",
+            Self::Login { .. } => "login",
+            Self::Logout => "logout",
         }
-        eprintln!("Error: {e}");
-        // Configuration problems are usage errors, like clap's: nothing ran.
-        let code = if e.downcast_ref::<ConfigError>().is_some() {
-            2
+    }
+    fn dry_run(&self) -> bool {
+        matches!(
+            self,
+            Self::Add { dry_run: true, .. } | Self::Get { dry_run: true, .. }
+        )
+    }
+}
+
+fn main() {
+    env_logger::init();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            // Help/version remain the conventional human-readable clap output.
+            if error.use_stderr()
+                && std::env::args_os()
+                    .take_while(|arg| arg != "--")
+                    .any(|arg| arg == "--json")
+            {
+                let error = output::coded("invalid_arguments", error.to_string());
+                output::emit(output::problem("cli", false, &error));
+                std::process::exit(2);
+            }
+            error.exit();
+        }
+    };
+    let json = cli.json;
+    let command = cli.command.name();
+    let dry_run = cli.command.dry_run();
+    if let Err(error) = try_main(cli) {
+        if let Some(Exit(code)) = error.downcast_ref::<Exit>() {
+            std::process::exit(*code);
+        }
+        if json {
+            output::emit(output::problem(command, dry_run, &error));
         } else {
-            1
-        };
-        ::std::process::exit(code)
+            eprintln!("Error: {error}");
+        }
+        std::process::exit(output::exit_code(&error));
     }
 }
