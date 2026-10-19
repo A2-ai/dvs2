@@ -1,0 +1,4 @@
+/.quarto/
+**/*.quarto_ipynb
+/pr-*-response-changes.html
+/pr-*-response-changes_files/
