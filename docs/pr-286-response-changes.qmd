@@ -1,0 +1,637 @@
+---
+title: "PR #286: versioned CLI responses"
+subtitle: "Before and after the JSON contract foundation"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+## Scope and reading conventions
+
+This guide compares `origin/feat/get-on-conflict` at `5be4f6b` with
+`feat/cli-json-contract` at `5d0d847`. It covers this PR independently of the
+subsequent read-query and event-stream PRs. No imp changes are required.
+
+Commands use `BEFORE` and `AFTER` as absolute paths to binaries built from those
+revisions. Set those shell variables before running the examples. JSON blocks
+are pretty-printed for readability; actual stdout is one compact document plus a
+newline. Object key order is not contractual. Paths, usernames, server addresses,
+and timestamps vary by machine. `/example/project` and `/example/storage` are
+representative paths, not literal captured temporary-directory names.
+
+A block labeled **excerpt** deliberately omits fields and is not a complete JSON
+document. Full-document examples include every envelope field. Unless stated
+otherwise, stderr is empty when diagnostics logging is disabled; exit status is
+shown separately. A server or filesystem diagnostic can vary by platform: clients
+must use codes and fields, never match that prose. Server examples are
+source-verified representative responses, not recordings from a live server.
+No credentials or private device codes appear in this guide.
+
+## Reproduce the local examples
+
+Build each revision in a separate checkout. From each checkout run
+`cargo build -p dvs-cli`, then use its `target/debug/dvs` as the corresponding
+binary. Use different fixtures for before and after when testing mutations:
+
+```bash
+fixture=$(mktemp -d)
+mkdir "$fixture/project"
+cd "$fixture/project"
+"$AFTER" init local "$fixture/storage" --no-compression --json
+printf content > good.txt
+```
+
+`--no-compression` makes the first add's `stored_size` equal to its input size.
+The exact BLAKE3 hash of the seven-byte string `content` is:
+
+```text
+3fba5250be9ac259c56e7250c526bc83bacb4be825f2799d3d59e5b4878dd74e
+```
+
+Use `BEFORE` instead in a fresh fixture to reproduce the old behavior. `--json`
+is global and may precede or follow a command. Environment settings such as
+`DVS_GET_ON_CONFLICT` can affect examples; unset them for default-policy tests.
+
+## Shared response contract
+
+Before this PR, commands had different stdout contracts: add/status returned
+arrays, info returned an unversioned object, init returned a small status object,
+attach returned no result, and login/logout printed prose even with `--json`.
+Most startup errors produced only stderr. Get already had a versioned envelope.
+
+After this PR, every command in JSON mode emits one result document. The common
+fields are:
+
+| Field | Scope and meaning |
+| --- | --- |
+| `v` | Integer protocol version, currently `1` |
+| `command` | Command name, or `cli` when argument parsing fails |
+| `outcome` | `complete`, `partial`, or `failed`; get also has `aborted` |
+| `dry_run` | Whether a mutation preview was requested |
+| `counts` | Command-specific counts; consumers must not assume get uses add's counters |
+| `problem` | Nullable human-readable shared problem, preserved for get compatibility |
+| `error` | Nullable shared error object containing stable `code` and display `message` |
+| `files` | Command-specific rows, or an empty array for non-file commands |
+
+Add/status use `counts.total`, `counts.succeeded`, and `counts.failed`. Successful
+info/init/attach/login/logout results have zero file counts, which does not mean
+no project or authentication action occurred. Get retains its action-specific
+counts. No new `total` or `succeeded` counters are imposed on get.
+
+A partial result can have `problem: null` and `error: null`: errors belong to
+individual rows. The root `error` is an object; an add/status row's existing
+`error` is display text. Row error codes are separate nullable `code` fields.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Command completed successfully |
+| `1` | Startup/operation failure or file failures |
+| `2` | Invalid CLI arguments or configuration |
+| `3` | Get conflicts without another failure |
+
+Existing exit categories are retained, with the empty-add selection correction
+from exit `1` to usage exit `2` described below. Failures become consumable on stdout.
+Unexpected library failures use `operation_failed`; the CLI does not guess an
+error classification from message text. Clients must accept unknown fields and
+codes and must inspect the result even when the process exits nonzero.
+
+## Add: successful and unchanged files
+
+```bash
+"$AFTER" add good.txt --json
+```
+
+Before, stdout was this complete array; stderr empty; exit `0`:
+
+```json
+[
+  {
+    "path": "good.txt",
+    "outcome": "copied",
+    "hash": "3fba5250be9ac259c56e7250c526bc83bacb4be825f2799d3d59e5b4878dd74e",
+    "size": 7,
+    "stored_size": 7
+  }
+]
+```
+
+After, stdout is this complete envelope; stderr empty; exit `0`:
+
+```json
+{
+  "v": 1,
+  "command": "add",
+  "outcome": "complete",
+  "dry_run": false,
+  "counts": {"total": 1, "succeeded": 1, "failed": 0},
+  "problem": null,
+  "error": null,
+  "files": [
+    {
+      "path": "good.txt",
+      "outcome": "copied",
+      "hash": "3fba5250be9ac259c56e7250c526bc83bacb4be825f2799d3d59e5b4878dd74e",
+      "size": 7,
+      "stored_size": 7,
+      "code": null
+    }
+  ]
+}
+```
+
+A subsequent unchanged add returns row `outcome: present`; its command outcome
+is still `complete`. A preview adds `--dry-run`, sets root `dry_run: true`, and
+uses the same row schema. Neither successful nor unchanged rows are failures.
+This is a breaking change for consumers that iterate the former root array: use
+`result.files`.
+
+## Add: partial execution
+
+Create a deterministic metadata-write failure after a successful first add:
+
+```bash
+printf content > bad.txt
+mkdir .dvs/bad.txt.dvs
+"$AFTER" add good.txt bad.txt --json
+```
+
+Both inputs are real files, but one metadata destination is a directory. This
+exercises partial execution, not the preflight rejection of invalid input paths.
+Before, stdout was an array containing the bad row's `error` string and the good
+row; stderr contained:
+
+```text
+Error: Some files failed to add
+```
+
+Exit was `1`. After, exit remains `1`, stderr is empty, and stdout contains a
+single result. Envelope and row **excerpt**, with the platform-dependent error
+message abbreviated:
+
+```json
+{
+  "command": "add",
+  "outcome": "partial",
+  "counts": {"total": 2, "succeeded": 1, "failed": 1},
+  "problem": null,
+  "error": null,
+  "files": [
+    {"path": "bad.txt", "code": "file_failed", "error": "Failed to write metadata file: [destination path]"},
+    {"path": "good.txt", "code": null, "outcome": "present"}
+  ]
+}
+```
+
+The successful row retains its hash and sizes, omitted above. The full result
+also includes `v` and `dry_run`. No second JSON error document is appended after
+the partial result. One failed row does not erase evidence that another input
+succeeded. Supplying an invalid input path can instead fail before any file runs;
+that is a shared failure with empty `files`, not this partial result.
+
+## Status: arrays become envelopes
+
+In a newly initialized project with no tracked files:
+
+```bash
+"$AFTER" status --json
+```
+
+Before stdout: `[]`; after stdout is the complete document below. Stderr empty
+and exit `0` in both cases.
+
+```json
+{
+  "v": 1,
+  "command": "status",
+  "outcome": "complete",
+  "dry_run": false,
+  "counts": {"total": 0, "succeeded": 0, "failed": 0},
+  "problem": null,
+  "error": null,
+  "files": []
+}
+```
+
+Tracked rows retain their former flattened `path`, `status`, and optional
+`metadata` fields and add `code: null`. Row **excerpt**:
+
+```json
+{"path": "good.txt", "status": "current", "code": null}
+```
+
+The actual successful tracked row also contains its full metadata. A failed row
+has `path`, display `error`, and `code: file_failed`; counts and command outcome
+reflect the retained rows after status filters. Any row failures produce exit
+`1` with no extra root error document. Before, status emitted the array and a
+stderr summary `Error: Some files failed to get status`.
+
+This PR does not add richer status facts or a cache-only status mode. Those belong
+to the next PR. Human-readable tables remain available without `--json`.
+
+## Init and attach: explicit command results
+
+```bash
+"$AFTER" init local "$fixture/storage" --no-compression --json
+```
+
+Run this in a fresh project/storage pair. Before stdout was
+`{"status":"initialized"}`; after it is the complete document below. Both exit
+`0` with empty stderr. The representative absolute root replaces the actual
+fixture path:
+
+```json
+{
+  "v": 1,
+  "command": "init",
+  "outcome": "complete",
+  "dry_run": false,
+  "counts": {"total": 0, "succeeded": 0, "failed": 0},
+  "problem": null,
+  "error": null,
+  "files": [],
+  "project_root": "/example/project"
+}
+```
+
+Server init uses the same success envelope after authenticated creation. Attach,
+when already authenticated and granted access to an existing project:
+
+```bash
+"$AFTER" attach example https://dvs.example.test/ --json
+```
+
+Before successful attach had empty stdout and stderr, exit `0`. After it emits
+this complete success document, exit `0`, empty stderr:
+
+```json
+{
+  "v": 1,
+  "command": "attach",
+  "outcome": "complete",
+  "dry_run": false,
+  "counts": {"total": 0, "succeeded": 0, "failed": 0},
+  "problem": null,
+  "error": null,
+  "files": []
+}
+```
+
+An already initialized project or refused server operation now returns a shared
+error envelope and nonzero exit instead of only a stderr error. Existing library
+errors without a typed classification use `operation_failed`.
+
+When server init/attach has no credential, the new JSON path reports
+`authentication_required` before initiating device authorization or writing the
+project configuration. Previously these commands started interactive login and
+printed its instructions to stdout even with `--json`. Authenticate separately
+before retrying; this foundation does not introduce an event stream.
+
+## Info: discover the project locally
+
+### Local backend
+
+```bash
+"$AFTER" info --json
+```
+
+Before, complete stdout was an unversioned object:
+
+```json
+{"version":"0.4.0","backend":"local","storage":"/example/storage","compression":"none"}
+```
+
+After, complete stdout is the following representative document. Both commands
+exit `0` with empty stderr:
+
+```json
+{
+  "v": 1,
+  "command": "info",
+  "outcome": "complete",
+  "dry_run": false,
+  "counts": {"total": 0, "succeeded": 0, "failed": 0},
+  "problem": null,
+  "error": null,
+  "files": [],
+  "version": "0.4.0",
+  "backend": "local",
+  "storage": "/example/storage",
+  "compression": "none",
+  "project_root": "/example/project",
+  "metadata_directory": "/example/project/.dvs",
+  "offline": false,
+  "protocol": {
+    "versions": [1],
+    "capabilities": ["json_results", "get_conflict_policy", "offline_discovery"]
+  }
+}
+```
+
+`version` is the application version; `v` is the result protocol version. Existing
+info fields remain top-level. Root and metadata paths are absolute native paths,
+including a configured alternate metadata directory. Discovery from a project
+subdirectory returns the same root, not the invoking directory.
+
+### Offline server discovery
+
+```bash
+"$AFTER" info --offline --json
+```
+
+Before, `--offline` was unknown: stdout empty, clap diagnostic on stderr, exit
+`2`. After, no server or credential access occurs. Exit is `0` with empty stderr
+when local discovery succeeds. Server-specific **excerpt**:
+
+```json
+{
+  "command": "info",
+  "outcome": "complete",
+  "backend": "server",
+  "project": "example",
+  "server": "https://dvs.example.test/",
+  "offline": true,
+  "logged_in": null,
+  "user": null,
+  "access": null,
+  "groups": []
+}
+```
+
+The full document also includes the common envelope, compression, version,
+project/metadata paths, and protocol capabilities. Null login/access means
+**unknown**, not logged out or denied. This permits local discovery during an
+outage and avoids prompting for credentials. Offline local info works too.
+
+### Online server information
+
+Without `--offline`, info continues to read credentials and, when logged in,
+request server access. Existing `project`, `server`, `logged_in`, `user`, `access`,
+and `groups` fields are retained alongside the new envelope/discovery fields.
+With no credential: `logged_in: false`, `user: null`, `access: "none"`, `groups:
+[]`; this is a successful answer, exit `0`. Authenticated access information is
+returned as before. Online network/configuration failures now emit shared error
+JSON with the appropriate nonzero status. This foundation does not change the
+underlying server access implementation.
+
+## Shared errors: stdout becomes usable on failure
+
+### Not in a project
+
+From a directory with no ancestor `dvs.toml`:
+
+```bash
+"$AFTER" status --json
+```
+
+Before: stdout empty, stderr `Error: Not in a DVS repository`, exit `1`.
+After: stderr empty, exit `1`, and complete stdout:
+
+```json
+{
+  "v": 1,
+  "command": "status",
+  "outcome": "failed",
+  "dry_run": false,
+  "counts": {"total": 0, "succeeded": 0, "failed": 0},
+  "problem": "Not in a DVS repository",
+  "error": {"code": "not_in_project", "message": "Not in a DVS repository"},
+  "files": []
+}
+```
+
+The same typed startup handling applies to other project-dependent commands.
+Zero failed-file counts mean no file rows ran, not that the command succeeded.
+Get's preexisting startup envelope is retained, as explained below.
+
+### Invalid configuration
+
+In a disposable fixture, write invalid TOML and invoke info:
+
+```bash
+printf 'invalid = [' > dvs.toml
+"$AFTER" info --json
+```
+
+Before: stdout empty, parse diagnostic on stderr, exit `2`. After: one shared
+error document on stdout, stderr empty, exit `2`. Error **excerpt**, with parser
+prose abbreviated:
+
+```json
+{
+  "command": "info",
+  "outcome": "failed",
+  "error": {"code": "invalid_configuration", "message": "Failed to parse [config path]: [TOML diagnostic]"}
+}
+```
+
+The full document has empty files, zero counts, and the same display message in
+`problem`. Configured/environment conflict-policy errors also use this typed
+configuration category. Plain I/O failures use `io_error`; other library errors
+fall back to `operation_failed`.
+
+### Invalid arguments and empty add selections
+
+```bash
+"$AFTER" get --on-conflict bogus --json
+```
+
+Before: stdout empty, clap diagnostic on stderr, exit `2`. After: stdout has one
+full shared envelope with `command: "cli"`, `outcome: "failed"`, `dry_run:
+false`, zero file counts, empty files, and `error.code: "invalid_arguments"`;
+stderr empty; exit `2`. Its display message contains clap's diagnostic, including
+usage guidance. `command: cli` explicitly indicates that command execution never
+started; the CLI does not infer a command name from error prose.
+
+An add glob that resolves to no files now returns `invalid_arguments`, root
+`command: add`, and exit `2`. Before it printed `Error: No files to add` to stderr
+and exited `1` without JSON. Example using a fresh fixture and a nonmatching glob:
+
+```bash
+"$AFTER" add --glob '*.does-not-exist' --json
+```
+
+## Get: preserve conflict behavior and enrich shared errors
+
+The base branch already contains get's `v`, `command`, `outcome`, `dry_run`,
+`on_conflict`, `source`, `counts`, `problem`, and `files`. This PR keeps them,
+including nullable startup policy/source and all file facts/hints. Existing
+conflict policies and precedence are unchanged.
+
+For a conflict, first add `good.txt`, then change its bytes:
+
+```bash
+printf 'local edit' > good.txt
+"$AFTER" get good.txt --json
+```
+
+Before and after: exit `3`, stderr empty, root `outcome: aborted`, no overwrite.
+The action-count and file **excerpt** below is unchanged:
+
+```json
+{
+  "command": "get",
+  "outcome": "aborted",
+  "on_conflict": "abort",
+  "source": "default",
+  "counts": {"failed":0,"not_run":1,"replaced":0,"restored":0,"skipped":0,"unchanged":0,"would_replace":0,"would_restore":0},
+  "files": [
+    {"path":"good.txt","local_path":"good.txt","before":"modified","action":"not_run","satisfied":false,"code":"local_changes"}
+  ]
+}
+```
+
+Actual rows also retain hashes, size, stored-copy information, display message,
+and hint. After additionally includes `error: null` for this file-level conflict;
+it does not mislabel it a global error. Successful get also adds `error: null`.
+
+When setup fails outside a project, get already returned a JSON envelope before
+this PR, with `problem` prose, empty files, and `on_conflict/source: null`.
+After adds the typed `not_in_project` root error while retaining those fields and
+exit `1`. Invalid configuration similarly adds `invalid_configuration`, exit `2`.
+If get's core report contains a shared `problem` after setup, its new root error
+uses `operation_failed` while preserving the original outcome/counts/policy.
+Get dry runs retain their prior actions and set `dry_run: true`.
+
+## Login: avoid prose and blocking authorization in JSON mode
+
+```bash
+"$AFTER" login https://dvs.example.test/ --json
+```
+
+Before, a successful server-backed login wrote interactive prose to stdout:
+
+```text
+Go to [approval URL] and enter the code [public user code]
+You are now logged in!
+```
+
+It waited for approval, stored the credential, and exited `0`. A failed flow
+could exit nonzero after already writing those instructions. After, no device
+flow starts: stderr empty, exit `1`, complete stdout:
+
+```json
+{
+  "v": 1,
+  "command": "login",
+  "outcome": "failed",
+  "dry_run": false,
+  "counts": {"total": 0, "succeeded": 0, "failed": 0},
+  "problem": "Device authorization requires interactive login; run dvs login without --json",
+  "error": {
+    "code": "authentication_required",
+    "message": "Device authorization requires interactive login; run dvs login without --json"
+  },
+  "files": []
+}
+```
+
+`dvs login` without `--json` still runs the normal interactive flow. A future
+streaming protocol can publish public approval instructions while the process
+waits. A one-document result cannot deliver them in time. This PR does not emit
+access tokens or secret device codes. Login with no explicit URL first discovers
+the project; outside a project it reports `not_in_project` instead.
+
+## Logout: successful local removal and revocation warnings
+
+These examples require a server-backed project. They are representative
+source-verified cases; no real credentials need to be published or checked in.
+
+```bash
+"$AFTER" logout --json
+```
+
+Before, no credential produced stdout `You were not logged in`; successful
+logout produced `Logged out successfully`. Both exited `0`. After, the complete
+no-credential result is:
+
+```json
+{
+  "v": 1,
+  "command": "logout",
+  "outcome": "complete",
+  "dry_run": false,
+  "counts": {"total": 0, "succeeded": 0, "failed": 0},
+  "problem": null,
+  "error": null,
+  "files": [],
+  "revoked": null,
+  "warnings": []
+}
+```
+
+Confirmed remote revocation uses the same envelope with `revoked: true` and
+`warnings: []`. Stderr empty, exit `0`.
+
+If the server cannot revoke the token, local credential deletion still proceeds.
+Before, stdout said `Logged out successfully`; stderr warned
+`Warning: could not revoke the token on the server: [diagnostic]`; exit `0`.
+After, stderr is empty and the successful JSON result carries this **excerpt**:
+
+```json
+{
+  "command": "logout",
+  "outcome": "complete",
+  "revoked": false,
+  "warnings": [{"code": "revoke_failed", "message": "[server diagnostic]"}]
+}
+```
+
+`revoked: false` is not a claim that the token stopped working remotely. The
+command fulfilled local logout; the warning exposes the remaining uncertainty.
+If local deletion itself fails, logout instead returns a shared failure and
+nonzero exit. Human logout messages remain available without `--json`.
+
+## Help, version, human output, and literal filenames
+
+These deliberately remain conventional:
+
+```bash
+"$AFTER" --json --help
+"$AFTER" --json --version
+```
+
+Before and after: human help/version text on stdout, stderr empty, exit `0`.
+They are explicit display requests, not JSON result operations. Applications
+should use `info --json` for machine-readable version/project discovery.
+
+Without `--json`, regular human output is preserved: init confirmation, status
+tables, get explanations, and login instructions. Partial add/status still print
+per-file errors on stderr; the redundant final aggregate error line is removed
+because the command already reported its result. Their failure exit remains `1`.
+
+The argument terminator matters:
+
+```bash
+"$AFTER" status -- --json
+```
+
+Here `--json` is a literal path. It does not activate machine output. Outside a
+project, stdout remains empty, stderr reports the human project-discovery error,
+and exit is `1`. Conversely, `status --json -- --json` activates JSON mode and
+passes the final token as a literal filename.
+
+## Review and validation
+
+The foundation's subprocess tests cover startup/argument/configuration failures,
+add success and partial execution, status wrapping, preserved get conflicts,
+subdirectory discovery, offline server discovery, login JSON rejection, and
+help/version/literal-flag behavior. Run from this PR's checkout:
+
+```bash
+cargo test -p dvs-cli
+```
+
+This guide intentionally stops at this PR's boundary. Rich status facts,
+availability/history queries, and event streams are documented in their own
+stacked PR guides. The protocol reference is [CLI JSON protocol](cli-json.md).
+
+Render this guide from the repository root:
+
+```bash
+quarto render docs/pr-286-response-changes.qmd --to html
+```
+
+The YAML header enables a table of contents and `embed-resources: true`, so the
+rendered HTML embeds its supporting resources. Rendering uses no executable
+notebooks, live servers, or code-evaluation dependencies.
