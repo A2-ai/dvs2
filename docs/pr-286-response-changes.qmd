@@ -75,7 +75,7 @@ fields are:
 | `files` | Command-specific rows, or an empty array for non-file commands |
 
 Add/status use `counts.total`, `counts.succeeded`, and `counts.failed`. Successful
-info/init/attach/login/logout results have zero file counts, which does not mean
+info/init/attach/logout results have zero file counts, which does not mean
 no project or authentication action occurred. Get retains its action-specific
 counts. No new `total` or `succeeded` counters are imposed on get.
 
