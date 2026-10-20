@@ -20,7 +20,7 @@ pub use backends::{Backend, RetrieveRequest, StoreRequest, StoreResult};
 pub use cache::HashSource;
 pub use config::Compression;
 pub use error::{BackendError, ErrorCode, backend_error_code};
-pub use files::add::{AddDetail, AddReport, AddResult, add_files};
+pub use files::add::{AddDetail, AddErrorCode, AddReport, AddResult, add_files};
 pub use files::get::{
     Action, Before, GetCode, GetCounts, GetOptions, GetOutcome, GetReport, GetRow, StoredCopy,
     get_files,

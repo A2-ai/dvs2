@@ -12,6 +12,7 @@ use crate::backends::Backend;
 use crate::backends::server::{UploadManifest, UploadManifestEntry};
 use crate::cache::try_open_cache;
 use crate::config::Compression;
+use crate::error::{ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
 use crate::operation::ByteTotals;
@@ -49,8 +50,32 @@ pub enum AddDetail {
         stored_size: u64,
     },
     Error {
+        code: AddErrorCode,
         error: String,
     },
+}
+
+/// Stable machine-readable category for a per-file add failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AddErrorCode {
+    AccessDenied,
+    ServerUnavailable,
+    IoError,
+    OperationFailed,
+}
+
+fn add_error_code(error: &anyhow::Error) -> AddErrorCode {
+    match backend_error_code(error) {
+        Some(ErrorCode::AccessDenied) => return AddErrorCode::AccessDenied,
+        Some(ErrorCode::ServerUnavailable) => return AddErrorCode::ServerUnavailable,
+        _ => {}
+    }
+    if error.downcast_ref::<std::io::Error>().is_some() {
+        AddErrorCode::IoError
+    } else {
+        AddErrorCode::OperationFailed
+    }
 }
 
 /// A file to add: the metadata it will get, waiting on the backend.
@@ -243,6 +268,7 @@ pub fn add_files(
                     let row = AddResult {
                         path: relative_path,
                         detail: AddDetail::Error {
+                            code: add_error_code(&e),
                             error: e.to_string(),
                         },
                     };
@@ -300,6 +326,7 @@ pub fn add_files(
                             let row = AddResult {
                                 path: p.relative_path,
                                 detail: AddDetail::Error {
+                                    code: add_error_code(&e),
                                     error: e.to_string(),
                                 },
                             };
@@ -356,6 +383,7 @@ pub fn add_files(
                         let result = AddResult {
                             path: pending.relative_path,
                             detail: AddDetail::Error {
+                                code: add_error_code(&e),
                                 error: e.to_string(),
                             },
                         };

@@ -89,6 +89,26 @@ fn results_wrap_files_and_preserve_get_conflicts() {
         "local edit"
     );
 }
+
+#[test]
+fn add_file_failures_have_stable_codes_and_keep_the_message() {
+    let (root, storage) = project();
+    std::fs::write(root.path().join("data.txt"), "recorded").unwrap();
+
+    // Make the configured storage path unusable after init. This reaches the
+    // per-file store failure path rather than failing batch setup.
+    let object_dir = storage.path().join("objects");
+    std::fs::remove_dir_all(&object_dir).unwrap();
+    std::fs::write(&object_dir, "blocks directory creation").unwrap();
+
+    let output = run(root.path(), &["add", "data.txt", "--json"]);
+    assert_eq!(output.status.code(), Some(1));
+    let result = document(&output);
+    assert_eq!(result["outcome"], "failed");
+    assert_eq!(result["files"][0]["code"], "io_error");
+    assert!(result["files"][0]["message"].as_str().is_some());
+}
+
 #[test]
 fn partial_add_has_one_result_and_nonzero_exit() {
     let (root, _storage) = project();
