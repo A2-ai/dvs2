@@ -335,7 +335,7 @@ impl ServerBackend {
                     created: status == 201,
                 })
             }
-            401 => return Err(self.login_expired()),
+            401 => Err(self.login_expired()),
             403 => bail!(
                 "You are not allowed to access this project, make sure you are logged in with the right user."
             ),
@@ -426,7 +426,7 @@ impl ServerBackend {
 
         match resp.status().as_u16() {
             200 => Ok(resp.body_mut().read_json::<Vec<AuditEntry>>()?),
-            401 => return Err(self.login_expired()),
+            401 => Err(self.login_expired()),
             403 => bail!(
                 "You are not allowed to access this project, make sure you are logged in with the right user."
             ),
