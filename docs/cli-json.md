@@ -32,11 +32,14 @@ must tolerate additional fields and unknown reason codes without treating them
 as success. New incompatible semantics require a new protocol version.
 
 Global error codes are `not_in_project`, `invalid_configuration`,
-`invalid_arguments`, `authentication_required`, `io_error`, and `operation_failed`.
-The last is the honest fallback when the underlying operation supplies no typed
-classification. Add/status rows have nullable `code`, with `file_failed` for
-failures; their existing nested result fields remain intact. Get has its existing
-more specific row codes. Consumers must not infer error types from messages.
+`invalid_arguments`, `no_files_selected`, `authentication_required`, `io_error`,
+and `operation_failed`. The last is the honest fallback when the underlying
+operation supplies no typed classification. A valid add selection that finds
+no files uses `no_files_selected` and exits `1`; malformed CLI usage uses
+`invalid_arguments` and exits `2`. Add/status rows have nullable `code`, with
+`file_failed` for failures; their existing nested result fields remain intact.
+Get has its existing more specific row codes. Consumers must not infer error
+types from messages.
 
 Exit statuses are `0` for success, `1` for operation or per-file failure, `2` for
 argument/configuration errors, and `3` for get conflicts without another failure.
@@ -45,18 +48,22 @@ process is killed means the operation was interrupted: rescan before retrying.
 
 ## Discovery
 
-`dvs info --offline --json` discovers the current project from the working
-directory without server requests or credential access. `project_root` and
-`metadata_directory` are absolute native paths. Existing file result `path` values
-are relative to the project root; get additionally supplies `local_path` for
-human-facing invocations. Clients should use `path` with `project_root` and must
-not assume that every path is relative to the invoking directory.
+`dvs info --json` always discovers local project facts without requiring a
+separate offline flag. `project_root` and `metadata_directory` are absolute
+native paths. Existing file result `path` values are relative to the project
+root; get additionally supplies `local_path` for human-facing invocations.
+Clients should use `path` with `project_root` and must not assume that every path
+is relative to the invoking directory.
 
 `protocol.versions` lists supported result versions; `protocol.capabilities`
-currently contains `json_results`, `get_conflict_policy`, and `offline_discovery`.
-Offline server discovery returns `logged_in: null` and `access: null`, meaning
-unknown, rather than claiming there is no access. Online `info` checks credentials
-and server access as before.
+currently contains `json_results`, `get_conflict_policy`, and
+`connectivity_status`. For a local backend, `connection` is
+`not_applicable`. For a server backend, `connection` is `unknown` when no
+credential is available, `available` when the access request reaches the
+server, and `unavailable` when the server cannot be reached or is failing.
+When unavailable, local project facts are still returned, with
+`connection_error` describing the failed check and access-specific fields left
+unknown. A successful connection check is only a point-in-time observation.
 
 ## Authentication
 

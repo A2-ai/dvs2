@@ -90,8 +90,9 @@ individual rows. The root `error` is an object; an add/status row's existing
 | `2` | Invalid CLI arguments or configuration |
 | `3` | Get conflicts without another failure |
 
-Existing exit categories are retained, with the empty-add selection correction
-from exit `1` to usage exit `2` described below. Failures become consumable on stdout.
+Existing exit categories are retained. A valid add path or glob that selects no
+files is a no-file operation failure with exit `1`, not an argument parsing
+failure. Failures become consumable on stdout.
 Unexpected library failures use `operation_failed`; the CLI does not guess an
 error classification from message text. Clients must accept unknown fields and
 codes and must inspect the result even when the process exits nonzero.
@@ -165,8 +166,8 @@ row; stderr contained:
 Error: Some files failed to add
 ```
 
-Exit was `1`. After, exit remains `1`, stderr is empty, and stdout contains a
-single result. Envelope and row **excerpt**, with the platform-dependent error
+Exit was `1`. After, exit remains `1`, stderr is empty in JSON mode, and stdout
+contains a single result. Envelope and row **excerpt**, with the platform-dependent error
 message abbreviated:
 
 ```json
@@ -224,7 +225,8 @@ The actual successful tracked row also contains its full metadata. A failed row
 has `path`, display `error`, and `code: file_failed`; counts and command outcome
 reflect the retained rows after status filters. Any row failures produce exit
 `1` with no extra root error document. Before, status emitted the array and a
-stderr summary `Error: Some files failed to get status`.
+stderr summary `Error: Some files failed to get status`. JSON mode now keeps
+stderr empty; human mode retains that summary.
 
 This PR does not add richer status facts or a cache-only status mode. Those belong
 to the next PR. Human-readable tables remain available without `--json`.
@@ -318,12 +320,12 @@ exit `0` with empty stderr:
   "backend": "local",
   "storage": "/example/storage",
   "compression": "none",
+  "connection": "not_applicable",
   "project_root": "/example/project",
   "metadata_directory": "/example/project/.dvs",
-  "offline": false,
   "protocol": {
     "versions": [1],
-    "capabilities": ["json_results", "get_conflict_policy", "offline_discovery"]
+    "capabilities": ["json_results", "get_conflict_policy", "connectivity_status"]
   }
 }
 ```
@@ -331,48 +333,19 @@ exit `0` with empty stderr:
 `version` is the application version; `v` is the result protocol version. Existing
 info fields remain top-level. Root and metadata paths are absolute native paths,
 including a configured alternate metadata directory. Discovery from a project
-subdirectory returns the same root, not the invoking directory.
+subdirectory returns the same root, not the invoking directory. The response
+also reports `connection: "not_applicable"` for a local backend.
 
-### Offline server discovery
+### Best-effort server information
 
-```bash
-"$AFTER" info --offline --json
-```
-
-Before, `--offline` was unknown: stdout empty, clap diagnostic on stderr, exit
-`2`. After, no server or credential access occurs. Exit is `0` with empty stderr
-when local discovery succeeds. Server-specific **excerpt**:
-
-```json
-{
-  "command": "info",
-  "outcome": "complete",
-  "backend": "server",
-  "project": "example",
-  "server": "https://dvs.example.test/",
-  "offline": true,
-  "logged_in": null,
-  "user": null,
-  "access": null,
-  "groups": []
-}
-```
-
-The full document also includes the common envelope, compression, version,
-project/metadata paths, and protocol capabilities. Null login/access means
-**unknown**, not logged out or denied. This permits local discovery during an
-outage and avoids prompting for credentials. Offline local info works too.
-
-### Online server information
-
-Without `--offline`, info continues to read credentials and, when logged in,
-request server access. Existing `project`, `server`, `logged_in`, `user`, `access`,
-and `groups` fields are retained alongside the new envelope/discovery fields.
-With no credential: `logged_in: false`, `user: null`, `access: "none"`, `groups:
-[]`; this is a successful answer, exit `0`. Authenticated access information is
-returned as before. Online network/configuration failures now emit shared error
-JSON with the appropriate nonzero status. This foundation does not change the
-underlying server access implementation.
+The same `info --json` command reports local project facts for a server backend
+and checks server access when a credential is available. With no credential,
+`logged_in` remains `false`, `access` remains `"none"`, and `connection` is
+`"unknown"`; info does not initiate login. If the access check cannot reach a
+working server, info still succeeds and returns the local fields, with
+`connection: "unavailable"`, `connection_error`, and unknown access-specific
+fields. A successful check reports `connection: "available"`. This is a
+point-in-time observation, not a guarantee that a later operation will succeed.
 
 ## Shared errors: stdout becomes usable on failure
 
@@ -443,12 +416,28 @@ stderr empty; exit `2`. Its display message contains clap's diagnostic, includin
 usage guidance. `command: cli` explicitly indicates that command execution never
 started; the CLI does not infer a command name from error prose.
 
-An add glob that resolves to no files now returns `invalid_arguments`, root
-`command: add`, and exit `2`. Before it printed `Error: No files to add` to stderr
-and exited `1` without JSON. Example using a fresh fixture and a nonmatching glob:
+An add glob that resolves to no files returns `no_files_selected`, root
+`command: add`, and exit `1`. A missing literal path has the same no-file
+classification. Before it printed `Error: No files to add` to stderr and exited
+`1` without JSON. Example using a fresh fixture and a nonmatching glob:
 
 ```bash
 "$AFTER" add --glob '*.does-not-exist' --json
+```
+
+After: stdout is one failed result, stderr empty, exit `1`:
+
+```json
+{
+  "v": 1,
+  "command": "add",
+  "outcome": "failed",
+  "dry_run": false,
+  "counts": {"total": 0, "succeeded": 0, "failed": 0},
+  "problem": "No files to add",
+  "error": {"code": "no_files_selected", "message": "No files to add"},
+  "files": []
+}
 ```
 
 ## Get: preserve conflict behavior and enrich shared errors
@@ -579,8 +568,10 @@ After, stderr is empty and the successful JSON result carries this **excerpt**:
 
 `revoked: false` is not a claim that the token stopped working remotely. The
 command fulfilled local logout; the warning exposes the remaining uncertainty.
-If local deletion itself fails, logout instead returns a shared failure and
-nonzero exit. Human logout messages remain available without `--json`.
+If local deletion itself fails, logout returns a shared failure and nonzero
+exit; if remote revocation also failed, the JSON failure includes the
+`revoke_failed` warning as well. Human logout messages remain available without
+`--json`.
 
 ## Help, version, human output, and literal filenames
 
@@ -597,8 +588,8 @@ should use `info --json` for machine-readable version/project discovery.
 
 Without `--json`, regular human output is preserved: init confirmation, status
 tables, get explanations, and login instructions. Partial add/status still print
-per-file errors on stderr; the redundant final aggregate error line is removed
-because the command already reported its result. Their failure exit remains `1`.
+per-file errors and the final aggregate error line on stderr. Their failure exit
+remains `1`.
 
 The argument terminator matters:
 
@@ -614,9 +605,10 @@ passes the final token as a literal filename.
 ## Review and validation
 
 The foundation's subprocess tests cover startup/argument/configuration failures,
-add success and partial execution, status wrapping, preserved get conflicts,
-subdirectory discovery, offline server discovery, login JSON rejection, and
-help/version/literal-flag behavior. Run from this PR's checkout:
+add success, no-match selection, and partial execution, status wrapping,
+preserved get conflicts, subdirectory discovery, server connection state without
+credentials, login JSON rejection, and help/version/literal-flag behavior. Run
+from this PR's checkout:
 
 ```bash
 cargo test -p dvs-cli

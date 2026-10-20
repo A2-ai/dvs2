@@ -23,6 +23,11 @@ pub fn coded(code: &'static str, message: impl Into<String>) -> Error {
 pub fn error_code(error: &Error) -> &'static str {
     if let Some(error) = error.downcast_ref::<CodedError>() {
         error.code
+    } else if error
+        .downcast_ref::<dvs::globbing::NoFilesSelected>()
+        .is_some()
+    {
+        "no_files_selected"
     } else if error.downcast_ref::<dvs::config::ConfigError>().is_some() {
         "invalid_configuration"
     } else if error.downcast_ref::<std::io::Error>().is_some() {

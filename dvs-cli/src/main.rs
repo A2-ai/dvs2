@@ -147,11 +147,7 @@ pub enum Command {
         force: bool,
     },
     /// Show the project configuration and the server info is using a dvs-server backend
-    Info {
-        /// Discover local project configuration without contacting a server or reading credentials
-        #[clap(long)]
-        offline: bool,
-    },
+    Info,
     /// Log in to a DVS server, the one in the config unless a URL is given
     Login { url: Option<Url> },
     /// Log out from a DVS server
@@ -368,7 +364,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 .into_iter()
                 .collect();
             if all_paths.is_empty() {
-                return Err(output::coded("invalid_arguments", "No files to add"));
+                return Err(output::coded("no_files_selected", "No files to add"));
             }
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
@@ -439,6 +435,9 @@ fn try_main(cli: Cli) -> Result<()> {
                 }
             }
             if has_errors {
+                if !cli.json {
+                    eprintln!("Error: Some files failed to add");
+                }
                 return Err(Exit(1).into());
             }
         }
@@ -557,6 +556,9 @@ fn try_main(cli: Cli) -> Result<()> {
                 }
             }
             if has_errors {
+                if !cli.json {
+                    eprintln!("Error: Some files failed to get status");
+                }
                 return Err(Exit(1).into());
             }
         }
@@ -618,7 +620,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 return Err(Exit(code).into());
             }
         }
-        Command::Info { offline } => {
+        Command::Info => {
             let config = find_config(&current_dir)?;
             let compression = config.compression().to_string();
             let dvs_paths = DvsPaths::from_cwd(&config)?;
@@ -629,8 +631,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 }
                 result["project_root"] = json!(dvs_paths.repo_root());
                 result["metadata_directory"] = json!(dvs_paths.metadata_folder());
-                result["offline"] = json!(offline);
-                result["protocol"] = json!({"versions": [1], "capabilities": ["json_results", "get_conflict_policy", "offline_discovery"]});
+                result["protocol"] = json!({"versions": [1], "capabilities": ["json_results", "get_conflict_policy", "connectivity_status"]});
                 output::emit(result);
             };
 
@@ -642,25 +643,33 @@ fn try_main(cli: Cli) -> Result<()> {
                             "backend": "local",
                             "storage": l.path,
                             "compression": compression,
+                            "connection": "not_applicable",
                         }));
                     } else {
                         println!("dvs {}", dvs::VERSION);
                         println!("backend     local");
                         println!("storage     {}", l.path.display());
                         println!("compression {compression}");
+                        println!("connection  not applicable");
                     }
                 }
                 Backend::Server(s) => {
                     // Not logged in is an answer, not an error
-                    let logged_in = if offline {
-                        None
+                    let logged_in = get_token(&s.url)?.is_some();
+                    let (access, connection, connection_error) = if logged_in {
+                        match s.access() {
+                            Ok(access) => (access, "available", None),
+                            Err(error)
+                                if error
+                                    .downcast_ref::<dvs::backends::server::Unreachable>()
+                                    .is_some() =>
+                            {
+                                (None, "unavailable", Some(format!("{error:#}")))
+                            }
+                            Err(error) => return Err(error),
+                        }
                     } else {
-                        Some(get_token(&s.url)?.is_some())
-                    };
-                    let access = if logged_in == Some(true) {
-                        s.access()?
-                    } else {
-                        None
+                        (None, "unknown", None)
                     };
                     if cli.json {
                         info_json(json!({
@@ -670,21 +679,33 @@ fn try_main(cli: Cli) -> Result<()> {
                             "server": s.url,
                             "compression": compression,
                             "logged_in": logged_in,
+                            "connection": connection,
+                            "connection_error": connection_error,
                             "user": access.as_ref().map(|a| &a.user),
-                            "access": if offline { None } else { Some(access.as_ref().map_or("none", |a| a.access.as_str())) },
-                            "groups": access.as_ref().map_or(&[][..], |a| &a.groups),
+                            "access": if !logged_in || connection == "available" {
+                                json!(access.as_ref().map_or("none", |a| a.access.as_str()))
+                            } else {
+                                serde_json::Value::Null
+                            },
+                            "groups": if connection == "unavailable" {
+                                serde_json::Value::Null
+                            } else {
+                                json!(access.as_ref().map_or(&[][..], |a| &a.groups))
+                            },
                         }));
                     } else {
                         let project = match (&access, logged_in) {
-                            (Some(a), _) => format!("{} ({})", s.name, a.access),
-                            (None, Some(true)) => format!("{} (no access)", s.name),
-                            (None, _) => s.name.clone(),
+                            (Some(a), true) => format!("{} ({})", s.name, a.access),
+                            (None, true) if connection == "available" => {
+                                format!("{} (no access)", s.name)
+                            }
+                            _ => s.name.clone(),
                         };
                         println!("dvs {}", dvs::VERSION);
                         println!("backend     server");
                         println!("project     {project}");
                         println!("server      {}", s.url);
-                        if logged_in == Some(false) {
+                        if !logged_in {
                             println!("user        not logged in, run `dvs login`");
                         } else if let Some(a) = &access {
                             match &a.user.email {
@@ -696,6 +717,10 @@ fn try_main(cli: Cli) -> Result<()> {
                             if !a.groups.is_empty() {
                                 println!("groups      {}", a.groups.join(", "));
                             }
+                        }
+                        println!("connection  {connection}");
+                        if let Some(error) = connection_error {
+                            eprintln!("Warning: {error}");
                         }
                         println!("compression {compression}");
                     }
@@ -732,8 +757,20 @@ fn try_main(cli: Cli) -> Result<()> {
                 // The local copy goes regardless: the server may be unreachable, and keeping
                 // a token the user asked to drop is worse than one revoke call too few.
                 let revoke_error = revoke_token(url, &token).err();
-                delete_token(url)?;
                 if cli.json {
+                    if let Err(delete_error) = delete_token(url) {
+                        let mut result = output::problem("logout", false, &delete_error);
+                        result["revoked"] = json!(revoke_error.is_none());
+                        result["warnings"] = json!(
+                            revoke_error
+                                .as_ref()
+                                .map(|e| json!({"code": "revoke_failed", "message": e.to_string()}))
+                                .into_iter()
+                                .collect::<Vec<_>>()
+                        );
+                        output::emit(result);
+                        return Err(Exit(1).into());
+                    }
                     let mut result = output::envelope("logout", false, vec![], 0);
                     result["revoked"] = json!(revoke_error.is_none());
                     result["warnings"] = json!(
@@ -745,9 +782,10 @@ fn try_main(cli: Cli) -> Result<()> {
                     );
                     output::emit(result);
                 } else {
-                    if let Some(e) = revoke_error {
+                    if let Some(e) = &revoke_error {
                         eprintln!("Warning: could not revoke the token on the server: {e}");
                     }
+                    delete_token(url)?;
                     println!("Logged out successfully");
                 }
             } else {
@@ -784,7 +822,7 @@ impl Command {
             Self::Add { .. } => "add",
             Self::Status { .. } => "status",
             Self::Get { .. } => "get",
-            Self::Info { .. } => "info",
+            Self::Info => "info",
             Self::Login { .. } => "login",
             Self::Logout => "logout",
         }

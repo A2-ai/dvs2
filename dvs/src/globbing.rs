@@ -2,9 +2,21 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::paths::{DvsPaths, PathFilter};
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use globset::{GlobBuilder, GlobMatcher};
 use walkdir::WalkDir;
+
+/// A valid add selection that names a path that does not exist.
+#[derive(Debug)]
+pub struct NoFilesSelected(pub PathBuf);
+
+impl std::fmt::Display for NoFilesSelected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Path not found: {}", self.0.display())
+    }
+}
+
+impl std::error::Error for NoFilesSelected {}
 
 /// Builds the glob matching the rg behaviour
 /// eg "*.csv" will not match `some/dir/test.csv`
@@ -46,7 +58,7 @@ pub fn resolve_paths_for_add(
             .cwd()
             .join(&path)
             .canonicalize()
-            .map_err(|_| anyhow!("Path not found: {}", path.display()))?;
+            .map_err(|_| NoFilesSelected(path.clone()))?;
 
         // Explicit file: we ignore the glob and add it to the file
         if full_path.is_file() {
