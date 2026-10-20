@@ -823,6 +823,7 @@ impl Command {
             Self::Logout => "logout",
         }
     }
+
     fn dry_run(&self) -> bool {
         matches!(
             self,
