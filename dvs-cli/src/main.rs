@@ -650,7 +650,6 @@ fn try_main(cli: Cli) -> Result<()> {
                         println!("backend     local");
                         println!("storage     {}", l.path.display());
                         println!("compression {compression}");
-                        println!("connection  not applicable");
                     }
                 }
                 Backend::Server(s) => {
@@ -660,9 +659,10 @@ fn try_main(cli: Cli) -> Result<()> {
                         match s.access() {
                             Ok(access) => (access, "available", None),
                             Err(error)
-                                if error
-                                    .downcast_ref::<dvs::backends::server::Unreachable>()
-                                    .is_some() =>
+                                if cli.json
+                                    && error
+                                        .downcast_ref::<dvs::backends::server::Unreachable>()
+                                        .is_some() =>
                             {
                                 (None, "unavailable", Some(format!("{error:#}")))
                             }
@@ -717,10 +717,6 @@ fn try_main(cli: Cli) -> Result<()> {
                             if !a.groups.is_empty() {
                                 println!("groups      {}", a.groups.join(", "));
                             }
-                        }
-                        println!("connection  {connection}");
-                        if let Some(error) = connection_error {
-                            eprintln!("Warning: {error}");
                         }
                         println!("compression {compression}");
                     }
