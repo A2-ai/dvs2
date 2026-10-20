@@ -91,3 +91,20 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
 pub fn emit(value: Value) {
     println!("{value}");
 }
+
+pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value>, usize) {
+    let mut failed = 0;
+    let files = rows
+        .into_iter()
+        .map(|(mut value, is_error)| {
+            failed += usize::from(is_error);
+            value["code"] = if is_error {
+                json!("file_failed")
+            } else {
+                Value::Null
+            };
+            value
+        })
+        .collect();
+    (files, failed)
+}

@@ -11,12 +11,12 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::SyncSender;
 
 use miniextendr_api::externalptr::ExternalPtr;
-use miniextendr_api::gc_protect::ProtectScope;
 use miniextendr_api::into_r::IntoR;
-use miniextendr_api::list::List;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
 use miniextendr_api::time::OffsetDateTime;
+use miniextendr_api::gc_protect::ProtectScope;
+use miniextendr_api::list::List;
 use miniextendr_api::{DataFrame, MatchArg, SEXP, miniextendr};
 
 use anyhow::{Result, anyhow};
@@ -28,7 +28,8 @@ use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
     Compression, FileMetadata, FileProgress, FileStatus, GetCode, GetOptions, GetReport, GetRow,
-    Hashes, PathFilter, Status, StatusDetail, add_files, get_files, get_status, set_num_threads,
+    Hashes, PathFilter, Status, StatusDetail, add_files, get_files, get_status,
+    set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -510,10 +511,7 @@ pub(crate) fn dvs_get(
     let current_dir = std::env::current_dir()?;
     let config = match Config::find(&current_dir) {
         None => {
-            let problem = format!(
-                "not in a dvs project: no dvs.toml in {} or its parents",
-                current_dir.display()
-            );
+            let problem = format!("not in a dvs project: no dvs.toml in {} or its parents", current_dir.display());
             return Ok(setup_failed_list(&problem, dry_run, false));
         }
         Some(Err(e)) => return Ok(setup_failed_list(&e.to_string(), dry_run, true)),
@@ -524,12 +522,7 @@ pub(crate) fn dvs_get(
         Err(ConfigError(message)) => return Ok(setup_failed_list(&message, dry_run, true)),
     };
     let dvs_paths = DvsPaths::from_cwd(&config)?;
-    let selection = select_paths_for_get(
-        paths,
-        glob.as_deref(),
-        &dvs_paths,
-        recursive.unwrap_or(false),
-    )?;
+    let selection = select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive.unwrap_or(false))?;
     let options = GetOptions {
         dry_run,
         on_conflict: policy,
@@ -539,13 +532,7 @@ pub(crate) fn dvs_get(
     let report = if progress_callback.is_some() && !dry_run {
         run_with_progress(|tx| {
             let on_file_start = progress_on_file_start(tx);
-            Ok(get_files(
-                selection,
-                &dvs_paths,
-                config.backend(),
-                options,
-                Some(&on_file_start),
-            ))
+            Ok(get_files(selection, &dvs_paths, config.backend(), options, Some(&on_file_start)))
         })?
     } else {
         get_files(selection, &dvs_paths, config.backend(), options, None)
@@ -563,11 +550,7 @@ fn setup_failed_list(message: &str, dry_run: bool, config_error: bool) -> List {
 
 /// The next step for a row, in R syntax.
 fn r_hint(row: &GetRow) -> Option<String> {
-    let p = row
-        .local_path
-        .to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
+    let p = row.local_path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
     let choices = format!(
         "keep your version: dvs_add(\"{p}\") (makes it the tracked version); take the tracked version: dvs_get(\"{p}\", on_conflict = \"overwrite\") (replaces yours)"
     );
@@ -602,10 +585,7 @@ fn r_hint(row: &GetRow) -> Option<String> {
 /// `list(files = <data.frame with a fixed schema>, info = <list>)`.
 /// `setup_failed` is `Some(config_error)` when the get could not start.
 fn get_result_list(report: &GetReport, setup_failed: Option<bool>) -> List {
-    fn strs<'a>(
-        rows: &'a [GetRow],
-        f: impl Fn(&'a GetRow) -> Option<String>,
-    ) -> Vec<Option<String>> {
+    fn strs<'a>(rows: &'a [GetRow], f: impl Fn(&'a GetRow) -> Option<String>) -> Vec<Option<String>> {
         rows.iter().map(f).collect()
     }
     let rows = &report.files;
@@ -617,52 +597,16 @@ fn get_result_list(report: &GetReport, setup_failed: Option<bool>) -> List {
 
     let mut columns: Vec<(&'static str, SEXP)> = Vec::with_capacity(12);
     let mut column = |name: &'static str, values: SEXP| columns.push((name, protect(values)));
-    column(
-        "path",
-        strs(rows, |r| Some(r.path.to_string_lossy().into_owned())).into_sexp(),
-    );
-    column(
-        "local_path",
-        strs(rows, |r| Some(r.local_path.to_string_lossy().into_owned())).into_sexp(),
-    );
-    column(
-        "before",
-        strs(rows, |r| Some(r.before.as_str().to_string())).into_sexp(),
-    );
-    column(
-        "action",
-        strs(rows, |r| Some(r.action.as_str().to_string())).into_sexp(),
-    );
-    column(
-        "satisfied",
-        rows.iter()
-            .map(|r| r.satisfied)
-            .collect::<Vec<bool>>()
-            .into_sexp(),
-    );
-    column(
-        "size",
-        rows.iter()
-            .map(|r| r.size.map(|s| s as f64))
-            .collect::<Vec<Option<f64>>>()
-            .into_sexp(),
-    );
-    column(
-        "target_hash",
-        strs(rows, |r| r.target_hash.clone()).into_sexp(),
-    );
-    column(
-        "local_hash",
-        strs(rows, |r| r.local_hash.clone()).into_sexp(),
-    );
-    column(
-        "stored_copy",
-        strs(rows, |r| r.stored_copy.map(|c| c.as_str().to_string())).into_sexp(),
-    );
-    column(
-        "code",
-        strs(rows, |r| r.code.map(|c| c.as_str().to_string())).into_sexp(),
-    );
+    column("path", strs(rows, |r| Some(r.path.to_string_lossy().into_owned())).into_sexp());
+    column("local_path", strs(rows, |r| Some(r.local_path.to_string_lossy().into_owned())).into_sexp());
+    column("before", strs(rows, |r| Some(r.before.as_str().to_string())).into_sexp());
+    column("action", strs(rows, |r| Some(r.action.as_str().to_string())).into_sexp());
+    column("satisfied", rows.iter().map(|r| r.satisfied).collect::<Vec<bool>>().into_sexp());
+    column("size", rows.iter().map(|r| r.size.map(|s| s as f64)).collect::<Vec<Option<f64>>>().into_sexp());
+    column("target_hash", strs(rows, |r| r.target_hash.clone()).into_sexp());
+    column("local_hash", strs(rows, |r| r.local_hash.clone()).into_sexp());
+    column("stored_copy", strs(rows, |r| r.stored_copy.map(|c| c.as_str().to_string())).into_sexp());
+    column("code", strs(rows, |r| r.code.map(|c| c.as_str().to_string())).into_sexp());
     column("message", strs(rows, |r| r.message.clone()).into_sexp());
     column("hint", strs(rows, r_hint).into_sexp());
     let files = protect(
@@ -674,8 +618,7 @@ fn get_result_list(report: &GetReport, setup_failed: Option<bool>) -> List {
 
     let c = &report.counts;
     let mut counts: Vec<(&'static str, SEXP)> = Vec::with_capacity(8);
-    let mut count =
-        |name: &'static str, n: usize| counts.push((name, protect((n as i32).into_sexp())));
+    let mut count = |name: &'static str, n: usize| counts.push((name, protect((n as i32).into_sexp())));
     count("restored", c.restored);
     count("replaced", c.replaced);
     count("unchanged", c.unchanged);
@@ -692,18 +635,8 @@ fn get_result_list(report: &GetReport, setup_failed: Option<bool>) -> List {
     field("outcome", report.outcome.as_str().to_string().into_sexp());
     field("dry_run", report.dry_run.into_sexp());
     let policy = setup_failed.is_none();
-    field(
-        "on_conflict",
-        policy
-            .then(|| report.on_conflict.as_str().to_string())
-            .into_sexp(),
-    );
-    field(
-        "source",
-        policy
-            .then(|| report.source.as_str().to_string())
-            .into_sexp(),
-    );
+    field("on_conflict", policy.then(|| report.on_conflict.as_str().to_string()).into_sexp());
+    field("source", policy.then(|| report.source.as_str().to_string()).into_sexp());
     field("counts", counts);
     field("problem", report.problem.clone().into_sexp());
     field("config_error", (setup_failed == Some(true)).into_sexp());

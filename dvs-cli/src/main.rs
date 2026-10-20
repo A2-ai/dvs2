@@ -387,22 +387,13 @@ fn try_main(cli: Cli) -> Result<()> {
                 .iter()
                 .any(|r| matches!(r.detail, AddDetail::Error { .. }));
             if cli.json {
-                let failed = results
-                    .iter()
-                    .filter(|r| matches!(r.detail, AddDetail::Error { .. }))
-                    .count();
-                let files = results
-                    .iter()
-                    .map(|r| {
-                        let mut value = serde_json::to_value(r).expect("add results serialize");
-                        value["code"] = if matches!(r.detail, AddDetail::Error { .. }) {
-                            json!("file_failed")
-                        } else {
-                            json!(null)
-                        };
-                        value
-                    })
-                    .collect();
+                let rows = results.iter().map(|r| {
+                    (
+                        serde_json::to_value(r).expect("add results serialize"),
+                        matches!(r.detail, AddDetail::Error { .. }),
+                    )
+                });
+                let (files, failed) = output::file_results(rows);
                 output::emit(output::envelope("add", dry_run, files, failed));
             } else {
                 for result in &results {
@@ -476,22 +467,13 @@ fn try_main(cli: Cli) -> Result<()> {
                 .iter()
                 .any(|s| matches!(s.detail, StatusDetail::Error { .. }));
             if cli.json {
-                let failed = statuses
-                    .iter()
-                    .filter(|r| matches!(r.detail, StatusDetail::Error { .. }))
-                    .count();
-                let files = statuses
-                    .iter()
-                    .map(|r| {
-                        let mut value = serde_json::to_value(r).expect("status results serialize");
-                        value["code"] = if matches!(r.detail, StatusDetail::Error { .. }) {
-                            json!("file_failed")
-                        } else {
-                            json!(null)
-                        };
-                        value
-                    })
-                    .collect();
+                let rows = statuses.iter().map(|r| {
+                    (
+                        serde_json::to_value(r).expect("status results serialize"),
+                        matches!(r.detail, StatusDetail::Error { .. }),
+                    )
+                });
+                let (files, failed) = output::file_results(rows);
                 output::emit(output::envelope("status", false, files, failed));
             } else if statuses.is_empty() {
                 if show_all {
