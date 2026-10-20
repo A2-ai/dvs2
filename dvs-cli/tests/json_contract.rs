@@ -73,6 +73,8 @@ fn results_wrap_files_and_preserve_get_conflicts() {
     let status = document(&run(root.path(), &["status", "--json"]));
     assert_eq!(status["command"], "status");
     assert_eq!(status["files"].as_array().unwrap().len(), 1);
+    assert!(status["files"][0].get("state").is_some());
+    assert!(status["files"][0].get("before").is_none());
     std::fs::write(root.path().join("data.txt"), "local edit").unwrap();
     let get = run(root.path(), &["get", "data.txt", "--json"]);
     assert_eq!(get.status.code(), Some(3));

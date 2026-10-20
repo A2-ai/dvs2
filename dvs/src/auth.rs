@@ -88,6 +88,21 @@ pub fn get_token(url: &Url) -> Result<Option<String>> {
     }
 }
 
+/// Read credentials without repairing or deleting the store.
+pub fn get_token_readonly(url: &Url) -> Result<Option<String>> {
+    token_from_store_readonly(&get_token_store_path()?, url)
+}
+
+fn token_from_store_readonly(path: &Path, url: &Url) -> Result<Option<String>> {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let store: TokenStore = serde_json::from_reader(file)?;
+    Ok(store.get(url.as_str()).cloned())
+}
+
 pub fn delete_token(url: &Url) -> Result<bool> {
     let path = get_token_store_path()?;
     if path.exists() {
@@ -182,4 +197,34 @@ pub fn revoke_token(base_url: &Url, token: &str) -> Result<()> {
         bail!("Server error: {}", resp.status());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod readonly_tests {
+    use super::*;
+
+    #[test]
+    fn corrupt_credentials_are_reported_and_preserved() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("credentials.json");
+        let original = b"corrupt credentials must remain available for diagnosis";
+        fs::write(&path, original).unwrap();
+        assert!(
+            token_from_store_readonly(&path, &Url::parse("https://example.test/").unwrap())
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn missing_credentials_are_not_created() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("missing").join("credentials.json");
+        assert_eq!(
+            token_from_store_readonly(&path, &Url::parse("https://example.test/").unwrap())
+                .unwrap(),
+            None
+        );
+        assert!(!path.parent().unwrap().exists());
+    }
 }

@@ -34,6 +34,21 @@ pub fn error_code(error: &Error) -> &'static str {
         "no_files_selected"
     } else if error.downcast_ref::<dvs::config::ConfigError>().is_some() {
         "invalid_configuration"
+    } else if error
+        .downcast_ref::<crate::read_cmd::QueryInputError>()
+        .is_some()
+    {
+        "invalid_arguments"
+    } else if error
+        .downcast_ref::<dvs::backends::server::Denied>()
+        .is_some()
+    {
+        "access_denied"
+    } else if error
+        .downcast_ref::<dvs::backends::server::Unreachable>()
+        .is_some()
+    {
+        "server_unavailable"
     } else if error.downcast_ref::<std::io::Error>().is_some() {
         "io_error"
     } else {

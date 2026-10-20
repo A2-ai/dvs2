@@ -9,6 +9,7 @@ mod gitignore;
 pub mod globbing;
 mod hashes;
 pub mod init;
+pub mod inspect;
 pub mod paths;
 pub mod progress;
 pub(crate) mod utils;

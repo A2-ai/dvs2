@@ -215,6 +215,96 @@ impl ServerBackend {
         .into()
     }
 
+    fn read_url(&self, endpoint: &str) -> Url {
+        let mut base = self.url.clone();
+        if !base.path().ends_with('/') {
+            base.set_path(&format!("{}/", base.path()));
+        }
+        base.join(&format!("api/{}/{}", self.name, endpoint))
+            .unwrap()
+    }
+
+    fn read_bearer(&self) -> anyhow::Result<String> {
+        if let Some(Some(token)) = self.access_token.get() {
+            return Ok(format!("Bearer {token}"));
+        }
+        let token = crate::auth::get_token_readonly(&self.url)
+            .map_err(|e| Denied(format!("Cannot read credentials: {e}")))?
+            .ok_or_else(|| Denied("Log in with `dvs login`".into()))?;
+        let _ = self.access_token.set(Some(token.clone()));
+        Ok(format!("Bearer {token}"))
+    }
+
+    fn read_status(&self, status: u16) -> anyhow::Result<()> {
+        match status {
+            200 => Ok(()),
+            401 | 403 => Err(Denied("Access denied; check `dvs login`".into()).into()),
+            code => Err(self.failing(code)),
+        }
+    }
+
+    /// Bounded access check that never modifies stored credentials.
+    pub fn access_readonly(&self) -> anyhow::Result<AccessResponse> {
+        let mut response = http_agent()
+            .get(self.read_url("access").as_str())
+            .header("authorization", self.read_bearer()?)
+            .config()
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .build()
+            .call()
+            .map_err(|e| self.unreachable(e))?;
+        self.read_status(response.status().as_u16())?;
+        response
+            .body_mut()
+            .read_json()
+            .map_err(|e| Unreachable(format!("Invalid server response: {e}")).into())
+    }
+
+    /// Query content only after establishing project access. A blob 404 then
+    /// means absent content rather than an inaccessible or nonexistent project.
+    pub fn exists_readonly(&self, hashes: &Hashes) -> anyhow::Result<bool> {
+        let response = http_agent()
+            .head(
+                self.read_url(&format!("blobs/{}", hashes.get_blake3()))
+                    .as_str(),
+            )
+            .header("authorization", self.read_bearer()?)
+            .config()
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .build()
+            .call()
+            .map_err(|e| self.unreachable(e))?;
+        match response.status().as_u16() {
+            200 => Ok(true),
+            404 => Ok(false),
+            code => {
+                self.read_status(code)?;
+                unreachable!()
+            }
+        }
+    }
+
+    pub fn history_readonly(&self, files: &[PathBuf]) -> anyhow::Result<Vec<AuditEntry>> {
+        let paths = files
+            .iter()
+            .map(|p| ProjectPath::from_path(p))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let mut response = http_agent()
+            .post(self.read_url("history").as_str())
+            .header("authorization", self.read_bearer()?)
+            .config()
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .build()
+            .send_json(&HistoryPayload { paths })
+            .map_err(|e| self.unreachable(e))?;
+        self.read_status(response.status().as_u16())?;
+        response
+            .body_mut()
+            .read_json()
+            .map_err(|e| Unreachable(format!("Invalid server response: {e}")).into())
+    }
+
     pub fn init(&self, compression: Compression) -> anyhow::Result<bool> {
         let Some(group) = self.group.clone() else {
             bail!("A group is required to create a project on the server");
@@ -434,6 +524,96 @@ impl ServerBackend {
                 "history failed ({code}): {}",
                 resp.body_mut().read_to_string().unwrap_or_default()
             ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod readonly_tests {
+    use super::*;
+    #[test]
+    fn read_urls_preserve_proxy_prefix_with_or_without_trailing_slash() {
+        for base in [
+            "https://example.test/prefix",
+            "https://example.test/prefix/",
+        ] {
+            let server = ServerBackend::new("project".into(), None, Url::parse(base).unwrap());
+            assert_eq!(
+                server.read_url("history").as_str(),
+                "https://example.test/prefix/api/project/history"
+            );
+        }
+    }
+    /// A real HTTP response must retain 404/403/503 semantics through ureq.
+    #[test]
+    fn head_responses_preserve_absent_denied_and_unavailable() {
+        use std::io::{Read, Write};
+        for (status, expected) in [
+            (200, "present"),
+            (404, "absent"),
+            (403, "denied"),
+            (503, "unavailable"),
+        ] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let handle = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut buffer = [0u8; 4096];
+                let count = stream.read(&mut buffer).unwrap();
+                let request = String::from_utf8_lossy(&buffer[..count]);
+                assert!(request.starts_with("HEAD /proxy/api/project/blobs/"));
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            });
+            let server = ServerBackend::new(
+                "project".into(),
+                None,
+                Url::parse(&format!("http://{address}/proxy")).unwrap(),
+            );
+            server.access_token.set(Some("test-token".into())).unwrap();
+            let result = server.exists_readonly(&Hashes {
+                blake3: "a".repeat(64),
+                md5: None,
+            });
+            match expected {
+                "present" => assert!(result.unwrap()),
+                "absent" => assert!(!result.unwrap()),
+                "denied" => assert!(result.unwrap_err().downcast_ref::<Denied>().is_some()),
+                _ => assert!(result.unwrap_err().downcast_ref::<Unreachable>().is_some()),
+            }
+            handle.join().unwrap();
+        }
+    }
+    #[test]
+    fn access_failures_are_typed_and_never_become_missing_content() {
+        let server = ServerBackend::new(
+            "project".into(),
+            None,
+            Url::parse("https://example.test/").unwrap(),
+        );
+        for status in [401, 403] {
+            assert!(
+                server
+                    .read_status(status)
+                    .unwrap_err()
+                    .downcast_ref::<Denied>()
+                    .is_some()
+            );
+        }
+        for status in [404, 429, 500, 503] {
+            assert!(
+                server
+                    .read_status(status)
+                    .unwrap_err()
+                    .downcast_ref::<Unreachable>()
+                    .is_some()
+            );
         }
     }
 }

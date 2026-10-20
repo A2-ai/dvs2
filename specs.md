@@ -12,6 +12,10 @@ All configuration is handled in a `dvs.toml` config file.
 
 All CLI commands take a `--json` flag if you want to get JSON output.
 
+The CLI JSON protocol specifies machine-readable envelopes, errors, exit statuses,
+and discovery. Client read queries specify rich status facts, content availability,
+and history.
+
 The Rust library must not contain anything specific to the CLI or the R package: no `miniextendr-*` dependency, no `println!`/`eprintln!`/`dbg!`. It may depend on the `log` facade but must not pull in a `log` implementer. Logger setup belongs in `dvs-cli` and `dvs-rpkg`.
 
 ## Glossary
@@ -39,14 +43,15 @@ You can pass some arguments to it or edit the toml file manually.
 
 Both `add` and `get` support a dry run from the CLI, the library, or the R package, returning the outcome that would have happened for each file without actually doing it.
 
-`status` is a way to check whether everything is checked out or if you have files different from what's in the metadata and
-that you might want to add again.
+`status` checks whether files are checked out as recorded or differ from the version in metadata.
 
-A file in a `dvs` project can be in 3 states:
+A file in a `dvs` project has these status states:
 
 - `current`: tracked in `dvs` and we have the same version as in the metadata folder checked out
 - `absent`: metadata exists in the folder but the local file is not present
-- `unsynced`: local file and metadata exists but the local file differs from the metadata
+- `unsynced`: local content differs from current metadata
+
+Both human-readable and machine-readable CLI status report differing content as `unsynced`.
 
 ### Relative paths vs. absolute paths
 
@@ -359,13 +364,13 @@ Options:
   -g, --glob <GLOB>        
       --current            Include the files that are current
       --absent             Include the files that are absent
-      --unsynced           Include the files that are unsynced
+      --unsynced           Include files whose working content differs from metadata
       --with-metadata      Show all metadata columns in the table output
   -h, --help               Print help
 ```
 
 By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`, and
-`--unsynced` flags are filters: when one or more are provided, only files matching those states are shown.
+`--current`, `--absent`, and `--unsynced` flags are filters: when one or more status flags are provided, only files matching those states are shown.
 
 This will exit with `1` if one or more files could not be inspected.
 

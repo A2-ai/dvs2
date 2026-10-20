@@ -253,6 +253,11 @@ pub struct PathFilter {
 }
 
 impl PathFilter {
+    /// Normalized project-relative selections, after rejecting paths outside the root.
+    pub fn paths(&self) -> &[PathBuf] {
+        &self.paths
+    }
+
     /// When a user doesn't provide a path, we default to the cwd relative to the root
     pub fn cwd_scoped(recursive: bool, dvs_paths: &DvsPaths) -> Self {
         let cwd = dvs_paths
