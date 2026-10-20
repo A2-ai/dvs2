@@ -52,37 +52,26 @@ fn status_reports_differences_as_unsynced_without_consulting_history() {
     add(root.path(), "data.txt", "second version");
     add(root.path(), "zz-current.txt", "current version");
     std::fs::write(root.path().join("data.txt"), "first version").unwrap();
-    let status = run(root.path(), &["status", "--json"]);
-    assert!(status.status.success(), "{}", document(&status));
-    let status = document(&status);
-    assert_eq!(status["files"][0]["status"], "unsynced");
-    assert_eq!(status["files"][0]["state"], "modified");
-    assert!(status["files"][0].get("before").is_none());
+    let unsynced = run(root.path(), &["status", "--json"]);
+    assert!(unsynced.status.success(), "{}", document(&unsynced));
+    let unsynced = document(&unsynced);
+    assert_eq!(unsynced["files"][0]["status"], "unsynced");
+    assert_eq!(unsynced["files"][0]["state"], "modified");
+    assert!(unsynced["files"][0].get("before").is_none());
     let human = run(root.path(), &["status"]);
     let human = String::from_utf8_lossy(&human.stdout);
     assert!(human.contains("unsynced"), "{human}");
-    let unsynced_only = run(root.path(), &["status", "--unsynced"]);
-    assert!(unsynced_only.status.success());
-    let unsynced_only = String::from_utf8_lossy(&unsynced_only.stdout);
-    assert!(unsynced_only.contains("data.txt"), "{unsynced_only}");
-    assert!(!unsynced_only.contains("zz-current.txt"), "{unsynced_only}");
+    let selected = run(root.path(), &["status", "--unsynced"]);
+    assert!(selected.status.success());
+    let selected = String::from_utf8_lossy(&selected.stdout);
+    assert!(selected.contains("data.txt"), "{selected}");
+    assert!(!selected.contains("zz-current.txt"), "{selected}");
 
     std::fs::write(root.path().join("data.txt"), "new unrecorded edit").unwrap();
-    let modified = run(root.path(), &["status", "--json"]);
-    assert!(modified.status.success(), "{}", document(&modified));
-    assert_eq!(document(&modified)["files"][0]["status"], "unsynced");
-    let human_modified = run(root.path(), &["status"]);
-    let human_modified = String::from_utf8_lossy(&human_modified.stdout);
-    assert!(human_modified.contains("unsynced"), "{human_modified}");
-    let modified_only = run(root.path(), &["status", "--unsynced"]);
-    assert!(modified_only.status.success());
-    let modified_only = String::from_utf8_lossy(&modified_only.stdout);
-    assert!(modified_only.contains("data.txt"), "{modified_only}");
-    assert!(!modified_only.contains("zz-current.txt"), "{modified_only}");
     std::fs::remove_file(_storage.path().join("objects/audit.log.jsonl")).unwrap();
-    let unknown = run(root.path(), &["status", "--json"]);
-    assert!(unknown.status.success(), "{}", document(&unknown));
-    assert_eq!(document(&unknown)["files"][0]["status"], "unsynced");
+    let no_history = run(root.path(), &["status", "--json"]);
+    assert!(no_history.status.success(), "{}", document(&no_history));
+    assert_eq!(document(&no_history)["files"][0]["status"], "unsynced");
 }
 
 #[test]

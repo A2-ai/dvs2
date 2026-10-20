@@ -1,9 +1,12 @@
+mod events;
 mod get_cmd;
 mod output;
 mod read_cmd;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
 
 use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
@@ -114,7 +117,7 @@ pub enum Command {
         /// Include the files that are absent
         #[clap(long)]
         absent: bool,
-        /// Include files whose working content differs from metadata
+        /// Include files that differ from recorded metadata
         #[clap(long)]
         unsynced: bool,
         /// Show all metadata columns in the table output
@@ -171,6 +174,10 @@ pub struct Cli {
     #[clap(long, global = true, display_order = 0)]
     pub json: bool,
 
+    /// Stream operation results and transfer progress as NDJSON
+    #[clap(long, global = true, conflicts_with = "json", display_order = 1)]
+    pub emit_events: bool,
+
     /// Number of threads for parallel operations (0 = auto-detect)
     #[clap(long, global = true, display_order = 1)]
     pub threads: Option<usize>,
@@ -210,6 +217,53 @@ impl<'a> From<&'a FileMetadata> for StatusRowFull<'a> {
             ..Default::default()
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct StatusSelection {
+    show_all: bool,
+    current: bool,
+    absent: bool,
+    unsynced: bool,
+}
+
+fn status_row_selected(row: &dvs::inspect::StatusFacts, selection: StatusSelection) -> bool {
+    selection.show_all
+        || row.error.is_some()
+        || (selection.current && row.status == "current")
+        || (selection.absent && row.status == "absent")
+        || (selection.unsynced && row.status == "unsynced")
+}
+
+/// Stream each completed local status check as a file result.
+fn inspect_status_events(
+    paths: &DvsPaths,
+    filter: Option<&PathFilter>,
+    glob_pattern: Option<&str>,
+    selection: StatusSelection,
+) -> Result<Vec<dvs::inspect::StatusFacts>> {
+    let events = events::active().expect("status event publishing requires event mode");
+    let (sender, receiver) = mpsc::sync_channel(32);
+    let mut results = Vec::new();
+    thread::scope(|scope| -> Result<()> {
+        let scan = scope.spawn(move || {
+            dvs::inspect::inspect_status_with_callback(paths, filter, glob_pattern, |row| {
+                let _ = sender.send(row.clone());
+            })
+        });
+        while let Ok(row) = receiver.recv() {
+            if status_row_selected(&row, selection) {
+                events.file_result(serde_json::to_value(&row)?);
+            }
+            results.push(row);
+        }
+
+        scan.join()
+            .map_err(|_| anyhow!("Status inspection worker panicked"))??;
+        results.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(())
+    })?;
+    Ok(results)
 }
 
 fn progress_style() -> ProgressStyle {
@@ -258,7 +312,7 @@ fn make_progress_callback(threshold: u64) -> impl Fn(&std::path::Path, u64) -> F
 
 /// Runs the interactive device-authorization flow and stores the resulting token.
 fn run_device_login(url: &Url, machine: bool) -> Result<()> {
-    if machine {
+    if machine && events::active().is_none() {
         return Err(output::coded(
             "authentication_required",
             "Device authorization requires interactive login; run dvs login without --json",
@@ -266,13 +320,19 @@ fn run_device_login(url: &Url, machine: bool) -> Result<()> {
     }
     let device_auth = initiate_device_approval(url)?;
     let approve_url = get_client_approve_url(url, &device_auth.user_code)?;
-    println!(
-        "Go to {approve_url} and enter the code {}",
-        device_auth.user_code
-    );
+    if let Some(events) = events::active() {
+        events.waiting_for_auth(&device_auth.user_code, approve_url.as_str());
+    } else {
+        println!(
+            "Go to {approve_url} and enter the code {}",
+            device_auth.user_code
+        );
+    }
     let polling_result = poll_for_token(url, &device_auth.device_code)?;
     store_token(url, &polling_result.access_token)?;
-    println!("You are now logged in!");
+    if events::active().is_none() {
+        println!("You are now logged in!");
+    }
     Ok(())
 }
 
@@ -379,7 +439,14 @@ fn try_main(cli: Cli) -> Result<()> {
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
 
-            let on_file_start = make_progress_callback(config.progress_bytes_threshold());
+            let human_progress = make_progress_callback(config.progress_bytes_threshold());
+            let on_file_start = move |path: &std::path::Path, size| {
+                if let Some(events) = events::active() {
+                    events.progress(path, size)
+                } else {
+                    human_progress(path, size)
+                }
+            };
             let results = add_files(
                 all_paths,
                 &dvs_paths,
@@ -387,7 +454,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 message,
                 config.compression(),
                 dry_run,
-                if show_progress {
+                if show_progress || (!dry_run && events::active().is_some()) {
                     Some(&on_file_start)
                 } else {
                     None
@@ -454,6 +521,12 @@ fn try_main(cli: Cli) -> Result<()> {
             let config = find_config(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !unsynced;
+            let selection = StatusSelection {
+                show_all,
+                current,
+                absent,
+                unsynced,
+            };
 
             let filter = if user_paths.is_empty() {
                 None
@@ -462,15 +535,13 @@ fn try_main(cli: Cli) -> Result<()> {
                     user_paths, recursive, &dvs_paths,
                 ))
             };
-            let mut statuses =
-                dvs::inspect::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
+            let mut statuses = if events::active().is_some() {
+                inspect_status_events(&dvs_paths, filter.as_ref(), glob.as_deref(), selection)?
+            } else {
+                dvs::inspect::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref())?
+            };
             if !show_all {
-                statuses.retain(|row| {
-                    row.error.is_some()
-                        || (current && row.status == "current")
-                        || (absent && row.status == "absent")
-                        || (unsynced && row.status == "unsynced")
-                });
+                statuses.retain(|row| status_row_selected(row, selection));
             }
             let failed = statuses.iter().filter(|row| row.error.is_some()).count();
             if cli.json {
@@ -478,7 +549,12 @@ fn try_main(cli: Cli) -> Result<()> {
                     .iter()
                     .map(serde_json::to_value)
                     .collect::<serde_json::Result<Vec<_>>>()?;
-                output::emit(output::envelope("status", false, files, failed));
+                let result = output::envelope("status", false, files, failed);
+                if events::active().is_some() {
+                    output::emit_streamed(result);
+                } else {
+                    output::emit(result);
+                }
                 return if failed == 0 {
                     Ok(())
                 } else {
@@ -569,7 +645,14 @@ fn try_main(cli: Cli) -> Result<()> {
             let (config, on_conflict, source, dvs_paths, selection) = setup()?;
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
-            let on_file_start = make_progress_callback(config.progress_bytes_threshold());
+            let human_progress = make_progress_callback(config.progress_bytes_threshold());
+            let on_file_start = move |path: &std::path::Path, size| {
+                if let Some(events) = events::active() {
+                    events.progress(path, size)
+                } else {
+                    human_progress(path, size)
+                }
+            };
             let report = get_files(
                 selection,
                 &dvs_paths,
@@ -579,7 +662,7 @@ fn try_main(cli: Cli) -> Result<()> {
                     on_conflict,
                     source,
                 },
-                if show_progress {
+                if show_progress || (!dry_run && events::active().is_some()) {
                     Some(&on_file_start)
                 } else {
                     None
@@ -612,7 +695,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 }
                 result["project_root"] = json!(dvs_paths.repo_root());
                 result["metadata_directory"] = json!(dvs_paths.metadata_folder());
-                result["protocol"] = json!({"versions": [1], "capabilities": ["json_results", "get_conflict_policy", "connectivity_status", "status_facts", "availability", "history"]});
+                result["protocol"] = json!({"versions": [1], "capabilities": ["json_results", "get_conflict_policy", "connectivity_status", "status_facts", "availability", "history", "event_stream", "device_login_events"]});
                 output::emit(result);
             };
 
@@ -791,12 +874,18 @@ fn try_main(cli: Cli) -> Result<()> {
         }
         Command::Login { url: Some(url) } => {
             run_device_login(&url, cli.json)?;
+            if cli.json {
+                output::emit(output::envelope("login", false, vec![], 0));
+            }
         }
         Command::Login { url: None } => {
             let config = find_config(&current_dir)?;
 
             if let Some(url) = config.server_url() {
                 run_device_login(url, cli.json)?;
+                if cli.json {
+                    output::emit(output::envelope("login", false, vec![], 0));
+                }
             } else {
                 bail!("This project is not using a dvs server");
             }
@@ -902,34 +991,66 @@ impl Command {
 
 fn main() {
     env_logger::init();
-    let cli = match Cli::try_parse() {
+    let mut cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
             // Help/version remain the conventional human-readable clap output.
-            if error.use_stderr()
-                && std::env::args_os()
-                    .take_while(|arg| arg != "--")
-                    .any(|arg| arg == "--json")
-            {
+            let flags: Vec<_> = std::env::args_os().take_while(|arg| arg != "--").collect();
+            let emit_events = flags.iter().any(|arg| arg == "--emit-events");
+            if error.use_stderr() && (emit_events || flags.iter().any(|arg| arg == "--json")) {
+                if emit_events {
+                    events::activate("cli");
+                }
                 let error = output::coded("invalid_arguments", error.to_string());
                 output::emit(output::problem("cli", false, &error));
-                std::process::exit(2);
+                std::process::exit(finish_events("cli", false, 2));
             }
             error.exit();
         }
     };
-    let json = cli.json;
     let command = cli.command.name();
     let dry_run = cli.command.dry_run();
-    if let Err(error) = try_main(cli) {
-        if let Some(Exit(code)) = error.downcast_ref::<Exit>() {
-            std::process::exit(*code);
-        }
-        if json {
-            output::emit(output::problem(command, dry_run, &error));
-        } else {
-            eprintln!("Error: {error}");
-        }
-        std::process::exit(output::exit_code(&error));
+    if cli.emit_events {
+        events::activate(command);
+        // Reuse exactly the JSON command results without rendering human output.
+        cli.json = true;
     }
+    let json = cli.json;
+    let code = match try_main(cli) {
+        Ok(()) => 0,
+        Err(error) => {
+            if let Some(Exit(code)) = error.downcast_ref::<Exit>() {
+                *code
+            } else {
+                if json {
+                    output::emit(output::problem(command, dry_run, &error));
+                } else {
+                    eprintln!("Error: {error}");
+                }
+                output::exit_code(&error)
+            }
+        }
+    };
+    let code = finish_events(command, dry_run, code);
+    if code != 0 {
+        std::process::exit(code);
+    }
+}
+
+fn finish_events(command: &str, dry_run: bool, mut code: i32) -> i32 {
+    if let Some(events) = events::active() {
+        let result = events.take_result().unwrap_or_else(|| {
+            code = 1;
+            output::problem(
+                command,
+                dry_run,
+                &output::coded("operation_failed", "Command did not produce a result"),
+            )
+        });
+        if let Err(error) = events.finish(result, code) {
+            eprintln!("Error writing event stream: {error}");
+            return 1;
+        }
+    }
+    code
 }

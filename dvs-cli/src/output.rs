@@ -104,7 +104,18 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
 
 /// Single rendering seam for JSON and, in future, terminal event results.
 pub fn emit(value: Value) {
-    println!("{value}");
+    if let Some(events) = crate::events::active() {
+        events.record_result(value);
+    } else {
+        println!("{value}");
+    }
+}
+
+/// Record a result whose file rows have already been streamed as they completed.
+pub fn emit_streamed(value: Value) {
+    crate::events::active()
+        .expect("streamed file rows require event mode")
+        .record_streamed_result(value);
 }
 
 pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value>, usize) {
