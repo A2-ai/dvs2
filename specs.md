@@ -43,15 +43,18 @@ You can pass some arguments to it or edit the toml file manually.
 
 Both `add` and `get` support a dry run from the CLI, the library, or the R package, returning the outcome that would have happened for each file without actually doing it.
 
-`status` checks whether files are checked out as recorded or differ from the version in metadata.
+`status` compares the working file with its metadata and, when available, the local baseline recorded by the last successful `get`.
 
 A file in a `dvs` project has these status states:
 
 - `current`: tracked in `dvs` and we have the same version as in the metadata folder checked out
 - `absent`: metadata exists in the folder but the local file is not present
-- `unsynced`: local content differs from current metadata
+- `stale`: local content differs from current metadata but still matches the local baseline
+- `modified`: local content differs from both current metadata and the local baseline
+- `unsynced`: local content differs from metadata, but no baseline is available to determine why
 
-Both human-readable and machine-readable CLI status report differing content as `unsynced`.
+Both human-readable and machine-readable CLI status report `stale` and
+`modified` separately.
 
 ### Relative paths vs. absolute paths
 
@@ -364,13 +367,15 @@ Options:
   -g, --glob <GLOB>        
       --current            Include the files that are current
       --absent             Include the files that are absent
-      --unsynced           Include files whose working content differs from metadata
+      --stale              Include files unchanged since the last successful get when metadata has advanced
+      --modified           Include files changed since the last successful get
+      --unsynced           Include differing files whose local baseline is unavailable
       --with-metadata      Show all metadata columns in the table output
   -h, --help               Print help
 ```
 
-By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`, and
-`--current`, `--absent`, and `--unsynced` flags are filters: when one or more status flags are provided, only files matching those states are shown.
+By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`,
+`--stale`, `--modified`, and `--unsynced` flags are filters: when one or more status flags are provided, only files matching those states are shown.
 
 This will exit with `1` if one or more files could not be inspected.
 
@@ -390,14 +395,15 @@ as per-file errors in the result list.
 dvs_status(
   paths = character(0),
   recursive = NULL,
-  status = c("current", "absent", "unsynced")
+  status = c("current", "absent", "stale", "modified", "unsynced")
 )
 ```
 
 - `paths` optional vector of paths files to retrieve status of
 - `recursive` if `TRUE`, recursively include files in subdirectories for any directory paths
-- `status` represent the filter flags `current`, `absent`, `unsynced`
-  When omitted, all three states are present in the returned data-frame, otherwise serval filtering status can be provided
+- `status` filters by `current`, `absent`, `stale`, `modified`, or `unsynced`.
+  A differing working file is `stale` when it still matches the local baseline, and `modified` when it differs from that baseline.
+  Without a baseline, DVS reports `unsynced` because it cannot determine why the file differs from metadata. When omitted, all statuses are returned.
 
 Returns a data frame with one row per tracked file.
 
@@ -504,9 +510,9 @@ changed. Both `add` and `get` populate the cache after a successful operation, s
 check benefits from cache hits. A cache hit is determined by matching the file's `mtime` and `size`. The cache directory is
 automatically added to `.gitignore` on creation. The cache is optional.
 
-The same database holds the `get` baseline (`baseline(path, blake3, size)`): what dvs last wrote or added at
-each path. Unlike the hash cache, `status` never writes it. Deleting it is safe; changed files then count as
-`unknown` until the next `get` or `add`.
+The same database holds the local baseline (`baseline(path, blake3, size)`): what dvs last wrote or added at
+each path. Unlike the hash cache, `status` never writes it. Deleting it is safe; a differing file then reports
+`unsynced` in status, while `get` treats it as `unknown` until the next `get` or `add`.
 
 ### Parallelism
 

@@ -53,7 +53,15 @@ fn get_file_status(
     if existing_metadata.hashes == hashes && existing_metadata.size == size {
         Ok((Status::Current, Some(existing_metadata)))
     } else {
-        Ok((Status::Unsynced, Some(existing_metadata)))
+        let baseline = cache.and_then(|cache| cache.lock().ok()?.baseline(&rel_str).ok().flatten());
+        let status = match baseline {
+            Some((blake3, baseline_size)) if blake3 == hashes.blake3 && baseline_size == size => {
+                Status::Stale
+            }
+            Some(_) => Status::Modified,
+            None => Status::Unsynced,
+        };
+        Ok((status, Some(existing_metadata)))
     }
 }
 
@@ -210,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn get_file_status_returns_unsynced_when_file_modified() {
+    fn get_file_status_returns_unsynced_without_baseline() {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
@@ -239,6 +247,100 @@ mod tests {
     }
 
     #[test]
+    fn get_status_uses_local_baseline_and_reports_unsynced_without_one() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+
+        let stale_file = create_file(&root, "stale.txt", b"prior version");
+        let baseline = FileMetadata::from_file(&stale_file, Compression::Zstd, None).unwrap();
+        fs::write(&stale_file, b"recorded version").unwrap();
+        let mut current = FileMetadata::from_file(&stale_file, Compression::Zstd, None).unwrap();
+        current
+            .save(
+                Uuid::new_v4(),
+                &stale_file,
+                &backend,
+                &paths,
+                "stale.txt",
+                None,
+            )
+            .unwrap();
+        let cache = make_cache(&paths);
+        cache
+            .lock()
+            .unwrap()
+            .set_baseline("stale.txt", &baseline.hashes.blake3, baseline.size)
+            .unwrap();
+        fs::write(&stale_file, b"prior version").unwrap();
+
+        let modified_file = create_file(&root, "modified.txt", b"recorded version");
+        let mut recorded =
+            FileMetadata::from_file(&modified_file, Compression::Zstd, None).unwrap();
+        recorded
+            .save(
+                Uuid::new_v4(),
+                &modified_file,
+                &backend,
+                &paths,
+                "modified.txt",
+                None,
+            )
+            .unwrap();
+        cache
+            .lock()
+            .unwrap()
+            .set_baseline("modified.txt", &recorded.hashes.blake3, recorded.size)
+            .unwrap();
+        fs::write(&modified_file, b"unrecorded edit").unwrap();
+
+        let unsynced_file = create_file(&root, "unsynced.txt", b"recorded version");
+        let mut unsynced =
+            FileMetadata::from_file(&unsynced_file, Compression::Zstd, None).unwrap();
+        unsynced
+            .save(
+                Uuid::new_v4(),
+                &unsynced_file,
+                &backend,
+                &paths,
+                "unsynced.txt",
+                None,
+            )
+            .unwrap();
+        fs::write(&unsynced_file, b"unexplained mismatch").unwrap();
+
+        let statuses = get_status(&paths, None, None).unwrap();
+        let status_for = |name| {
+            statuses
+                .iter()
+                .find(|row| row.path == PathBuf::from(name))
+                .unwrap()
+        };
+        assert!(matches!(
+            status_for("stale.txt").detail,
+            StatusDetail::Success {
+                status: Status::Stale,
+                ..
+            }
+        ));
+        assert!(matches!(
+            status_for("modified.txt").detail,
+            StatusDetail::Success {
+                status: Status::Modified,
+                ..
+            }
+        ));
+        assert!(matches!(
+            status_for("unsynced.txt").detail,
+            StatusDetail::Success {
+                status: Status::Unsynced,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn get_status_returns_all_tracked_files() {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
@@ -261,7 +363,9 @@ mod tests {
         // All should be Current
         for status in &statuses {
             match &status.detail {
-                StatusDetail::Success { status, metadata } => {
+                StatusDetail::Success {
+                    status, metadata, ..
+                } => {
                     assert_eq!(*status, Status::Current);
                     assert!(metadata.is_some());
                 }

@@ -46,32 +46,65 @@ fn add(root: &Path, path: &str, contents: &str) -> String {
 }
 
 #[test]
-fn status_reports_differences_as_unsynced_without_consulting_history() {
+fn status_uses_local_baseline_and_reports_unsynced_without_one() {
     let (root, _storage) = project();
     add(root.path(), "data.txt", "first version");
     add(root.path(), "data.txt", "second version");
     add(root.path(), "zz-current.txt", "current version");
-    std::fs::write(root.path().join("data.txt"), "first version").unwrap();
+    // Simulate metadata arriving through Git while the local data remains at
+    // the version DVS last installed. The cache baseline distinguishes stale
+    // data from a local edit without consulting history.
+    std::fs::copy(
+        root.path().join(".dvs/zz-current.txt.dvs"),
+        root.path().join(".dvs/data.txt.dvs"),
+    )
+    .unwrap();
+    let stale = document(&run(root.path(), &["status", "--json"]));
+    let stale_row = stale["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["path"] == "data.txt")
+        .unwrap();
+    assert_eq!(stale_row["status"], "stale");
+    assert_eq!(stale_row["working"]["state"], "present");
+    assert!(stale_row.get("state").is_none());
+    let human_stale = run(root.path(), &["status"]);
+    let human_stale = String::from_utf8_lossy(&human_stale.stdout);
+    assert!(human_stale.contains("stale"), "{human_stale}");
+    let stale_only = run(root.path(), &["status", "--stale"]);
+    assert!(stale_only.status.success());
+    let stale_only = String::from_utf8_lossy(&stale_only.stdout);
+    assert!(stale_only.contains("data.txt"), "{stale_only}");
+    assert!(!stale_only.contains("zz-current.txt"), "{stale_only}");
+
+    std::fs::write(root.path().join("data.txt"), "new unrecorded edit").unwrap();
+    let modified = run(root.path(), &["status", "--json"]);
+    assert!(modified.status.success(), "{}", document(&modified));
+    assert_eq!(document(&modified)["files"][0]["status"], "modified");
+    let human_modified = run(root.path(), &["status"]);
+    let human_modified = String::from_utf8_lossy(&human_modified.stdout);
+    assert!(human_modified.contains("modified"), "{human_modified}");
+    let modified_only = run(root.path(), &["status", "--modified"]);
+    assert!(modified_only.status.success());
+    let modified_only = String::from_utf8_lossy(&modified_only.stdout);
+    assert!(modified_only.contains("data.txt"), "{modified_only}");
+    assert!(!modified_only.contains("zz-current.txt"), "{modified_only}");
+    let unsynced = run(root.path(), &["status", "--unsynced", "--json"]);
+    assert!(unsynced.status.success());
+    assert!(document(&unsynced)["files"].as_array().unwrap().is_empty());
+
+    std::fs::remove_dir_all(root.path().join(".dvs/.cache")).unwrap();
     let unsynced = run(root.path(), &["status", "--json"]);
     assert!(unsynced.status.success(), "{}", document(&unsynced));
     let unsynced = document(&unsynced);
-    assert_eq!(unsynced["files"][0]["status"], "unsynced");
-    assert_eq!(unsynced["files"][0]["state"], "modified");
-    assert!(unsynced["files"][0].get("before").is_none());
-    let human = run(root.path(), &["status"]);
-    let human = String::from_utf8_lossy(&human.stdout);
-    assert!(human.contains("unsynced"), "{human}");
-    let selected = run(root.path(), &["status", "--unsynced"]);
-    assert!(selected.status.success());
-    let selected = String::from_utf8_lossy(&selected.stdout);
-    assert!(selected.contains("data.txt"), "{selected}");
-    assert!(!selected.contains("zz-current.txt"), "{selected}");
-
-    std::fs::write(root.path().join("data.txt"), "new unrecorded edit").unwrap();
-    std::fs::remove_file(_storage.path().join("objects/audit.log.jsonl")).unwrap();
-    let no_history = run(root.path(), &["status", "--json"]);
-    assert!(no_history.status.success(), "{}", document(&no_history));
-    assert_eq!(document(&no_history)["files"][0]["status"], "unsynced");
+    assert!(
+        unsynced["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| { row["path"] == "data.txt" && row["status"] == "unsynced" })
+    );
 }
 
 #[test]

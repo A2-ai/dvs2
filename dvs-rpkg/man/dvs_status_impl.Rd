@@ -11,7 +11,7 @@ dvs_status_impl(
   paths = character(0),
   recursive = NULL,
   glob = NULL,
-  status = c("current", "absent", "unsynced")
+  status = c("current", "absent", "stale", "modified", "unsynced")
 )
 }
 \arguments{
@@ -29,7 +29,7 @@ target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} 
 match recursively across subdirectories. Mutually exclusive with \code{recursive}.}
 
 \item{status}{Character vector of statuses to include. Valid values are
-\code{"current"}, \code{"absent"}, and \code{"unsynced"}. When empty (default), all
+\code{"current"}, \code{"absent"}, \code{"stale"}, \code{"modified"}, and \code{"unsynced"}. When empty (default), all
 statuses are shown.}
 }
 \description{

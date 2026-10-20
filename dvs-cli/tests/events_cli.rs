@@ -122,7 +122,7 @@ fn terminal_result_matches_json_for_status_and_dry_run() {
 }
 
 #[test]
-fn status_events_report_unsynced_files() {
+fn status_events_report_modified_against_local_baseline() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     std::fs::create_dir(&project).unwrap();
@@ -156,7 +156,7 @@ fn status_events_report_unsynced_files() {
     std::fs::write(project.join("tracked.txt"), "first version").unwrap();
 
     let output = cli(&project)
-        .args(["--emit-events", "status", "--unsynced"])
+        .args(["--emit-events", "status", "--modified"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -167,13 +167,13 @@ fn status_events_report_unsynced_files() {
         .map(|event| event["result"].clone())
         .collect();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["status"], "unsynced");
+    assert_eq!(rows[0]["status"], "modified");
     assert_eq!(events.last().unwrap()["result"]["files"], json!(rows));
 }
 
 #[cfg(unix)]
 #[test]
-fn status_streams_unsynced_rows_without_history_lookup() {
+fn status_events_do_not_depend_on_history_availability() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let storage = temp.path().join("storage");
@@ -221,7 +221,11 @@ fn status_streams_unsynced_rows_without_history_lookup() {
         .args(["--emit-events", "status"])
         .output()
         .unwrap();
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let events = parse_stream(&output.stdout, 0);
     let rows: Vec<_> = events
         .iter()
@@ -230,7 +234,7 @@ fn status_streams_unsynced_rows_without_history_lookup() {
         .collect();
     assert!(
         rows.iter()
-            .any(|row| { row["path"] == "z-stale.txt" && row["status"] == "unsynced" })
+            .any(|row| { row["path"] == "z-stale.txt" && row["status"] == "modified" })
     );
     assert_eq!(
         events.last().unwrap()["result"]["files"]

@@ -263,7 +263,11 @@ pub enum StatusChoice {
     Current,
     /// Metadata exists but local file is missing.
     Absent,
-    /// Local file exists but differs from stored version.
+    /// Local file matches the last successful get, while metadata has advanced.
+    Stale,
+    /// Local file differs from metadata and the last successful get.
+    Modified,
+    /// Local file differs from metadata, but no local baseline is available.
     Unsynced,
 }
 
@@ -272,6 +276,8 @@ impl From<StatusChoice> for Status {
         match c {
             StatusChoice::Current => Status::Current,
             StatusChoice::Absent => Status::Absent,
+            StatusChoice::Stale => Status::Stale,
+            StatusChoice::Modified => Status::Modified,
             StatusChoice::Unsynced => Status::Unsynced,
         }
     }
@@ -294,7 +300,7 @@ impl From<StatusChoice> for Status {
 ///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
 ///   match recursively across subdirectories. Mutually exclusive with `recursive`.
 /// @param status Character vector of statuses to include. Valid values are
-///   `"current"`, `"absent"`, and `"unsynced"`. When empty (default), all
+///   `"current"`, `"absent"`, `"stale"`, `"modified"`, and `"unsynced"`. When empty (default), all
 ///   statuses are shown.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_status_impl")]
@@ -440,7 +446,9 @@ impl<'a> From<&'a FileStatus> for FileStatusView<'a> {
 impl<'a> From<&'a StatusDetail> for StatusDetailView<'a> {
     fn from(detail: &'a StatusDetail) -> Self {
         match detail {
-            StatusDetail::Success { status, metadata } => StatusDetailView::Success {
+            StatusDetail::Success {
+                status, metadata, ..
+            } => StatusDetailView::Success {
                 status,
                 metadata: metadata.as_ref().map(FileMetadataView::from),
             },

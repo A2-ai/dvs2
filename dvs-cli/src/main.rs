@@ -26,7 +26,7 @@ use dvs::init::init;
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, Backend, Compression, FileMetadata, FileProgress, GetOptions, Outcome, PathFilter,
-    add_files, format_size, get_files, set_num_threads,
+    Status, add_files, format_size, get_files, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -117,7 +117,13 @@ pub enum Command {
         /// Include the files that are absent
         #[clap(long)]
         absent: bool,
-        /// Include files that differ from recorded metadata
+        /// Include files unchanged since the last successful get, when metadata has advanced
+        #[clap(long)]
+        stale: bool,
+        /// Include files changed since the last successful get
+        #[clap(long)]
+        modified: bool,
+        /// Include differing files whose local baseline is unavailable
         #[clap(long)]
         unsynced: bool,
         /// Show all metadata columns in the table output
@@ -224,25 +230,42 @@ struct StatusSelection {
     show_all: bool,
     current: bool,
     absent: bool,
+    stale: bool,
+    modified: bool,
     unsynced: bool,
 }
 
 fn status_row_selected(row: &dvs::inspect::StatusFacts, selection: StatusSelection) -> bool {
     selection.show_all
         || row.error.is_some()
-        || (selection.current && row.status == "current")
-        || (selection.absent && row.status == "absent")
-        || (selection.unsynced && row.status == "unsynced")
+        || (selection.current && row.status == Status::Current)
+        || (selection.absent && row.status == Status::Absent)
+        || (selection.stale && row.status == Status::Stale)
+        || (selection.modified && row.status == Status::Modified)
+        || (selection.unsynced && row.status == Status::Unsynced)
 }
 
-/// Stream each completed local status check as a file result.
+fn publish_status_rows(
+    rows: Vec<dvs::inspect::StatusFacts>,
+    selection: StatusSelection,
+) -> Result<Vec<dvs::inspect::StatusFacts>> {
+    let events = events::active().expect("status event publishing requires event mode");
+    for row in rows
+        .iter()
+        .filter(|row| status_row_selected(row, selection))
+    {
+        events.file_result(serde_json::to_value(row)?);
+    }
+    Ok(rows)
+}
+
+/// Stream each row as soon as its local baseline comparison completes.
 fn inspect_status_events(
     paths: &DvsPaths,
     filter: Option<&PathFilter>,
     glob_pattern: Option<&str>,
     selection: StatusSelection,
 ) -> Result<Vec<dvs::inspect::StatusFacts>> {
-    let events = events::active().expect("status event publishing requires event mode");
     let (sender, receiver) = mpsc::sync_channel(32);
     let mut results = Vec::new();
     thread::scope(|scope| -> Result<()> {
@@ -252,10 +275,7 @@ fn inspect_status_events(
             })
         });
         while let Ok(row) = receiver.recv() {
-            if status_row_selected(&row, selection) {
-                events.file_result(serde_json::to_value(&row)?);
-            }
-            results.push(row);
+            results.extend(publish_status_rows(vec![row], selection)?);
         }
 
         scan.join()
@@ -514,17 +534,21 @@ fn try_main(cli: Cli) -> Result<()> {
             recursive,
             current,
             absent,
+            stale,
+            modified,
             unsynced,
             with_metadata,
             glob,
         } => {
             let config = find_config(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let show_all = !current && !absent && !unsynced;
+            let show_all = !current && !absent && !stale && !modified && !unsynced;
             let selection = StatusSelection {
                 show_all,
                 current,
                 absent,
+                stale,
+                modified,
                 unsynced,
             };
 

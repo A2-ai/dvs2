@@ -1,6 +1,6 @@
 //! Local facts for machine-readable status, using cached hashes when available.
 use crate::cache::{self, FileStat};
-use crate::{DvsPaths, FileMetadata, Hashes, PathFilter};
+use crate::{DvsPaths, FileMetadata, Hashes, PathFilter, Status};
 use anyhow::Result;
 use fs_err as fs;
 use rayon::prelude::*;
@@ -23,12 +23,10 @@ pub struct WorkingCopy {
 #[derive(Clone, Debug, Serialize)]
 pub struct StatusFacts {
     pub path: PathBuf,
-    pub status: &'static str,
+    pub status: Status,
     pub metadata: Option<FileMetadata>,
     pub working: WorkingCopy,
     pub baseline: Option<Baseline>,
-    /// Local checkout state relative to the baseline and current metadata.
-    pub state: &'static str,
     pub code: Option<&'static str>,
     pub error: Option<String>,
 }
@@ -102,7 +100,7 @@ fn inspect_path(
 ) -> StatusFacts {
     let mut row = StatusFacts {
         path: path.clone(),
-        status: "error",
+        status: Status::Error,
         metadata: None,
         working: WorkingCopy {
             state: "unknown",
@@ -111,7 +109,6 @@ fn inspect_path(
             hash_source: None,
         },
         baseline: None,
-        state: "unknown",
         code: None,
         error: None,
     };
@@ -146,8 +143,7 @@ fn inspect_path(
                 if e.downcast_ref::<std::io::Error>()
                     .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
             {
-                row.status = "absent";
-                row.state = "absent";
+                row.status = Status::Absent;
                 row.working.state = "absent";
                 return Ok(());
             }
@@ -166,19 +162,19 @@ fn inspect_path(
             }
         };
         let target = row.metadata.as_ref().unwrap();
-        row.status = if hashes == target.hashes && size == target.size {
-            "current"
+        let matches_metadata = hashes == target.hashes && size == target.size;
+        let matches_baseline = row
+            .baseline
+            .as_ref()
+            .is_some_and(|baseline| baseline.blake3 == hashes.blake3 && baseline.size == size);
+        row.status = if matches_metadata {
+            Status::Current
+        } else if matches_baseline {
+            Status::Stale
+        } else if row.baseline.is_some() {
+            Status::Modified
         } else {
-            "unsynced"
-        };
-        row.state = if row.status == "current" {
-            "current"
-        } else {
-            match &row.baseline {
-                Some(b) if b.blake3 == hashes.blake3 && b.size == size => "clean",
-                Some(_) => "modified",
-                None => "unknown",
-            }
+            Status::Unsynced
         };
         row.working = WorkingCopy {
             state: "present",
@@ -191,7 +187,7 @@ fn inspect_path(
     match facts {
         Ok(()) => row.code = None,
         Err(e) => {
-            row.status = "error";
+            row.status = Status::Error;
             row.error = Some(format!("{e:#}"));
         }
     }
@@ -226,18 +222,18 @@ mod tests {
     fn cache_miss_computes_status_facts() {
         let (_temp, paths) = fixture();
         let rows = inspect_status(&paths, None, None).unwrap();
-        assert_eq!(rows[0].status, "current");
+        assert_eq!(rows[0].status, Status::Current);
         assert_eq!(rows[0].working.hash_source, Some("computed"));
         #[cfg(feature = "cache")]
         {
             let rows = inspect_status(&paths, None, None).unwrap();
-            assert_eq!(rows[0].status, "current");
+            assert_eq!(rows[0].status, Status::Current);
             assert_eq!(rows[0].working.hash_source, Some("cache"));
             // A changed stat invalidates the cache without reading new file content.
             fs::write(paths.repo_root().join("data.txt"), b"changed content").unwrap();
             assert_eq!(
                 inspect_status(&paths, None, None).unwrap()[0].status,
-                "unsynced"
+                Status::Unsynced
             );
         }
     }
@@ -246,7 +242,7 @@ mod tests {
         let (_temp, paths) = fixture();
         fs::remove_file(paths.repo_root().join("data.txt")).unwrap();
         let rows = inspect_status(&paths, None, None).unwrap();
-        assert_eq!(rows[0].status, "absent");
+        assert_eq!(rows[0].status, Status::Absent);
         assert!(rows[0].error.is_none());
         fs::write(
             paths.metadata_path(std::path::Path::new("data.txt")),
@@ -254,7 +250,7 @@ mod tests {
         )
         .unwrap();
         let rows = inspect_status(&paths, None, None).unwrap();
-        assert_eq!(rows[0].status, "error");
+        assert_eq!(rows[0].status, Status::Error);
         assert_eq!(rows[0].code, Some("bad_metadata"));
     }
 
@@ -275,7 +271,7 @@ mod tests {
             let row = row_receiver
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
-            assert_eq!(row.status, "current");
+            assert_eq!(row.status, Status::Current);
             assert!(!scan.is_finished());
             continue_sender.send(()).unwrap();
             scan.join().unwrap().unwrap();
@@ -303,14 +299,10 @@ mod tests {
             serde_json::to_vec(&target).unwrap(),
         )
         .unwrap();
-        assert_eq!(
-            inspect_status(&paths, None, None).unwrap()[0].state,
-            "clean"
-        );
+        let stale = inspect_status(&paths, None, None).unwrap();
+        assert_eq!(stale[0].status, Status::Stale);
         fs::write(paths.repo_root().join("data.txt"), b"user edits").unwrap();
-        assert_eq!(
-            inspect_status(&paths, None, None).unwrap()[0].state,
-            "modified"
-        );
+        let modified = inspect_status(&paths, None, None).unwrap();
+        assert_eq!(modified[0].status, Status::Modified);
     }
 }
