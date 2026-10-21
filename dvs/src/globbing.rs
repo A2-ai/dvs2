@@ -32,7 +32,12 @@ pub fn resolve_paths_for_add(
     let mut out = HashSet::new();
     let glob_matcher = build_glob_matcher(glob_pattern)?;
     let repo_root = dvs_paths.repo_root().canonicalize()?;
-    let metadata_root = dvs_paths.metadata_folder().canonicalize()?;
+    // The metadata folder may not exist yet, eg before the first add in an attached
+    // project: there is nothing in it to skip then
+    let metadata_root = dvs_paths
+        .metadata_folder()
+        .canonicalize()
+        .unwrap_or_else(|_| dvs_paths.metadata_folder());
 
     // If no paths given, default to cwd
     let paths = if paths.is_empty() {
@@ -187,6 +192,21 @@ mod tests {
 
         let dvs_paths = DvsPaths::new(root.to_path_buf(), root.to_path_buf(), ".dvs").unwrap();
         (temp, dvs_paths)
+    }
+
+    #[test]
+    fn add_without_metadata_folder() {
+        // An attached project has no metadata folder until something is added
+        let (_temp, dvs_paths) = setup_test_repo();
+        fs::remove_dir_all(dvs_paths.metadata_folder()).unwrap();
+
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("data/a.csv")], None, &dvs_paths).unwrap();
+        assert_eq!(result, HashSet::from([PathBuf::from("data/a.csv")]));
+
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("data")], Some("*.csv"), &dvs_paths).unwrap();
+        assert_eq!(result, HashSet::from([PathBuf::from("data/a.csv")]));
     }
 
     #[test]
