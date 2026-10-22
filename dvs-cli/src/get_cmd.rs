@@ -1,9 +1,10 @@
 //! Rendering `dvs get` results: human text, the JSON envelope, and exit codes.
 
-use std::path::Path;
-
 use dvs::config::{OnConflict, SettingSource};
-use dvs::{Action, Before, GetCode, GetOutcome, GetReport, GetRow, StoredCopy, format_size};
+use dvs::{
+    Action, Before, GetCode, GetOutcome, GetReport, GetRow, GetVerdict, StoredCopy, format_size,
+    shell_path,
+};
 use serde_json::json;
 
 /// Exit codes for `get`. Usage and configuration errors exit 2 (clap and
@@ -14,25 +15,10 @@ pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_CONFLICTS: i32 = 3;
 
 pub fn exit_code(report: &GetReport) -> i32 {
-    if report.has_failures() {
-        EXIT_FAILED
-    } else if report.outcome == GetOutcome::Aborted && report.has_conflicts() {
-        // Only abort stops on conflicts; a skip the policy asked for is success
-        EXIT_CONFLICTS
-    } else {
-        EXIT_OK
-    }
-}
-
-/// Quote a path for a shell command line when it needs it.
-fn shell_path(path: &Path) -> String {
-    let s = path.to_string_lossy();
-    if s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || "/._-+".contains(c))
-    {
-        s.into_owned()
-    } else {
-        format!("'{}'", s.replace('\'', r"'\''"))
+    match report.verdict() {
+        GetVerdict::Done => EXIT_OK,
+        GetVerdict::Failed => EXIT_FAILED,
+        GetVerdict::HeldBack => EXIT_CONFLICTS,
     }
 }
 
@@ -43,56 +29,6 @@ fn is_shared(code: Option<GetCode>) -> bool {
         code,
         Some(GetCode::AccessDenied | GetCode::ServerUnavailable)
     )
-}
-
-fn is_conflict_row(row: &GetRow) -> bool {
-    matches!(
-        row.code,
-        Some(GetCode::LocalChanges | GetCode::UnknownLocal)
-    )
-}
-
-/// The next command to run for a row, in CLI syntax.
-pub fn hint(row: &GetRow) -> Option<String> {
-    let p = shell_path(&row.local_path);
-    let choices = format!(
-        "keep your version: dvs add {p} (makes it the tracked version); \
-         take the tracked version: dvs get --force {p} (replaces yours)"
-    );
-    match row.code? {
-        GetCode::LocalChanges => Some(choices),
-        GetCode::UnknownLocal => Some(format!(
-            "dvs has no record of writing this file (a clone from before dvs recorded this, \
-             or a cleared cache); {choices}"
-        )),
-        GetCode::BatchAborted => {
-            Some("held back by another file; to get the rest: --on-conflict skip".into())
-        }
-        GetCode::NotTracked if row.local_path.is_dir() => Some(
-            "nothing tracked is selected here; add -r to include subdirectories, or check the path"
-                .into(),
-        ),
-        GetCode::NotTracked => Some("check the path; list tracked files with: dvs status".into()),
-        GetCode::SourceMissing => Some(
-            "the stored content of this version is missing (probably an interrupted upload); \
-             tell whoever added it"
-                .into(),
-        ),
-        GetCode::AccessDenied => {
-            Some("check you are logged in with access: dvs info, dvs login".into())
-        }
-        GetCode::ServerUnavailable => {
-            Some("check your network or VPN and the server, then run dvs get again".into())
-        }
-        GetCode::DestinationChanged => Some(format!("run again once nothing is writing {p}")),
-        GetCode::FileInUse => {
-            Some("close the program using the file, then run dvs get again".into())
-        }
-        GetCode::BadMetadata => Some(format!(
-            "fix the .dvs file for {p} (for example a git merge conflict), then run dvs get again"
-        )),
-        _ => None,
-    }
 }
 
 fn label(action: Action) -> &'static str {
@@ -143,7 +79,7 @@ fn conflict_reasons(report: &GetReport) -> Vec<String> {
         report
             .files
             .iter()
-            .filter(|r| is_conflict_row(r) && r.before == b)
+            .filter(|r| r.is_conflict() && r.before == b)
             .count()
     };
     let (modified, unknown) = (count(Before::Modified), count(Before::Unknown));
@@ -176,7 +112,10 @@ fn summary(report: &GetReport) -> String {
         GetOutcome::Aborted => {
             let mut reasons = conflict_reasons(report);
             if c.failed > 0 {
-                reasons.push(format!("{} cannot be retrieved", c.failed));
+                reasons.push(format!(
+                    "{} cannot be retrieved",
+                    plural(c.failed, "file", "files")
+                ));
             }
             let dry = if report.dry_run { "would be " } else { "" };
             format!("aborted, nothing {dry}changed: {}", reasons.join("; "))
@@ -218,7 +157,7 @@ pub fn print_human(report: &GetReport) {
             (_, Some(m)) => m.clone(),
             (false, None) => String::new(),
         };
-        let extra = match (is_conflict_row(r), r.stored_copy) {
+        let extra = match (r.is_conflict(), r.stored_copy) {
             (true, Some(StoredCopy::Present)) => " (a copy of your version appears to be stored)",
             _ => "",
         };
@@ -250,13 +189,13 @@ pub fn print_human(report: &GetReport) {
         if let Some(m) = &r.message {
             eprintln!("  {m}");
         }
-        if let Some(h) = hint(r) {
+        if let Some(h) = &r.hint {
             eprintln!("  {h}");
         }
     }
 
     // Next steps for conflicts, in one place rather than per row.
-    let conflicts: Vec<&GetRow> = report.files.iter().filter(|r| is_conflict_row(r)).collect();
+    let conflicts: Vec<&GetRow> = report.files.iter().filter(|r| r.is_conflict()).collect();
     if !conflicts.is_empty() {
         let paths = conflicts
             .iter()
@@ -280,27 +219,19 @@ pub fn print_human(report: &GetReport) {
             "  take the tracked version:  dvs get --force {paths}   (replaces yours; copy it first to keep both)"
         );
     }
-    for r in report
-        .files
-        .iter()
-        .filter(|r| !r.satisfied && !r.code.is_some_and(GetCode::is_conflict) && !is_shared(r.code))
-    {
-        if let Some(h) = hint(r) {
+    for r in report.files.iter().filter(|r| {
+        !r.satisfied
+            && !r.is_conflict()
+            && r.code != Some(GetCode::BatchAborted)
+            && !is_shared(r.code)
+    }) {
+        if let Some(h) = &r.hint {
             eprintln!("  {}: {h}", r.local_path.display());
         }
     }
 }
 
 pub fn to_json(report: &GetReport) -> serde_json::Value {
-    let files: Vec<_> = report
-        .files
-        .iter()
-        .map(|r| {
-            let mut v = serde_json::to_value(r).expect("rows serialize");
-            v["hint"] = json!(hint(r));
-            v
-        })
-        .collect();
     json!({
         "v": 1,
         "command": "get",
@@ -310,7 +241,7 @@ pub fn to_json(report: &GetReport) -> serde_json::Value {
         "source": report.source,
         "counts": report.counts,
         "problem": report.problem,
-        "files": files,
+        "files": report.files,
     })
 }
 
@@ -322,4 +253,24 @@ pub fn problem_json(problem: &str, dry_run: bool) -> serde_json::Value {
     v["on_conflict"] = serde_json::Value::Null;
     v["source"] = serde_json::Value::Null;
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dvs::GetCounts;
+
+    #[test]
+    fn aborted_summary_names_files_that_cannot_be_retrieved() {
+        let mut report = GetReport::problem("", false, OnConflict::Abort, SettingSource::Default);
+        report.problem = None;
+        report.outcome = GetOutcome::Aborted;
+        report.counts = GetCounts {
+            failed: 1,
+            ..GetCounts::default()
+        };
+        assert!(summary(&report).contains("1 file cannot be retrieved"));
+        report.counts.failed = 2;
+        assert!(summary(&report).contains("2 files cannot be retrieved"));
+    }
 }

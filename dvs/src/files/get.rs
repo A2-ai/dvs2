@@ -5,7 +5,7 @@
 //! replaced without asking when it equals the baseline, the bytes dvs itself
 //! last wrote or added there; anything else is a conflict, handled by the
 //! `on_conflict` policy. Remote and runtime problems are per file and never stop
-//! the rest of the batch. See work/plans/2026-10-17-get-spec.md in the workspace.
+//! the rest of the batch.
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -48,10 +48,6 @@ pub enum Before {
 }
 
 impl Before {
-    pub fn is_conflict(self) -> bool {
-        matches!(self, Before::Modified | Before::Unknown)
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             Before::Absent => "absent",
@@ -137,14 +133,6 @@ pub enum GetCode {
 }
 
 impl GetCode {
-    /// Conflicts, and files held back because of them: local, nothing broken.
-    pub fn is_conflict(self) -> bool {
-        matches!(
-            self,
-            GetCode::LocalChanges | GetCode::UnknownLocal | GetCode::BatchAborted
-        )
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             GetCode::LocalChanges => "local_changes",
@@ -186,9 +174,18 @@ pub struct GetRow {
     pub stored_copy: Option<StoredCopy>,
     pub code: Option<GetCode>,
     pub message: Option<String>,
-    /// The next command to run. Left empty by core: each frontend phrases it
-    /// in its own syntax.
+    /// The next step, in CLI syntax
     pub hint: Option<String>,
+}
+
+impl GetRow {
+    /// The working file is a conflict that was left as it is (not replaced).
+    pub fn is_conflict(&self) -> bool {
+        matches!(
+            self.code,
+            Some(GetCode::LocalChanges | GetCode::UnknownLocal)
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -198,9 +195,10 @@ pub enum GetOutcome {
     Complete,
     /// The policy held the batch back: no file was changed
     Aborted,
-    /// Some files are at their target, some are not
+    /// Not every file is at its target; some are, or were skipped as the
+    /// policy asked
     Partial,
-    /// Nothing is at its target, or the operation could not run
+    /// No file is at its target or skipped, or the operation could not run
     Failed,
 }
 
@@ -259,22 +257,27 @@ impl GetReport {
         }
     }
 
-    /// Some file failed for a reason other than a local conflict, or the
-    /// operation itself had a problem.
-    pub fn has_failures(&self) -> bool {
-        self.problem.is_some()
-            || self
-                .files
-                .iter()
-                .any(|r| !r.satisfied && r.code.is_some_and(|c| !c.is_conflict()))
+    /// Whether get did as asked. A skip the policy asked for counts as done.
+    pub fn verdict(&self) -> GetVerdict {
+        if self.problem.is_some() || self.counts.failed > 0 {
+            GetVerdict::Failed
+        } else if self.outcome == GetOutcome::Aborted {
+            GetVerdict::HeldBack
+        } else {
+            GetVerdict::Done
+        }
     }
+}
 
-    /// Some file was held back or skipped because of a local conflict.
-    pub fn has_conflicts(&self) -> bool {
-        self.files
-            .iter()
-            .any(|r| !r.satisfied && r.code.is_some_and(GetCode::is_conflict))
-    }
+/// How a get ended, for exit codes and R's `on_error`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GetVerdict {
+    /// Did as asked, including leaving files the policy asked to skip
+    Done,
+    /// A file failed, or the operation itself had a problem
+    Failed,
+    /// `abort` held files back because of conflicts; nothing was written
+    HeldBack,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -304,15 +307,10 @@ struct Planned {
 }
 
 impl Planned {
-    /// Classified as a conflict (rows that already failed in the plan are not).
-    fn is_conflict(&self) -> bool {
-        self.row.before.is_conflict() && self.row.action != Action::Failed
-    }
-
     fn needs_transfer(&self, on_conflict: OnConflict) -> bool {
         self.row.action == Action::NotRun
             && (matches!(self.row.before, Before::Absent | Before::Clean)
-                || (self.is_conflict() && on_conflict == OnConflict::Overwrite))
+                || (self.row.is_conflict() && on_conflict == OnConflict::Overwrite))
     }
 
     /// Detected before anything is written: under abort/overwrite, any of these
@@ -321,7 +319,7 @@ impl Planned {
     /// `.dvs` file).
     fn is_known_problem(&self, on_conflict: OnConflict) -> bool {
         self.row.action == Action::Failed
-            || (self.is_conflict() && on_conflict != OnConflict::Overwrite)
+            || (self.row.is_conflict() && on_conflict != OnConflict::Overwrite)
     }
 
     fn set(&mut self, action: Action, code: Option<GetCode>, message: Option<String>) {
@@ -336,22 +334,6 @@ impl Planned {
         );
         self.row.code = code;
         self.row.message = message;
-    }
-
-    fn conflict_code(&self) -> GetCode {
-        if self.row.before == Before::Modified {
-            GetCode::LocalChanges
-        } else {
-            GetCode::UnknownLocal
-        }
-    }
-
-    fn conflict_message(&self) -> String {
-        if self.row.before == Before::Modified {
-            "local changes since dvs last wrote this file".to_string()
-        } else {
-            "differs from the tracked version, and dvs has no record of writing it".to_string()
-        }
     }
 }
 
@@ -547,6 +529,20 @@ fn plan_file(paths: &DvsPaths, relative_path: &Path, cache: Option<&Mutex<HashCa
             None => Before::Unknown,
         }
     };
+    let conflict = match planned.row.before {
+        Before::Modified => Some((
+            GetCode::LocalChanges,
+            "local changes since dvs last wrote this file",
+        )),
+        Before::Unknown => Some((
+            GetCode::UnknownLocal,
+            "differs from the tracked version, and dvs has no record of writing it",
+        )),
+        _ => None,
+    };
+    if let Some((code, message)) = conflict {
+        planned.set(Action::NotRun, Some(code), Some(message.to_string()));
+    }
     planned.metadata = Some(metadata);
     planned
 }
@@ -739,7 +735,7 @@ pub fn get_files(
     // the stored-copy hints on conflicts. Files already current need neither.
     let needs_remote = planned
         .iter()
-        .any(|p| p.needs_transfer(on_conflict) || p.is_conflict());
+        .any(|p| p.needs_transfer(on_conflict) || p.row.is_conflict());
     let access = if needs_remote {
         backend.check_access().map_err(|e| {
             // Short of an unreachable server (no token, expired login, no
@@ -753,7 +749,7 @@ pub fn get_files(
     } else {
         Ok(())
     };
-    for p in planned.iter_mut().filter(|p| p.is_conflict()) {
+    for p in planned.iter_mut().filter(|p| p.row.is_conflict()) {
         p.row.stored_copy = Some(match (&access, &p.row.local_hash) {
             (Ok(()), Some(blake3)) => {
                 let hashes = crate::Hashes {
@@ -775,28 +771,24 @@ pub fn get_files(
         on_conflict != OnConflict::Skip && planned.iter().any(|p| p.is_known_problem(on_conflict));
     if blocked {
         for p in planned.iter_mut() {
-            if p.row.before == Before::Current || p.row.action == Action::Failed {
+            // Conflicts kept by the policy already say why they are not run.
+            let kept = p.row.is_conflict() && on_conflict != OnConflict::Overwrite;
+            if p.row.before == Before::Current || p.row.action == Action::Failed || kept {
                 continue;
             }
-            if p.is_conflict() && on_conflict != OnConflict::Overwrite {
-                let (code, message) = (p.conflict_code(), p.conflict_message());
-                p.set(Action::NotRun, Some(code), Some(message));
-            } else {
-                p.set(
-                    Action::NotRun,
-                    Some(GetCode::BatchAborted),
-                    Some("held back: another requested file has a problem".to_string()),
-                );
-            }
+            p.set(
+                Action::NotRun,
+                Some(GetCode::BatchAborted),
+                Some("held back: another requested file has a problem".to_string()),
+            );
         }
         return finish(planned, dry_run, on_conflict, source, true);
     }
     for p in planned
         .iter_mut()
-        .filter(|p| p.is_conflict() && on_conflict == OnConflict::Skip)
+        .filter(|p| p.row.is_conflict() && on_conflict == OnConflict::Skip)
     {
-        let (code, message) = (p.conflict_code(), p.conflict_message());
-        p.set(Action::Skipped, Some(code), Some(message));
+        p.row.action = Action::Skipped;
     }
 
     // 3. Execute the transfers. Each file succeeds or fails on its own.
@@ -859,7 +851,7 @@ pub fn get_files(
     for (i, result) in outcomes {
         let p = &mut planned[i];
         let was_absent = p.row.before == Before::Absent;
-        let was_conflict = p.is_conflict();
+        let was_conflict = p.row.is_conflict();
         match result {
             Ok(()) => {
                 let action = match (dry_run, was_absent) {
@@ -909,6 +901,61 @@ pub fn get_files(
     finish(planned, dry_run, on_conflict, source, false)
 }
 
+/// Quote a path for a shell command line when it needs it.
+pub fn shell_path(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-+".contains(c))
+    {
+        s.into_owned()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
+/// The next command to run for a row.
+fn hint(row: &GetRow) -> Option<String> {
+    let p = shell_path(&row.local_path);
+    let choices = format!(
+        "keep your version: dvs add {p} (makes it the tracked version); \
+         take the tracked version: dvs get --force {p} (replaces yours)"
+    );
+    match row.code? {
+        GetCode::LocalChanges => Some(choices),
+        GetCode::UnknownLocal => Some(format!(
+            "dvs has no record of writing this file (a clone from before dvs recorded this, \
+             or a cleared cache); {choices}"
+        )),
+        GetCode::BatchAborted => {
+            Some("held back by another file; to get the rest: --on-conflict skip".into())
+        }
+        GetCode::NotTracked if row.local_path.is_dir() => Some(
+            "nothing tracked is selected here; add -r to include subdirectories, or check the path"
+                .into(),
+        ),
+        GetCode::NotTracked => Some("check the path; list tracked files with: dvs status".into()),
+        GetCode::SourceMissing => Some(
+            "the stored content of this version is missing (probably an interrupted upload); \
+             tell whoever added it"
+                .into(),
+        ),
+        GetCode::AccessDenied => {
+            Some("check you are logged in with access: dvs info, dvs login".into())
+        }
+        GetCode::ServerUnavailable => {
+            Some("check your network or VPN and the server, then run dvs get again".into())
+        }
+        GetCode::DestinationChanged => Some(format!("run again once nothing is writing {p}")),
+        GetCode::FileInUse => {
+            Some("close the program using the file, then run dvs get again".into())
+        }
+        GetCode::BadMetadata => Some(format!(
+            "fix the .dvs file for {p} (for example a git merge conflict), then run dvs get again"
+        )),
+        _ => None,
+    }
+}
+
 fn finish(
     planned: Vec<Planned>,
     dry_run: bool,
@@ -916,7 +963,13 @@ fn finish(
     source: SettingSource,
     aborted: bool,
 ) -> GetReport {
-    let files: Vec<GetRow> = planned.into_iter().map(|p| p.row).collect();
+    let files: Vec<GetRow> = planned
+        .into_iter()
+        .map(|p| GetRow {
+            hint: hint(&p.row),
+            ..p.row
+        })
+        .collect();
     let mut counts = GetCounts::default();
     for r in &files {
         let slot = match r.action {
@@ -936,7 +989,7 @@ fn finish(
         GetOutcome::Aborted
     } else if satisfied == files.len() {
         GetOutcome::Complete
-    } else if satisfied == 0 {
+    } else if satisfied + counts.skipped == 0 {
         GetOutcome::Failed
     } else {
         GetOutcome::Partial
@@ -1161,7 +1214,8 @@ mod tests {
         );
         assert_eq!(repo.read("a.csv"), b"a2", "nothing may change on abort");
         assert_eq!(repo.read("b.csv"), b"my edits");
-        assert!(report.has_conflicts() && !report.has_failures());
+        assert_eq!(report.verdict(), GetVerdict::HeldBack);
+        assert!(b.hint.as_deref().unwrap().contains("dvs add b.csv"));
     }
 
     // Spec 4o
@@ -1222,7 +1276,7 @@ mod tests {
         );
         assert_eq!(row(&report, "a.csv").code, Some(GetCode::BatchAborted));
         assert!(!repo.root.join("a.csv").exists());
-        assert!(report.has_failures());
+        assert_eq!(report.verdict(), GetVerdict::Failed);
 
         let report = repo.get_with(&["a.csv"], &["typo.csv"], OnConflict::Skip, false);
         assert_eq!(report.outcome, GetOutcome::Partial);
@@ -1415,9 +1469,21 @@ mod tests {
         assert_eq!(row(&report, "c.csv").action, Action::Unchanged);
         assert_eq!(row(&report, "d.csv").action, Action::Replaced);
         assert_eq!(report.outcome, GetOutcome::Partial);
-        assert!(report.has_conflicts() && !report.has_failures());
+        assert_eq!(report.verdict(), GetVerdict::Done);
         assert_eq!(repo.read("b.csv"), b"edited");
         assert_eq!(repo.read("d.csv"), b"d1");
+    }
+
+    #[test]
+    fn skipping_every_file_is_partial_and_done() {
+        let repo = TestRepo::new();
+        repo.switched_branch("b.csv", b"b1", b"b2");
+        fs::write(repo.root.join("b.csv"), b"edited").unwrap();
+
+        let report = repo.get(&["b.csv"], OnConflict::Skip);
+        assert_eq!(row(&report, "b.csv").action, Action::Skipped);
+        assert_eq!(report.outcome, GetOutcome::Partial);
+        assert_eq!(report.verdict(), GetVerdict::Done);
     }
 
     // Run from a subdirectory: paths in the report are from the project root
