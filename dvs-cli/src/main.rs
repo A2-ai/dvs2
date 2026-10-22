@@ -776,24 +776,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             };
             let (on_conflict, source) = config.get_on_conflict(explicit)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let bare = paths.is_empty() && glob.is_none() && !recursive;
             let selection = select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
-            // A bare get at the project root with nothing directly in it: the
-            // data is in subdirectories, which -r reaches
-            let at_root = dvs_paths.cwd() == dvs_paths.repo_root();
-            let below = if bare && at_root && selection.tracked.is_empty() {
-                select_paths_for_get(vec![], None, &dvs_paths, true)?
-                    .tracked
-                    .len()
-            } else {
-                0
-            };
-            let recursive_hint = (below > 0).then(|| {
-                format!(
-                    "{below} tracked {} in subdirectories; to get everything in the project: dvs get -r",
-                    if below == 1 { "file is" } else { "files are" }
-                )
-            });
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
@@ -819,16 +802,9 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 &ctx,
             );
             if cli.json {
-                let mut result = get_cmd::to_json(&report);
-                if let Some(hint) = &recursive_hint {
-                    result["error"]["hint"] = json!(hint);
-                }
-                output::emit_streamed(result);
+                output::emit_streamed(get_cmd::to_json(&report));
             } else {
                 get_cmd::print_human(&report);
-                if let Some(hint) = &recursive_hint {
-                    eprintln!("  {hint}");
-                }
             }
             summary_exit(report.verdict())?;
         }
