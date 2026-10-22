@@ -1,7 +1,7 @@
 pub mod audit;
 pub mod auth;
 pub mod backends;
-pub mod cache;
+mod cache;
 pub mod config;
 pub mod error;
 mod files;
@@ -17,20 +17,17 @@ pub mod progress;
 pub(crate) mod utils;
 
 pub use backends::{Backend, RetrieveRequest, StoreRequest, StoreResult};
-pub use cache::HashSource;
 pub use config::Compression;
-pub use error::{BackendError, ErrorCode, backend_error_code};
-pub use files::add::{AddDetail, AddErrorCode, AddReport, AddResult, add_files};
+pub use error::{Error, ErrorCode, backend_error_code};
+pub use files::add::{AddDetail, AddReport, AddResult, add_files};
 pub use files::get::{
-    Action, Before, GetCode, GetCounts, GetOptions, GetOutcome, GetReport, GetRow, StoredCopy,
-    get_files,
+    Action, Before, GetCode, GetCounts, GetOptions, GetOutcome, GetReport, GetRow, GetVerdict,
+    StoredCopy, get_files, shell_path,
 };
-pub use files::hash::{HashRow, hash_files};
 pub use files::metadata::FileMetadata;
-pub use files::status::{FileStatus, StatusDetail, get_status};
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
-pub use operation::ByteTotals;
+pub use operation::{ByteTotals, Counts};
 pub use paths::{AddPathStatus, DvsPaths, PathFilter, ProjectPath, find_repo_root};
 pub use progress::FileProgress;
 pub use utils::{format_size, set_num_threads};
