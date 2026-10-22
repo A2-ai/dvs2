@@ -76,11 +76,6 @@ pub fn error_code(error: &Error) -> ErrorCode {
         ErrorCode::NoFilesSelected
     } else if error.downcast_ref::<dvs::config::ConfigError>().is_some() {
         ErrorCode::InvalidConfiguration
-    } else if error
-        .downcast_ref::<crate::read_cmd::QueryInputError>()
-        .is_some()
-    {
-        ErrorCode::InvalidArguments
     } else if let Some(code) = dvs::backend_error_code(error) {
         code
     } else if error.downcast_ref::<std::io::Error>().is_some() {

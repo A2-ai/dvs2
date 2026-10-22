@@ -116,12 +116,16 @@ failure of the whole command; per-file failures stay in the rows, so a `partial`
 `error: null`. A `hint` is the next thing to try, for people (only `get` fills row hints today).
 
 Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; `get` see get;
-`status` `path`, `status`, `metadata`, `working`, `baseline`, `state`; `availability` `hash`,
-`state` (`present`, `absent`, `unknown`), `in_history`, and a second error pair `history_code`/`history_message`
-for the history lookup, a separate request that fails on its own (`in_history` and the history pair are `null`
-without `--path`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action` (history never
-fails per row). `path` is relative to the project root (`info`'s `project_root`); get's `local_path` is relative
-to the current directory.
+`status` `path`, `status`, `metadata`, `working`, `baseline`, `state`; `availability` `hash`, `state`
+(`present`, `absent`, `unknown`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action`
+(history never fails per row). `path` is relative to the project root (`info`'s `project_root`); get's
+`local_path` is relative to the current directory.
+
+`dvs availability <HASHES>...` takes one or more BLAKE3 hashes (an invalid one is `invalid_arguments`) and
+reports, per hash and in input order, whether storage has that content, without downloading it.
+`dvs history <PATHS>...` takes one or more file paths and reports their stored upload history; the files need
+not exist in this checkout. It takes files, not folders: a path that is a folder is refused with
+`invalid_arguments` (exit `2`), as is a path outside the project.
 
 Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row (`code`):
 `auth_required` (no token, not logged in), `auth_expired` (the server said 401), `access_denied` (403),
@@ -131,8 +135,8 @@ markers) and `credentials_unreadable` (the store exists but cannot be read). Com
 `not_in_project`, `invalid_configuration`, `invalid_arguments`, `no_files_selected` (also `get` when no tracked
 file matched), `io_error`, and `operation_failed`, the honest fallback when nothing more specific is known.
 `auth_required` is also what `login`, `init` and `attach` report in machine mode when device login would be
-needed. Row codes besides the shared ones: `add` `io_error` and `operation_failed` (`file_failed` if a failure
-has no code), get's codes (see get), `status` `local_read_failed`, `availability` `backend_read_failed` (an unclassified backend failure), and `logout` `warnings`
+needed. Row codes besides the shared ones: `add`, `status` and `availability` `io_error` and
+`operation_failed` (`file_failed` if a failure has no code), get's codes (see get), and `logout` `warnings`
 `revoke_failed`.
 
 `dvs info --json` finds the project from the working directory. `project_root` and `metadata_directory` are

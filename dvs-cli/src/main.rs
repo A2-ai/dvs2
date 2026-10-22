@@ -153,13 +153,15 @@ pub enum Command {
     Info,
     /// Check whether explicitly named BLAKE3 content is stored, without downloading it
     Availability {
+        #[clap(required = true)]
         hashes: Vec<String>,
-        /// Also report whether these hashes appear in this file's history
-        #[clap(long, value_name = "FILE")]
-        path: Option<PathBuf>,
     },
-    /// Show stored upload history; no paths queries the whole project's history
-    History { paths: Vec<PathBuf> },
+    /// Show the stored upload history of files
+    History {
+        /// Files to show the history of (not folders)
+        #[clap(required = true)]
+        paths: Vec<PathBuf>,
+    },
     /// Log in to a DVS server, the one in the config unless a URL is given
     Login { url: Option<Url> },
     /// Log out from a DVS server
@@ -762,33 +764,20 @@ fn try_main(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Command::Availability { hashes, path } => {
+        Command::Availability { hashes } => {
             let config = find_config(&current_dir)?;
-            let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let (files, failed) =
-                read_cmd::availability(config.backend(), &dvs_paths, &hashes, path)?;
+            let (files, failed) = read_cmd::availability(config.backend(), &hashes)?;
             if cli.json {
                 let counts = Counts::new(files.len(), failed);
                 output::emit(output::rows_envelope("availability", false, files, counts));
             } else {
                 for row in files {
-                    let line = format!(
+                    println!(
                         "{} {}",
                         row["state"].as_str().unwrap_or("unknown"),
                         row["hash"].as_str().unwrap_or_default()
                     );
-                    if let Some(in_history) = row["in_history"].as_bool() {
-                        println!(
-                            "{line} {} in the specified file's history",
-                            if in_history { "is" } else { "is not" }
-                        );
-                    } else {
-                        println!("{line}");
-                    }
                     if let Some(message) = row["message"].as_str() {
-                        eprintln!("{message}");
-                    }
-                    if let Some(message) = row["history_message"].as_str() {
                         eprintln!("{message}");
                     }
                 }
