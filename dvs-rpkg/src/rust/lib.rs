@@ -27,8 +27,8 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileMetadata, FileProgress, FileStatus, GetOptions, GetReport, GetRow, GetVerdict,
-    Hashes, PathFilter, Status, StatusDetail, add_files, get_files, get_status, set_num_threads,
+    Compression, FileMetadata, FileProgress, GetOptions, GetReport, GetRow, GetVerdict, Hashes,
+    PathFilter, Status, add_files, get_files, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -284,6 +284,8 @@ impl From<StatusChoice> for Status {
 /// Reports the sync status of DVS-managed files. By default all statuses
 /// are shown; pass a character vector
 /// of status names (e.g. `c("current", "absent")`) to restrict output.
+/// A file whose status cannot be read is always kept, with status `"error"`
+/// and the reason in `error`.
 ///
 /// @param paths Character vector of file or directory paths to check status for.
 /// @param recursive If `TRUE`, directory inputs include all descendants;
@@ -326,13 +328,13 @@ pub(crate) fn dvs_status(
             &dvs_paths,
         ))
     };
-    let mut statuses = get_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
+    let mut statuses = dvs::inspect::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
     if !show_all {
-        statuses.retain(|x| match &x.detail {
-            StatusDetail::Success { status: s, .. } => {
-                status.iter().any(|c| *s == Status::from(*c))
-            }
-            StatusDetail::Error { .. } => true,
+        statuses.retain(|row| {
+            row.error.is_some()
+                || status
+                    .iter()
+                    .any(|c| row.status == Status::from(*c).to_string())
         });
     }
 
@@ -344,11 +346,10 @@ pub(crate) fn dvs_status(
     let views: Vec<FileStatusView<'_>> = statuses.iter().map(FileStatusView::from).collect();
     let add_times: Vec<Option<OffsetDateTime>> = statuses
         .iter()
-        .map(|s| match &s.detail {
-            StatusDetail::Success {
-                metadata: Some(m), ..
-            } => OffsetDateTime::from_unix_timestamp_nanos(m.add_time.as_nanosecond()).ok(),
-            _ => None,
+        .map(|s| {
+            s.metadata.as_ref().and_then(|m| {
+                OffsetDateTime::from_unix_timestamp_nanos(m.add_time.as_nanosecond()).ok()
+            })
         })
         .collect();
     let add_time_sexp = add_times.into_sexp();
@@ -393,29 +394,19 @@ pub(crate) fn dvs_audit_log(
     Ok(miniextendr_api::serde::vec_to_dataframe(&entries)?)
 }
 
-// region: FileStatus serde view (skips add_time)
+// region: status serde view (skips add_time)
 
-/// Serialize-only mirror of [`FileStatus`] whose [`FileMetadata`] view
+/// Serialize-only view of a status row whose [`FileMetadata`] view
 /// omits `add_time`. The caller appends `add_time` as a POSIXct column
 /// directly from the original `jiff::Timestamp` values.
 #[derive(Serialize)]
 struct FileStatusView<'a> {
     path: &'a Path,
-    #[serde(flatten)]
-    detail: StatusDetailView<'a>,
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-enum StatusDetailView<'a> {
-    Success {
-        status: &'a Status,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metadata: Option<FileMetadataView<'a>>,
-    },
-    Error {
-        error: &'a str,
-    },
+    status: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<FileMetadataView<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -430,23 +421,13 @@ struct FileMetadataView<'a> {
     message: Option<&'a str>,
 }
 
-impl<'a> From<&'a FileStatus> for FileStatusView<'a> {
-    fn from(fs: &'a FileStatus) -> Self {
+impl<'a> From<&'a dvs::inspect::StatusFacts> for FileStatusView<'a> {
+    fn from(row: &'a dvs::inspect::StatusFacts) -> Self {
         FileStatusView {
-            path: fs.path.as_path(),
-            detail: (&fs.detail).into(),
-        }
-    }
-}
-
-impl<'a> From<&'a StatusDetail> for StatusDetailView<'a> {
-    fn from(detail: &'a StatusDetail) -> Self {
-        match detail {
-            StatusDetail::Success { status, metadata } => StatusDetailView::Success {
-                status,
-                metadata: metadata.as_ref().map(FileMetadataView::from),
-            },
-            StatusDetail::Error { error } => StatusDetailView::Error { error },
+            path: row.path.as_path(),
+            status: row.status,
+            metadata: row.metadata.as_ref().map(FileMetadataView::from),
+            error: row.error.as_deref(),
         }
     }
 }

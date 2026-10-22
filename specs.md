@@ -116,10 +116,11 @@ failure of the whole command; per-file failures stay in the rows, so a `partial`
 `error: null`. A `hint` is the next thing to try, for people (only `get` fills row hints today).
 
 Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; `get` see get;
-`status` `path`, `status`, `metadata`, `working`, `baseline`, `state`; `availability` `hash`, `state`
-(`present`, `absent`, `unknown`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action`
-(history never fails per row). `path` is relative to the project root (`info`'s `project_root`); get's
-`local_path` is relative to the current directory.
+`status` `path`, `status` (`error` on an error row), `metadata`, `working` (`state` `present`, `absent` or
+`unknown`, `hashes`, `size`, `hash_source` `cache` or `computed`); `availability` `hash`, `state` (`present`,
+`absent`, `unknown`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action` (history never
+fails per row). `path` is relative to the project root (`info`'s `project_root`); get's `local_path` is
+relative to the current directory.
 
 `dvs availability <HASHES>...` takes one or more BLAKE3 hashes (an invalid one is `invalid_arguments`) and
 reports, per hash and in input order, whether storage has that content, without downloading it.

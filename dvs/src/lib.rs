@@ -25,7 +25,6 @@ pub use files::get::{
     StoredCopy, get_files, shell_path,
 };
 pub use files::metadata::FileMetadata;
-pub use files::status::{FileStatus, StatusDetail, get_status};
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use operation::{ByteTotals, Counts};
