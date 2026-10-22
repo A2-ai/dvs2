@@ -231,7 +231,7 @@ struct StatusSelection {
     unsynced: bool,
 }
 
-fn status_row_selected(row: &dvs::inspect::StatusFacts, selection: StatusSelection) -> bool {
+fn status_row_selected(row: &dvs::StatusFacts, selection: StatusSelection) -> bool {
     selection.show_all
         || row.error.is_some()
         || (selection.current && row.status == "current")
@@ -245,13 +245,13 @@ fn inspect_status_events(
     filter: Option<&PathFilter>,
     glob_pattern: Option<&str>,
     selection: StatusSelection,
-) -> Result<Vec<dvs::inspect::StatusFacts>> {
+) -> Result<Vec<dvs::StatusFacts>> {
     let events = events::active().expect("status event publishing requires event mode");
     let (sender, receiver) = mpsc::sync_channel(32);
     let mut results = Vec::new();
     thread::scope(|scope| -> Result<()> {
         let scan = scope.spawn(move || {
-            dvs::inspect::inspect_status_with_callback(paths, filter, glob_pattern, |row| {
+            dvs::inspect_status_with_callback(paths, filter, glob_pattern, |row| {
                 let _ = sender.send(row.clone());
             })
         });
@@ -305,7 +305,7 @@ fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
 }
 
 /// The library's `error` text is the row's `message`, as on every other row.
-fn status_row(row: &dvs::inspect::StatusFacts) -> (serde_json::Value, bool) {
+fn status_row(row: &dvs::StatusFacts) -> (serde_json::Value, bool) {
     let mut value = serde_json::to_value(row).expect("status rows serialize");
     if let Some(object) = value.as_object_mut()
         && let Some(message) = object.remove("error")
@@ -590,7 +590,7 @@ fn try_main(cli: Cli) -> Result<()> {
             let mut statuses = if events::active().is_some() {
                 inspect_status_events(&dvs_paths, filter.as_ref(), glob.as_deref(), selection)?
             } else {
-                dvs::inspect::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref())?
+                dvs::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref())?
             };
             if !show_all {
                 statuses.retain(|row| status_row_selected(row, selection));
