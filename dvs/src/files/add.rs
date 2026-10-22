@@ -17,8 +17,8 @@ use crate::error::{ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
 use crate::operation::{
-    ByteTotals, Counts, FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard,
-    duration_ms, millis,
+    ByteTotals, Counts, FileRow, LazyPhase, OperationContext, OperationObserver, OperationPlan,
+    Phase, PhaseGuard, duration_ms, millis,
 };
 use crate::paths::{DvsPaths, ProjectPath};
 use crate::utils::get_threadpool;
@@ -31,9 +31,7 @@ pub struct AddResult {
     #[serde(flatten)]
     pub detail: AddDetail,
     /// Time spent on this file (hash + transfer + record); `None` when it did
-    /// no work. Not serialized by the library, so the R package's output is
-    /// unchanged; the CLI adds it to its rows.
-    #[serde(skip)]
+    /// no work.
     pub duration_ms: Option<u64>,
 }
 
@@ -133,7 +131,9 @@ struct Added {
 }
 
 /// `missing` is the server's answer to the manifest: the hashes to upload. The local
-/// backend has no manifest and checks for itself.
+/// backend has no manifest and checks for itself. Only a store moves bytes, so
+/// only it is reported as a transfer.
+#[allow(clippy::too_many_arguments)]
 fn add_file(
     pending: &mut Pending,
     paths: &DvsPaths,
@@ -141,7 +141,8 @@ fn add_file(
     operation_id: Uuid,
     missing: Option<&HashSet<String>>,
     dry_run: bool,
-    on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    observer: &dyn OperationObserver,
+    transfer: &LazyPhase<'_>,
 ) -> Result<Added> {
     let full_path = paths.file_path(&pending.relative_path);
     if dry_run {
@@ -156,55 +157,45 @@ fn add_file(
             created: false,
         });
     }
-    let stored = |res: crate::StoreResult| (Some(res.stored_size), res.created);
-    let (outcome, (stored_size, created)) = match missing {
-        // The local backend checks for itself whether it has the content
-        None => {
-            let (outcome, res) = pending.metadata.save(
-                operation_id,
-                &full_path,
-                backend,
-                paths,
-                &pending.relative_path,
-                on_bytes,
-            )?;
-            (outcome, res.map_or((None, false), stored))
-        }
-        Some(missing) if missing.contains(&pending.metadata.hashes.blake3) => {
-            let res = pending.metadata.store_and_write(
-                operation_id,
-                &full_path,
-                backend,
-                paths,
-                &pending.relative_path,
-                on_bytes,
-            )?;
-            (Outcome::Copied, stored(res))
-        }
-        // The server has the content and recorded the add from the manifest
-        Some(_) if pending.in_sync(paths) => (Outcome::Present, (None, false)),
-        Some(_) => {
-            pending.metadata.write(paths, &pending.relative_path)?;
-            (Outcome::Copied, (None, false))
-        }
-    };
-    Ok(Added {
-        outcome,
-        stored_size,
-        created,
-    })
-}
-
-/// Whether [`add_file`] (not in a dry run) will make a store call, i.e. may
-/// move bytes. Mirrors its branches: the local backend stores unless the file
-/// is in storage and its record already says exactly this (as
-/// `save_reporting` checks); the server only gets the content it said it is
-/// missing.
-fn may_move_bytes(pending: &Pending, paths: &DvsPaths, missing: Option<&HashSet<String>>) -> bool {
-    match missing {
-        None => !(pending.stored && pending.in_sync(paths)),
+    let store = match missing {
+        None => !pending
+            .metadata
+            .is_saved(backend, paths, &pending.relative_path)?,
         Some(missing) => missing.contains(&pending.metadata.hashes.blake3),
+    };
+    if !store {
+        // In sync, or the server has the content and recorded the add from the manifest
+        let outcome = if missing.is_none() || pending.in_sync(paths) {
+            Outcome::Present
+        } else {
+            pending.metadata.write(paths, &pending.relative_path)?;
+            Outcome::Copied
+        };
+        return Ok(Added {
+            outcome,
+            stored_size: None,
+            created: false,
+        });
     }
+    transfer.begin();
+    let file_progress = observer.transfer_started(&pending.relative_path, pending.metadata.size);
+    let res = pending.metadata.store_and_write(
+        operation_id,
+        &full_path,
+        backend,
+        paths,
+        &pending.relative_path,
+        file_progress.as_ref().map(|fp| &*fp.on_bytes),
+    );
+    if let Some(fp) = &file_progress {
+        (fp.on_done)(res.is_ok());
+    }
+    let res = res?;
+    Ok(Added {
+        outcome: Outcome::Copied,
+        stored_size: Some(res.stored_size),
+        created: res.created,
+    })
 }
 
 /// Adds files matching a glob pattern to DVS.
@@ -370,15 +361,7 @@ pub fn add_files(
     // 3. Store what is missing and write the metadata files
     let transfer = LazyPhase::new(observer, Phase::Transfer);
     let finish_one = |mut pending: Pending| -> (AddResult, Option<RowBytes>) {
-        // Only a store call can move bytes: a file already in sync and a
-        // record the server already has are no transfer work
-        if !dry_run && may_move_bytes(&pending, paths, missing.as_ref()) {
-            transfer.begin();
-        }
         let start = Instant::now();
-        let file_progress =
-            observer.transfer_started(&pending.relative_path, pending.metadata.size);
-        let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
         let added = add_file(
             &mut pending,
             paths,
@@ -386,7 +369,8 @@ pub fn add_files(
             operation_id,
             missing.as_ref(),
             dry_run,
-            on_bytes,
+            observer,
+            &transfer,
         );
         pending.work += start.elapsed();
         let (result, bytes) = match added {
@@ -416,9 +400,6 @@ pub fn add_files(
                 (row, bytes)
             }
         };
-        if let Some(fp) = &file_progress {
-            (fp.on_done)(matches!(result.detail, AddDetail::Success { .. }));
-        }
         observer.file_finished(FileRow::Add(&result));
         (result, Some(bytes))
     };
@@ -789,7 +770,7 @@ mod tests {
     }
 
     #[test]
-    fn transfer_phase_only_when_bytes_may_move() {
+    fn only_stored_files_are_transfers() {
         let (_tmp, root, config, paths) = project();
         let backend = config.backend();
         create_file(&root, "a.txt", b"aaaa");
@@ -802,7 +783,7 @@ mod tests {
             &OperationContext::new(),
         );
 
-        // Everything in sync: no store call, so no transfer phase
+        // Everything in sync: no store call, so no transfer
         let in_sync = Arc::new(Recorder::default());
         let report = add(
             &["a.txt", "b.txt"],
@@ -825,8 +806,16 @@ mod tests {
             "{:?}",
             in_sync.outline()
         );
+        assert!(
+            !in_sync
+                .seen()
+                .iter()
+                .any(|s| matches!(s, Seen::TransferStarted(_)))
+        );
+        // The library serializes each row's time
+        assert!(serde_json::to_value(&report.files[0]).unwrap()["duration_ms"].is_u64());
 
-        // A new file is stored, so the phase happens
+        // A new file is stored, so it alone is a transfer
         create_file(&root, "c.txt", b"c");
         let with_new = Arc::new(Recorder::default());
         add(
@@ -845,6 +834,12 @@ mod tests {
             outline.contains(&Seen::PhaseFinished(Phase::Transfer)),
             "{outline:?}"
         );
+        let transfers: Vec<_> = with_new
+            .seen()
+            .into_iter()
+            .filter(|s| matches!(s, Seen::TransferStarted(_)))
+            .collect();
+        assert_eq!(transfers, vec![Seen::TransferStarted("c.txt".into())]);
     }
 
     #[test]

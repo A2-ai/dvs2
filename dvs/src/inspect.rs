@@ -82,15 +82,20 @@ pub fn inspect_status(
     let observer = ctx.observer();
     let scan = PhaseGuard::start(observer, Phase::Scan);
     let (entries, cache, pool) = status_scan_inputs(paths, filter, glob_pattern)?;
-    // What hashing will read: the working files that are regular files
-    let bytes_total = pool.install(|| {
-        entries
-            .par_iter()
-            .filter_map(|path| fs::symlink_metadata(paths.file_path(path)).ok())
-            .filter(|meta| meta.is_file())
-            .map(|meta| meta.len())
-            .sum()
-    });
+    // What hashing will read: the working files that are regular files. An
+    // extra stat per file, so only when someone hears the plan.
+    let bytes_total = if ctx.is_observed() {
+        pool.install(|| {
+            entries
+                .par_iter()
+                .filter_map(|path| fs::symlink_metadata(paths.file_path(path)).ok())
+                .filter(|meta| meta.is_file())
+                .map(|meta| meta.len())
+                .sum()
+        })
+    } else {
+        0
+    };
     scan.finish();
     observer.planned(&OperationPlan {
         files_total: entries.len() as u64,

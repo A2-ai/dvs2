@@ -18,7 +18,7 @@ use crate::error::{Error, ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::globbing::GetSelection;
 use crate::operation::{
-    ByteTotals, FileRow, LazyPhase, OperationContext, OperationPlan, Phase, millis,
+    ByteTotals, FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard, millis,
 };
 use crate::paths::ProjectPath;
 use crate::utils::get_threadpool;
@@ -186,9 +186,7 @@ pub struct GetRow {
     /// The next step, in CLI syntax
     pub hint: Option<String>,
     /// Time spent on this file (hash + transfer + install); `None` for rows
-    /// never hashed or transferred. Not serialized, so R output is unchanged;
-    /// the CLI adds it.
-    #[serde(skip)]
+    /// never hashed or transferred.
     pub duration_ms: Option<u64>,
 }
 
@@ -841,13 +839,8 @@ pub fn get_files(
     let needs_remote = planned
         .iter()
         .any(|p| p.needs_transfer(on_conflict) || p.row.is_conflict());
-    let end_check_storage = || {
-        if needs_remote {
-            observer.phase_finished(Phase::CheckStorage);
-        }
-    };
+    let mut check_storage = needs_remote.then(|| PhaseGuard::start(observer, Phase::CheckStorage));
     let access = if needs_remote {
-        observer.phase_started(Phase::CheckStorage);
         backend.check_access().map_err(access_failure)
     } else {
         Ok(())
@@ -885,7 +878,7 @@ pub fn get_files(
                 Some("held back: another requested file has a problem".to_string()),
             );
         }
-        end_check_storage();
+        drop(check_storage);
         let plan = operation_plan(&planned, &[]);
         observer.planned(&plan);
         return ending(planned, true);
@@ -909,14 +902,14 @@ pub fn get_files(
         for &i in &transfer_idx {
             planned[i].set(Action::Failed, Some(*code), Some(message.clone()));
         }
-        end_check_storage();
+        drop(check_storage);
         observer.planned(&plan);
         return ending(planned, false);
     }
     // A dry run's existence checks are storage checks: check_storage stays
     // open across them, and there is no transfer phase.
     if !dry_run {
-        end_check_storage();
+        drop(check_storage.take());
     }
     observer.planned(&plan);
     // Everything that will not be transferred is final now.
@@ -926,10 +919,8 @@ pub fn get_files(
         }
     }
 
-    let transfers = !dry_run && !transfer_idx.is_empty();
-    if transfers {
-        observer.phase_started(Phase::Transfer);
-    }
+    let transferring = (!dry_run && !transfer_idx.is_empty())
+        .then(|| PhaseGuard::start(observer, Phase::Transfer));
     let operation_id = Uuid::new_v4();
     let finished: Vec<(usize, GetRow)> = pool.install(|| {
         transfer_idx
@@ -952,11 +943,8 @@ pub fn get_files(
         planned[i].row = row;
         planned[i].emitted = true;
     }
-    if transfers {
-        observer.phase_finished(Phase::Transfer);
-    } else if dry_run {
-        end_check_storage();
-    }
+    drop(transferring);
+    drop(check_storage);
 
     ending(planned, false)
 }
@@ -2119,6 +2107,8 @@ mod tests {
         assert!(duration("b.csv").is_some(), "unchanged: hashed");
         assert!(duration("c.csv").is_some(), "skipped, but hashed");
         assert_eq!(duration("typo.csv"), None, "not tracked");
+        let serialized = serde_json::to_value(row(&report, "a.csv")).unwrap();
+        assert!(serialized["duration_ms"].is_u64());
         // Held back: the hashed conflict keeps its hash time, the absent
         // file (never hashed) has none.
         let repo = TestRepo::new();

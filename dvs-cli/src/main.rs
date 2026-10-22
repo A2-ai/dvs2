@@ -7,6 +7,7 @@ mod read_cmd;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
@@ -251,8 +252,6 @@ fn status_row_selected(row: &dvs::inspect::StatusFacts, selection: StatusSelecti
         || (selection.unsynced && row.status == Some(Status::Unsynced))
 }
 
-/// An add row and whether it failed. Built here, not by changing
-/// `AddResult`'s serialization, so R output is unchanged.
 fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
     let (value, is_error) = match &r.detail {
         AddDetail::Success {
@@ -267,6 +266,7 @@ fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
                 "hash": hash,
                 "size": size,
                 "stored_size": stored_size,
+                "duration_ms": r.duration_ms,
             }),
             false,
         ),
@@ -279,13 +279,11 @@ fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
                 "stored_size": null,
                 "code": code,
                 "message": error,
+                "duration_ms": r.duration_ms,
             }),
             true,
         ),
     };
-    let mut value = output::file_result(value, is_error);
-    // Not serialized by the library, so R output is unchanged
-    value["duration_ms"] = json!(r.duration_ms);
     (value, is_error)
 }
 
@@ -370,7 +368,7 @@ fn run_device_login(url: &Url, machine: bool) -> Result<()> {
     Ok(())
 }
 
-fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
+fn try_main(cli: Cli) -> Result<()> {
     if let Some(n) = cli.threads {
         set_num_threads(n);
     }
@@ -473,14 +471,17 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
-                FileRow::Add(r) => Some(add_row(r).0),
+                FileRow::Add(r) => {
+                    let (value, is_error) = add_row(r);
+                    Some(output::file_result(value, is_error))
+                }
                 _ => None,
             });
             if show_progress {
                 observer =
                     observer.with_bars(make_progress_callback(config.progress_bytes_threshold()));
             }
-            let ctx = ctx.clone().with_observer(Arc::new(observer));
+            let ctx = OperationContext::new().with_observer(Arc::new(observer));
             let report = add_files(
                 all_paths,
                 &dvs_paths,
@@ -568,14 +569,17 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
             let filter = (!user_paths.is_empty())
                 .then(|| PathFilter::from_user_paths(user_paths, recursive, &dvs_paths));
             // Rows stream as soon as their local check completes
-            let observer = CliObserver::new(false).with_rows(move |row| match row {
-                FileRow::Status(row) if status_row_selected(row, selection) => {
-                    let (value, is_error) = status_row(row);
-                    Some(output::file_result(value, is_error))
-                }
-                _ => None,
-            });
-            let ctx = ctx.clone().with_observer(Arc::new(observer));
+            let mut ctx = OperationContext::new();
+            if events::active().is_some() {
+                let observer = CliObserver::new(false).with_rows(move |row| match row {
+                    FileRow::Status(row) if status_row_selected(row, selection) => {
+                        let (value, is_error) = status_row(row);
+                        Some(output::file_result(value, is_error))
+                    }
+                    _ => None,
+                });
+                ctx = ctx.with_observer(Arc::new(observer));
+            }
             let mut statuses =
                 dvs::inspect::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
             if !show_all {
@@ -666,14 +670,14 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
-                FileRow::Get(r) => Some(get_cmd::row_json(r)),
+                FileRow::Get(r) => Some(serde_json::to_value(r).expect("rows serialize")),
                 _ => None,
             });
             if show_progress {
                 observer =
                     observer.with_bars(make_progress_callback(config.progress_bytes_threshold()));
             }
-            let ctx = ctx.clone().with_observer(Arc::new(observer));
+            let ctx = OperationContext::new().with_observer(Arc::new(observer));
             let report = get_files(
                 selection,
                 &dvs_paths,
@@ -1026,9 +1030,7 @@ fn main() {
             error.exit();
         }
     };
-    // One operation per run: its start time times every library call and result
-    let ctx = OperationContext::new();
-    output::start_clock(ctx.started(), ctx.started_at());
+    output::start_clock(Instant::now(), SystemTime::now());
     let command = cli.command.name();
     let dry_run = cli.command.dry_run();
     if cli.emit_events {
@@ -1037,7 +1039,7 @@ fn main() {
         cli.json = true;
     }
     let json = cli.json;
-    let code = match try_main(cli, &ctx) {
+    let code = match try_main(cli) {
         Ok(()) => 0,
         Err(error) => {
             if let Some(Exit(code)) = error.downcast_ref::<Exit>() {

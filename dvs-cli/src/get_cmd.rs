@@ -227,14 +227,6 @@ pub fn print_human(report: &GetReport) {
     }
 }
 
-/// Streamed by `--emit-events` the moment it is final.
-pub fn row_json(r: &GetRow) -> serde_json::Value {
-    let mut v = serde_json::to_value(r).expect("rows serialize");
-    // Not serialized by the library, so R output is unchanged
-    v["duration_ms"] = json!(r.duration_ms);
-    v
-}
-
 pub fn to_json(report: &GetReport) -> serde_json::Value {
     json!({
         "v": 1,
@@ -249,7 +241,7 @@ pub fn to_json(report: &GetReport) -> serde_json::Value {
             .problem
             .as_ref()
             .map(|p| crate::output::error_json(p.code, p.message.as_str())),
-        "files": report.files.iter().map(row_json).collect::<Vec<_>>(),
+        "files": report.files,
     })
 }
 

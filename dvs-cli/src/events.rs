@@ -57,8 +57,8 @@ struct Progress {
     files_done: u64,
     files_total: u64,
     bytes_done: u64,
-    /// The plan's `bytes_to_transfer`: what moving bytes count against
-    bytes_total: u64,
+    /// The plan's, which moving bytes count against
+    bytes_to_transfer: u64,
     /// When the last progress event was emitted, or the plan arrived
     last_at: Option<Instant>,
     last_files: u64,
@@ -71,7 +71,7 @@ impl Progress {
             "files_done": self.files_done,
             "files_total": self.files_total,
             "bytes_done": self.bytes_done,
-            "bytes_total": self.bytes_total,
+            "bytes_to_transfer": self.bytes_to_transfer,
         })
     }
 
@@ -85,8 +85,8 @@ impl Progress {
             .is_none_or(|last| now.duration_since(last) >= PROGRESS_INTERVAL);
         let file_finished = self.files_done != self.last_files;
         let moved = self.bytes_done.saturating_sub(self.last_bytes);
-        let bytes_moved =
-            moved > 0 && moved.saturating_mul(100) >= self.bytes_total * PROGRESS_BYTES_PERCENT;
+        let bytes_moved = moved > 0
+            && moved.saturating_mul(100) >= self.bytes_to_transfer * PROGRESS_BYTES_PERCENT;
         waited && (file_finished || bytes_moved)
     }
 
@@ -185,7 +185,7 @@ impl EventStream {
         let progress = &mut state.progress;
         progress.planned = true;
         progress.files_total = plan.files_total;
-        progress.bytes_total = plan.bytes_to_transfer;
+        progress.bytes_to_transfer = plan.bytes_to_transfer;
         progress.last_at = Some(now);
         Self::emit_locked(&mut state, "operation_planned", json!(plan), false);
     }
@@ -494,7 +494,7 @@ mod tests {
         let progress = progress_events(&capture);
         assert_eq!(progress.len(), 1);
         assert_eq!(progress[0]["bytes_done"], 110);
-        assert_eq!(progress[0]["bytes_total"], 10_000);
+        assert_eq!(progress[0]["bytes_to_transfer"], 10_000);
         // Right after one, nothing more for a while however much moves
         (transfer.on_bytes)(5_000);
         assert_eq!(progress_events(&capture).len(), 1);

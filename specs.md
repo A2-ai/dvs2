@@ -180,9 +180,9 @@ with the result document: `operation_started` (`command`), `waiting_for_auth` (`
 `total_bytes`), `transfer_progress` (`path`, `bytes`, `total_bytes`; at most 10 per second per transfer),
 `transfer_finished` (`path`, `bytes`, `total_bytes`, `success`, `duration_ms`), `file_result` (`result`: one
 row, the same shape as a `--json` `files` row, sent once, as soon as it is final, in completion order),
-`operation_progress` (`files_done`, `files_total`, `bytes_done`, `bytes_total`: files against the plan's
-`files_total`, moved bytes against its `bytes_to_transfer`; at most every 250 ms and only once a file finished
-or 1% of the bytes moved since the last one; the final count is always reported before the end), and
+`operation_progress` (`files_done`, `files_total`, `bytes_done`, `bytes_to_transfer`: files against the
+plan's `files_total`, moved bytes against its `bytes_to_transfer`; at most every 250 ms and only once a file
+finished or 1% of the bytes moved since the last one; the final count is always reported before the end), and
 `operation_finished` (`result`, the `--json` document without `files`, so the envelope and `counts`;
 `exit_code`, `started_at`, `finished_at`, `duration_ms`; always last). Every event has `v`, `operation_id`
 (`"<pid>-<nanos>"`), `seq` (0, 1, 2, ...), `type`, `ts` (unix milliseconds) and `elapsed_ms` (since the

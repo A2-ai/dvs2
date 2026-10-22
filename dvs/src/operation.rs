@@ -124,20 +124,20 @@ pub trait OperationObserver: Send + Sync {
 /// A started phase that reports `phase_finished` when dropped, so a phase is
 /// closed on every exit, `?` and `bail!` included.
 #[must_use = "dropping the guard finishes the phase at once"]
-pub struct PhaseGuard<'a> {
+pub(crate) struct PhaseGuard<'a> {
     observer: &'a dyn OperationObserver,
     phase: Phase,
 }
 
 impl<'a> PhaseGuard<'a> {
     /// Reports `phase_started` now and `phase_finished` on drop.
-    pub fn start(observer: &'a dyn OperationObserver, phase: Phase) -> Self {
+    pub(crate) fn start(observer: &'a dyn OperationObserver, phase: Phase) -> Self {
         observer.phase_started(phase);
         Self { observer, phase }
     }
 
     /// Finishes the phase here, for readability; the same as dropping it.
-    pub fn finish(self) {}
+    pub(crate) fn finish(self) {}
 }
 
 impl Drop for PhaseGuard<'_> {
@@ -148,14 +148,14 @@ impl Drop for PhaseGuard<'_> {
 
 /// A phase that starts the first time work in it begins, from any thread, and
 /// is never reported if no work does. Finished on drop if it started.
-pub struct LazyPhase<'a> {
+pub(crate) struct LazyPhase<'a> {
     observer: &'a dyn OperationObserver,
     phase: Phase,
     started: std::sync::Once,
 }
 
 impl<'a> LazyPhase<'a> {
-    pub fn new(observer: &'a dyn OperationObserver, phase: Phase) -> Self {
+    pub(crate) fn new(observer: &'a dyn OperationObserver, phase: Phase) -> Self {
         Self {
             observer,
             phase,
@@ -166,13 +166,13 @@ impl<'a> LazyPhase<'a> {
     /// Call before each piece of work in the phase. The first call reports
     /// `phase_started`; concurrent callers wait for it, so no work in the
     /// phase is reported before the phase is.
-    pub fn begin(&self) {
+    pub(crate) fn begin(&self) {
         self.started
             .call_once(|| self.observer.phase_started(self.phase));
     }
 
     /// Finishes the phase here if it started; the same as dropping it.
-    pub fn finish(self) {}
+    pub(crate) fn finish(self) {}
 }
 
 impl Drop for LazyPhase<'_> {
@@ -183,9 +183,8 @@ impl Drop for LazyPhase<'_> {
     }
 }
 
-/// Hears nothing. The default observer.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoopObserver;
+/// Hears nothing: what an unobserved operation reports to.
+struct NoopObserver;
 
 impl OperationObserver for NoopObserver {}
 
@@ -202,47 +201,30 @@ where
     }
 }
 
-/// Passed to every operation. One context is one operation: one start time.
-#[derive(Clone)]
+/// Passed to every operation: who, if anyone, observes it.
+#[derive(Clone, Default)]
 pub struct OperationContext {
-    started: Instant,
-    started_at: SystemTime,
-    observer: Arc<dyn OperationObserver>,
-}
-
-impl Default for OperationContext {
-    fn default() -> Self {
-        Self::new()
-    }
+    observer: Option<Arc<dyn OperationObserver>>,
 }
 
 impl OperationContext {
-    /// Starts now, observed by nobody.
+    /// Observed by nobody.
     pub fn new() -> Self {
-        Self {
-            started: Instant::now(),
-            started_at: SystemTime::now(),
-            observer: Arc::new(NoopObserver),
-        }
+        Self::default()
     }
 
     pub fn with_observer(mut self, observer: Arc<dyn OperationObserver>) -> Self {
-        self.observer = observer;
+        self.observer = Some(observer);
         self
     }
 
-    pub fn observer(&self) -> &dyn OperationObserver {
-        &*self.observer
+    pub(crate) fn observer(&self) -> &dyn OperationObserver {
+        self.observer.as_deref().unwrap_or(&NoopObserver)
     }
 
-    /// Monotonic start, for `elapsed_ms` and durations.
-    pub fn started(&self) -> Instant {
-        self.started
-    }
-
-    /// Wall-clock start, for `started_at`.
-    pub fn started_at(&self) -> SystemTime {
-        self.started_at
+    /// Whether anyone hears the reports, so work done only for them can be skipped.
+    pub(crate) fn is_observed(&self) -> bool {
+        self.observer.is_some()
     }
 }
 

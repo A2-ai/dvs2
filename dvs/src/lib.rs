@@ -28,8 +28,8 @@ pub use files::metadata::FileMetadata;
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use operation::{
-    ByteTotals, Counts, FileRow, NoopObserver, OperationContext, OperationObserver, OperationPlan,
-    Phase, TransferObserver,
+    ByteTotals, Counts, FileRow, OperationContext, OperationObserver, OperationPlan, Phase,
+    TransferObserver,
 };
 pub use paths::{AddPathStatus, DvsPaths, PathFilter, ProjectPath, find_repo_root};
 pub use progress::FileProgress;
