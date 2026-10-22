@@ -130,8 +130,8 @@ record, e.g. git conflict markers, in every command) and `credentials_unreadable
 be read). Command-level codes: `not_in_project`, `invalid_configuration`, `invalid_arguments`,
 `no_files_selected`, `authentication_required` (device login needs an interactive `dvs login`), `io_error`,
 and `operation_failed`, the honest fallback when nothing more specific is known (`get` also uses it when no
-tracked file matched). Row codes besides the shared ones: `add` `file_failed` (the reason is in `message`),
-get's codes (see get), `status` `local_read_failed`, `hash` `local_read_failed` (symlinks) and `io_error`,
+tracked file matched). Row codes besides the shared ones: `add` `io_error`, `operation_failed`, and `file_failed`
+if a failure has no code, get's codes (see get), `status` `local_read_failed`, `hash` `local_read_failed` (symlinks) and `io_error`,
 `availability` `backend_read_failed` (an unclassified backend failure), and `logout` `warnings`
 `revoke_failed`.
 
