@@ -28,11 +28,10 @@ use dvs::init::init;
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode, FileMetadata,
-    FileProgress, FileRow, GetOptions, OperationContext, OperationRow, Outcome, PathFilter,
-    RowState, RunOutcome, Status, add_files, format_size, get_files, set_num_threads,
+    FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow, Outcome,
+    PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files, set_num_threads,
 };
 
-use crate::cancel::EXIT_CANCELLED;
 use crate::observer::CliObserver;
 
 #[derive(Debug, Subcommand)]
@@ -302,28 +301,11 @@ fn status_row(row: &dvs::inspect::StatusFacts) -> (serde_json::Value, bool) {
     (value, row.error.is_some())
 }
 
-/// Human output's closing line for a cancelled run; nothing when every
-/// file had already started.
-fn report_cancelled(not_started: usize, what: &str) {
-    if not_started == 0 {
-        return;
-    }
-    eprintln!(
-        "Cancelled: {} not {what}",
-        if not_started == 1 {
-            "1 file was".to_string()
-        } else {
-            format!("{not_started} files were")
-        }
-    );
-}
-
-/// 130 if cancelled, over everything else, then 1 if any row failed.
-fn summary_exit(outcome: RunOutcome) -> Result<()> {
-    match outcome {
-        RunOutcome::Cancelled => Err(Exit(EXIT_CANCELLED).into()),
-        RunOutcome::Partial | RunOutcome::Failed => Err(Exit(1).into()),
-        RunOutcome::Complete => Ok(()),
+/// Ends a run that reported rows with the exit status of how it ended.
+fn summary_exit(verdict: impl Into<GetVerdict>) -> Result<()> {
+    match output::run_exit_code(verdict) {
+        output::EXIT_OK => Ok(()),
+        code => Err(Exit(code).into()),
     }
 }
 
@@ -568,7 +550,6 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 if report.counts.failed > 0 {
                     eprintln!("Error: Some files failed to add");
                 }
-                report_cancelled(report.counts.cancelled, "added");
             }
             summary_exit(report.outcome)?;
         }
@@ -680,11 +661,8 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                     println!("{table}");
                 }
             }
-            if !cli.json {
-                if counts.failed > 0 {
-                    eprintln!("Error: Some files failed to get status");
-                }
-                report_cancelled(counts.cancelled, "checked");
+            if !cli.json && counts.failed > 0 {
+                eprintln!("Error: Some files failed to get status");
             }
             summary_exit(outcome)?;
         }
@@ -735,12 +713,8 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 output::emit_streamed(get_cmd::to_json(&report));
             } else {
                 get_cmd::print_human(&report);
-                report_cancelled(report.counts.cancelled, "retrieved");
             }
-            let code = get_cmd::exit_code(&report);
-            if code != output::EXIT_OK {
-                return Err(Exit(code).into());
-            }
+            summary_exit(report.verdict())?;
         }
         Command::Info => {
             let config = find_config(&current_dir)?;
@@ -1096,8 +1070,7 @@ fn main() {
     let dry_run = cli.command.dry_run();
     // One cancel flag per run, shared by every library call the command makes
     let cancel = CancelToken::new();
-    let cancellable = cli.command.cancellable();
-    if cancellable {
+    if cli.command.cancellable() {
         cancel::install(&cancel, cli.emit_events);
     }
     if cli.emit_events {
@@ -1112,22 +1085,12 @@ fn main() {
             if let Some(Exit(code)) = error.downcast_ref::<Exit>() {
                 *code
             } else {
-                // A run cancelled before it failed is still cancelled
-                let cancelled = cancellable && cancel.is_cancelled();
                 if json {
-                    let mut result = output::problem(command, dry_run, &error);
-                    if cancelled {
-                        result["outcome"] = json!("cancelled");
-                    }
-                    output::emit(result);
+                    output::emit(output::problem(command, dry_run, &error));
                 } else {
                     eprintln!("Error: {error}");
                 }
-                if cancelled {
-                    EXIT_CANCELLED
-                } else {
-                    output::exit_code(&error)
-                }
+                output::exit_code(&error)
             }
         }
     };

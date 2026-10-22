@@ -353,6 +353,9 @@ mod tests {
         assert_eq!((row.status, row.code), (None, Some(ErrorCode::Cancelled)));
         assert_eq!(row.state(), RowState::Cancelled);
         assert_eq!(serde_json::to_value(row).unwrap()["status"], "cancelled");
+        // A run that fails after a cancel (here an invalid glob) is still cancelled
+        let report = inspect_status(&paths, None, Some("["), &ctx).unwrap();
+        assert!(report.cancelled && report.files.is_empty());
     }
 
     #[test]

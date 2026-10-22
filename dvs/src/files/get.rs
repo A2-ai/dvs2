@@ -18,7 +18,8 @@ use crate::error::{Error, ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::globbing::GetSelection;
 use crate::operation::{
-    ByteTotals, FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard, millis,
+    ByteTotals, FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard, RunOutcome,
+    millis,
 };
 use crate::paths::ProjectPath;
 use crate::utils::get_threadpool;
@@ -308,6 +309,18 @@ pub enum GetVerdict {
     HeldBack,
     /// A cancel came before the run finished
     Cancelled,
+}
+
+/// An add or status outcome in the same terms, so one mapping gives every
+/// command its exit status.
+impl From<RunOutcome> for GetVerdict {
+    fn from(outcome: RunOutcome) -> Self {
+        match outcome {
+            RunOutcome::Complete => GetVerdict::Done,
+            RunOutcome::Partial | RunOutcome::Failed => GetVerdict::Failed,
+            RunOutcome::Cancelled => GetVerdict::Cancelled,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

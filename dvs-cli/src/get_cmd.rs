@@ -1,21 +1,10 @@
-//! Rendering `dvs get` results: human text, the JSON envelope, and exit codes.
+//! Rendering `dvs get` results: human text and the JSON envelope.
 
 use dvs::{
-    Action, Before, ErrorCode, GetCode, GetOutcome, GetReport, GetRow, GetVerdict, StoredCopy,
-    format_size, shell_path,
+    Action, Before, ErrorCode, GetCode, GetOutcome, GetReport, GetRow, StoredCopy, format_size,
+    shell_path,
 };
 use serde_json::json;
-
-use crate::output::{EXIT_CONFLICTS, EXIT_FAILED, EXIT_OK};
-
-pub fn exit_code(report: &GetReport) -> i32 {
-    match report.verdict() {
-        GetVerdict::Done => EXIT_OK,
-        GetVerdict::Failed => EXIT_FAILED,
-        GetVerdict::HeldBack => EXIT_CONFLICTS,
-        GetVerdict::Cancelled => crate::cancel::EXIT_CANCELLED,
-    }
-}
 
 /// Failures with one cause shared by every affected file (no access, server
 /// down): their message and hint are printed once, not per file.

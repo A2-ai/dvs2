@@ -11,8 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use dvs::CancelToken;
 
-/// The exit status of a cancelled run, conventional for SIGINT (128 + 2).
-pub const EXIT_CANCELLED: i32 = 130;
+use crate::output::EXIT_CANCELLED;
 
 /// Install the handlers for one cancellable run. Only `add`, `get` and
 /// `status` call this: every other command keeps the default "a signal kills

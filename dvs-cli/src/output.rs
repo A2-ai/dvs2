@@ -4,7 +4,7 @@ use std::time::{Instant, SystemTime};
 
 use anyhow::Error;
 use dvs::operation::{duration_ms, rfc3339_ms};
-use dvs::{ByteTotals, Counts, ErrorCode, RunOutcome};
+use dvs::{ByteTotals, Counts, ErrorCode, GetVerdict, RunOutcome};
 use serde_json::{Value, json};
 
 /// Exit codes, shared by every command; only `get` uses 3.
@@ -12,6 +12,8 @@ pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAILED: i32 = 1;
 pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_CONFLICTS: i32 = 3;
+/// A cancelled run, conventional for SIGINT (128 + 2).
+pub const EXIT_CANCELLED: i32 = 130;
 
 /// When this run started, for the timing every result carries.
 #[derive(Clone, Copy)]
@@ -82,6 +84,17 @@ pub fn error_code(error: &Error) -> ErrorCode {
         ErrorCode::IoError
     } else {
         ErrorCode::OperationFailed
+    }
+}
+
+/// The exit status of a run that reported rows: get passes its verdict, add
+/// and status their outcome.
+pub fn run_exit_code(verdict: impl Into<GetVerdict>) -> i32 {
+    match verdict.into() {
+        GetVerdict::Done => EXIT_OK,
+        GetVerdict::Failed => EXIT_FAILED,
+        GetVerdict::HeldBack => EXIT_CONFLICTS,
+        GetVerdict::Cancelled => EXIT_CANCELLED,
     }
 }
 
@@ -183,4 +196,18 @@ pub fn row_error_fields(mut value: Value) -> Value {
         }
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cancel_exits_130_whatever_the_command() {
+        assert_eq!(run_exit_code(RunOutcome::Cancelled), EXIT_CANCELLED);
+        assert_eq!(run_exit_code(GetVerdict::Cancelled), EXIT_CANCELLED);
+        assert_eq!(run_exit_code(RunOutcome::Partial), EXIT_FAILED);
+        assert_eq!(run_exit_code(RunOutcome::Complete), EXIT_OK);
+        assert_eq!(run_exit_code(GetVerdict::HeldBack), EXIT_CONFLICTS);
+    }
 }
