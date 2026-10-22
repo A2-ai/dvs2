@@ -1,6 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
@@ -164,39 +163,17 @@ struct RowBytes {
     transferred: bool,
 }
 
-/// What step 3 does with a hashed file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Finish {
-    /// Never starts: a `cancelled` row, no upload, no record
-    Cancel,
-    /// Upload if storage lacks the content, then write the record
-    Add,
-    /// This add already uploaded the content: write the record only
-    RecordOnly,
-}
-
-/// Decides what step 3 does with a file as it would start. `manifest_missing`
-/// is the server's manifest answer, `None` when none was sent. The server
-/// records every manifest entry whose content it already has, and completes
-/// every same-hash entry once content arrives, so those files finish even
-/// after a cancel to keep the local records in agreement.
-fn finish_for(
+/// Whether a file that has not started yet is cancelled. The server records
+/// every manifest entry whose content it already has, so after a cancel those
+/// files still write their local record, keeping the two in agreement.
+fn cancelled_before_start(
     cancelled: bool,
     hash: &str,
     manifest_missing: Option<&HashSet<String>>,
-    uploaded_in_this_add: bool,
-) -> Finish {
-    let recorded_by_server = manifest_missing.is_some_and(|missing| !missing.contains(hash));
-    if uploaded_in_this_add {
-        Finish::RecordOnly
-    } else if cancelled && !recorded_by_server {
-        Finish::Cancel
-    } else {
-        Finish::Add
-    }
+) -> bool {
+    cancelled && !manifest_missing.is_some_and(|missing| !missing.contains(hash))
 }
 
-/// What finishing one file did.
 struct Added {
     outcome: Outcome,
     stored_size: Option<u64>,
@@ -206,8 +183,7 @@ struct Added {
 
 /// `missing` is the server's answer to the manifest: the hashes to upload. The local
 /// backend has no manifest and checks for itself. Only a store moves bytes, so
-/// only it is reported as a transfer. `uploaded` is the stored size of this
-/// file's content when this add already uploaded it.
+/// only it is reported as a transfer.
 #[allow(clippy::too_many_arguments)]
 fn add_file(
     pending: &mut Pending,
@@ -215,7 +191,6 @@ fn add_file(
     backend: &Backend,
     operation_id: Uuid,
     missing: Option<&HashSet<String>>,
-    uploaded: Option<u64>,
     dry_run: bool,
     observer: &dyn OperationObserver,
     transfer: &LazyPhase<'_>,
@@ -233,15 +208,11 @@ fn add_file(
             created: false,
         });
     }
-    let store = match (missing, uploaded) {
-        // The local backend checks for itself whether it has the content
-        (None, _) => !pending
+    let store = match missing {
+        None => !pending
             .metadata
             .is_saved(backend, paths, &pending.relative_path)?,
-        // This add uploaded the content already, and the server completes
-        // this entry with it: uploading again would move the bytes twice
-        (Some(_), Some(_)) => false,
-        (Some(missing), None) => missing.contains(&pending.metadata.hashes.blake3),
+        Some(missing) => missing.contains(&pending.metadata.hashes.blake3),
     };
     if !store {
         // In sync, or the server has the content and recorded the add from the manifest
@@ -253,7 +224,7 @@ fn add_file(
         };
         return Ok(Added {
             outcome,
-            stored_size: uploaded.filter(|_| missing.is_some()),
+            stored_size: None,
             created: false,
         });
     }
@@ -289,8 +260,8 @@ fn add_file(
 /// each row as soon as it is final. Once `ctx` is cancelled no new file
 /// starts: files in flight finish (upload and record together), the rest get
 /// a `cancelled` row and no record, except files whose add the server already
-/// recorded or whose content this add already uploaded (see [`finish_for`]).
-/// A run that fails after a cancel still returns its (empty) cancelled report.
+/// recorded (see [`cancelled_before_start`]). A run that fails after a cancel
+/// still returns its (empty) cancelled report.
 pub fn add_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
@@ -477,24 +448,11 @@ fn add_all(
         observer.file_finished(FileRow::Add(row));
     }
 
-    // 3. Store what is missing and write the metadata files. A second file
-    // with content this add already uploads waits until that upload is done,
-    // so it can finish from it (see `finish_for`) rather than upload the same
-    // bytes again or, after a cancel, leave the server listing an add the
-    // client never recorded.
+    // 3. Store what is missing and write the metadata files
     let transfer = LazyPhase::new(observer, Phase::Transfer);
-    // Content uploaded by this add: hash -> stored size
-    let uploaded: Mutex<HashMap<String, u64>> = Mutex::new(HashMap::new());
     let finish_one = |mut pending: Pending| -> (AddResult, Option<RowBytes>) {
-        let hash = pending.metadata.hashes.blake3.clone();
-        let uploaded_size = uploaded.lock().unwrap().get(&hash).copied();
-        let finish = finish_for(
-            ctx.is_cancelled(),
-            &hash,
-            missing.as_ref(),
-            uploaded_size.is_some(),
-        );
-        if finish == Finish::Cancel {
+        let hash = &pending.metadata.hashes.blake3;
+        if cancelled_before_start(ctx.is_cancelled(), hash, missing.as_ref()) {
             let bytes = pending.row_bytes(false);
             let row = cancelled_row(pending.relative_path, Some(pending.work));
             observer.file_finished(FileRow::Add(&row));
@@ -507,7 +465,6 @@ fn add_all(
             backend,
             operation_id,
             missing.as_ref(),
-            uploaded_size,
             dry_run,
             observer,
             &transfer,
@@ -520,20 +477,13 @@ fn add_all(
                     pending.relative_path.display(),
                     added.outcome
                 );
-                if let Some(stored_size) = added.stored_size {
-                    uploaded
-                        .lock()
-                        .unwrap()
-                        .entry(hash.clone())
-                        .or_insert(stored_size);
-                }
                 // Storing content that was already there moves no bytes
                 let bytes = pending.row_bytes(added.created);
                 let result = AddResult {
                     path: pending.relative_path,
                     detail: AddDetail::Success {
                         outcome: added.outcome,
-                        hash,
+                        hash: pending.metadata.hashes.blake3,
                         size: pending.metadata.size,
                         stored_size: added.stored_size.unwrap_or(pending.metadata.size),
                     },
@@ -550,14 +500,7 @@ fn add_all(
         observer.file_finished(FileRow::Add(&result));
         (result, Some(bytes))
     };
-    let mut hashes_seen = HashSet::new();
-    let (firsts, repeats): (Vec<Pending>, Vec<Pending>) = pending
-        .into_iter()
-        .partition(|p| hashes_seen.insert(p.metadata.hashes.blake3.clone()));
-    for batch in [firsts, repeats] {
-        let finished = pool.install(|| batch.into_par_iter().map(&finish_one).collect::<Vec<_>>());
-        results.extend(finished);
-    }
+    results.extend(pool.install(|| pending.into_par_iter().map(finish_one).collect::<Vec<_>>()));
     transfer.finish();
 
     let mut bytes = ByteTotals::default();
@@ -856,66 +799,34 @@ mod tests {
     }
 
     #[test]
-    fn identical_new_files_are_transferred_once() {
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "a.txt", b"same content");
-        create_file(&root, "b.txt", b"same content");
-
-        let report = add(
-            &["a.txt", "b.txt"],
+    fn a_run_that_fails_after_a_cancel_is_reported_cancelled() {
+        let (_tmp, _root, config, paths) = project();
+        let token = CancelToken::new();
+        token.cancel();
+        // A missing path refuses the batch
+        let report = add_files(
+            vec!["missing.csv".into()],
             &paths,
-            backend,
+            config.backend(),
+            None,
+            Compression::Zstd,
             false,
-            &OperationContext::new(),
-        );
-        assert!(
-            report
-                .files
-                .iter()
-                .all(|r| r.state() == RowState::Succeeded)
-        );
-        assert!(paths.metadata_path(Path::new("b.txt")).is_file());
-        // Both needed uploading, but the bytes moved once
-        assert_eq!(
-            report.bytes,
-            ByteTotals {
-                total: 24,
-                to_transfer: 24,
-                already_stored: 0,
-                transferred: 12,
-            }
-        );
+            &OperationContext::new().with_cancel(token),
+        )
+        .unwrap();
+        assert_eq!(report.outcome, RunOutcome::Cancelled);
+        assert!(report.files.is_empty());
     }
 
     #[test]
-    fn a_copy_of_content_uploaded_before_a_cancel_is_still_recorded() {
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "a.txt", b"same content");
-        create_file(&root, "b.txt", b"same content");
-
-        // Cancelled as the first upload starts, before the copy has started
-        let token = CancelToken::new();
-        let recorder = Arc::new(Recorder::cancelling_on_transfer(token.clone(), 1));
-        let ctx = OperationContext::new()
-            .with_cancel(token)
-            .with_observer(recorder.clone());
-        let report = add(&["a.txt", "b.txt"], &paths, backend, false, &ctx);
-
-        assert!(ctx.is_cancelled());
-        assert!(
-            report
-                .files
-                .iter()
-                .all(|r| r.state() == RowState::Succeeded),
-            "{:?}",
-            report.files
-        );
-        for name in ["a.txt", "b.txt"] {
-            assert!(paths.metadata_path(Path::new(name)).is_file());
-        }
-        assert_eq!(report.bytes.transferred, 12);
+    fn after_a_cancel_only_files_the_server_already_recorded_start() {
+        let missing: HashSet<String> = ["new".to_string()].into();
+        // The manifest recorded "old" (the server has it), but not "new"
+        assert!(!cancelled_before_start(true, "old", Some(&missing)));
+        assert!(cancelled_before_start(true, "new", Some(&missing)));
+        // No manifest (local storage): every file not yet started is cancelled
+        assert!(cancelled_before_start(true, "old", None));
+        assert!(!cancelled_before_start(false, "new", Some(&missing)));
     }
 
     #[test]
