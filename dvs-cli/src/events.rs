@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use dvs::operation::{duration_ms, rfc3339_ms, unix_ms};
-use dvs::{FileProgress, OperationPlan, Phase};
+use dvs::{FileProgress, OperationPlan};
 use serde_json::{Value, json};
 
 static ACTIVE: OnceLock<EventStream> = OnceLock::new();
@@ -190,12 +190,12 @@ impl EventStream {
         Self::emit_locked(&mut state, "operation_planned", json!(plan), false);
     }
 
-    pub fn phase_started(&self, phase: Phase) {
-        self.emit("phase_started", json!({"phase": phase.as_str()}), false);
+    pub fn hash_started(&self) {
+        self.emit("hash_started", json!({}), false);
     }
 
-    pub fn phase_finished(&self, phase: Phase) {
-        self.emit("phase_finished", json!({"phase": phase.as_str()}), false);
+    pub fn hash_finished(&self) {
+        self.emit("hash_finished", json!({}), false);
     }
 
     /// A file's outcome is final: count it, and report progress if due.

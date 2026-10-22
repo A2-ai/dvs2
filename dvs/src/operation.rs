@@ -11,34 +11,6 @@ use crate::files::get::GetRow;
 use crate::files::status::StatusFacts;
 use crate::progress::FileProgress;
 
-/// A stage of an operation. A phase that does not occur is not reported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Phase {
-    /// Selecting and validating the files to work on
-    Scan,
-    /// Hashing working files
-    Hash,
-    /// Asking storage what it has (access check, manifest, existence checks)
-    CheckStorage,
-    /// Moving bytes to or from storage
-    Transfer,
-    /// Writing records, baselines and the gitignore
-    Record,
-}
-
-impl Phase {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Phase::Scan => "scan",
-            Phase::Hash => "hash",
-            Phase::CheckStorage => "check_storage",
-            Phase::Transfer => "transfer",
-            Phase::Record => "record",
-        }
-    }
-}
-
 /// What an operation is about to do, known once selection and storage checks
 /// are done. `status` reports zero `*_to_transfer`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -106,9 +78,12 @@ pub trait OperationObserver: Send + Sync {
     /// Once, after selection and storage checks, before any transfer.
     fn planned(&self, _plan: &OperationPlan) {}
 
-    fn phase_started(&self, _phase: Phase) {}
+    /// The first file that needs hashing is about to be hashed. Not called
+    /// when nothing is hashed.
+    fn hashing_started(&self) {}
 
-    fn phase_finished(&self, _phase: Phase) {}
+    /// Hashing is done, once for every `hashing_started`, error exits included.
+    fn hashing_finished(&self) {}
 
     /// A transfer of `total_bytes` for `path` is starting. The returned
     /// callbacks receive byte deltas and the transfer's success; `None` means
@@ -121,64 +96,37 @@ pub trait OperationObserver: Send + Sync {
     fn file_finished(&self, _row: FileRow<'_>) {}
 }
 
-/// A started phase that reports `phase_finished` when dropped, so a phase is
-/// closed on every exit, `?` and `bail!` included.
-#[must_use = "dropping the guard finishes the phase at once"]
-pub(crate) struct PhaseGuard<'a> {
+/// Hashing that starts the first time a file is hashed, from any thread, and
+/// is never reported if none is. Finished on drop if it started, so it is
+/// finished on every exit, `?` and `bail!` included.
+pub(crate) struct Hashing<'a> {
     observer: &'a dyn OperationObserver,
-    phase: Phase,
-}
-
-impl<'a> PhaseGuard<'a> {
-    /// Reports `phase_started` now and `phase_finished` on drop.
-    pub(crate) fn start(observer: &'a dyn OperationObserver, phase: Phase) -> Self {
-        observer.phase_started(phase);
-        Self { observer, phase }
-    }
-
-    /// Finishes the phase here, for readability; the same as dropping it.
-    pub(crate) fn finish(self) {}
-}
-
-impl Drop for PhaseGuard<'_> {
-    fn drop(&mut self) {
-        self.observer.phase_finished(self.phase);
-    }
-}
-
-/// A phase that starts the first time work in it begins, from any thread, and
-/// is never reported if no work does. Finished on drop if it started.
-pub(crate) struct LazyPhase<'a> {
-    observer: &'a dyn OperationObserver,
-    phase: Phase,
     started: std::sync::Once,
 }
 
-impl<'a> LazyPhase<'a> {
-    pub(crate) fn new(observer: &'a dyn OperationObserver, phase: Phase) -> Self {
+impl<'a> Hashing<'a> {
+    pub(crate) fn new(observer: &'a dyn OperationObserver) -> Self {
         Self {
             observer,
-            phase,
             started: std::sync::Once::new(),
         }
     }
 
-    /// Call before each piece of work in the phase. The first call reports
-    /// `phase_started`; concurrent callers wait for it, so no work in the
-    /// phase is reported before the phase is.
+    /// Call before hashing each file. The first call reports
+    /// `hashing_started`; concurrent callers wait for it, so no hashed file
+    /// is reported before hashing is.
     pub(crate) fn begin(&self) {
-        self.started
-            .call_once(|| self.observer.phase_started(self.phase));
+        self.started.call_once(|| self.observer.hashing_started());
     }
 
-    /// Finishes the phase here if it started; the same as dropping it.
+    /// Finishes hashing here if it started; the same as dropping it.
     pub(crate) fn finish(self) {}
 }
 
-impl Drop for LazyPhase<'_> {
+impl Drop for Hashing<'_> {
     fn drop(&mut self) {
         if self.started.is_completed() {
-            self.observer.phase_finished(self.phase);
+            self.observer.hashing_finished();
         }
     }
 }
@@ -256,14 +204,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_started_phase_finishes_on_an_early_error_exit() {
+    fn started_hashing_finishes_on_an_early_error_exit() {
         let recorder = crate::testutil::Recorder::default();
         let early_exit = || -> Result<(), ()> {
-            let _scan = PhaseGuard::start(&recorder, Phase::Scan);
+            let hashing = Hashing::new(&recorder);
+            hashing.begin();
             Err(())?;
             Ok(())
         };
         assert!(early_exit().is_err());
-        assert_eq!(recorder.seen(), ["start scan", "end scan"]);
+        assert_eq!(recorder.seen(), ["hash start", "hash end"]);
     }
 }

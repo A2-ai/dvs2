@@ -28,7 +28,7 @@ pub use files::status::{Baseline, StatusFacts, WorkingCopy, inspect_status};
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use operation::{
-    ByteTotals, Counts, FileRow, OperationContext, OperationObserver, OperationPlan, Phase,
+    ByteTotals, Counts, FileRow, OperationContext, OperationObserver, OperationPlan,
     TransferObserver,
 };
 pub use paths::{AddPathStatus, DvsPaths, PathFilter, ProjectPath, find_repo_root};
@@ -111,12 +111,12 @@ pub mod testutil {
             self.push(format!("plan {files} {bytes} {to_files} {to_bytes}"));
         }
 
-        fn phase_started(&self, phase: crate::Phase) {
-            self.push(format!("start {}", phase.as_str()));
+        fn hashing_started(&self) {
+            self.push("hash start".to_string());
         }
 
-        fn phase_finished(&self, phase: crate::Phase) {
-            self.push(format!("end {}", phase.as_str()));
+        fn hashing_finished(&self) {
+            self.push("hash end".to_string());
         }
 
         fn transfer_started(&self, path: &Path, _total_bytes: u64) -> Option<crate::FileProgress> {

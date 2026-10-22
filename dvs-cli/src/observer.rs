@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use dvs::{FileProgress, FileRow, OperationObserver, OperationPlan, Phase};
+use dvs::{FileProgress, FileRow, OperationObserver, OperationPlan};
 use serde_json::Value;
 
 use crate::events::{self, EventStream};
@@ -64,15 +64,15 @@ impl OperationObserver for CliObserver {
         }
     }
 
-    fn phase_started(&self, phase: Phase) {
+    fn hashing_started(&self) {
         if let Some(events) = self.events {
-            events.phase_started(phase);
+            events.hash_started();
         }
     }
 
-    fn phase_finished(&self, phase: Phase) {
+    fn hashing_finished(&self) {
         if let Some(events) = self.events {
-            events.phase_finished(phase);
+            events.hash_finished();
         }
     }
 

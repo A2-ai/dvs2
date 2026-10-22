@@ -1,6 +1,6 @@
 //! Local facts for machine-readable status, using cached hashes when available.
 use crate::cache::{self, FileStat};
-use crate::operation::{FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard};
+use crate::operation::{FileRow, Hashing, OperationContext, OperationPlan};
 use crate::{DvsPaths, ErrorCode, FileMetadata, Hashes, PathFilter, Status};
 use anyhow::Result;
 use fs_err as fs;
@@ -70,7 +70,7 @@ fn classify(
 
 /// Inspect tracked files in parallel. Each row goes to `ctx`'s observer as
 /// soon as it completes, so callers can stream rows; the returned rows are
-/// sorted by path. `hash` is reported only once a file is actually hashed.
+/// sorted by path. Hashing is reported only once a file is actually hashed.
 ///
 /// Paths in the result are relative to `paths.repo_root()`, independent of cwd.
 pub fn inspect_status(
@@ -80,7 +80,6 @@ pub fn inspect_status(
     ctx: &OperationContext,
 ) -> Result<Vec<StatusFacts>> {
     let observer = ctx.observer();
-    let scan = PhaseGuard::start(observer, Phase::Scan);
     let (entries, cache, pool) = status_scan_inputs(paths, filter, glob_pattern)?;
     // What hashing will read: the working files that are regular files. An
     // extra stat per file, so only when someone hears the plan.
@@ -96,14 +95,13 @@ pub fn inspect_status(
     } else {
         0
     };
-    scan.finish();
     observer.planned(&OperationPlan {
         files_total: entries.len() as u64,
         bytes_total,
         files_to_transfer: 0,
         bytes_to_transfer: 0,
     });
-    let hashing = LazyPhase::new(observer, Phase::Hash);
+    let hashing = Hashing::new(observer);
     let mut results = pool.install(|| {
         entries
             .into_par_iter()
@@ -149,7 +147,7 @@ fn inspect_path(
     path: PathBuf,
     paths: &DvsPaths,
     cache: &Option<Mutex<cache::HashCache>>,
-    hashing: &LazyPhase<'_>,
+    hashing: &Hashing<'_>,
 ) -> StatusFacts {
     let mut row = StatusFacts {
         path: path.clone(),
@@ -205,7 +203,7 @@ fn inspect_path(
         anyhow::ensure!(full.is_file(), "working path is not a regular file");
         row.working.size = Some(stat.size);
         // Hashing starts here: a cache lookup counts, while
-        // absent and failed rows never open the phase.
+        // absent and failed rows never start hashing.
         hashing.begin();
         let hit = cache
             .as_ref()
@@ -478,14 +476,7 @@ mod tests {
         // The extra stat pass, done only when observed, sizes the plan
         assert_eq!(
             recorder.seen(),
-            [
-                "start scan",
-                "end scan",
-                "plan 1 8 0 0",
-                "start hash",
-                "row data.txt",
-                "end hash"
-            ]
+            ["plan 1 8 0 0", "hash start", "row data.txt", "hash end"]
         );
     }
 }

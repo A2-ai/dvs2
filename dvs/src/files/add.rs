@@ -17,8 +17,8 @@ use crate::error::{ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
 use crate::operation::{
-    ByteTotals, Counts, FileRow, LazyPhase, OperationContext, OperationObserver, OperationPlan,
-    Phase, PhaseGuard, duration_ms, millis,
+    ByteTotals, Counts, FileRow, Hashing, OperationContext, OperationObserver, OperationPlan,
+    duration_ms, millis,
 };
 use crate::paths::{DvsPaths, ProjectPath};
 use crate::utils::get_threadpool;
@@ -142,7 +142,6 @@ fn add_file(
     missing: Option<&HashSet<String>>,
     dry_run: bool,
     observer: &dyn OperationObserver,
-    transfer: &LazyPhase<'_>,
 ) -> Result<Added> {
     let full_path = paths.file_path(&pending.relative_path);
     if dry_run {
@@ -177,7 +176,6 @@ fn add_file(
             created: false,
         });
     }
-    transfer.begin();
     let file_progress = observer.transfer_started(&pending.relative_path, pending.metadata.size);
     let res = pending.metadata.store_and_write(
         operation_id,
@@ -203,8 +201,8 @@ fn add_file(
 /// The pattern is matched against files relative to cwd.
 /// Files are stored with paths relative to repo_root.
 ///
-/// Reports to `ctx`'s observer as it goes: phases (only those in which work
-/// happens, each finished also on an error exit), the plan (once storage has
+/// Reports to `ctx`'s observer as it goes: hashing (if any file is hashed,
+/// finished also on an error exit), the plan (once storage has
 /// been asked what it has, and always before any row), each transfer, and
 /// each row as soon as it is final.
 pub fn add_files(
@@ -217,10 +215,8 @@ pub fn add_files(
     ctx: &OperationContext,
 ) -> Result<AddReport> {
     let observer = ctx.observer();
-    let scan = PhaseGuard::start(observer, Phase::Scan);
     let matched_paths = paths.validate_for_add(&files);
     if matched_paths.is_empty() {
-        scan.finish();
         // Still planned, once: nothing to add, and no rows follow
         observer.planned(&OperationPlan::default());
         return Ok(AddReport::default());
@@ -247,10 +243,8 @@ pub fn add_files(
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
 
-    // Fail fast on auth/permission problems before doing any work. Part of the
-    // scan so that it runs before hashing, which can take long
+    // Fail fast on auth/permission problems before hashing, which can take long
     backend.check_access()?;
-    scan.finish();
 
     let files_total = valid_paths.len() as u64;
     let pool = get_threadpool(valid_paths.len())?;
@@ -262,7 +256,7 @@ pub fn add_files(
     let mut results: Vec<(AddResult, Option<RowBytes>)>;
 
     // 1. Hash everything first: the server wants the whole list before any bytes move
-    let hashing = LazyPhase::new(observer, Phase::Hash);
+    let hashing = Hashing::new(observer);
     let mut pending: Vec<Pending>;
     (pending, results) = pool.install(|| {
         valid_paths.into_par_iter().partition_map(|relative_path| {
@@ -299,7 +293,6 @@ pub fn add_files(
             let mut answer_missing = HashSet::new();
             // Everything in sync: no manifest, so no storage check either
             if !entries.is_empty() {
-                let _check = PhaseGuard::start(observer, Phase::CheckStorage);
                 let answer = server.manifest(&UploadManifest {
                     operation_id,
                     message: message.clone(),
@@ -319,10 +312,8 @@ pub fn add_files(
             missing = Some(answer_missing);
         }
         _ => {
-            let check = LazyPhase::new(observer, Phase::CheckStorage);
             let (checked, unchecked): (Vec<Pending>, Vec<_>) = pool.install(|| {
                 pending.into_par_iter().partition_map(|mut p| {
-                    check.begin();
                     let start = Instant::now();
                     match backend.exists(&p.metadata.hashes) {
                         Ok(stored) => {
@@ -339,7 +330,6 @@ pub fn add_files(
                     }
                 })
             });
-            check.finish();
             pending = checked;
             results.extend(unchecked);
         }
@@ -359,7 +349,6 @@ pub fn add_files(
     }
 
     // 3. Store what is missing and write the metadata files
-    let transfer = LazyPhase::new(observer, Phase::Transfer);
     let finish_one = |mut pending: Pending| -> (AddResult, Option<RowBytes>) {
         let start = Instant::now();
         let added = add_file(
@@ -370,7 +359,6 @@ pub fn add_files(
             missing.as_ref(),
             dry_run,
             observer,
-            &transfer,
         );
         pending.work += start.elapsed();
         let (result, bytes) = match added {
@@ -404,7 +392,6 @@ pub fn add_files(
         (result, Some(bytes))
     };
     results.extend(pool.install(|| pending.into_par_iter().map(finish_one).collect::<Vec<_>>()));
-    transfer.finish();
 
     let mut bytes = ByteTotals::default();
     let mut results: Vec<AddResult> = results
@@ -424,7 +411,6 @@ pub fn add_files(
         .map(|r| r.path.clone())
         .collect();
     if !dry_run && !successful_paths.is_empty() {
-        let _record = PhaseGuard::start(observer, Phase::Record);
         // Successfully added bytes are what dvs last placed at these paths, so a
         // later `get` may replace them without asking (see files/get.rs).
         for r in &results {

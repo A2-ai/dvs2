@@ -175,8 +175,8 @@ request, login included, goes under it.
 `--emit-events` (instead of `--json`) writes NDJSON, one event per line, while the command runs and ends
 with the result document: `operation_started` (`command`), `waiting_for_auth` (`user_code`,
 `approval_url`; device login), `operation_planned` (`files_total`, `bytes_total`, `files_to_transfer`,
-`bytes_to_transfer`; once, before any row), `phase_started`/`phase_finished` (`phase`: `scan`, `hash`,
-`check_storage`, `transfer`, `record`; only phases where work happens), `transfer_started` (`path`,
+`bytes_to_transfer`; once, before any row), `hash_started`/`hash_finished` (`add`, `get`
+and `status`; only when a file is hashed), `transfer_started` (`path`,
 `total_bytes`), `transfer_progress` (`path`, `bytes`, `total_bytes`; at most 10 per second per transfer),
 `transfer_finished` (`path`, `bytes`, `total_bytes`, `success`, `duration_ms`), `file_result` (`result`: one
 row, the same shape as a `--json` `files` row, sent once, as soon as it is final, in completion order),
