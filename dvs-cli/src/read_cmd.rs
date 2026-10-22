@@ -55,6 +55,14 @@ fn resolve_paths(paths: &DvsPaths, user_paths: Vec<PathBuf>) -> Result<Vec<PathB
     user_paths
         .into_iter()
         .map(|path| {
+            // A folder's history is the history of every file in it, which can be
+            // thousands of entries: name the files
+            if paths.cwd().join(&path).is_dir() {
+                return Err(invalid(format!(
+                    "history takes files, not folders: {}",
+                    path.display()
+                )));
+            }
             let filter = PathFilter::from_user_paths(vec![path.clone()], false, paths);
             if filter.paths().len() != 1 || filter.paths()[0].as_os_str().is_empty() {
                 return Err(invalid(format!(

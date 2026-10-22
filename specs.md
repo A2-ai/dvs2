@@ -124,7 +124,7 @@ Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored
 `state` (`present`, `absent`, `unknown`), `in_history`, and a second error pair `history_code`/`history_message`
 for the history lookup, a separate request that fails on its own (`in_history` and the history pair are `null`
 without `--path`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action` (history never
-fails per row). `path` is relative to the project root (`info`'s `project_root`); get's `local_path` is relative
+fails per row; it requires one or more file paths, and a folder is `invalid_arguments`). `path` is relative to the project root (`info`'s `project_root`); get's `local_path` is relative
 to the current directory.
 
 Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row

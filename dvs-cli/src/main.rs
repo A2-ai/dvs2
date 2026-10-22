@@ -197,9 +197,10 @@ pub enum Command {
         #[clap(long, value_name = "FILE")]
         path: Option<PathBuf>,
     },
-    /// Show stored upload history; no paths queries the whole project's history
+    /// Show the stored upload history of the given files
     History {
-        /// Only show the history of these files
+        /// Files to show the history of (not folders)
+        #[clap(required = true)]
         paths: Vec<PathBuf>,
     },
     /// Log in to a DVS server, the one in the config unless a URL is given
