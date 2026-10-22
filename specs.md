@@ -81,11 +81,13 @@ of pipelines, or non-interactive workflows. Returning error codes is necessary.
 
 Every `--json` result is one envelope (`v`, `command`, `outcome`, `dry_run`, `counts`, `error`, `files`, ...),
 error envelopes included, and carries its timing: `started_at` and `finished_at` (RFC 3339 UTC
-with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and `duration_ms`. `add` and `get` results have
-`bytes: {total, to_transfer, already_stored, transferred}` (dry runs too; `transferred` is what actually moved,
-so `0` in a dry run; `to_transfer + already_stored = total`). Every time in JSON output is RFC 3339 UTC:
-`started_at`/`finished_at` and history's `timestamp` with milliseconds (the audit log on disk keeps unix
-seconds), a record's `add_time` as the record stores it. The only exception is event `ts` (unix milliseconds).
+with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and `duration_ms`. `add`, `get` and `hash` rows have a
+`duration_ms` for that file's work (hash, transfer, record), `null` for a row that did no work. `add` and `get`
+results have `bytes: {total, to_transfer, already_stored, transferred}` (dry runs too; `transferred` is what
+actually moved, so `0` in a dry run; `to_transfer + already_stored = total`). Every time in JSON output is
+RFC 3339 UTC: `started_at`/`finished_at` and history's `timestamp` with milliseconds (the audit log on disk
+keeps unix seconds), a record's `add_time` as the record stores it. The only exception is event `ts` (unix
+milliseconds).
 
 Errors have one shape. The envelope's `error` is `null` or `{code, message, hint}`; every row of every command
 has `code`, `message` and `hint` (all `null` on success; `hint` is `null` where there is none). Rows have fixed
@@ -115,12 +117,16 @@ purpose.
 A server URL may carry a path prefix (a proxy, `https://host/dvs`, with or without the trailing slash): every
 request, login included, goes under it.
 
-`--emit-events` writes NDJSON: `operation_started`, `waiting_for_auth` (device login), `transfer_started`,
-`transfer_progress`, `transfer_finished` (with `duration_ms`), `file_result` (`status` streams each row as its
-local check completes, in completion order; other commands emit one per result row just before the end; the
-same shape as in the result), and `operation_finished` (`result`, `exit_code`, `started_at`, `finished_at`,
-`duration_ms`). Every event has `v`, `operation_id`, `seq`, `type`, `ts` (unix milliseconds) and `elapsed_ms`
-(since the operation started).
+`--emit-events` writes NDJSON: `operation_started`, `operation_planned` (`files_total`, `bytes_total`,
+`files_to_transfer`, `bytes_to_transfer`; once, before any row), `phase_started`/`phase_finished` (`phase`:
+`scan`, `hash`, `check_storage`, `transfer`, `record`; only phases where work happens), `transfer_started`,
+`transfer_progress`, `transfer_finished` (with `duration_ms`), `file_result` (each row as soon as it is final,
+in completion order, the same shape as in the result), `operation_progress` (`files_done`, `files_total`,
+`bytes_done`, `bytes_total`: files against the plan's `files_total`, moved bytes against its
+`bytes_to_transfer`; at most every 250 ms and only once a file finished or 1% of the bytes moved since the
+last one; the final count is always reported before the end), and `operation_finished` (`result`,
+`exit_code`, `started_at`, `finished_at`, `duration_ms`). Every event has `v`, `operation_id`, `seq`, `type`,
+`ts` (unix milliseconds) and `elapsed_ms` (since the operation started).
 
 #### R package
 
@@ -495,7 +501,6 @@ error row; nothing selected is dropped silently. It exits `1` if any file could 
 ```
 
 `hash_source` is `cache` or `computed`; `hashes`, `size` and `hash_source` match status's `working` object.
-`duration_ms` is the time spent hashing that file, `null` for a row that did no work.
 
 ## Internals
 

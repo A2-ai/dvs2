@@ -7,12 +7,12 @@ clients must never parse diagnostic text. Explicit `--help` and `--version` keep
 conventional human output and exit 0. A `--json` after the argument terminator `--` is
 a literal path, not a request for machine output.
 
+`--emit-events` (instead of `--json`) streams NDJSON events while the command runs and
+ends with the same result document; see [Events](#events).
+
 Codes are the API; messages are display text and may change. Clients must tolerate
 additional fields and unknown codes without treating them as success. New incompatible
 semantics require a new protocol version.
-
-`--emit-events` (instead of `--json`) streams NDJSON events while the command runs and
-ends with the same result document; see [Events](#events).
 
 ## Envelope
 
@@ -64,7 +64,7 @@ rows (held back by a conflict) are in neither.
 - `total`: the sizes of the rows whose size is known.
 - `to_transfer`: bytes that need moving: upload for `add`; for `get`, every row whose
   local copy does not match its target (held back, skipped and failed rows included).
-- `already_stored`: the rest of `total` (`add`: storage already has the content;
+- `already_stored`: the rest of `total` (`add`: the server already has the content;
   `get`: the local copy already matches). `to_transfer + already_stored = total`.
 - `transferred`: bytes actually moved; `0` in a dry run.
 
@@ -79,13 +79,15 @@ missing. Every row carries the same error fields:
 | `message` | `null` on success, else the reason, for people |
 | `hint` | `null`, or the next thing to try (only `get` fills it today) |
 
+`add`, `get` and `hash` rows also have `duration_ms`: that file's work (hash, transfer,
+record), `null` for a row that did no work.
+
 - `add`: `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; all
   `null` on an error row.
 - `get`: `path`, `local_path`, `before`, `action`, `satisfied`, `size`, `target_hash`,
   `local_hash`, `stored_copy`.
 - `status`: `path`, `status`, `metadata`, `working`, `baseline`.
-- `hash`: `path`, `hashes`, `size`, `hash_source` (`cache`, `computed`), and
-  `duration_ms`: the time spent hashing that file, `null` for a row that did no work.
+- `hash`: `path`, `hashes`, `size`, `hash_source` (`cache`, `computed`).
 - `availability`: `hash`, `state` (`present`, `absent`, `unknown`), `in_history`, and a
   second error pair `history_code`/`history_message` for the history lookup, which is a
   separate request that fails on its own. `in_history` and the history pair are `null`
@@ -156,15 +158,20 @@ was killed means the operation was interrupted: rescan before retrying.
 | --- | --- |
 | `operation_started` | `command` |
 | `waiting_for_auth` | `user_code`, `approval_url` (device login) |
+| `operation_planned` | `files_total`, `bytes_total`, `files_to_transfer`, `bytes_to_transfer`; once, before any row |
+| `phase_started`, `phase_finished` | `phase`: `scan`, `hash`, `check_storage`, `transfer`, `record`; only phases where work happens |
 | `transfer_started` | `path`, `total_bytes` |
 | `transfer_progress` | `path`, `bytes`, `total_bytes`; at most 10 per second per transfer |
 | `transfer_finished` | `path`, `bytes`, `total_bytes`, `success`, `duration_ms` |
 | `file_result` | `result`: one row, the same shape as in the result's `files` |
+| `operation_progress` | `files_done`, `files_total`, `bytes_done`, `bytes_total` |
 | `operation_finished` | `result` (the full result document), `exit_code`, `started_at`, `finished_at`, `duration_ms`; always last |
 
-`status` streams each `file_result` as that file's local check completes, in completion
-order; the final result's `files` keeps its own order. Other commands emit one
-`file_result` per row of their result just before `operation_finished`. Transfer events
+`file_result` events stream as each file's outcome is final, in completion order; the
+final result's `files` keeps its own order. `operation_progress` counts files against the
+plan's `files_total` and moved bytes against its `bytes_to_transfer`; it is emitted at
+most every 250 ms, and only once a file finished or 1% of the bytes moved since the last
+one; the final count is always reported before `operation_finished`. Transfer events
 describe transfer work only: the result is authoritative (a transfer can succeed and the
 install still fail).
 
