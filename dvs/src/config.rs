@@ -331,7 +331,6 @@ impl Config {
         &self.backend
     }
 
-    /// See [`crate::auth::CredentialPolicy`]. Not part of `dvs.toml`.
     pub fn set_credential_policy(&mut self, policy: crate::auth::CredentialPolicy) {
         self.backend.set_credential_policy(policy);
     }

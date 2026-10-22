@@ -6,9 +6,8 @@ use dvs::config::{OnConflict, SettingSource};
 use dvs::{Action, Before, GetCode, GetOutcome, GetReport, GetRow, StoredCopy, format_size};
 use serde_json::json;
 
-/// Exit codes. Every command shares one table (`output::exit_code`,
-/// specs.md "Machine output"); only `get` uses 3. Usage and configuration errors exit
-/// 2 (clap and `main`).
+/// Exit codes, shared by every command; only `get` uses 3. Usage and
+/// configuration errors exit 2 (clap and `main`).
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAILED: i32 = 1;
 pub const EXIT_USAGE: i32 = 2;
@@ -291,18 +290,14 @@ pub fn print_human(report: &GetReport) {
     }
 }
 
-/// One row as `get --json` reports it.
 pub fn row_json(r: &GetRow) -> serde_json::Value {
     let mut v = serde_json::to_value(r).expect("rows serialize");
     v["hint"] = json!(hint(r));
     v
 }
 
-/// get's detailed counts plus the `total`/`succeeded` every command has
-/// (§9 rec 5). `succeeded` = rows at their target (restored, replaced,
-/// unchanged; would_restore/would_replace in a dry run). `failed` stays the
-/// `failed` action. Skipped and not_run (held back) rows are in neither.
-/// Added here, not in `GetCounts`, so R output is unchanged (K8).
+/// get's counts plus `total` and `succeeded` (rows at their target). Added
+/// here, not in `GetCounts`, so R output is unchanged.
 fn counts_json(report: &GetReport) -> serde_json::Value {
     let c = &report.counts;
     let mut counts = serde_json::to_value(c).expect("counts serialize");
@@ -323,8 +318,6 @@ pub fn to_json(report: &GetReport) -> serde_json::Value {
         "source": report.source,
         "counts": counts_json(report),
         "bytes": report.bytes,
-        // An operation-level problem ("no tracked files matched") keeps its
-        // code (K2); the library's `problem` text is its message
         "error": report
             .problem
             .as_ref()
