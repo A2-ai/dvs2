@@ -9,6 +9,19 @@ use crate::backends::Backend;
 use crate::config::Config;
 use crate::paths;
 
+/// Creates the metadata folder of the project in `root_dir`, if it doesn't exist yet.
+/// Both `init` and `attach` need it: the commands that track files expect it.
+pub fn create_metadata_folder(root_dir: impl AsRef<Path>, config: &Config) -> Result<()> {
+    let metadata_dir = root_dir.as_ref().join(config.metadata_folder_name());
+    log::debug!("Creating metadata folder: {}", metadata_dir.display());
+    if let Err(e) = fs::create_dir(&metadata_dir)
+        && e.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        return Err(e.into());
+    }
+    Ok(())
+}
+
 /// Starts a new dvs project.
 /// We need a ready to use Config object + the current directory the user is in
 pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
@@ -65,13 +78,10 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
 
     let config_path = root_dir.join(paths::CONFIG_FILE_NAME);
 
-    log::debug!("Creating metadata folder: {}", metadata_dir.display());
-    if let Err(e) = fs::create_dir(&metadata_dir) {
-        if e.kind() != std::io::ErrorKind::AlreadyExists {
-            // Roll back the config file we just wrote.
-            let _ = fs::remove_file(&config_path);
-            return Err(e.into());
-        }
+    if let Err(e) = create_metadata_folder(root_dir, &config) {
+        // Roll back the config file we just wrote.
+        let _ = fs::remove_file(&config_path);
+        return Err(e);
     }
 
     match &config.backend {

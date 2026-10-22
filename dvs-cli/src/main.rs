@@ -15,7 +15,7 @@ use dvs::auth::{
 };
 use dvs::config::Config;
 use dvs::globbing::{resolve_paths_for_add, resolve_paths_for_get};
-use dvs::init::init;
+use dvs::init::{create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, Backend, Compression, FileMetadata, FileProgress, GetDetail, Outcome, PathFilter,
@@ -330,7 +330,9 @@ fn try_main() -> Result<()> {
 
             if let Backend::Server(s) = config.backend() {
                 s.attach()?;
-                config.save(current_dir)?;
+                // Before the config, so a failure leaves nothing that blocks a retry
+                create_metadata_folder(&current_dir, &config)?;
+                config.save(&current_dir)?;
             }
         }
         Command::Add {
