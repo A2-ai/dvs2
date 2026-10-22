@@ -444,6 +444,19 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[test]
+    fn row_errors_carry_a_code() {
+        let backend = anyhow::Error::from(crate::BackendError::new(ErrorCode::AccessDenied, "no"));
+        let io = anyhow::Error::from(std::io::Error::other("disk"));
+        for (error, expected) in [
+            (backend, AddErrorCode::AccessDenied),
+            (io, AddErrorCode::IoError),
+            (anyhow::anyhow!("other"), AddErrorCode::OperationFailed),
+        ] {
+            assert_eq!(add_error_code(&error), expected);
+        }
+    }
+
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
         DvsPaths::new(
             root.to_path_buf(),
