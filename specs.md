@@ -168,13 +168,13 @@ A server URL may carry a path prefix (a proxy, `https://host/dvs`, with or witho
 request, login included, goes under it.
 
 `--emit-events` (instead of `--json`) writes NDJSON, one event per line, while the command runs and ends
-with the same result document: `operation_started` (`command`), `waiting_for_auth` (`user_code`,
+with the result document: `operation_started` (`command`), `waiting_for_auth` (`user_code`,
 `approval_url`; device login), `transfer_started` (`path`, `total_bytes`), `transfer_progress` (`path`,
 `bytes`, `total_bytes`; at most 10 per second per transfer), `transfer_finished` (`path`, `bytes`,
-`total_bytes`, `success`, `duration_ms`), `file_result` (`result`: one row, the same shape as in the result's
-`files`; `status` streams each row as its local check completes, in completion order, while the final result's
-`files` keeps its own order; other commands emit one per result row just before the end), and
-`operation_finished` (`result`, the full result document, `exit_code`, `started_at`, `finished_at`,
+`total_bytes`, `success`, `duration_ms`), `file_result` (`result`: one row, the same shape as a `--json`
+`files` row; each row is sent once: `status` streams each row as its local check completes, in completion
+order; other commands emit one per row just before the end), and `operation_finished` (`result`, the `--json`
+document without `files`, so the envelope and `counts`; `exit_code`, `started_at`, `finished_at`,
 `duration_ms`; always last). Every event has `v`, `operation_id` (`"<pid>-<nanos>"`), `seq` (0, 1, 2, ...),
 `type`, `ts` (unix milliseconds) and `elapsed_ms` (since the operation started). Transfer events describe
 transfer work only: the result is authoritative (a transfer can succeed and the install still fail).
