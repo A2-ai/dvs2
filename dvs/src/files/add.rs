@@ -18,8 +18,8 @@ use crate::error::{ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
 use crate::operation::{
-    ByteTotals, FileRow, LazyPhase, OperationContext, OperationPlan, OperationRow, Phase,
-    PhaseGuard, RowState, RunSummary, duration_ms, millis,
+    ByteTotals, Counts, FileRow, LazyPhase, OperationContext, OperationObserver, OperationPlan,
+    OperationRow, Phase, PhaseGuard, RowState, RunOutcome, duration_ms, millis,
 };
 use crate::paths::{DvsPaths, ProjectPath};
 use crate::utils::get_threadpool;
@@ -33,9 +33,7 @@ pub struct AddResult {
     pub detail: AddDetail,
     /// Time spent on this file (hash + transfer + record); `None` when it did
     /// no work (including rows cancelled before hashing; a row cancelled after
-    /// hashing carries its work so far). Not serialized by the library, so
-    /// the R package's output is unchanged; the CLI adds it to its rows.
-    #[serde(skip)]
+    /// hashing carries its work so far).
     pub duration_ms: Option<u64>,
 }
 
@@ -49,17 +47,24 @@ impl OperationRow for AddResult {
     }
 }
 
-/// The rows of an `add`, sorted by path, plus byte totals.
+/// The rows of an `add`, sorted by path, plus counts, outcome and byte totals.
 #[derive(Debug, Clone)]
 pub struct AddReport {
     pub files: Vec<AddResult>,
+    pub counts: Counts,
+    pub outcome: RunOutcome,
     pub bytes: ByteTotals,
-    pub cancelled: bool,
 }
 
 impl AddReport {
-    pub fn summary(&self) -> RunSummary {
-        RunSummary::of(&self.files, self.cancelled)
+    fn new(files: Vec<AddResult>, bytes: ByteTotals, cancelled: bool) -> Self {
+        let counts = Counts::of(&files);
+        AddReport {
+            outcome: RunOutcome::of(&counts, cancelled),
+            files,
+            counts,
+            bytes,
+        }
     }
 }
 
@@ -73,7 +78,7 @@ pub enum AddDetail {
         stored_size: u64,
     },
     Error {
-        code: AddErrorCode,
+        code: ErrorCode,
         error: String,
     },
     Cancelled {
@@ -81,44 +86,13 @@ pub enum AddDetail {
     },
 }
 
-/// Stable machine-readable category for a per-file add failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AddErrorCode {
-    AccessDenied,
-    ServerUnavailable,
-    IoError,
-    OperationFailed,
-    AuthRequired,
-    AuthExpired,
-    ServerTooOld,
-    ProjectNotFound,
-    BadMetadata,
-    CredentialsUnreadable,
-}
-
-impl From<ErrorCode> for AddErrorCode {
-    fn from(code: ErrorCode) -> Self {
-        match code {
-            ErrorCode::AuthRequired => AddErrorCode::AuthRequired,
-            ErrorCode::AuthExpired => AddErrorCode::AuthExpired,
-            ErrorCode::AccessDenied => AddErrorCode::AccessDenied,
-            ErrorCode::ServerUnavailable => AddErrorCode::ServerUnavailable,
-            ErrorCode::ServerTooOld => AddErrorCode::ServerTooOld,
-            ErrorCode::ProjectNotFound => AddErrorCode::ProjectNotFound,
-            ErrorCode::BadMetadata => AddErrorCode::BadMetadata,
-            ErrorCode::CredentialsUnreadable => AddErrorCode::CredentialsUnreadable,
-        }
-    }
-}
-
-fn add_error_code(error: &anyhow::Error) -> AddErrorCode {
+fn add_error_code(error: &anyhow::Error) -> ErrorCode {
     if let Some(code) = backend_error_code(error) {
-        code.into()
+        code
     } else if error.downcast_ref::<std::io::Error>().is_some() {
-        AddErrorCode::IoError
+        ErrorCode::IoError
     } else {
-        AddErrorCode::OperationFailed
+        ErrorCode::OperationFailed
     }
 }
 
@@ -231,8 +205,9 @@ struct Added {
 }
 
 /// `missing` is the server's answer to the manifest: the hashes to upload. The local
-/// backend has no manifest and checks for itself. `uploaded` is the stored size
-/// of this file's content when this add already uploaded it.
+/// backend has no manifest and checks for itself. Only a store moves bytes, so
+/// only it is reported as a transfer. `uploaded` is the stored size of this
+/// file's content when this add already uploaded it.
 #[allow(clippy::too_many_arguments)]
 fn add_file(
     pending: &mut Pending,
@@ -242,7 +217,8 @@ fn add_file(
     missing: Option<&HashSet<String>>,
     uploaded: Option<u64>,
     dry_run: bool,
-    on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    observer: &dyn OperationObserver,
+    transfer: &LazyPhase<'_>,
 ) -> Result<Added> {
     let full_path = paths.file_path(&pending.relative_path);
     if dry_run {
@@ -257,75 +233,49 @@ fn add_file(
             created: false,
         });
     }
-    let stored = |res: crate::StoreResult| (Some(res.stored_size), res.created);
-    let (outcome, (stored_size, created)) = match (missing, uploaded) {
-        // The local backend checks for itself whether it has the content (and
-        // dedups a copy this add already stored, recording its path)
-        (None, _) => {
-            let (outcome, res) = pending.metadata.save_reporting(
-                operation_id,
-                &full_path,
-                backend,
-                paths,
-                &pending.relative_path,
-                on_bytes,
-            )?;
-            (outcome, res.map_or((None, false), stored))
-        }
+    let store = match (missing, uploaded) {
+        // The local backend checks for itself whether it has the content
+        (None, _) => !pending
+            .metadata
+            .is_saved(backend, paths, &pending.relative_path)?,
         // This add uploaded the content already, and the server completes
         // this entry with it: uploading again would move the bytes twice
-        (Some(_), Some(size)) => {
-            let outcome = if pending.in_sync(paths) {
-                Outcome::Present
-            } else {
-                pending.metadata.write(paths, &pending.relative_path)?;
-                Outcome::Copied
-            };
-            (outcome, (Some(size), false))
-        }
-        (Some(missing), None) if missing.contains(&pending.metadata.hashes.blake3) => {
-            let res = pending.metadata.store_and_write_reporting(
-                operation_id,
-                &full_path,
-                backend,
-                paths,
-                &pending.relative_path,
-                on_bytes,
-            )?;
-            (Outcome::Copied, stored(res))
-        }
-        // The server has the content and recorded the add from the manifest
-        (Some(_), None) if pending.in_sync(paths) => (Outcome::Present, (None, false)),
-        (Some(_), None) => {
-            pending.metadata.write(paths, &pending.relative_path)?;
-            (Outcome::Copied, (None, false))
-        }
+        (Some(_), Some(_)) => false,
+        (Some(missing), None) => missing.contains(&pending.metadata.hashes.blake3),
     };
+    if !store {
+        // In sync, or the server has the content and recorded the add from the manifest
+        let outcome = if missing.is_none() || pending.in_sync(paths) {
+            Outcome::Present
+        } else {
+            pending.metadata.write(paths, &pending.relative_path)?;
+            Outcome::Copied
+        };
+        return Ok(Added {
+            outcome,
+            stored_size: uploaded.filter(|_| missing.is_some()),
+            created: false,
+        });
+    }
+    transfer.begin();
+    let file_progress = observer.transfer_started(&pending.relative_path, pending.metadata.size);
+    let res = pending.metadata.store_and_write(
+        operation_id,
+        &full_path,
+        backend,
+        paths,
+        &pending.relative_path,
+        file_progress.as_ref().map(|fp| &*fp.on_bytes),
+    );
+    if let Some(fp) = &file_progress {
+        (fp.on_done)(res.is_ok());
+    }
+    let res = res?;
     Ok(Added {
-        outcome,
-        stored_size,
-        created,
+        outcome: Outcome::Copied,
+        stored_size: Some(res.stored_size),
+        created: res.created,
     })
-}
-
-/// Whether [`add_file`] (not in a dry run) will make a store call, i.e. may
-/// move bytes. Mirrors its branches: the local backend stores unless the file
-/// is in storage and its record already says exactly this (as
-/// `save_reporting` checks); the server only gets the content it said it is
-/// missing; content this add already uploaded is never stored again.
-fn may_move_bytes(
-    pending: &Pending,
-    paths: &DvsPaths,
-    missing: Option<&HashSet<String>>,
-    uploaded: Option<u64>,
-) -> bool {
-    if uploaded.is_some() {
-        return false;
-    }
-    match missing {
-        None => !(pending.stored && pending.in_sync(paths)),
-        Some(missing) => missing.contains(&pending.metadata.hashes.blake3),
-    }
 }
 
 /// Adds files matching a glob pattern to DVS.
@@ -340,7 +290,23 @@ fn may_move_bytes(
 /// starts: files in flight finish (upload and record together), the rest get
 /// a `cancelled` row and no record, except files whose add the server already
 /// recorded or whose content this add already uploaded (see [`finish_for`]).
+/// A run that fails after a cancel still returns its (empty) cancelled report.
 pub fn add_files(
+    files: Vec<PathBuf>,
+    paths: &DvsPaths,
+    backend: &Backend,
+    message: Option<String>,
+    compression: Compression,
+    dry_run: bool,
+    ctx: &OperationContext,
+) -> Result<AddReport> {
+    match add_all(files, paths, backend, message, compression, dry_run, ctx) {
+        Err(_) if ctx.is_cancelled() => Ok(AddReport::new(Vec::new(), ByteTotals::default(), true)),
+        result => result,
+    }
+}
+
+fn add_all(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
     backend: &Backend,
@@ -356,11 +322,11 @@ pub fn add_files(
         scan.finish();
         // Still planned, once: nothing to add, and no rows follow
         observer.planned(&OperationPlan::default());
-        return Ok(AddReport {
-            files: Vec::new(),
-            bytes: ByteTotals::default(),
-            cancelled: ctx.is_cancelled(),
-        });
+        return Ok(AddReport::new(
+            Vec::new(),
+            ByteTotals::default(),
+            ctx.is_cancelled(),
+        ));
     }
 
     // If any input is invalid we just bail instead of doing partial execution
@@ -534,16 +500,7 @@ pub fn add_files(
             observer.file_finished(FileRow::Add(&row));
             return (row, Some(bytes));
         }
-        // Only a store call can move bytes: a file already in sync, a record
-        // the server already has and a repeat of content this add uploaded
-        // are no transfer work
-        if !dry_run && may_move_bytes(&pending, paths, missing.as_ref(), uploaded_size) {
-            transfer.begin();
-        }
         let start = Instant::now();
-        let file_progress =
-            observer.transfer_started(&pending.relative_path, pending.metadata.size);
-        let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
         let added = add_file(
             &mut pending,
             paths,
@@ -552,7 +509,8 @@ pub fn add_files(
             missing.as_ref(),
             uploaded_size,
             dry_run,
-            on_bytes,
+            observer,
+            &transfer,
         );
         pending.work += start.elapsed();
         let (result, bytes) = match added {
@@ -589,9 +547,6 @@ pub fn add_files(
                 (row, bytes)
             }
         };
-        if let Some(fp) = &file_progress {
-            (fp.on_done)(matches!(result.detail, AddDetail::Success { .. }));
-        }
         observer.file_finished(FileRow::Add(&result));
         (result, Some(bytes))
     };
@@ -636,11 +591,7 @@ pub fn add_files(
         }
     }
 
-    Ok(AddReport {
-        files: results,
-        bytes,
-        cancelled: ctx.is_cancelled(),
-    })
+    Ok(AddReport::new(results, bytes, ctx.is_cancelled()))
 }
 
 #[cfg(test)]
@@ -656,12 +607,12 @@ mod tests {
 
     #[test]
     fn row_errors_carry_a_code() {
-        let backend = anyhow::Error::from(crate::BackendError::new(ErrorCode::AccessDenied, "no"));
+        let backend = anyhow::Error::from(crate::Error::new(ErrorCode::AccessDenied, "no"));
         let io = anyhow::Error::from(std::io::Error::other("disk"));
         for (error, expected) in [
-            (backend, AddErrorCode::AccessDenied),
-            (io, AddErrorCode::IoError),
-            (anyhow::anyhow!("other"), AddErrorCode::OperationFailed),
+            (backend, ErrorCode::AccessDenied),
+            (io, ErrorCode::IoError),
+            (anyhow::anyhow!("other"), ErrorCode::OperationFailed),
         ] {
             assert_eq!(add_error_code(&error), expected);
         }
@@ -812,7 +763,7 @@ mod tests {
         .unwrap()
     }
 
-    fn code(row: &AddResult) -> Option<AddErrorCode> {
+    fn code(row: &AddResult) -> Option<ErrorCode> {
         match row.detail {
             AddDetail::Error { code, .. } => Some(code),
             AddDetail::Success { .. } | AddDetail::Cancelled { .. } => None,
@@ -854,8 +805,8 @@ mod tests {
             .iter()
             .filter(|r| r.state() == RowState::Cancelled)
             .collect();
-        assert_eq!(report.summary().counts.cancelled, cancelled.len());
-        assert_eq!(report.summary().outcome, crate::RunOutcome::Cancelled);
+        assert_eq!(report.counts.cancelled, cancelled.len());
+        assert_eq!(report.outcome, RunOutcome::Cancelled);
         assert_eq!(report.files.len(), 48);
         assert_eq!(added.len() + cancelled.len(), 48, "{:?}", report.files);
         // Exactly the files in flight when the cancel came finished
@@ -1116,7 +1067,7 @@ mod tests {
     }
 
     #[test]
-    fn transfer_phase_only_when_bytes_may_move() {
+    fn only_stored_files_are_transfers() {
         let (_tmp, root, config, paths) = project();
         let backend = config.backend();
         create_file(&root, "a.txt", b"aaaa");
@@ -1129,7 +1080,7 @@ mod tests {
             &OperationContext::new(),
         );
 
-        // Everything in sync: no store call, so no transfer phase
+        // Everything in sync: no store call, so no transfer
         let in_sync = Arc::new(Recorder::default());
         let report = add(
             &["a.txt", "b.txt"],
@@ -1152,8 +1103,16 @@ mod tests {
             "{:?}",
             in_sync.outline()
         );
+        assert!(
+            !in_sync
+                .seen()
+                .iter()
+                .any(|s| matches!(s, Seen::TransferStarted(_)))
+        );
+        // The library serializes each row's time
+        assert!(serde_json::to_value(&report.files[0]).unwrap()["duration_ms"].is_u64());
 
-        // A new file is stored, so the phase happens
+        // A new file is stored, so it alone is a transfer
         create_file(&root, "c.txt", b"c");
         let with_new = Arc::new(Recorder::default());
         add(
@@ -1172,6 +1131,12 @@ mod tests {
             outline.contains(&Seen::PhaseFinished(Phase::Transfer)),
             "{outline:?}"
         );
+        let transfers: Vec<_> = with_new
+            .seen()
+            .into_iter()
+            .filter(|s| matches!(s, Seen::TransferStarted(_)))
+            .collect();
+        assert_eq!(transfers, vec![Seen::TransferStarted("c.txt".into())]);
     }
 
     #[test]
@@ -1198,7 +1163,7 @@ mod tests {
         );
         fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        assert_eq!(code(&report.files[0]), Some(AddErrorCode::IoError));
+        assert_eq!(code(&report.files[0]), Some(ErrorCode::IoError));
         assert!(report.files[0].duration_ms.is_some());
         assert_eq!(code(&report.files[1]), None);
         // The hash error is reported after the plan, like every row
@@ -1206,5 +1171,28 @@ mod tests {
         // The failed row has no known size, so it counts in no total
         assert_eq!(report.bytes.total, 2);
         assert_eq!(recorder.plan().bytes_total, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn counts_include_failed_rows() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, root, config, paths) = project();
+        create_file(&root, "a.txt", b"a");
+        let b = create_file(&root, "b.txt", b"b");
+        fs::set_permissions(&b, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&b).is_ok() {
+            return; // running as root: permissions are not enforced
+        }
+
+        let report = add(
+            &["a.txt", "b.txt"],
+            &paths,
+            config.backend(),
+            false,
+            &OperationContext::new(),
+        );
+        let c = report.counts;
+        assert_eq!((c.total, c.succeeded, c.failed), (2, 1, 1));
     }
 }

@@ -5,7 +5,7 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::error::{BackendError, ErrorCode};
+use crate::error::{Error, ErrorCode};
 use crate::paths::ProjectPath;
 use crate::{Backend, Compression, DvsPaths, Hashes, Outcome, StoreRequest, StoreResult};
 
@@ -81,8 +81,46 @@ impl FileMetadata {
         Ok(())
     }
 
+    /// Whether storage has the content and the metadata file already says
+    /// exactly this, so saving would change nothing.
+    pub(crate) fn is_saved(
+        &self,
+        backend: &Backend,
+        paths: &DvsPaths,
+        relative_path: &Path,
+    ) -> Result<bool> {
+        let dvs_file_path = paths.metadata_path(relative_path);
+        let dvs_file_exists = dvs_file_path.is_file();
+        // Only check if file exists on the server if it exists locally
+        // Backend will dedup anyway
+        let storage_exists = dvs_file_exists && backend.exists(&self.hashes)?;
+
+        log::debug!(
+            "Saving {}: metadata_exists={}, storage_exists={}",
+            relative_path.display(),
+            dvs_file_exists,
+            storage_exists
+        );
+
+        if dvs_file_exists && storage_exists {
+            // we read the file anyway to make sure it's not 2 files having the same hash
+            let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)
+                .map_err(|e| {
+                Error::new(
+                    ErrorCode::BadMetadata,
+                    format!("cannot read {}: {e}", dvs_file_path.display()),
+                )
+            })?;
+            if existing == *self {
+                log::debug!("File {} is already in sync", relative_path.display());
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Returns whether the file already existed in the dvs folder and therefore is an update
-    /// and the compressed size if applicable.
+    /// and what storage reported, if it stored anything.
     /// Copies the source file to storage and saves metadata atomically (both succeed or neither).
     pub fn save(
         &mut self,
@@ -92,59 +130,12 @@ impl FileMetadata {
         paths: &DvsPaths,
         relative_path: impl AsRef<Path>,
         on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-    ) -> Result<(Outcome, Option<u64>)> {
-        let (outcome, stored) = self.save_reporting(
-            operation_id,
-            source_file,
-            backend,
-            paths,
-            relative_path,
-            on_bytes,
-        )?;
-        Ok((outcome, stored.map(|res| res.stored_size)))
-    }
-
-    pub(crate) fn save_reporting(
-        &mut self,
-        operation_id: Uuid,
-        source_file: impl AsRef<Path>,
-        backend: &Backend,
-        paths: &DvsPaths,
-        relative_path: impl AsRef<Path>,
-        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
     ) -> Result<(Outcome, Option<StoreResult>)> {
-        let dvs_file_path = paths.metadata_path(relative_path.as_ref());
-        let dvs_file_exists = dvs_file_path.is_file();
-        // Only check if file exists on the server if it exists locally
-        // Backend will dedup anyway
-        let storage_exists = dvs_file_exists && backend.exists(&self.hashes)?;
-
-        log::debug!(
-            "Saving {}: metadata_exists={}, storage_exists={}",
-            relative_path.as_ref().display(),
-            dvs_file_exists,
-            storage_exists
-        );
-
-        if dvs_file_exists && storage_exists {
-            // we read the file anyway to make sure it's not 2 files having the same hash
-            let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)
-                .map_err(|e| {
-                BackendError::new(
-                    ErrorCode::BadMetadata,
-                    format!("cannot read {}: {e}", dvs_file_path.display()),
-                )
-            })?;
-            if existing == *self {
-                log::debug!(
-                    "File {} is already in sync",
-                    relative_path.as_ref().display()
-                );
-                return Ok((Outcome::Present, None));
-            }
+        if self.is_saved(backend, paths, relative_path.as_ref())? {
+            return Ok((Outcome::Present, None));
         }
 
-        let stored = self.store_and_write_reporting(
+        let stored = self.store_and_write(
             operation_id,
             source_file,
             backend,
@@ -156,28 +147,8 @@ impl FileMetadata {
     }
 
     /// Stores the file then writes the metadata, atomically: either both succeed or
-    /// neither is left behind. Returns the compressed size.
+    /// neither is left behind. Returns what storage reported.
     pub fn store_and_write(
-        &mut self,
-        operation_id: Uuid,
-        source_file: impl AsRef<Path>,
-        backend: &Backend,
-        paths: &DvsPaths,
-        relative_path: impl AsRef<Path>,
-        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-    ) -> Result<u64> {
-        self.store_and_write_reporting(
-            operation_id,
-            source_file,
-            backend,
-            paths,
-            relative_path,
-            on_bytes,
-        )
-        .map(|res| res.stored_size)
-    }
-
-    pub(crate) fn store_and_write_reporting(
         &mut self,
         operation_id: Uuid,
         source_file: impl AsRef<Path>,
@@ -420,5 +391,56 @@ mod tests {
             .unwrap();
         assert_eq!(outcome, Outcome::Present);
         assert!(stored_size.is_none());
+    }
+
+    #[test]
+    fn save_local_updates_metadata_when_content_matches_different_file() {
+        // - Add file A with content "foo" (hash H1)
+        // - Add file B with content "bar" (hash H2)
+        // - Change file B's content to "foo" (now hash H1)
+        // - Run `add` on B
+        // => B's metadata is updated to hash H1
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+
+        // Add file A with content "foo" (hash H1)
+        let file_a = create_file(&root, "a.txt", b"foo");
+        let mut metadata_a = FileMetadata::from_file(&file_a, Compression::Zstd, None).unwrap();
+        metadata_a
+            .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt", None)
+            .unwrap();
+        let hash_h1 = metadata_a.hashes.blake3.clone();
+
+        // Add file B with content "bar" (hash H2)
+        let file_b = create_file(&root, "b.txt", b"bar");
+        let mut metadata_b = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
+        metadata_b
+            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", None)
+            .unwrap();
+        let hash_h2 = metadata_b.hashes.blake3.clone();
+        assert_ne!(hash_h1, hash_h2);
+
+        // Change file B's content to "foo" (now hash H1)
+        fs::write(&file_b, b"foo").unwrap();
+
+        // Run add on B with new content
+        let mut metadata_b_new = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
+        assert_eq!(metadata_b_new.hashes.blake3, hash_h1);
+
+        metadata_b_new
+            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", None)
+            .unwrap();
+
+        // Verify metadata was updated
+        let dvs_file = dvs_dir.join("b.txt.dvs");
+        let stored: FileMetadata =
+            serde_json::from_reader(fs::File::open(&dvs_file).unwrap()).unwrap();
+
+        assert_eq!(
+            stored.hashes.blake3, hash_h1,
+            "Metadata should be updated to new hash"
+        );
     }
 }

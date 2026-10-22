@@ -1,6 +1,6 @@
-//! The CLI's one [`OperationObserver`]: what an `add`, `get`, `status` or
-//! `hash` reports while it runs becomes NDJSON events (`--emit-events`) or
-//! human progress bars (a terminal), never both.
+//! The CLI's one [`OperationObserver`]: what an `add`, `get` or `status`
+//! reports while it runs becomes NDJSON events (`--emit-events`) or human
+//! progress bars (a terminal), never both.
 
 use std::path::Path;
 

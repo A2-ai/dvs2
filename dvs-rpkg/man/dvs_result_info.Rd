@@ -11,9 +11,10 @@ dvs_result_info(x)
 }
 \value{
 A list: \code{command}, \code{outcome} (\code{"complete"}, \code{"aborted"},
-\code{"partial"} or \code{"failed"}), \code{dry_run}, \code{on_conflict} and its \code{source}
-(\code{"argument"}, \code{"env"}, \code{"config"} for dvs.toml, or \code{"default"}; both \code{NA}
-when the get could not start, e.g. outside a project), \code{counts} (a named
+\code{"partial"} or \code{"failed"}), \code{did_as_asked} (\code{TRUE} unless a file failed
+or \code{on_conflict = "abort"} held files back), \code{dry_run}, \code{on_conflict} and
+its \code{source} (\code{"argument"}, \code{"env"}, \code{"config"} for dvs.toml, or
+\code{"default"}), \code{counts} (a named
 list of row counts per action) and \code{problem} (an operation-level message,
 or \code{NA} when there is none).
 }

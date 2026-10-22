@@ -14,9 +14,9 @@ use dvs::CancelToken;
 /// The exit status of a cancelled run, conventional for SIGINT (128 + 2).
 pub const EXIT_CANCELLED: i32 = 130;
 
-/// Install the handlers for one cancellable run. Only `add`, `get`, `status`
-/// and `hash` call this: every other command keeps the default "a signal
-/// kills the process" behaviour, so Ctrl-C still stops `dvs login` polling.
+/// Install the handlers for one cancellable run. Only `add`, `get` and
+/// `status` call this: every other command keeps the default "a signal kills
+/// the process" behaviour, so Ctrl-C still stops `dvs login` polling.
 pub fn install(token: &CancelToken, watch_stdin: bool) {
     // A signal the process was started with ignored (`nohup`, a shell's
     // background job without job control) must stay ignored: installing a
