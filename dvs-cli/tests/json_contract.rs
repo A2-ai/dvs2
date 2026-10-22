@@ -8,6 +8,7 @@ fn run(root: &Path, args: &[&str]) -> Output {
         .current_dir(root)
         .args(args)
         .env("XDG_CONFIG_HOME", root.join("test-config"))
+        .env("APPDATA", root.join("test-config"))
         .env_remove("DVS_GET_ON_CONFLICT")
         .output()
         .unwrap()

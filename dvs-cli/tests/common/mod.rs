@@ -1,6 +1,6 @@
 //! Shared helpers for the CLI integration tests: running `dvs` with a
-//! private credentials directory, and a small in-process stand-in for
-//! dvs-server.
+//! private credentials directory, reading event streams, and a small
+//! in-process stand-in for dvs-server.
 //!
 //! Every run points `XDG_CONFIG_HOME`/`APPDATA` at a directory the test owns,
 //! so no test ever reads or writes the real user's credentials.
@@ -126,6 +126,44 @@ pub fn stderr(output: &Output) -> String {
 pub fn document(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout)
         .unwrap_or_else(|e| panic!("{e}: {} / {}", stdout(output), stderr(output)))
+}
+
+/// Every line of an event stream, checked for the stream's invariants.
+pub fn parse_stream(bytes: &[u8], expected_exit: i32) -> Vec<Value> {
+    let events: Vec<Value> = String::from_utf8_lossy(bytes)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every stdout line must be JSON"))
+        .collect();
+    assert_eq!(events.first().unwrap()["type"], "operation_started");
+    assert_eq!(events.last().unwrap()["type"], "operation_finished");
+    assert_eq!(events.last().unwrap()["exit_code"], expected_exit);
+    for (seq, event) in events.iter().enumerate() {
+        assert_eq!(event["seq"], seq);
+        assert_eq!(event["v"], 1);
+        assert_eq!(event["operation_id"], events[0]["operation_id"]);
+    }
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["type"] == "operation_finished")
+            .count(),
+        1
+    );
+    events
+}
+
+pub fn of_type<'a>(events: &'a [Value], kind: &str) -> Vec<&'a Value> {
+    events
+        .iter()
+        .filter(|event| event["type"] == kind)
+        .collect()
+}
+
+pub fn file_results(events: &[Value]) -> Vec<Value> {
+    of_type(events, "file_result")
+        .into_iter()
+        .map(|event| event["result"].clone())
+        .collect()
 }
 
 /// A result with its run-specific timing removed, for comparing two runs.

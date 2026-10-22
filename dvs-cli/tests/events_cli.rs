@@ -1,5 +1,7 @@
 mod common;
 
+use common::parse_stream;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
@@ -12,29 +14,6 @@ fn cli(cwd: &std::path::Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_dvs"));
     command.current_dir(cwd).env_remove("DVS_GET_ON_CONFLICT");
     command
-}
-
-fn parse_stream(bytes: &[u8], expected_exit: i32) -> Vec<Value> {
-    let events: Vec<Value> = String::from_utf8_lossy(bytes)
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("every stdout line must be JSON"))
-        .collect();
-    assert_eq!(events.first().unwrap()["type"], "operation_started");
-    assert_eq!(events.last().unwrap()["type"], "operation_finished");
-    assert_eq!(events.last().unwrap()["exit_code"], expected_exit);
-    for (seq, event) in events.iter().enumerate() {
-        assert_eq!(event["seq"], seq);
-        assert_eq!(event["v"], 1);
-        assert_eq!(event["operation_id"], events[0]["operation_id"]);
-    }
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event["type"] == "operation_finished")
-            .count(),
-        1
-    );
-    events
 }
 
 #[test]
