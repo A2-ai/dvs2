@@ -83,7 +83,7 @@ missing. Every row carries the same error fields:
   `null` on an error row.
 - `get`: `path`, `local_path`, `before`, `action`, `satisfied`, `size`, `target_hash`,
   `local_hash`, `stored_copy`.
-- `status`: `path`, `status`, `metadata`, `working`, `baseline`, `state`.
+- `status`: `path`, `status`, `metadata`, `working`, `baseline`.
 - `hash`: `path`, `hashes`, `size`, `hash_source` (`cache`, `computed`), and
   `duration_ms`: the time spent hashing that file, `null` for a row that did no work.
 - `availability`: `hash`, `state` (`present`, `absent`, `unknown`), `in_history`, and a

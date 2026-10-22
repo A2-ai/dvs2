@@ -265,8 +265,7 @@ fn hash_reports_hashes_for_selected_files() {
     assert_eq!(edited["files"][0]["hash_source"], "computed");
     assert_eq!(sandbox.read(".dvs/tracked.txt.dvs"), record);
     let status = document(&sandbox.run(&["--json", "status", "tracked.txt"]));
-    // Still differs from the baseline: hash did not record the edit
-    assert_eq!(status["files"][0]["state"], "modified", "{status}");
+    assert_eq!(status["files"][0]["status"], "modified", "{status}");
 
     // Human output: a table on stdout
     let human = sandbox.run(&["hash", "untracked.txt"]);
