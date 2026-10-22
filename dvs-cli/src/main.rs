@@ -347,7 +347,7 @@ fn is_cancelled_code(code: Option<&str>) -> bool {
     code == Some(ErrorCode::Cancelled.as_str())
 }
 
-/// Human output's closing line for a cancelled run (C1); nothing when every
+/// Human output's closing line for a cancelled run; nothing when every
 /// file had already started.
 fn report_cancelled(not_started: usize, what: &str) {
     if not_started == 0 {
@@ -363,8 +363,7 @@ fn report_cancelled(not_started: usize, what: &str) {
     );
 }
 
-/// The exit of a command that reported its rows: 130 if cancelled, over
-/// everything else (K4), then 1 if any row failed.
+/// 130 if cancelled, over everything else, then 1 if any row failed.
 fn rows_exit(cancelled: bool, failed: bool) -> Result<()> {
     if cancelled {
         Err(Exit(EXIT_CANCELLED).into())
@@ -582,7 +581,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 dry_run,
                 &ctx,
             )?;
-            // K10: cancelled iff the flag was set before the operation finished
+            // Cancelled iff the flag was set before the operation finished
             let cancelled = ctx.is_cancelled();
             let results = &report.files;
             let has_errors = results
@@ -856,7 +855,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 },
                 &ctx,
             );
-            // K10: the library decides this for the runs it plans; the CLI
+            // The library decides this for the runs it plans; the CLI
             // also covers the ones that stop before planning ("no tracked
             // files matched")
             if ctx.is_cancelled() {
@@ -871,7 +870,6 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                     report_cancelled(get_cmd::cancelled_count(&report), "retrieved");
                 }
             }
-            // K4: a cancelled run exits 130, over get's 1/2/3
             if report.outcome == GetOutcome::Cancelled {
                 return Err(Exit(EXIT_CANCELLED).into());
             }
@@ -1193,7 +1191,7 @@ impl Command {
         }
     }
 
-    /// Commands that stop starting files on a cancel request (C1).
+    /// Commands that stop starting files on a cancel request.
     fn cancellable(&self) -> bool {
         matches!(
             self,
@@ -1250,7 +1248,7 @@ fn main() {
             if let Some(Exit(code)) = error.downcast_ref::<Exit>() {
                 *code
             } else {
-                // K10/K4: a run cancelled before it failed is still cancelled
+                // A run cancelled before it failed is still cancelled
                 let cancelled = cancellable && ctx.is_cancelled();
                 if json {
                     let mut result = output::problem(command, dry_run, &error);

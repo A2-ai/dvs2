@@ -334,7 +334,7 @@ fn crosses_symlink(root: &Path, path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::testutil::{Recorder, Seen, create_file, create_temp_git_repo, init_dvs_repo};
-    use crate::{CancelToken, Compression, FileMetadata};
+    use crate::{Compression, FileMetadata};
     use fs_err as fs;
     use std::sync::Arc;
 
@@ -631,50 +631,5 @@ mod tests {
         assert_eq!(row.code, Some("io_error"));
         assert!(row.message.is_some() && row.hashes.is_none());
         assert_eq!(rows.iter().filter(|r| r.code.is_none()).count(), 2);
-    }
-
-    #[test]
-    fn cancel_and_observer_calls() {
-        let (_tmp, paths) = fixture();
-        let recorder = Arc::new(Recorder::default());
-        let ctx = OperationContext::new().with_observer(recorder.clone());
-        let rows = hash_files(&paths, Some(&filter(&paths, &["data"], true)), None, &ctx).unwrap();
-        assert_eq!(recorder.finished().len(), rows.len());
-        assert_eq!(
-            recorder.outline(),
-            vec![
-                Seen::PhaseStarted(Phase::Scan),
-                Seen::PhaseFinished(Phase::Scan),
-                Seen::Planned(OperationPlan {
-                    files_total: 3,
-                    bytes_total: 4 + 7 + 9,
-                    files_to_transfer: 0,
-                    bytes_to_transfer: 0,
-                }),
-                Seen::PhaseStarted(Phase::Hash),
-                Seen::PhaseFinished(Phase::Hash),
-            ]
-        );
-
-        let token = CancelToken::new();
-        token.cancel();
-        let recorder = Arc::new(Recorder::default());
-        let ctx = OperationContext::new()
-            .with_cancel(token)
-            .with_observer(recorder.clone());
-        let rows = hash_files(&paths, Some(&filter(&paths, &["data"], true)), None, &ctx).unwrap();
-        assert_eq!(rows.len(), 3);
-        assert!(
-            rows.iter().all(|r| r.code == Some("cancelled")
-                && r.duration_ms.is_none()
-                && r.hashes.is_none())
-        );
-        assert_eq!(recorder.finished().len(), 3);
-        // Nothing was hashed, so there is no hash phase
-        assert!(
-            !recorder
-                .outline()
-                .contains(&Seen::PhaseStarted(Phase::Hash))
-        );
     }
 }

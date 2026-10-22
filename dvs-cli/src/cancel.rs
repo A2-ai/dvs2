@@ -1,4 +1,4 @@
-//! Cancellation (C1): turn SIGINT/SIGTERM/SIGHUP, and with `--emit-events`
+//! Cancellation: turn SIGINT/SIGTERM/SIGHUP, and with `--emit-events`
 //! the end of stdin (Unix only), into the operation's cancel flag.
 //!
 //! The library only stops *starting* files once the flag is set; files in
@@ -77,7 +77,7 @@ fn stdin_is_a_channel() -> bool {
 /// Elsewhere (Windows) there is no portable way to tell a pipe a client
 /// holds open from the null device or a file, so stdin is never watched:
 /// end-of-stdin cancel is Unix only, and Windows clients cancel with
-/// Ctrl-C/Ctrl-Break (K32).
+/// Ctrl-C/Ctrl-Break.
 #[cfg(not(unix))]
 fn stdin_is_a_channel() -> bool {
     false

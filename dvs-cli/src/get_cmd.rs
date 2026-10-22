@@ -115,7 +115,7 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 /// The non-zero counts, in a fixed order: "restored 2, 3 already current".
 fn counts_phrase(report: &GetReport) -> String {
     let c = &report.counts;
-    // Cancelled rows are `not_run` too, but nothing held them back (C1)
+    // Cancelled rows are `not_run` too, but nothing held them back
     let cancelled = cancelled_count(report);
     let parts = [
         (c.restored, "restored {}"),
@@ -140,7 +140,7 @@ fn counts_phrase(report: &GetReport) -> String {
     }
 }
 
-/// Files a cancel request stopped before they started (C1).
+/// Files a cancel request stopped before they started.
 pub fn cancelled_count(report: &GetReport) -> usize {
     report
         .files

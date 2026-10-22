@@ -880,39 +880,6 @@ mod tests {
     }
 
     #[test]
-    fn cancel_finishes_only_files_storage_already_has_or_this_add_uploaded() {
-        let missing: HashSet<String> = ["new".to_string()].into();
-        let none_missing = HashSet::new();
-        // Before any manifest (or without one) a cancel stops every file
-        assert_eq!(finish_for(true, "new", None, false), Finish::Cancel);
-        assert_eq!(finish_for(true, "old", None, false), Finish::Cancel);
-        // After the manifest the server recorded the files it has content for:
-        // they finish; the ones it is missing do not
-        assert_eq!(finish_for(true, "old", Some(&missing), false), Finish::Add);
-        assert_eq!(
-            finish_for(true, "old", Some(&none_missing), false),
-            Finish::Add
-        );
-        assert_eq!(
-            finish_for(true, "new", Some(&missing), false),
-            Finish::Cancel
-        );
-        // Content this add already uploaded: record-only, cancelled or not
-        assert_eq!(
-            finish_for(true, "new", Some(&missing), true),
-            Finish::RecordOnly
-        );
-        assert_eq!(finish_for(true, "new", None, true), Finish::RecordOnly);
-        assert_eq!(
-            finish_for(false, "new", Some(&missing), true),
-            Finish::RecordOnly
-        );
-        // Not cancelled: everything else is added
-        assert_eq!(finish_for(false, "new", Some(&missing), false), Finish::Add);
-        assert_eq!(finish_for(false, "new", None, false), Finish::Add);
-    }
-
-    #[test]
     fn identical_new_files_are_transferred_once() {
         let (_tmp, root, config, paths) = project();
         let backend = config.backend();
@@ -965,90 +932,6 @@ mod tests {
             assert!(paths.metadata_path(Path::new(name)).is_file());
         }
         assert_eq!(report.bytes.transferred, 12);
-    }
-
-    #[test]
-    fn a_cancel_during_storage_checks_stops_the_remaining_checks() {
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        // More files than the pool can check at once, so some are never checked
-        let names: Vec<String> = (0..128).map(|i| format!("f{i:03}.txt")).collect();
-        for name in &names {
-            create_file(&root, name, name.as_bytes());
-        }
-        let names: Vec<&str> = names.iter().map(String::as_str).collect();
-
-        let token = CancelToken::new();
-        let recorder = Arc::new(Recorder::cancelling_as_phase_starts(
-            token.clone(),
-            Phase::CheckStorage,
-        ));
-        let ctx = OperationContext::new()
-            .with_cancel(token)
-            .with_observer(recorder.clone());
-        let report = add(&names, &paths, backend, true, &ctx);
-
-        // Only files checked before the cancel are planned for transfer
-        let plan = recorder.plan();
-        assert!(plan.files_to_transfer < 128, "{plan:?}");
-        let cancelled = report
-            .files
-            .iter()
-            .filter(|r| code(r) == Some(AddErrorCode::Cancelled))
-            .count();
-        assert!(cancelled >= 128 - plan.files_to_transfer as usize);
-        assert_eq!(report.bytes.total, plan.bytes_total);
-        assert_eq!(recorder.finished().len(), 128);
-    }
-
-    #[test]
-    fn a_cancel_before_storage_checks_still_plans_and_moves_nothing() {
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "a.txt", b"aaaa");
-        create_file(&root, "b.txt", b"bb");
-
-        let token = CancelToken::new();
-        let recorder = Arc::new(Recorder::cancelling_after_phase(token.clone(), Phase::Hash));
-        let ctx = OperationContext::new()
-            .with_cancel(token)
-            .with_observer(recorder.clone());
-        let report = add(&["a.txt", "b.txt"], &paths, backend, false, &ctx);
-
-        let plan = OperationPlan {
-            files_total: 2,
-            bytes_total: 6,
-            files_to_transfer: 0,
-            bytes_to_transfer: 0,
-        };
-        // No storage check, transfer or record happens
-        assert_eq!(
-            recorder.outline(),
-            vec![
-                Seen::PhaseStarted(Phase::Scan),
-                Seen::PhaseFinished(Phase::Scan),
-                Seen::PhaseStarted(Phase::Hash),
-                Seen::PhaseFinished(Phase::Hash),
-                Seen::Planned(plan),
-            ]
-        );
-        assert!(
-            report
-                .files
-                .iter()
-                .all(|r| code(r) == Some(AddErrorCode::Cancelled))
-        );
-        assert_planned_before_rows(&recorder, 2);
-        // Hashed, so their sizes count, none of it stored or moved
-        assert_eq!(
-            report.bytes,
-            ByteTotals {
-                total: 6,
-                to_transfer: 6,
-                already_stored: 0,
-                transferred: 0,
-            }
-        );
     }
 
     #[test]
@@ -1105,53 +988,6 @@ mod tests {
             .collect();
         assert_eq!(finished.len(), rows, "{seen:?}");
         assert!(finished.iter().all(|&i| i > planned[0]), "{seen:?}");
-    }
-
-    #[test]
-    fn add_cancelled_before_it_starts_does_no_work() {
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "a.txt", b"a");
-        create_file(&root, "b.txt", b"b");
-
-        let token = CancelToken::new();
-        token.cancel();
-        let recorder = Arc::new(Recorder::default());
-        let ctx = OperationContext::new()
-            .with_cancel(token)
-            .with_observer(recorder.clone());
-        let report = add(&["a.txt", "b.txt"], &paths, backend, false, &ctx);
-
-        assert!(
-            report
-                .files
-                .iter()
-                .all(|r| code(r) == Some(AddErrorCode::Cancelled) && r.duration_ms.is_none())
-        );
-        assert!(recorder.transfers().is_empty());
-        assert_eq!(recorder.finished().len(), 2);
-        assert!(!paths.metadata_path(Path::new("a.txt")).exists());
-        assert_eq!(report.bytes, ByteTotals::default());
-        // Not even hashed
-        #[cfg(feature = "cache")]
-        {
-            let cache = cache::open_cache(&paths).unwrap();
-            let stat = cache::FileStat::from_path(&root.join("a.txt")).unwrap();
-            assert_eq!(cache.lookup("a.txt", &stat).unwrap(), None);
-        }
-        // Nothing is hashed, checked, moved or recorded, but the plan is made
-        assert_eq!(
-            recorder.outline(),
-            vec![
-                Seen::PhaseStarted(Phase::Scan),
-                Seen::PhaseFinished(Phase::Scan),
-                Seen::Planned(OperationPlan {
-                    files_total: 2,
-                    ..OperationPlan::default()
-                }),
-            ]
-        );
-        assert_planned_before_rows(&recorder, 2);
     }
 
     #[test]

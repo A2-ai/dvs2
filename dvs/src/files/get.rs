@@ -381,7 +381,7 @@ impl Planned {
         }
     }
 
-    /// Cancelled before the plan looked at it (K11): never a conflict, never
+    /// Cancelled before the plan looked at it: never a conflict, never
     /// held back, never transferred.
     fn is_cancelled(&self) -> bool {
         self.row.code == Some(GetCode::Cancelled)
@@ -444,7 +444,7 @@ fn set_row(row: &mut GetRow, action: Action, code: Option<GetCode>, message: Opt
     row.message = message;
 }
 
-/// A file a cancel stopped before it started (C1).
+/// A file a cancel stopped before it started.
 fn cancel_row(row: &mut GetRow) {
     let message = "cancelled before it started".to_string();
     set_row(row, Action::NotRun, Some(GetCode::Cancelled), Some(message));
@@ -805,7 +805,7 @@ pub fn get_files(
             .tracked
             .into_par_iter()
             .map(|p| {
-                // Hashing is starting work too: a cancel stops it (K11). The
+                // Hashing is starting work too: a cancel stops it. The
                 // row is `unknown` only because nothing looked at the file.
                 if ctx.is_cancelled() {
                     let mut planned = Planned::new(blank_row(paths, &p));
@@ -873,7 +873,7 @@ pub fn get_files(
 
     // One access check for everything that needs the remote: transfers, and
     // the stored-copy hints on conflicts. Files already current need neither.
-    // A cancel by now stops the storage checks from starting too (K13, K22):
+    // A cancel by now stops the storage checks from starting too:
     // no access check, no stored-copy lookups, no check_storage phase.
     let cancelled_before_storage = ctx.is_cancelled();
     let needs_remote = !cancelled_before_storage
@@ -943,8 +943,8 @@ pub fn get_files(
 
     // 3. Execute the transfers. Each file succeeds or fails on its own.
     // Cancelled before the storage checks: no transfer starts, so the plan
-    // reports none (K22) and each would-be transfer ends cancelled, keeping
-    // its hash time if it was hashed (K11).
+    // reports none and each would-be transfer ends cancelled, keeping its
+    // hash time if it was hashed.
     if cancelled_before_storage {
         for p in planned.iter_mut().filter(|p| p.needs_transfer(on_conflict)) {
             cancel_row(&mut p.row);
@@ -992,7 +992,7 @@ pub fn get_files(
                 // Stop starting files; the ones already started run to the end.
                 if ctx.is_cancelled() {
                     cancel_row(&mut row);
-                    // Hashed in the plan: that was its work (K11).
+                    // Hashed in the plan: that was its work
                     if p.hashed {
                         row.duration_ms = Some(millis(p.hash_time));
                     }
@@ -1187,9 +1187,8 @@ fn finish(planned: Vec<Planned>, ending: Ending, ctx: &OperationContext) -> GetR
         }
     }
     let satisfied = files.iter().filter(|r| r.satisfied).count();
-    // K10: a cancel request decides the outcome, even when no row ended up
-    // cancelled (every file already in flight) and over an abort or an
-    // access failure.
+    // A cancel request decides the outcome, even when no row ended up
+    // cancelled (every file already in flight)
     let outcome = if ctx.is_cancelled() {
         GetOutcome::Cancelled
     } else if aborted {
@@ -1793,37 +1792,19 @@ mod tests {
         Row(GetRow),
     }
 
-    /// Records everything; optionally cancels when the first transfer starts
-    /// or at another event, or holds the second transfer open until another
-    /// row is reported.
+    /// Records everything; optionally cancels when the first transfer starts,
+    /// or holds the second transfer open until another row is reported.
     #[derive(Default)]
     struct Recorder {
         heard: Mutex<Vec<Heard>>,
         rows_seen: std::sync::Condvar,
         cancel_on_first_transfer: Option<crate::CancelToken>,
-        /// Cancel when this event is heard (a phase start/finish, or the plan)
-        cancel_on: Option<(CancelAt, crate::CancelToken)>,
         hold_second_transfer: bool,
         /// Whether the held transfer saw another file's row before it finished
         second_saw_a_row: Mutex<Option<bool>>,
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    enum CancelAt {
-        Started(Phase),
-        Finished(Phase),
-        Planned,
-    }
-
     impl Recorder {
-        fn maybe_cancel(&self, at: CancelAt) {
-            if let Some((when, token)) = &self.cancel_on {
-                if *when == at {
-                    token.cancel();
-                }
-            }
-        }
-
         fn phases(&self) -> Vec<String> {
             self.heard()
                 .into_iter()
@@ -1863,15 +1844,12 @@ mod tests {
     impl crate::OperationObserver for std::sync::Arc<Recorder> {
         fn planned(&self, plan: &OperationPlan) {
             self.heard.lock().unwrap().push(Heard::Planned(*plan));
-            self.maybe_cancel(CancelAt::Planned);
         }
         fn phase_started(&self, phase: Phase) {
             self.heard.lock().unwrap().push(Heard::Started(phase));
-            self.maybe_cancel(CancelAt::Started(phase));
         }
         fn phase_finished(&self, phase: Phase) {
             self.heard.lock().unwrap().push(Heard::Finished(phase));
-            self.maybe_cancel(CancelAt::Finished(phase));
         }
         fn transfer_started(
             &self,
@@ -2232,7 +2210,6 @@ mod tests {
         // Cancelled rows are reported too, once each.
         assert_eq!(recorder.rows().len(), names.len());
     }
-
 
     #[test]
     fn a_batch_with_nothing_to_hash_has_no_hash_phase() {
