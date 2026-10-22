@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::files::add::AddResult;
 use crate::files::get::GetRow;
-use crate::inspect::StatusFacts;
+use crate::files::status::StatusFacts;
 use crate::progress::FileProgress;
 
 /// A stage of an operation. A phase that does not occur is not reported.
