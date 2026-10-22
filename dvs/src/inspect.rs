@@ -1,5 +1,6 @@
 //! Local facts for machine-readable status, using cached hashes when available.
 use crate::cache::{self, FileStat};
+use crate::error::ErrorCode;
 use crate::operation::{FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard};
 use crate::{DvsPaths, FileMetadata, Hashes, PathFilter, Status};
 use anyhow::Result;
@@ -40,7 +41,8 @@ pub struct StatusFacts {
 /// (files and working bytes to look at; nothing to transfer). `scan` is
 /// finished on every exit, errors included; `hash` is reported only once a
 /// file is actually hashed (or its cached hash looked up), so a run of only
-/// absent or failed rows has none.
+/// cancelled, absent or failed rows has none. Once `ctx` is cancelled, files
+/// not yet started get a `cancelled` error row.
 ///
 /// Paths in the result are relative to `paths.repo_root()`, independent of cwd.
 pub fn inspect_status(
@@ -73,7 +75,11 @@ pub fn inspect_status(
         entries
             .into_par_iter()
             .map(|path| {
-                let row = inspect_path(path, paths, &cache, &hashing);
+                let row = if ctx.is_cancelled() {
+                    cancelled_row(path)
+                } else {
+                    inspect_path(path, paths, &cache, &hashing)
+                };
                 observer.file_finished(FileRow::Status(&row));
                 row
             })
@@ -82,6 +88,24 @@ pub fn inspect_status(
     hashing.finish();
     results.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(results)
+}
+
+/// A file the cancelled operation never looked at.
+fn cancelled_row(path: PathBuf) -> StatusFacts {
+    StatusFacts {
+        path,
+        status: Status::Error,
+        metadata: None,
+        working: WorkingCopy {
+            state: "unknown",
+            hashes: None,
+            size: None,
+            hash_source: None,
+        },
+        baseline: None,
+        code: Some(ErrorCode::Cancelled.as_str()),
+        error: Some("cancelled before this file was checked".to_string()),
+    }
 }
 
 fn status_scan_inputs(
@@ -170,7 +194,7 @@ fn inspect_path(
         anyhow::ensure!(full.is_file(), "working path is not a regular file");
         row.working.size = Some(stat.size);
         // Hashing starts here, as in `hash`: a cache lookup counts, while
-        // absent and failed rows never open the phase.
+        // cancelled, absent and failed rows never open the phase.
         hashing.begin();
         let hit = cache
             .as_ref()
@@ -340,6 +364,38 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_status_reports_unchecked_files_as_cancelled() {
+        use crate::testutil::{Recorder, Seen};
+        let (_temp, paths) = fixture();
+        let token = crate::CancelToken::new();
+        token.cancel();
+        let recorder = std::sync::Arc::new(Recorder::default());
+        let ctx = OperationContext::new()
+            .with_cancel(token)
+            .with_observer(recorder.clone());
+        let rows = inspect_status(&paths, None, None, &ctx).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, Status::Error);
+        assert_eq!(rows[0].code, Some("cancelled"));
+        assert!(rows[0].working.hashes.is_none());
+        assert_eq!(recorder.finished().len(), 1);
+        assert_eq!(
+            recorder.outline(),
+            vec![
+                Seen::PhaseStarted(Phase::Scan),
+                Seen::PhaseFinished(Phase::Scan),
+                Seen::Planned(OperationPlan {
+                    files_total: 1,
+                    bytes_total: 8,
+                    files_to_transfer: 0,
+                    bytes_to_transfer: 0,
+                }),
+                // Nothing was hashed, so no hash phase (K29)
+            ]
+        );
+    }
+
+    #[test]
     fn status_reports_a_hash_phase_when_a_file_is_hashed() {
         use crate::testutil::{Recorder, Seen};
         let (_temp, paths) = fixture();
@@ -378,5 +434,33 @@ mod tests {
                 Seen::PhaseFinished(Phase::Scan),
             ]
         );
+    }
+
+    #[test]
+    fn status_cancelled_mid_scan_checks_only_started_files() {
+        use crate::testutil::Recorder;
+        let (_temp, paths) = fixture();
+        for i in 0..48 {
+            let name = format!("f{i:02}.txt");
+            let full = create_file(paths.repo_root(), &name, name.as_bytes());
+            let metadata = FileMetadata::from_file(&full, crate::Compression::Zstd, None).unwrap();
+            fs::write(
+                paths.metadata_path(std::path::Path::new(&name)),
+                serde_json::to_vec(&metadata).unwrap(),
+            )
+            .unwrap();
+        }
+        let token = crate::CancelToken::new();
+        let recorder = std::sync::Arc::new(Recorder::cancelling_on_row(token.clone(), 1));
+        let ctx = OperationContext::new()
+            .with_cancel(token)
+            .with_observer(recorder.clone());
+        let rows = inspect_status(&paths, None, None, &ctx).unwrap();
+        assert_eq!(rows.len(), 49);
+        assert_eq!(recorder.finished().len(), 49);
+        let cancelled = rows.iter().filter(|r| r.code == Some("cancelled")).count();
+        let checked = rows.iter().filter(|r| r.status == Status::Current).count();
+        assert_eq!(cancelled + checked, 49);
+        assert!(checked >= 1 && cancelled >= 1, "{checked} checked");
     }
 }

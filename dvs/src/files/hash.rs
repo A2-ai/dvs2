@@ -15,6 +15,7 @@ use serde::Serialize;
 use walkdir::WalkDir;
 
 use crate::cache::{self, HashSource};
+use crate::error::ErrorCode;
 use crate::globbing::build_glob_matcher;
 use crate::hashes::Hashes;
 use crate::operation::{
@@ -57,7 +58,8 @@ const SYMLINK_MESSAGE: &str = "working path contains a symlink";
 /// get an error row (status's code where status has one, else `io_error`).
 ///
 /// Reports the `scan` phase, the plan, then (if anything is hashed) the `hash`
-/// phase; the plan precedes every row.
+/// phase; the plan precedes every row. Once `ctx` is cancelled, files not yet
+/// started get a `cancelled` row.
 pub fn hash_files(
     paths: &DvsPaths,
     filter: Option<&PathFilter>,
@@ -101,7 +103,12 @@ pub fn hash_files(
         to_hash
             .into_par_iter()
             .map(|path| {
-                let row = hash_one(path, paths, cache.as_ref(), &hashing);
+                let row = if ctx.is_cancelled() {
+                    let message = "cancelled before this file was hashed".to_string();
+                    error_row(path, ErrorCode::Cancelled.as_str(), message, None)
+                } else {
+                    hash_one(path, paths, cache.as_ref(), &hashing)
+                };
                 observer.file_finished(FileRow::Hash(&row));
                 row
             })
@@ -338,7 +345,7 @@ fn crosses_symlink(root: &Path, path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::testutil::{Recorder, Seen, create_file, create_temp_git_repo, init_dvs_repo};
-    use crate::{Compression, FileMetadata};
+    use crate::{CancelToken, Compression, FileMetadata};
     use fs_err as fs;
     use std::sync::Arc;
 
@@ -674,7 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn observer_calls() {
+    fn cancel_and_observer_calls() {
         let (_tmp, paths) = fixture();
         let recorder = Arc::new(Recorder::default());
         let ctx = OperationContext::new().with_observer(recorder.clone());
@@ -694,6 +701,27 @@ mod tests {
                 Seen::PhaseStarted(Phase::Hash),
                 Seen::PhaseFinished(Phase::Hash),
             ]
+        );
+
+        let token = CancelToken::new();
+        token.cancel();
+        let recorder = Arc::new(Recorder::default());
+        let ctx = OperationContext::new()
+            .with_cancel(token)
+            .with_observer(recorder.clone());
+        let rows = hash_files(&paths, Some(&filter(&paths, &["data"], true)), None, &ctx).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(
+            rows.iter().all(|r| r.code == Some("cancelled")
+                && r.duration_ms.is_none()
+                && r.hashes.is_none())
+        );
+        assert_eq!(recorder.finished().len(), 3);
+        // Nothing was hashed, so there is no hash phase
+        assert!(
+            !recorder
+                .outline()
+                .contains(&Seen::PhaseStarted(Phase::Hash))
         );
     }
 }

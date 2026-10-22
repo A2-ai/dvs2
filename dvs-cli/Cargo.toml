@@ -14,6 +14,11 @@ tabled = "0.22"
 walkdir.workspace = true
 url = "2.5.8"
 toml.workspace = true
+log.workspace = true
+ctrlc = { version = "3.5.2", features = ["termination"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

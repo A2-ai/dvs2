@@ -8,7 +8,7 @@ use serde_json::json;
 
 /// Exit codes. Every command shares one table (`output::exit_code`,
 /// docs/cli-json.md); only `get` uses 3. Usage and configuration errors exit
-/// 2 (clap and `main`).
+/// 2 (clap and `main`); cancelled runs 130 (`cancel::EXIT_CANCELLED`).
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAILED: i32 = 1;
 pub const EXIT_USAGE: i32 = 2;
@@ -115,6 +115,8 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 /// The non-zero counts, in a fixed order: "restored 2, 3 already current".
 fn counts_phrase(report: &GetReport) -> String {
     let c = &report.counts;
+    // Cancelled rows are `not_run` too, but nothing held them back (C1)
+    let cancelled = cancelled_count(report);
     let parts = [
         (c.restored, "restored {}"),
         (c.replaced, "replaced {}"),
@@ -122,7 +124,8 @@ fn counts_phrase(report: &GetReport) -> String {
         (c.would_replace, "would replace {}"),
         (c.unchanged, "{} already current"),
         (c.skipped, "skipped {}"),
-        (c.not_run, "{} held back"),
+        (c.not_run - cancelled, "{} held back"),
+        (cancelled, "cancelled {}"),
         (c.failed, "{} failed"),
     ];
     let out: Vec<String> = parts
@@ -135,6 +138,21 @@ fn counts_phrase(report: &GetReport) -> String {
     } else {
         out.join(", ")
     }
+}
+
+/// Files a cancel request stopped before they started (C1).
+pub fn cancelled_count(report: &GetReport) -> usize {
+    report
+        .files
+        .iter()
+        .filter(|r| r.code == Some(GetCode::Cancelled))
+        .count()
+}
+
+/// Rows listed one per line: every file that changed or needs attention.
+/// Cancelled files are only counted, as add, status and hash do.
+fn is_listed(row: &GetRow) -> bool {
+    row.action != Action::Unchanged && row.code != Some(GetCode::Cancelled)
 }
 
 /// Why conflicts stopped things, separating edits from files with no record.
@@ -181,7 +199,7 @@ fn summary(report: &GetReport) -> String {
             let dry = if report.dry_run { "would be " } else { "" };
             format!("aborted, nothing {dry}changed: {}", reasons.join("; "))
         }
-        GetOutcome::Partial | GetOutcome::Failed => {
+        GetOutcome::Partial | GetOutcome::Failed | GetOutcome::Cancelled => {
             format!("{}: {}", report.outcome.as_str(), counts_phrase(report))
         }
     };
@@ -203,15 +221,11 @@ pub fn print_human(report: &GetReport) {
     let width = report
         .files
         .iter()
-        .filter(|r| r.action != Action::Unchanged)
+        .filter(|r| is_listed(r))
         .map(|r| r.local_path.to_string_lossy().chars().count())
         .max()
         .unwrap_or(0);
-    for r in report
-        .files
-        .iter()
-        .filter(|r| r.action != Action::Unchanged)
-    {
+    for r in report.files.iter().filter(|r| is_listed(r)) {
         let detail = match (r.satisfied, &r.message) {
             _ if is_shared(r.code) => String::new(),
             (true, None) => r.size.map(format_size).unwrap_or_default(),
@@ -304,8 +318,9 @@ pub fn row_json(r: &GetRow) -> serde_json::Value {
 /// get's detailed counts plus the `total`/`succeeded` every command has
 /// (§9 rec 5). `succeeded` = rows at their target (restored, replaced,
 /// unchanged; would_restore/would_replace in a dry run). `failed` stays the
-/// `failed` action. Skipped and not_run (held back) rows are in neither.
-/// Added here, not in `GetCounts`, so R output is unchanged (K8).
+/// `failed` action. Skipped and not_run rows (held back or cancelled, K18)
+/// are in neither. Added here, not in `GetCounts`, so R output is unchanged
+/// (K8).
 fn counts_json(report: &GetReport) -> serde_json::Value {
     let c = &report.counts;
     let mut counts = serde_json::to_value(c).expect("counts serialize");

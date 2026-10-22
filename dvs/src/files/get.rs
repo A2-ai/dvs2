@@ -141,6 +141,7 @@ pub enum GetCode {
     AuthExpired,
     ServerTooOld,
     ProjectNotFound,
+    Cancelled,
     CredentialsUnreadable,
 }
 
@@ -154,6 +155,7 @@ impl From<ErrorCode> for GetCode {
             ErrorCode::ServerTooOld => GetCode::ServerTooOld,
             ErrorCode::ProjectNotFound => GetCode::ProjectNotFound,
             ErrorCode::BadMetadata => GetCode::BadMetadata,
+            ErrorCode::Cancelled => GetCode::Cancelled,
             ErrorCode::CredentialsUnreadable => GetCode::CredentialsUnreadable,
         }
     }
@@ -189,6 +191,7 @@ impl GetCode {
             GetCode::AuthExpired => "auth_expired",
             GetCode::ServerTooOld => "server_too_old",
             GetCode::ProjectNotFound => "project_not_found",
+            GetCode::Cancelled => "cancelled",
             GetCode::CredentialsUnreadable => "credentials_unreadable",
         }
     }
@@ -220,7 +223,8 @@ pub struct GetRow {
     /// Time spent on this file (hash + transfer + install). Any row that was
     /// hashed has at least its hash time, whatever happened after (K11);
     /// `None` for rows never hashed and not transferred (untracked, unreadable
-    /// metadata, not a file, absent and held back). Not serialized here, so R output is unchanged (K8); the CLI
+    /// metadata, not a file, cancelled before the plan, absent and held
+    /// back). Not serialized here, so R output is unchanged (K8); the CLI
     /// adds it.
     #[serde(skip)]
     pub duration_ms: Option<u64>,
@@ -237,6 +241,8 @@ pub enum GetOutcome {
     Partial,
     /// Nothing is at its target, or the operation could not run
     Failed,
+    /// Stopped by a cancel request; files that never started are `not_run`
+    Cancelled,
 }
 
 impl GetOutcome {
@@ -246,6 +252,7 @@ impl GetOutcome {
             GetOutcome::Aborted => "aborted",
             GetOutcome::Partial => "partial",
             GetOutcome::Failed => "failed",
+            GetOutcome::Cancelled => "cancelled",
         }
     }
 }
@@ -373,20 +380,28 @@ impl Planned {
 
     /// K11: a row that was hashed carries at least its hash time, whatever
     /// happened to it after (hash failure, skipped, held back, access
-    /// failure). Rows never hashed keep `None`.
+    /// failure, cancelled). Rows never hashed keep `None`.
     fn fill_hash_duration(&mut self) {
         if self.row.duration_ms.is_none() && self.hashed {
             self.row.duration_ms = Some(millis(self.hash_time));
         }
     }
 
-    /// Classified as a conflict (rows that already failed in the plan are not).
+    /// Cancelled before the plan looked at it (K11): never a conflict, never
+    /// held back, never transferred.
+    fn is_cancelled(&self) -> bool {
+        self.row.code == Some(GetCode::Cancelled)
+    }
+
+    /// Classified as a conflict (rows that already failed in the plan, or
+    /// were cancelled before it, are not).
     fn is_conflict(&self) -> bool {
-        self.row.before.is_conflict() && self.row.action != Action::Failed
+        self.row.before.is_conflict() && self.row.action != Action::Failed && !self.is_cancelled()
     }
 
     fn needs_transfer(&self, on_conflict: OnConflict) -> bool {
         self.row.action == Action::NotRun
+            && !self.is_cancelled()
             && (matches!(self.row.before, Before::Absent | Before::Clean)
                 || (self.is_conflict() && on_conflict == OnConflict::Overwrite))
     }
@@ -433,6 +448,12 @@ fn set_row(row: &mut GetRow, action: Action, code: Option<GetCode>, message: Opt
     );
     row.code = code;
     row.message = message;
+}
+
+/// A file a cancel stopped before it started (C1).
+fn cancel_row(row: &mut GetRow) {
+    let message = "cancelled before it started".to_string();
+    set_row(row, Action::NotRun, Some(GetCode::Cancelled), Some(message));
 }
 
 /// An absolute path as a path from the project root, if it is inside it
@@ -742,7 +763,9 @@ fn install(
 /// exactly once, as soon as it is final (rows decided before the transfers
 /// first, then each transfer as it completes). In a dry run the existence
 /// checks that stand in for transfers belong to `check_storage`, so there is
-/// no `transfer` phase.
+/// no `transfer` phase. A cancel stops files from *starting*: a file already
+/// downloading finishes (verified temp file + rename), the rest are `not_run`
+/// with code `cancelled`.
 pub fn get_files(
     selection: GetSelection,
     paths: &DvsPaths,
@@ -781,13 +804,21 @@ pub fn get_files(
 
     // 1. Plan: classify every file, locally, writing nothing. The hash phase
     // starts with the first file actually hashed, so a plan that hashes
-    // nothing (every file absent) reports none (K13).
+    // nothing (every file absent, or a cancel first) reports none (K13).
     let hashing = LazyPhase::new(observer, Phase::Hash);
     let mut planned: Vec<Planned> = pool.install(|| {
         selection
             .tracked
             .into_par_iter()
             .map(|p| {
+                // Hashing is starting work too: a cancel stops it (K11). The
+                // row is `unknown` only because nothing looked at the file.
+                if ctx.is_cancelled() {
+                    let mut planned = Planned::new(blank_row(paths, &p));
+                    planned.row.before = Before::Unknown;
+                    cancel_row(&mut planned.row);
+                    return planned;
+                }
                 let started = Instant::now();
                 let mut planned = plan_file(paths, &p, cache, &hashing);
                 planned.hash_time = started.elapsed();
@@ -848,9 +879,13 @@ pub fn get_files(
 
     // One access check for everything that needs the remote: transfers, and
     // the stored-copy hints on conflicts. Files already current need neither.
-    let needs_remote = planned
-        .iter()
-        .any(|p| p.needs_transfer(on_conflict) || p.is_conflict());
+    // A cancel by now stops the storage checks from starting too (K13, K22):
+    // no access check, no stored-copy lookups, no check_storage phase.
+    let cancelled_before_storage = ctx.is_cancelled();
+    let needs_remote = !cancelled_before_storage
+        && planned
+            .iter()
+            .any(|p| p.needs_transfer(on_conflict) || p.is_conflict());
     let end_check_storage = || {
         if needs_remote {
             observer.phase_finished(Phase::CheckStorage);
@@ -884,7 +919,8 @@ pub fn get_files(
         on_conflict != OnConflict::Skip && planned.iter().any(|p| p.is_known_problem(on_conflict));
     if blocked {
         for p in planned.iter_mut() {
-            if p.row.before == Before::Current || p.row.action == Action::Failed {
+            if p.row.before == Before::Current || p.row.action == Action::Failed || p.is_cancelled()
+            {
                 continue;
             }
             if p.is_conflict() && on_conflict != OnConflict::Overwrite {
@@ -912,6 +948,14 @@ pub fn get_files(
     }
 
     // 3. Execute the transfers. Each file succeeds or fails on its own.
+    // Cancelled before the storage checks: no transfer starts, so the plan
+    // reports none (K22) and each would-be transfer ends cancelled, keeping
+    // its hash time if it was hashed (K11).
+    if cancelled_before_storage {
+        for p in planned.iter_mut().filter(|p| p.needs_transfer(on_conflict)) {
+            cancel_row(&mut p.row);
+        }
+    }
     let transfer_idx: Vec<usize> = planned
         .iter()
         .enumerate()
@@ -951,6 +995,16 @@ pub fn get_files(
             .map(|&i| {
                 let p = &planned[i];
                 let mut row = p.row.clone();
+                // Stop starting files; the ones already started run to the end.
+                if ctx.is_cancelled() {
+                    cancel_row(&mut row);
+                    // Hashed in the plan: that was its work (K11).
+                    if p.hashed {
+                        row.duration_ms = Some(millis(p.hash_time));
+                    }
+                    observer.file_finished(FileRow::Get(&row));
+                    return (i, row);
+                }
                 let started = Instant::now();
                 let result = transfer(p, backend, paths, dry_run, operation_id, ctx);
                 settle(&mut row, p, result, dry_run, paths, cache);
@@ -1136,7 +1190,7 @@ fn finish(planned: Vec<Planned>, ending: Ending, ctx: &OperationContext) -> GetR
     }
     // K5, K12: from the rows, the same in every ending (aborted included).
     // `to_transfer` is every row whose local copy does not match its target,
-    // whatever then happened to it (held back, skipped, failed);
+    // whatever then happened to it (held back, skipped, failed, cancelled);
     // `already_stored` the ones that match. Unlike the plan's
     // `bytes_to_transfer` (what get attempts), it does not depend on the
     // policy. `transferred` is the size of what was installed, so 0 in a dry
@@ -1149,7 +1203,12 @@ fn finish(planned: Vec<Planned>, ending: Ending, ctx: &OperationContext) -> GetR
         }
     }
     let satisfied = files.iter().filter(|r| r.satisfied).count();
-    let outcome = if aborted {
+    // K10: a cancel request decides the outcome, even when no row ended up
+    // cancelled (every file already in flight) and over an abort or an
+    // access failure.
+    let outcome = if ctx.is_cancelled() {
+        GetOutcome::Cancelled
+    } else if aborted {
         GetOutcome::Aborted
     } else if satisfied == files.len() {
         GetOutcome::Complete
@@ -1772,22 +1831,41 @@ mod tests {
         Planned(OperationPlan),
         Started(Phase),
         Finished(Phase),
-        Transfer,
+        Transfer(PathBuf),
         Row(GetRow),
     }
 
-    /// Records everything; optionally holds the second transfer open until
-    /// another row is reported.
+    /// Records everything; optionally cancels when the first transfer starts
+    /// or at another event, or holds the second transfer open until another
+    /// row is reported.
     #[derive(Default)]
     struct Recorder {
         heard: Mutex<Vec<Heard>>,
         rows_seen: std::sync::Condvar,
+        cancel_on_first_transfer: Option<crate::CancelToken>,
+        /// Cancel when this event is heard (a phase start/finish, or the plan)
+        cancel_on: Option<(CancelAt, crate::CancelToken)>,
         hold_second_transfer: bool,
         /// Whether the held transfer saw another file's row before it finished
         second_saw_a_row: Mutex<Option<bool>>,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum CancelAt {
+        Started(Phase),
+        Finished(Phase),
+        Planned,
+    }
+
     impl Recorder {
+        fn maybe_cancel(&self, at: CancelAt) {
+            if let Some((when, token)) = &self.cancel_on {
+                if *when == at {
+                    token.cancel();
+                }
+            }
+        }
+
         fn phases(&self) -> Vec<String> {
             self.heard()
                 .into_iter()
@@ -1812,17 +1890,30 @@ mod tests {
                 })
                 .collect()
         }
+
+        fn transfers(&self) -> HashSet<PathBuf> {
+            self.heard()
+                .into_iter()
+                .filter_map(|h| match h {
+                    Heard::Transfer(p) => Some(p),
+                    _ => None,
+                })
+                .collect()
+        }
     }
 
     impl crate::OperationObserver for std::sync::Arc<Recorder> {
         fn planned(&self, plan: &OperationPlan) {
             self.heard.lock().unwrap().push(Heard::Planned(*plan));
+            self.maybe_cancel(CancelAt::Planned);
         }
         fn phase_started(&self, phase: Phase) {
             self.heard.lock().unwrap().push(Heard::Started(phase));
+            self.maybe_cancel(CancelAt::Started(phase));
         }
         fn phase_finished(&self, phase: Phase) {
             self.heard.lock().unwrap().push(Heard::Finished(phase));
+            self.maybe_cancel(CancelAt::Finished(phase));
         }
         fn transfer_started(
             &self,
@@ -1831,12 +1922,19 @@ mod tests {
         ) -> Option<crate::progress::FileProgress> {
             let nth = {
                 let mut heard = self.heard.lock().unwrap();
-                heard.push(Heard::Transfer);
+                heard.push(Heard::Transfer(path.to_path_buf()));
                 heard
                     .iter()
-                    .filter(|h| matches!(h, Heard::Transfer))
+                    .filter(|h| matches!(h, Heard::Transfer(_)))
                     .count()
             };
+            if let Some(token) = &self.cancel_on_first_transfer {
+                if nth == 1 {
+                    token.cancel();
+                    // Let the other workers reach their cancel check.
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
             if !(self.hold_second_transfer && nth == 2) {
                 return None;
             }
@@ -1880,11 +1978,21 @@ mod tests {
             on_conflict: OnConflict,
             dry_run: bool,
             recorder: &std::sync::Arc<Recorder>,
+            cancel: Option<crate::CancelToken>,
         ) -> GetReport {
             let backend = self.backend();
-            self.get_observed_on(backend, names, unmatched, on_conflict, dry_run, recorder)
+            self.get_observed_on(
+                backend,
+                names,
+                unmatched,
+                on_conflict,
+                dry_run,
+                recorder,
+                cancel,
+            )
         }
 
+        #[allow(clippy::too_many_arguments)]
         fn get_observed_on(
             &self,
             backend: &Backend,
@@ -1893,12 +2001,17 @@ mod tests {
             on_conflict: OnConflict,
             dry_run: bool,
             recorder: &std::sync::Arc<Recorder>,
+            cancel: Option<crate::CancelToken>,
         ) -> GetReport {
             let selection = GetSelection {
                 tracked: names.iter().map(PathBuf::from).collect::<HashSet<_>>(),
                 unmatched: unmatched.iter().map(PathBuf::from).collect(),
             };
-            let ctx = OperationContext::new().with_observer(std::sync::Arc::new(recorder.clone()));
+            let mut ctx =
+                OperationContext::new().with_observer(std::sync::Arc::new(recorder.clone()));
+            if let Some(token) = cancel {
+                ctx = ctx.with_cancel(token);
+            }
             get_files(
                 selection,
                 &self.paths,
@@ -1910,6 +2023,13 @@ mod tests {
                 },
                 &ctx,
             )
+        }
+
+        fn temp_files_left(&self) -> bool {
+            fs::read_dir(&self.root)
+                .unwrap()
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().contains("dvs-tmp"))
         }
     }
 
@@ -1942,6 +2062,7 @@ mod tests {
                 OnConflict::Skip,
                 dry_run,
                 &recorder,
+                None,
             );
             let rows = recorder.rows();
             assert_eq!(rows.len(), report.files.len(), "{rows:#?}");
@@ -1981,6 +2102,7 @@ mod tests {
             OnConflict::Abort,
             false,
             &recorder,
+            None,
         );
         assert_eq!(report.outcome, GetOutcome::Complete);
         assert_eq!(*recorder.second_saw_a_row.lock().unwrap(), Some(true));
@@ -1999,6 +2121,7 @@ mod tests {
                 OnConflict::Skip,
                 dry_run,
                 &recorder,
+                None,
             );
             let heard = recorder.heard();
             let marks: Vec<String> = heard
@@ -2066,7 +2189,7 @@ mod tests {
         let repo = TestRepo::new();
         repo.add("a.csv", b"a");
         let recorder = std::sync::Arc::new(Recorder::default());
-        repo.get_observed(&["a.csv"], &[], OnConflict::Abort, false, &recorder);
+        repo.get_observed(&["a.csv"], &[], OnConflict::Abort, false, &recorder, None);
         let phases: Vec<_> = recorder
             .heard()
             .into_iter()
@@ -2143,6 +2266,266 @@ mod tests {
         row(report, name).duration_ms
     }
 
+    // C1: cancel after the first transfer starts: whatever started finishes,
+    // the rest never starts.
+    #[test]
+    fn a_cancel_lets_started_files_finish_and_cancels_the_rest() {
+        let repo = TestRepo::new();
+        // More files than the pool can have threads, so some never start.
+        let names: Vec<String> = (0..40).map(|i| format!("f{i:02}.csv")).collect();
+        for name in &names {
+            repo.add(name, name.as_bytes());
+            fs::remove_file(repo.root.join(name)).unwrap();
+        }
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let token = crate::CancelToken::new();
+        let recorder = std::sync::Arc::new(Recorder {
+            cancel_on_first_transfer: Some(token.clone()),
+            ..Default::default()
+        });
+        let report = repo.get_observed(
+            &names,
+            &[],
+            OnConflict::Abort,
+            false,
+            &recorder,
+            Some(token),
+        );
+
+        assert_eq!(report.outcome, GetOutcome::Cancelled);
+        let started = recorder.transfers();
+        assert!(!started.is_empty());
+        let mut cancelled = 0;
+        for r in &report.files {
+            if started.contains(&r.path) {
+                assert_eq!((r.action, r.code), (Action::Restored, None));
+                assert!(repo.root.join(&r.path).exists());
+            } else {
+                assert_eq!(
+                    (r.action, r.code, r.satisfied, r.duration_ms),
+                    (Action::NotRun, Some(GetCode::Cancelled), false, None)
+                );
+                assert!(!repo.root.join(&r.path).exists());
+                cancelled += 1;
+            }
+        }
+        assert!(cancelled > 0, "the cancel came too late to test anything");
+        assert_eq!(report.counts.not_run, cancelled);
+        assert_eq!(report.counts.restored, started.len());
+        assert!(!repo.temp_files_left());
+        // Cancelled rows are reported too, once each.
+        assert_eq!(recorder.rows().len(), names.len());
+    }
+
+    // C1: cancelled once the plan is done, before any transfer: rows already
+    // final keep their outcome, a dry run stops before its existence checks
+    // too. A cancelled file that was hashed keeps its hash time (K11).
+    #[test]
+    fn a_cancel_before_the_transfers_starts_none() {
+        for dry_run in [false, true] {
+            let repo = TestRepo::new();
+            repo.add("a.csv", b"a");
+            fs::remove_file(repo.root.join("a.csv")).unwrap();
+            repo.add("b.csv", b"b");
+            repo.switched_branch("c.csv", b"c1", b"c2");
+            let token = crate::CancelToken::new();
+            let recorder = std::sync::Arc::new(Recorder {
+                cancel_on: Some((CancelAt::Planned, token.clone())),
+                ..Default::default()
+            });
+            let report = repo.get_observed(
+                &["a.csv", "b.csv", "c.csv"],
+                &[],
+                OnConflict::Abort,
+                dry_run,
+                &recorder,
+                Some(token),
+            );
+            assert_eq!(report.outcome, GetOutcome::Cancelled);
+            for name in ["a.csv", "c.csv"] {
+                let r = row(&report, name);
+                assert_eq!(
+                    (r.action, r.code),
+                    (Action::NotRun, Some(GetCode::Cancelled)),
+                    "{name}"
+                );
+            }
+            assert_eq!(row(&report, "a.csv").duration_ms, None, "never hashed");
+            assert!(row(&report, "c.csv").duration_ms.is_some(), "hashed");
+            assert_eq!(row(&report, "b.csv").action, Action::Unchanged);
+            assert!(recorder.transfers().is_empty());
+            assert!(!repo.root.join("a.csv").exists());
+            assert_eq!(repo.read("c.csv"), b"c2");
+            assert_eq!(report.bytes.transferred, 0);
+        }
+    }
+
+    // K13, K22, K11: cancelled once the plan is done but before the storage
+    // checks: none of them runs (no check_storage phase, no stored-copy
+    // lookup), `planned` still precedes every row and attempts no transfer,
+    // and the would-be transfers end cancelled, with their hash time if
+    // they were hashed.
+    #[test]
+    fn a_cancel_before_the_storage_checks_runs_none() {
+        for dry_run in [false, true] {
+            let repo = TestRepo::new();
+            repo.add("a.csv", b"a");
+            fs::remove_file(repo.root.join("a.csv")).unwrap();
+            repo.add("b.csv", b"b");
+            repo.switched_branch("c.csv", b"c1", b"c2");
+            repo.switched_branch("d.csv", b"d1", b"d2");
+            fs::write(repo.root.join("d.csv"), b"edited").unwrap();
+            let token = crate::CancelToken::new();
+            let recorder = std::sync::Arc::new(Recorder {
+                cancel_on: Some((CancelAt::Finished(Phase::Hash), token.clone())),
+                ..Default::default()
+            });
+            let report = repo.get_observed(
+                &["a.csv", "b.csv", "c.csv", "d.csv"],
+                &[],
+                OnConflict::Skip,
+                dry_run,
+                &recorder,
+                Some(token),
+            );
+            assert_eq!(report.outcome, GetOutcome::Cancelled);
+            assert_eq!(recorder.phases(), ["+hash", "-hash"], "dry_run {dry_run}");
+            let heard = recorder.heard();
+            let plans: Vec<(usize, OperationPlan)> = heard
+                .iter()
+                .enumerate()
+                .filter_map(|(i, h)| match h {
+                    Heard::Planned(p) => Some((i, *p)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(plans.len(), 1);
+            let (at, plan) = plans[0];
+            assert!(
+                heard[..at].iter().all(|h| !matches!(h, Heard::Row(_))),
+                "planned precedes every row"
+            );
+            assert_eq!(plan.files_total, 4);
+            assert_eq!((plan.files_to_transfer, plan.bytes_to_transfer), (0, 0));
+            for name in ["a.csv", "c.csv"] {
+                let r = row(&report, name);
+                assert_eq!(
+                    (r.action, r.code, r.satisfied),
+                    (Action::NotRun, Some(GetCode::Cancelled), false),
+                    "{name}"
+                );
+            }
+            assert_eq!(row(&report, "a.csv").duration_ms, None, "never hashed");
+            assert!(row(&report, "c.csv").duration_ms.is_some(), "hashed");
+            let d = row(&report, "d.csv");
+            assert_eq!(
+                (d.action, d.code, d.stored_copy),
+                (
+                    Action::Skipped,
+                    Some(GetCode::LocalChanges),
+                    Some(StoredCopy::Unknown)
+                ),
+                "not looked up"
+            );
+            assert!(d.duration_ms.is_some(), "hashed");
+            assert_eq!(row(&report, "b.csv").action, Action::Unchanged);
+            assert_eq!(recorder.rows().len(), 4);
+            assert!(recorder.transfers().is_empty());
+            assert!(!repo.root.join("a.csv").exists());
+            assert_eq!(repo.read("c.csv"), b"c2");
+        }
+    }
+
+    // C1, K11, K13: cancelled before the plan: no file is hashed (no hash
+    // phase), every row is cancelled with no duration, and none counts as a
+    // conflict or holds the batch back, even under abort. An untracked
+    // request still blocks the batch, but does not turn cancelled rows into
+    // held-back ones.
+    #[test]
+    fn a_cancel_before_hashing_starts_nothing() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        fs::remove_file(repo.root.join("a.csv")).unwrap();
+        repo.add("b.csv", b"b");
+        repo.switched_branch("c.csv", b"c1", b"c2");
+        let token = crate::CancelToken::new();
+        token.cancel();
+        let recorder = std::sync::Arc::new(Recorder::default());
+        let report = repo.get_observed(
+            &["a.csv", "b.csv", "c.csv"],
+            &["typo.csv"],
+            OnConflict::Abort,
+            false,
+            &recorder,
+            Some(token),
+        );
+        assert_eq!(report.outcome, GetOutcome::Cancelled);
+        assert_eq!(row(&report, "typo.csv").code, Some(GetCode::NotTracked));
+        for r in report
+            .files
+            .iter()
+            .filter(|r| r.path != Path::new("typo.csv"))
+        {
+            assert_eq!(
+                (r.action, r.code, r.satisfied, r.duration_ms, r.stored_copy),
+                (Action::NotRun, Some(GetCode::Cancelled), false, None, None),
+                "{}",
+                r.path.display()
+            );
+            assert_eq!(r.local_hash, None);
+        }
+        assert!(!report.has_conflicts());
+        // Not a conflict, so no storage check either.
+        assert!(recorder.phases().is_empty(), "{:?}", recorder.phases());
+        assert_eq!(recorder.rows().len(), 4);
+        assert_eq!(repo.read("c.csv"), b"c2");
+    }
+
+    // C1, K11: a cancel while hashing stops the files not yet started. With
+    // on_conflict=abort the cancelled rows are not conflicts: nothing is held
+    // back because of them and they need no storage check.
+    #[test]
+    fn a_cancel_during_hashing_stops_starting_files() {
+        let repo = TestRepo::new();
+        // More files than the pool can have threads, so some never start.
+        let names: Vec<String> = (0..40).map(|i| format!("f{i:02}.csv")).collect();
+        for name in &names {
+            repo.add(name, name.as_bytes());
+        }
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let token = crate::CancelToken::new();
+        let recorder = std::sync::Arc::new(Recorder {
+            cancel_on: Some((CancelAt::Started(Phase::Hash), token.clone())),
+            ..Default::default()
+        });
+        let report = repo.get_observed(
+            &names,
+            &[],
+            OnConflict::Abort,
+            false,
+            &recorder,
+            Some(token),
+        );
+        assert_eq!(report.outcome, GetOutcome::Cancelled);
+        let mut cancelled = 0;
+        for r in &report.files {
+            if r.code == Some(GetCode::Cancelled) {
+                assert_eq!(
+                    (r.action, r.before, r.duration_ms, r.stored_copy),
+                    (Action::NotRun, Before::Unknown, None, None)
+                );
+                cancelled += 1;
+            } else {
+                assert_eq!((r.action, r.code), (Action::Unchanged, None));
+                assert!(r.duration_ms.is_some());
+            }
+        }
+        assert!(cancelled > 0, "the cancel came too late to test anything");
+        assert!(cancelled < names.len(), "the first file hashed");
+        assert!(!report.has_conflicts());
+        assert_eq!(recorder.phases(), ["+hash", "-hash"]);
+    }
+
     // K13: a plan that hashes nothing (every file absent) has no hash phase.
     #[test]
     fn a_batch_with_nothing_to_hash_has_no_hash_phase() {
@@ -2150,12 +2533,103 @@ mod tests {
         repo.add("a.csv", b"a");
         fs::remove_file(repo.root.join("a.csv")).unwrap();
         let recorder = std::sync::Arc::new(Recorder::default());
-        let report = repo.get_observed(&["a.csv"], &[], OnConflict::Abort, false, &recorder);
+        let report = repo.get_observed(&["a.csv"], &[], OnConflict::Abort, false, &recorder, None);
         assert_eq!(report.outcome, GetOutcome::Complete);
         assert_eq!(
             recorder.phases(),
             ["+check_storage", "-check_storage", "+transfer", "-transfer"]
         );
+    }
+
+    // K10: a cancel makes the outcome cancelled even when no row was
+    // cancelled (every file already started) ...
+    #[test]
+    fn a_cancel_after_every_file_started_is_still_cancelled() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        fs::remove_file(repo.root.join("a.csv")).unwrap();
+        let token = crate::CancelToken::new();
+        let recorder = std::sync::Arc::new(Recorder {
+            cancel_on: Some((CancelAt::Finished(Phase::Transfer), token.clone())),
+            ..Default::default()
+        });
+        let report = repo.get_observed(
+            &["a.csv"],
+            &[],
+            OnConflict::Abort,
+            false,
+            &recorder,
+            Some(token),
+        );
+        assert_eq!(row(&report, "a.csv").action, Action::Restored);
+        assert_eq!(report.outcome, GetOutcome::Cancelled);
+    }
+
+    // ... and over an abort: the held-back rows keep their codes.
+    #[test]
+    fn a_cancel_overrides_an_aborted_outcome() {
+        let repo = TestRepo::new();
+        mixed_batch(&repo);
+        let token = crate::CancelToken::new();
+        let recorder = std::sync::Arc::new(Recorder {
+            cancel_on: Some((CancelAt::Planned, token.clone())),
+            ..Default::default()
+        });
+        let report = repo.get_observed(
+            &["a.csv", "c.csv"],
+            &[],
+            OnConflict::Abort,
+            false,
+            &recorder,
+            Some(token),
+        );
+        assert_eq!(report.outcome, GetOutcome::Cancelled);
+        assert_eq!(row(&report, "a.csv").code, Some(GetCode::BatchAborted));
+        assert_eq!(row(&report, "c.csv").code, Some(GetCode::LocalChanges));
+        // K12: computed from the rows in the aborted ending too.
+        assert_eq!(report.bytes.to_transfer, 5);
+        assert_eq!(report.bytes.already_stored, 0);
+    }
+
+    // ... and over an access failure. The access-failed row was hashed, so it
+    // keeps its hash time (K11).
+    #[test]
+    fn a_cancel_overrides_an_access_failure() {
+        let repo = TestRepo::new();
+        repo.switched_branch("a.csv", b"a1", b"a2");
+        // A server with no credentials: the access check fails before any
+        // request (this test thread's credentials store is empty).
+        let address = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap()
+        };
+        let server = Backend::Server(crate::backends::server::ServerBackend::new(
+            "project".into(),
+            Some("group".into()),
+            url::Url::parse(&format!("http://{address}/proxy")).unwrap(),
+        ));
+        let token = crate::CancelToken::new();
+        let recorder = std::sync::Arc::new(Recorder {
+            cancel_on: Some((CancelAt::Planned, token.clone())),
+            ..Default::default()
+        });
+        let report = repo.get_observed_on(
+            &server,
+            &["a.csv"],
+            &[],
+            OnConflict::Abort,
+            false,
+            &recorder,
+            Some(token),
+        );
+        assert_eq!(report.outcome, GetOutcome::Cancelled);
+        let a = row(&report, "a.csv");
+        assert_eq!(
+            (a.before, a.action, a.code),
+            (Before::Clean, Action::Failed, Some(GetCode::AuthRequired))
+        );
+        assert!(a.duration_ms.is_some(), "hashed before the access check");
+        assert_eq!(repo.read("a.csv"), b"a2");
     }
 
     // C4: an access failure keeps its shared code per row instead of

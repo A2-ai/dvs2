@@ -1,12 +1,14 @@
-//! The CLI against a stand-in dvs-server: streamed rows (C3), error codes
-//! (C4), credentials in machine mode (C5), URL path prefixes (C6) and byte
-//! totals (C8).
+//! The CLI against a stand-in dvs-server: cancellation (C1), streamed rows
+//! (C3), error codes (C4), credentials in machine mode (C5), URL path
+//! prefixes (C6) and byte totals (C8).
 mod common;
 
 use common::{
     Live, PROJECT, Sandbox, Stub, by_path, document, file_results, parse_stream, route, stderr,
+    tree,
 };
 use serde_json::Value;
+use std::time::Duration;
 
 /// A logged-in server project.
 fn server_project(stub: &Stub) -> Sandbox {
@@ -31,6 +33,289 @@ fn added(sandbox: &Sandbox, names: &[&str]) {
     for name in names {
         std::fs::remove_file(sandbox.project().join(name)).unwrap();
     }
+}
+
+fn record_hash(sandbox: &Sandbox, name: &str) -> Option<String> {
+    let record = std::fs::read(sandbox.project().join(".dvs").join(format!("{name}.dvs"))).ok()?;
+    let record: Value = serde_json::from_slice(&record).unwrap();
+    Some(record["hashes"]["blake3"].as_str().unwrap().to_string())
+}
+
+fn rows_with<'a>(result: &'a Value, key: &str, value: &str) -> Vec<&'a Value> {
+    result["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row[key] == value)
+        .collect()
+}
+
+/// C1, K4, K10, K18: an interrupt lets the one upload in flight finish and
+/// record, cancels the rest, still writes the whole result and exits 130,
+/// in every output mode.
+#[cfg(unix)]
+#[test]
+fn interrupted_add_finishes_the_upload_in_flight_and_cancels_the_rest() {
+    let names = ["f1.txt", "f2.txt", "f3.txt", "f4.txt", "f5.txt"];
+    for mode in ["--emit-events", "--json", "human"] {
+        let stub = Stub::start();
+        let sandbox = server_project(&stub);
+        for name in names {
+            sandbox.write(name, format!("contents of {name}"));
+        }
+        // One file at a time: the first upload is the only one in flight
+        let held = stub.hold(route("PUT", "blobs/"));
+        let mut command = sandbox.dvs();
+        if mode != "human" {
+            command.arg(mode);
+        }
+        command.args(["--threads", "1", "add"]).args(names);
+        let live = Live::spawn(command);
+        held.wait();
+        common::interrupt(&live.child);
+        common::settle();
+        held.release();
+        let (code, out, err) = live.finish();
+        assert_eq!(code, 130, "{mode}: {out}{err}");
+
+        let result: Value = match mode {
+            "--emit-events" => parse_stream(out.as_bytes(), 130).last().unwrap()["result"].clone(),
+            "--json" => serde_json::from_str(&out).unwrap(),
+            _ => {
+                assert!(err.contains("Cancelled: 4 files were not added"), "{err}");
+                assert!(!err.contains("Error adding"), "{err}");
+                Value::Null
+            }
+        };
+        if mode != "human" {
+            assert_eq!(result["outcome"], "cancelled", "{result}");
+            assert_eq!(result["counts"]["total"], 5);
+            assert_eq!(result["counts"]["succeeded"], 1);
+            assert_eq!(result["counts"]["failed"], 0);
+            assert_eq!(rows_with(&result, "code", "cancelled").len(), 4);
+        }
+        // Records are consistent: only the finished file has one, and its
+        // content is on the server
+        let recorded: Vec<_> = names
+            .iter()
+            .filter_map(|name| record_hash(&sandbox, name))
+            .collect();
+        assert_eq!(recorded.len(), 1, "{mode}");
+        assert!(stub.has_blob(&recorded[0]));
+        assert_eq!(stub.blob_count(), 1);
+        // Nothing half-written is left in the project
+        let mut expected: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+        expected.push("dvs.toml".into());
+        let mut tree: Vec<_> = tree(&sandbox.project())
+            .into_iter()
+            .filter(|p| !p.starts_with(".dvs/") && p != ".gitignore")
+            .collect();
+        tree.sort();
+        expected.sort();
+        assert_eq!(tree, expected, "{mode}");
+    }
+}
+
+/// C1: a second signal while a file is still in flight exits 130 at once,
+/// without waiting for the file and without a result.
+#[cfg(unix)]
+#[test]
+fn a_second_interrupt_exits_at_once_without_a_result() {
+    let stub = Stub::start();
+    let sandbox = server_project(&stub);
+    sandbox.write("f1.txt", "contents of f1.txt");
+    let held = stub.hold(route("PUT", "blobs/"));
+    let mut command = sandbox.dvs();
+    command.args(["--json", "add", "f1.txt"]);
+    let mut live = Live::spawn(command);
+    held.wait();
+    common::interrupt(&live.child);
+    common::settle();
+    common::interrupt(&live.child);
+    // The upload is still held: only the hard exit can end the run
+    let code = common::exit_within(&mut live.child, Duration::from_secs(10));
+    held.release();
+    assert_eq!(code, Some(130));
+    let (_, out, err) = live.finish();
+    assert_eq!(out.trim(), "", "{err}");
+}
+
+/// C1: SIGTERM cancels like SIGINT: the result is complete and the run
+/// exits 130.
+#[cfg(unix)]
+#[test]
+fn sigterm_cancels_like_an_interrupt() {
+    let names = ["f1.txt", "f2.txt", "f3.txt"];
+    let stub = Stub::start();
+    let sandbox = server_project(&stub);
+    for name in names {
+        sandbox.write(name, format!("contents of {name}"));
+    }
+    let held = stub.hold(route("PUT", "blobs/"));
+    let mut command = sandbox.dvs();
+    command
+        .args(["--json", "--threads", "1", "add"])
+        .args(names);
+    let live = Live::spawn(command);
+    held.wait();
+    common::signal(&live.child, "TERM");
+    common::settle();
+    held.release();
+    let (code, out, err) = live.finish();
+    assert_eq!(code, 130, "{out}{err}");
+    let result: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(result["outcome"], "cancelled", "{result}");
+    assert_eq!(result["counts"]["total"], 3);
+    assert_eq!(result["counts"]["succeeded"], 1);
+    assert_eq!(rows_with(&result, "code", "cancelled").len(), 2);
+}
+
+/// C1: a signal `dvs` was started with ignored (`nohup`, a background job
+/// started with SIGINT ignored) stays ignored: the run completes as if the
+/// signal never came.
+#[cfg(unix)]
+#[test]
+fn an_ignored_signal_stays_ignored() {
+    for signal in ["HUP", "INT"] {
+        let names = ["f1.txt", "f2.txt"];
+        let stub = Stub::start();
+        let sandbox = server_project(&stub);
+        for name in names {
+            sandbox.write(name, format!("contents of {name}"));
+        }
+        let held = stub.hold(route("PUT", "blobs/"));
+        // The shell ignores the signal and execs dvs, which inherits that,
+        // as `nohup` does for SIGHUP
+        let dvs = sandbox.dvs();
+        let mut command = std::process::Command::new("sh");
+        for (key, value) in dvs.get_envs() {
+            match value {
+                Some(value) => command.env(key, value),
+                None => command.env_remove(key),
+            };
+        }
+        command
+            .current_dir(sandbox.project())
+            .arg("-c")
+            .arg(format!("trap '' {signal}; exec \"$0\" \"$@\""))
+            .arg(dvs.get_program())
+            .args(["--json", "--threads", "1", "add"])
+            .args(names);
+        let live = Live::spawn(command);
+        held.wait();
+        common::signal(&live.child, signal);
+        common::settle();
+        held.release();
+        let (code, out, err) = live.finish();
+        assert_eq!(code, 0, "{signal}: {out}{err}");
+        let result: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(result["outcome"], "complete", "{signal}: {result}");
+        assert_eq!(result["counts"]["succeeded"], 2);
+    }
+}
+
+/// C1: human get calls cancelled files cancelled, not held back, and closes
+/// with how many were not retrieved; with every file already in flight there
+/// is no such line (add says the same).
+#[cfg(unix)]
+#[test]
+fn interrupted_get_in_human_mode_says_what_was_cancelled() {
+    for (names, cancelled) in [
+        (&["g1.txt", "g2.txt", "g3.txt", "g4.txt"][..], 3),
+        (&["g1.txt"], 0),
+    ] {
+        let stub = Stub::start();
+        let sandbox = server_project(&stub);
+        added(&sandbox, names);
+        let held = stub.hold(route("GET", "blobs/"));
+        let mut command = sandbox.dvs();
+        command.args(["--threads", "1", "get"]).args(names);
+        let live = Live::spawn(command);
+        held.wait();
+        common::interrupt(&live.child);
+        common::settle();
+        held.release();
+        let (code, out, err) = live.finish();
+        assert_eq!(code, 130, "{out}{err}");
+        assert!(!err.contains("held back"), "{err}");
+        assert!(!err.contains("not run"), "{err}");
+        if cancelled > 0 {
+            assert!(
+                err.contains(&format!("cancelled: restored 1, cancelled {cancelled}")),
+                "{err}"
+            );
+            assert!(
+                err.contains(&format!("Cancelled: {cancelled} files were not retrieved")),
+                "{err}"
+            );
+        } else {
+            assert!(err.contains("cancelled: restored 1"), "{err}");
+            assert!(!err.contains("Cancelled:"), "{err}");
+        }
+    }
+    // add: the one file was in flight, so nothing was left unstarted
+    let stub = Stub::start();
+    let sandbox = server_project(&stub);
+    sandbox.write("f1.txt", "contents of f1.txt");
+    let held = stub.hold(route("PUT", "blobs/"));
+    let mut command = sandbox.dvs();
+    command.args(["add", "f1.txt"]);
+    let live = Live::spawn(command);
+    held.wait();
+    common::interrupt(&live.child);
+    common::settle();
+    held.release();
+    let (code, out, err) = live.finish();
+    assert_eq!(code, 130, "{out}{err}");
+    assert!(!err.contains("Cancelled:"), "{err}");
+}
+
+/// C1: with --emit-events, the client closing stdin cancels like a signal.
+/// The download in flight is verified and installed; the rest are not run.
+#[cfg(unix)]
+#[test]
+fn closing_stdin_cancels_get_after_the_download_in_flight() {
+    let names = ["g1.txt", "g2.txt", "g3.txt", "g4.txt"];
+    let stub = Stub::start();
+    let sandbox = server_project(&stub);
+    added(&sandbox, &names);
+    let held = stub.hold(route("GET", "blobs/"));
+    let mut command = sandbox.dvs();
+    command
+        .args(["--emit-events", "--threads", "1", "get"])
+        .args(names)
+        .stdin(std::process::Stdio::piped());
+    let mut live = Live::spawn(command);
+    held.wait();
+    drop(live.child.stdin.take());
+    common::settle();
+    held.release();
+    let (code, out, err) = live.finish();
+    assert_eq!(code, 130, "{out}{err}");
+    let events = parse_stream(out.as_bytes(), 130);
+    let result = &events.last().unwrap()["result"];
+    assert_eq!(result["outcome"], "cancelled");
+    let restored = rows_with(result, "action", "restored");
+    assert_eq!(restored.len(), 1, "{result}");
+    let not_run = rows_with(result, "code", "cancelled");
+    assert_eq!(not_run.len(), 3);
+    assert!(not_run.iter().all(|row| row["action"] == "not_run"));
+    let path = restored[0]["path"].as_str().unwrap();
+    assert_eq!(
+        sandbox.read(path),
+        format!("contents of {path}").into_bytes()
+    );
+    // No temp file or partial target anywhere in the project
+    let present: Vec<_> = tree(&sandbox.project())
+        .into_iter()
+        .filter(|p| !p.starts_with(".dvs/") && p != ".gitignore")
+        .collect();
+    assert_eq!(present, vec!["dvs.toml", path]);
+    // Every row streamed once, matching the final result
+    assert_eq!(
+        by_path(file_results(&events)),
+        result["files"].as_array().unwrap().clone()
+    );
 }
 
 /// C3: add and get stream each row when it is final, not at the end.

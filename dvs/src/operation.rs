@@ -1,6 +1,6 @@
 //! What a running operation (`add`, `get`, `status`, `hash`) shares with its
-//! caller: when it started, and an observer that hears about progress as it
-//! happens.
+//! caller: a cancel flag, when it started, and an observer that hears about
+//! progress as it happens.
 //!
 //! The library only reports facts through [`OperationObserver`]: the plan,
 //! phases, transfer bytes and finished rows. Frontends decide what to do with
@@ -10,6 +10,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -19,6 +20,28 @@ use crate::files::get::GetRow;
 use crate::files::hash::HashRow;
 use crate::inspect::StatusFacts;
 use crate::progress::FileProgress;
+
+/// A shared "stop starting new files" flag. Cloning shares the flag, so a
+/// signal handler can hold one clone while the operation checks another.
+///
+/// Cancelling never interrupts a file already in flight: it finishes
+/// atomically, and only files that had not started are reported `cancelled`.
+#[derive(Debug, Clone, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+
+impl CancelToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
 
 /// A stage of an operation. A phase that does not occur is not reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -200,9 +223,11 @@ where
     }
 }
 
-/// Passed to every operation. One context is one operation: one start time.
+/// Passed to every operation. One context is one operation: one start time,
+/// one cancel flag.
 #[derive(Clone)]
 pub struct OperationContext {
+    cancel: CancelToken,
     started: Instant,
     started_at: SystemTime,
     observer: Arc<dyn OperationObserver>,
@@ -215,9 +240,10 @@ impl Default for OperationContext {
 }
 
 impl OperationContext {
-    /// Starts now, observed by nobody.
+    /// Starts now, never cancelled unless asked, observed by nobody.
     pub fn new() -> Self {
         Self {
+            cancel: CancelToken::new(),
             started: Instant::now(),
             started_at: SystemTime::now(),
             observer: Arc::new(NoopObserver),
@@ -227,6 +253,20 @@ impl OperationContext {
     pub fn with_observer(mut self, observer: Arc<dyn OperationObserver>) -> Self {
         self.observer = observer;
         self
+    }
+
+    pub fn with_cancel(mut self, cancel: CancelToken) -> Self {
+        self.cancel = cancel;
+        self
+    }
+
+    pub fn cancel_token(&self) -> &CancelToken {
+        &self.cancel
+    }
+
+    /// Check before starting each file.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
     }
 
     pub fn observer(&self) -> &dyn OperationObserver {
@@ -273,6 +313,15 @@ pub fn rfc3339_ms(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cancelled_clone_cancels_the_context() {
+        let token = CancelToken::new();
+        let ctx = OperationContext::new().with_cancel(token.clone());
+        assert!(!ctx.is_cancelled());
+        token.cancel();
+        assert!(ctx.is_cancelled());
+    }
 
     #[test]
     fn timestamps_are_unix_ms_and_rfc3339_with_milliseconds() {

@@ -1,7 +1,10 @@
 //! Operation reporting on a local project: timing (C2), `dvs hash` (C7),
-//! byte totals (C8) and plan/phase/progress events (O1).
+//! byte totals (C8), plan/phase/progress events (O1) and cancellation of
+//! local work (C1).
 mod common;
 
+#[cfg(unix)]
+use common::{ConfigGate, interrupt, settle};
 use common::{Sandbox, by_path, document, file_results, of_type, parse_stream, stderr};
 use serde_json::{Value, json};
 
@@ -449,4 +452,110 @@ fn plan_phases_and_throttled_progress() {
             "no rate or ETA fields"
         );
     }
+}
+
+/// C1, K10, K11, K18: closing stdin cancels local work too (status, hash);
+/// the result is complete and cancelled rows are neither succeeded nor
+/// failed. The run is held until the cancel has landed, so no file starts and
+/// every row is cancelled.
+#[cfg(unix)]
+#[test]
+fn closing_stdin_cancels_status_and_hash() {
+    let sandbox = local_project();
+    let names: Vec<String> = (0..5).map(|i| format!("f{i}.txt")).collect();
+    for name in &names {
+        sandbox.write(name, format!("file {name}"));
+    }
+    let output = sandbox
+        .dvs()
+        .arg("--json")
+        .arg("add")
+        .args(&names)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let gate = ConfigGate::new(&sandbox);
+    for command in ["status", "hash"] {
+        let mut child = sandbox
+            .dvs()
+            .args(["--emit-events", "--threads", "1", command])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let writer = gate.wait();
+        drop(child.stdin.take());
+        settle();
+        gate.release(writer);
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(130), "{command}");
+        let events = parse_stream(&output.stdout, 130);
+        let result = &events.last().unwrap()["result"];
+        assert_eq!(result["outcome"], "cancelled", "{command}");
+        let rows = result["files"].as_array().unwrap();
+        assert_eq!(rows.len(), names.len(), "{command}: {result}");
+        assert!(
+            rows.iter().all(|r| r["code"] == "cancelled"),
+            "{command}: {result}"
+        );
+        assert_eq!(result["counts"]["total"], rows.len());
+        assert_eq!(result["counts"]["succeeded"], 0);
+        assert_eq!(result["counts"]["failed"], 0);
+    }
+    gate.restore();
+    // Stdin that is not a pipe (here /dev/null) is not watched
+    let output = sandbox.run(&["--emit-events", "hash"]);
+    assert_eq!(output.status.code(), Some(0));
+}
+
+/// C1, K10, K4: a run cancelled before it failed reports the failure in the
+/// error envelope with outcome `cancelled`, and exits 130.
+#[cfg(unix)]
+#[test]
+fn a_failure_after_a_cancel_is_still_cancelled() {
+    let sandbox = local_project();
+    let gate = ConfigGate::new(&sandbox);
+    let child = sandbox
+        .dvs()
+        .args(["--json", "add", "missing.txt"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let writer = gate.wait();
+    interrupt(&child);
+    settle();
+    gate.release(writer);
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(130), "{}", stderr(&output));
+    let result = document(&output);
+    assert_eq!(result["outcome"], "cancelled", "{result}");
+    assert!(result["error"]["code"].is_string(), "{result}");
+}
+
+/// C1, K10: get stopping early because nothing matched is still cancelled
+/// when the cancel came first.
+#[cfg(unix)]
+#[test]
+fn get_matching_nothing_after_a_cancel_is_cancelled() {
+    let sandbox = local_project();
+    let gate = ConfigGate::new(&sandbox);
+    let child = sandbox
+        .dvs()
+        .args(["--json", "get"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let writer = gate.wait();
+    interrupt(&child);
+    settle();
+    gate.release(writer);
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(130), "{}", stderr(&output));
+    let result = document(&output);
+    assert_eq!(result["outcome"], "cancelled", "{result}");
+    assert_eq!(
+        result["error"]["message"], "no tracked files matched",
+        "{result}"
+    );
+    assert_eq!(result["error"]["code"], "operation_failed", "{result}");
 }

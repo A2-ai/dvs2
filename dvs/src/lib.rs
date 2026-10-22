@@ -31,8 +31,8 @@ pub use files::status::{FileStatus, StatusDetail, get_status};
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use operation::{
-    ByteTotals, FileRow, NoopObserver, OperationContext, OperationObserver, OperationPlan, Phase,
-    TransferObserver,
+    ByteTotals, CancelToken, FileRow, NoopObserver, OperationContext, OperationObserver,
+    OperationPlan, Phase, TransferObserver,
 };
 pub use paths::{AddPathStatus, DvsPaths, PathFilter, ProjectPath, find_repo_root};
 pub use progress::FileProgress;
@@ -104,13 +104,60 @@ pub mod testutil {
         },
     }
 
-    /// An observer that records every call in order.
+    /// An observer that records every call in order and can cancel the
+    /// operation once a given number of transfers (or rows) have started.
     #[derive(Default)]
     pub struct Recorder {
         pub seen: std::sync::Mutex<Vec<Seen>>,
+        cancel: Option<(crate::CancelToken, usize)>,
+        cancel_on_rows: bool,
+        /// Cancels when this phase starts (`true`) or finishes (`false`)
+        cancel_at_phase: Option<(crate::CancelToken, crate::Phase, bool)>,
+        count: std::sync::atomic::AtomicUsize,
     }
 
     impl Recorder {
+        /// Cancels `token` when the `n`th transfer starts.
+        pub fn cancelling_on_transfer(token: crate::CancelToken, n: usize) -> Self {
+            Self {
+                cancel: Some((token, n)),
+                ..Self::default()
+            }
+        }
+
+        /// Cancels `token` when the `n`th row finishes.
+        pub fn cancelling_on_row(token: crate::CancelToken, n: usize) -> Self {
+            Self {
+                cancel: Some((token, n)),
+                cancel_on_rows: true,
+                ..Self::default()
+            }
+        }
+
+        /// Cancels `token` as `phase` starts.
+        pub fn cancelling_as_phase_starts(token: crate::CancelToken, phase: crate::Phase) -> Self {
+            Self {
+                cancel_at_phase: Some((token, phase, true)),
+                ..Self::default()
+            }
+        }
+
+        /// Cancels `token` once `phase` has finished.
+        pub fn cancelling_after_phase(token: crate::CancelToken, phase: crate::Phase) -> Self {
+            Self {
+                cancel_at_phase: Some((token, phase, false)),
+                ..Self::default()
+            }
+        }
+
+        fn phase_tick(&self, phase: crate::Phase, starting: bool) {
+            if let Some((token, at, on_start)) = &self.cancel_at_phase {
+                if *at == phase && *on_start == starting {
+                    token.cancel();
+                }
+            }
+        }
+
         pub fn seen(&self) -> Vec<Seen> {
             self.seen.lock().unwrap().clone()
         }
@@ -166,6 +213,16 @@ pub mod testutil {
                 })
                 .collect()
         }
+
+        fn tick(&self, rows: bool) {
+            if let Some((token, n)) = &self.cancel {
+                if rows == self.cancel_on_rows
+                    && self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1 == *n
+                {
+                    token.cancel();
+                }
+            }
+        }
     }
 
     impl crate::OperationObserver for Recorder {
@@ -175,10 +232,12 @@ pub mod testutil {
 
         fn phase_started(&self, phase: crate::Phase) {
             self.seen.lock().unwrap().push(Seen::PhaseStarted(phase));
+            self.phase_tick(phase, true);
         }
 
         fn phase_finished(&self, phase: crate::Phase) {
             self.seen.lock().unwrap().push(Seen::PhaseFinished(phase));
+            self.phase_tick(phase, false);
         }
 
         fn transfer_started(&self, path: &Path, _total_bytes: u64) -> Option<crate::FileProgress> {
@@ -186,6 +245,7 @@ pub mod testutil {
                 .lock()
                 .unwrap()
                 .push(Seen::TransferStarted(path.to_path_buf()));
+            self.tick(false);
             None
         }
 
@@ -216,6 +276,7 @@ pub mod testutil {
                 code,
                 duration_ms,
             });
+            self.tick(true);
         }
     }
 }

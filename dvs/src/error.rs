@@ -30,6 +30,8 @@ pub enum ErrorCode {
     /// An unreadable `.dvs` record, including git conflict markers. The one
     /// code for it in every command (K25; `invalid_record` is gone)
     BadMetadata,
+    /// The operation was cancelled before this work started
+    Cancelled,
     /// The credentials store exists but cannot be read or parsed
     CredentialsUnreadable,
 }
@@ -44,6 +46,7 @@ impl ErrorCode {
             ErrorCode::ServerTooOld => "server_too_old",
             ErrorCode::ProjectNotFound => "project_not_found",
             ErrorCode::BadMetadata => "bad_metadata",
+            ErrorCode::Cancelled => "cancelled",
             ErrorCode::CredentialsUnreadable => "credentials_unreadable",
         }
     }
@@ -75,7 +78,7 @@ impl std::fmt::Display for BackendError {
 impl std::error::Error for BackendError {}
 
 /// The one mapping from an error to a shared code. `None` means the error is
-/// not a backend/credentials/record failure, and the caller falls back
+/// not a backend/credentials/cancellation failure, and the caller falls back
 /// to its own codes (`io_error`, `operation_failed`, get's `GetCode`s, ...).
 pub fn backend_error_code(error: &anyhow::Error) -> Option<ErrorCode> {
     error.downcast_ref::<BackendError>().map(|e| e.code)
@@ -95,6 +98,7 @@ mod tests {
             ErrorCode::ServerTooOld,
             ErrorCode::ProjectNotFound,
             ErrorCode::BadMetadata,
+            ErrorCode::Cancelled,
             ErrorCode::CredentialsUnreadable,
         ] {
             assert_eq!(serde_json::to_value(code).unwrap(), code.as_str());

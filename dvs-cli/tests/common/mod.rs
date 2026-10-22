@@ -598,3 +598,98 @@ impl Drop for Live {
         let _ = self.child.wait();
     }
 }
+
+/// Send SIGINT to a child process.
+#[cfg(unix)]
+pub fn interrupt(child: &std::process::Child) {
+    signal(child, "INT");
+}
+
+/// Send the signal `name` (as `kill -NAME` spells it) to a child process.
+#[cfg(unix)]
+pub fn signal(child: &std::process::Child, name: &str) {
+    let status = Command::new("kill")
+        .arg(format!("-{name}"))
+        .arg(child.id().to_string())
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// Wait at most `limit` for a child to exit; its exit code, or `None` if it
+/// is still running (or was killed by a signal).
+pub fn exit_within(child: &mut std::process::Child, limit: Duration) -> Option<i32> {
+    let deadline = std::time::Instant::now() + limit;
+    while std::time::Instant::now() < deadline {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status.code();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    None
+}
+
+/// Holds `dvs` at the start of a run, after it installed its cancellation
+/// handlers and before it does any work: `dvs.toml` is replaced by a FIFO,
+/// so reading the configuration blocks until the test writes it. This makes
+/// "cancelled before X" deterministic where no server request can be held.
+#[cfg(unix)]
+pub struct ConfigGate {
+    path: PathBuf,
+    contents: String,
+}
+
+#[cfg(unix)]
+impl ConfigGate {
+    pub fn new(sandbox: &Sandbox) -> Self {
+        let path = sandbox.project().join("dvs.toml");
+        let contents = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let status = Command::new("mkfifo").arg(&path).status().unwrap();
+        assert!(status.success());
+        Self { path, contents }
+    }
+
+    /// Wait until `dvs` is blocked reading its configuration.
+    pub fn wait(&self) -> std::fs::File {
+        use std::os::unix::fs::OpenOptionsExt;
+        let deadline = std::time::Instant::now() + WAIT;
+        loop {
+            // Opening the write end without blocking only succeeds once a
+            // reader has the FIFO open
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&self.path)
+            {
+                Ok(writer) => return writer,
+                Err(e) if e.raw_os_error() == Some(libc::ENXIO) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "dvs never read dvs.toml"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("{e}"),
+            }
+        }
+    }
+
+    /// Let the run go on with the project's configuration.
+    pub fn release(&self, mut writer: std::fs::File) {
+        writer.write_all(self.contents.as_bytes()).unwrap();
+    }
+
+    /// Put the regular `dvs.toml` back, for runs that are not held.
+    pub fn restore(self) {
+        std::fs::remove_file(&self.path).unwrap();
+        std::fs::write(&self.path, &self.contents).unwrap();
+    }
+}
+
+/// Cancellation is asynchronous to the operation (a signal handler thread or
+/// the stdin watcher sets the flag). Give it far more time than it needs
+/// before letting held work go on.
+pub fn settle() {
+    std::thread::sleep(Duration::from_millis(1000));
+}

@@ -98,6 +98,7 @@ pub fn error_code(error: &Error) -> &'static str {
 /// | 1 | failure, or some rows failed (`partial`/`failed`) |
 /// | 2 | usage or configuration: `invalid_arguments`, `invalid_configuration` |
 /// | 3 | `get` only: local conflicts held files back, nothing else failed |
+/// | 130 | cancelled (C1), over every other status |
 pub fn exit_code(error: &Error) -> i32 {
     match error_code(error) {
         "invalid_arguments" | "invalid_configuration" => crate::get_cmd::EXIT_USAGE,
@@ -111,9 +112,13 @@ pub fn error_json(code: &str, message: impl Into<String>) -> Value {
     json!({"code": code, "message": message.into(), "hint": null})
 }
 
-/// The common result envelope. `failed` counts failed rows.
+/// The common result envelope. `failed` counts failed rows; rows with code
+/// `cancelled` (never started, C1) count in `total` but in neither
+/// `succeeded` nor `failed` (K18), so the caller must not count them in
+/// `failed`. A cancelled run's `outcome` is set by the caller ([`cancelled`]).
 pub fn envelope(command: &str, dry_run: bool, files: Vec<Value>, failed: usize) -> Value {
     let total = files.len();
+    let cancelled = files.iter().filter(|row| is_cancelled_row(row)).count();
     json!({
         "v": 1,
         "command": command,
@@ -127,7 +132,7 @@ pub fn envelope(command: &str, dry_run: bool, files: Vec<Value>, failed: usize) 
         "dry_run": dry_run,
         "counts": {
             "total": total,
-            "succeeded": total - failed,
+            "succeeded": total - failed - cancelled,
             "failed": failed,
         },
         "error": null,
@@ -148,6 +153,17 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
     value["outcome"] = json!("failed");
     value["error"] = error_json(error_code(error), format!("{error:#}"));
     value
+}
+
+/// A row the cancelled operation never started.
+pub fn is_cancelled_row(row: &Value) -> bool {
+    row["code"] == "cancelled"
+}
+
+/// Mark a result as cancelled (K10): the cancel flag was set before the
+/// operation finished, whatever its rows say.
+pub fn cancelled(value: &mut Value) {
+    value["outcome"] = json!("cancelled");
 }
 
 /// Single rendering seam for JSON and terminal event results. Every result
@@ -173,14 +189,16 @@ pub fn emit_streamed(mut value: Value) {
     }
 }
 
-/// Rows and the number that failed, for [`envelope`].
+/// Rows and the number that failed, for [`envelope`]. Cancelled rows are
+/// errors to the library but not failures here (K18).
 pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value>, usize) {
     let mut failed = 0;
     let files = rows
         .into_iter()
         .map(|(value, is_error)| {
-            failed += usize::from(is_error);
-            file_result(value, is_error)
+            let value = file_result(value, is_error);
+            failed += usize::from(is_error && !is_cancelled_row(&value));
+            value
         })
         .collect();
     (files, failed)
@@ -214,26 +232,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rows_get_a_code_and_every_error_field() {
+    fn cancelled_rows_count_in_total_only() {
         let (files, failed) = file_results([
             (json!({"path": "ok"}), false),
-            (json!({"path": "bad", "message": "broken"}), true),
-            (json!({"path": "coded", "code": "io_error"}), true),
+            (json!({"path": "bad", "code": "io_error"}), true),
+            (json!({"path": "later", "code": "cancelled"}), true),
         ]);
-        assert_eq!(failed, 2);
-        assert_eq!(
-            files[0],
-            json!({"path": "ok", "code": null, "message": null, "hint": null})
-        );
-        assert_eq!(files[1]["code"], "file_failed");
-        assert_eq!(files[1]["message"], "broken");
-        assert_eq!(files[2]["code"], "io_error");
-        let result = envelope("add", false, files, failed);
+        assert_eq!(failed, 1);
+        let mut result = envelope("add", false, files, failed);
         assert_eq!(
             result["counts"],
-            json!({"total": 3, "succeeded": 1, "failed": 2})
+            json!({"total": 3, "succeeded": 1, "failed": 1})
         );
-        assert!(result.get("problem").is_none());
+        assert_eq!(result["files"][0]["code"], Value::Null);
+        assert_eq!(result["files"][2]["code"], "cancelled");
+        cancelled(&mut result);
+        assert_eq!(result["outcome"], "cancelled");
     }
 
     #[test]
