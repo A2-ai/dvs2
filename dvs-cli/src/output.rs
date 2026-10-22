@@ -89,7 +89,7 @@ pub fn error_code(error: &Error) -> &'static str {
 
 /// The exit status of a run that failed before it could report rows.
 ///
-/// One table for every command (§9 rec 4; docs/cli-json.md):
+/// One table for every command (§9 rec 4; specs.md "Machine output"):
 ///
 /// | exit | meaning |
 /// |---|---|
