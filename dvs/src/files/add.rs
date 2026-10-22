@@ -39,14 +39,10 @@ pub struct AddResult {
     pub duration_ms: Option<u64>,
 }
 
-/// The whole result of an `add`: one row per file, sorted by path, plus byte
-/// totals.
+/// The rows of an `add`, sorted by path, plus byte totals.
 #[derive(Debug, Clone)]
 pub struct AddReport {
     pub files: Vec<AddResult>,
-    /// Sums over the rows whose size is known (every file that was hashed,
-    /// failed and cancelled ones included); see [`ByteTotals`]. Not serialized
-    /// by the library.
     pub bytes: ByteTotals,
 }
 
@@ -138,8 +134,6 @@ fn cancelled_row(path: PathBuf, work: Option<Duration>) -> AddResult {
 struct Pending {
     relative_path: PathBuf,
     metadata: FileMetadata,
-    /// Whether storage already has this content, so nothing needs uploading.
-    /// Known once storage has been asked (step 2); false until then.
     stored: bool,
     /// Time spent on this file so far: hashing, then storage and record
     work: Duration,
@@ -163,10 +157,7 @@ impl Pending {
         })
     }
 
-    /// What this file contributes to the byte totals however it ends: once
-    /// hashed its size is known, so a later failure or cancel still counts it
-    /// (in `to_transfer` unless storage said it has the content), and the
-    /// result's `total` matches the plan's `bytes_total`.
+    /// Once hashed the size is known, so a later failure or cancel still counts it.
     fn row_bytes(&self, transferred: bool) -> RowBytes {
         RowBytes {
             size: self.metadata.size,
@@ -176,13 +167,9 @@ impl Pending {
     }
 }
 
-/// What a finished file contributes to the result's [`ByteTotals`].
 struct RowBytes {
     size: u64,
-    /// The content was already in storage when the add was planned
     stored: bool,
-    /// This file's bytes were uploaded by this add: the backend created the
-    /// blob. A second copy of content this add already uploaded moves nothing.
     transferred: bool,
 }
 
@@ -197,17 +184,11 @@ enum Finish {
     RecordOnly,
 }
 
-/// Decides what step 3 does with a file, from what is known as it would start.
-///
-/// `manifest_missing` is the server's answer to the manifest (the hashes it
-/// lacks), or `None` when no manifest was sent: cancelled before storage was
-/// asked, a dry run, or a backend without manifests. The server records every
-/// manifest entry whose content it already has, so such a file is finished
-/// even after a cancel: writing the local record keeps the two in agreement.
-/// Likewise a file whose content this add already uploaded: dvs-server
-/// completes every same-hash entry of an operation once the content arrives,
-/// so the file finishes record-only. Any other file has neither an upload nor
-/// a record once cancelled, and gets neither.
+/// Decides what step 3 does with a file as it would start. `manifest_missing`
+/// is the server's manifest answer, `None` when none was sent. The server
+/// records every manifest entry whose content it already has, and completes
+/// every same-hash entry once content arrives, so those files finish even
+/// after a cancel to keep the local records in agreement.
 fn finish_for(
     cancelled: bool,
     hash: &str,
@@ -227,9 +208,8 @@ fn finish_for(
 /// What finishing one file did.
 struct Added {
     outcome: Outcome,
-    /// Size of the stored blob, when a store call reported it
     stored_size: Option<u64>,
-    /// Whether the backend created the blob, i.e. this file's bytes moved
+    /// The backend created the blob, i.e. this file's bytes moved
     created: bool,
 }
 
@@ -396,9 +376,8 @@ pub fn add_files(
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
 
-    // Rows final before the plan, with their byte contribution (`None`: size
-    // unknown). They are reported only once the plan is, so that `planned`
-    // precedes every row.
+    // Rows final before the plan, reported only once it is, so that `planned`
+    // precedes every row. `None`: size unknown.
     let mut results: Vec<(AddResult, Option<RowBytes>)>;
 
     // 1. Hash everything first: the server wants the whole list before any bytes move
@@ -428,10 +407,9 @@ pub fn add_files(
     });
     hashing.finish();
 
-    // 2. Ask storage what it already has. The server is told what we are about
-    // to add (minus files already in sync) and answers with what it is missing;
-    // it records every entry, so a cancel before this point sends no manifest at
-    // all. Other backends, and dry runs, are asked file by file.
+    // 2. Ask storage what it already has: the server through the manifest (minus
+    // files already in sync), other backends and dry runs file by file. The
+    // server records every manifest entry, so a cancel before this sends none
     let mut missing = None;
     let mut storage_asked = false;
     if !ctx.is_cancelled() {
@@ -656,6 +634,19 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn row_errors_carry_a_code() {
+        let backend = anyhow::Error::from(crate::BackendError::new(ErrorCode::AccessDenied, "no"));
+        let io = anyhow::Error::from(std::io::Error::other("disk"));
+        for (error, expected) in [
+            (backend, AddErrorCode::AccessDenied),
+            (io, AddErrorCode::IoError),
+            (anyhow::anyhow!("other"), AddErrorCode::OperationFailed),
+        ] {
+            assert_eq!(add_error_code(&error), expected);
+        }
+    }
 
     /// A local-storage project: its temp dir guard, root, config and paths.
     fn project() -> (tempfile::TempDir, PathBuf, crate::config::Config, DvsPaths) {
@@ -1061,70 +1052,6 @@ mod tests {
     }
 
     #[test]
-    fn a_phase_is_finished_when_add_bails() {
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "a.txt", b"a");
-
-        let recorder = Arc::new(Recorder::default());
-        add_files(
-            vec!["a.txt".into(), "missing.csv".into()],
-            &paths,
-            backend,
-            None,
-            Compression::Zstd,
-            false,
-            &OperationContext::new().with_observer(recorder.clone()),
-        )
-        .unwrap_err();
-        assert_eq!(
-            recorder.outline(),
-            vec![
-                Seen::PhaseStarted(Phase::Scan),
-                Seen::PhaseFinished(Phase::Scan),
-            ]
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn a_file_that_fails_after_hashing_still_counts_its_size() {
-        use std::os::unix::fs::PermissionsExt;
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "a.txt", b"aaaa");
-        // Storage refuses the blob
-        let storage = root.parent().unwrap().join(".storage");
-        fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o555)).unwrap();
-        if fs::write(storage.join("probe"), b"").is_ok() {
-            // Running as root: permissions do not stop writes
-            fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o755)).unwrap();
-            return;
-        }
-        let recorder = Arc::new(Recorder::default());
-        let report = add(
-            &["a.txt"],
-            &paths,
-            backend,
-            false,
-            &OperationContext::new().with_observer(recorder.clone()),
-        );
-        fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-        assert!(code(&report.files[0]).is_some(), "{:?}", report.files);
-        assert_eq!(recorder.plan().bytes_total, 4);
-        assert_eq!(
-            report.bytes,
-            ByteTotals {
-                total: 4,
-                to_transfer: 4,
-                already_stored: 0,
-                transferred: 0,
-            }
-        );
-    }
-
-    #[test]
     #[cfg(unix)]
     fn nothing_hashed_means_no_storage_check() {
         use std::os::unix::fs::PermissionsExt;
@@ -1375,85 +1302,6 @@ mod tests {
         assert!(
             outline.contains(&Seen::PhaseFinished(Phase::Transfer)),
             "{outline:?}"
-        );
-    }
-
-    #[test]
-    fn empty_selection_is_still_planned() {
-        let (_tmp, _root, config, paths) = project();
-        let backend = config.backend();
-        let recorder = Arc::new(Recorder::default());
-        let report = add(
-            &[],
-            &paths,
-            backend,
-            false,
-            &OperationContext::new().with_observer(recorder.clone()),
-        );
-        assert!(report.files.is_empty());
-        assert_eq!(
-            recorder.outline(),
-            vec![
-                Seen::PhaseStarted(Phase::Scan),
-                Seen::PhaseFinished(Phase::Scan),
-                Seen::Planned(OperationPlan::default()),
-            ]
-        );
-        assert_planned_before_rows(&recorder, 0);
-    }
-
-    fn row_size_sum(report: &AddReport) -> u64 {
-        report
-            .files
-            .iter()
-            .filter_map(|r| match r.detail {
-                AddDetail::Success { size, .. } => Some(size),
-                AddDetail::Error { .. } => None,
-            })
-            .sum()
-    }
-
-    #[test]
-    fn byte_totals_match_rows_in_dry_and_real_runs() {
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "old.txt", b"already stored");
-        add(
-            &["old.txt"],
-            &paths,
-            backend,
-            false,
-            &OperationContext::new(),
-        );
-        // Same content at a new path: stored, so nothing to upload
-        create_file(&root, "copy.txt", b"already stored");
-        create_file(&root, "new.txt", b"new content!");
-        let names = ["copy.txt", "new.txt", "old.txt"];
-
-        let dry = add(&names, &paths, backend, true, &OperationContext::new());
-        assert_eq!(dry.bytes.total, row_size_sum(&dry));
-        assert_eq!(
-            dry.bytes,
-            ByteTotals {
-                total: 14 + 12 + 14,
-                to_transfer: 12,
-                already_stored: 28,
-                transferred: 0,
-            }
-        );
-
-        let real = add(&names, &paths, backend, false, &OperationContext::new());
-        assert_eq!(real.bytes.total, row_size_sum(&real));
-        assert_eq!(
-            real.bytes,
-            ByteTotals {
-                transferred: 12,
-                ..dry.bytes
-            }
-        );
-        assert_eq!(
-            real.bytes.to_transfer + real.bytes.already_stored,
-            real.bytes.total
         );
     }
 

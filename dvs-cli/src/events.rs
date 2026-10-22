@@ -4,7 +4,7 @@
 //! remains authoritative: a transfer can finish before installation fails.
 //!
 //! Every event carries `ts` (unix milliseconds) and `elapsed_ms` (since the
-//! operation started). Operation-level progress (O1) is aggregated here from
+//! operation started). Operation-level progress is aggregated here from
 //! the library's facts (plan, transfer byte deltas, finished files) and
 //! throttled, so a large transfer emits a bounded number of lines.
 
@@ -57,7 +57,7 @@ struct Progress {
     files_done: u64,
     files_total: u64,
     bytes_done: u64,
-    /// The plan's `bytes_to_transfer`: what moving bytes count against (K12)
+    /// The plan's `bytes_to_transfer`: what moving bytes count against
     bytes_total: u64,
     /// When the last progress event was emitted, or the plan arrived
     last_at: Option<Instant>,
@@ -264,9 +264,8 @@ impl EventStream {
         }
     }
 
-    /// Byte callbacks report deltas. Coalesce them to at most ten progress
-    /// events per second per transfer, always flushing the final count. The
-    /// deltas also drive operation progress.
+    /// Byte callbacks report deltas; coalesced to at most ten progress events
+    /// per second per transfer. The deltas also drive operation progress.
     pub fn progress(&self, path: &Path, total_bytes: u64) -> FileProgress {
         let path = path.to_path_buf();
         self.emit(

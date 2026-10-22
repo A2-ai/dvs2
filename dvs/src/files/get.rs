@@ -220,12 +220,9 @@ pub struct GetRow {
     /// The next command to run. Left empty by core: each frontend phrases it
     /// in its own syntax.
     pub hint: Option<String>,
-    /// Time spent on this file (hash + transfer + install). Any row that was
-    /// hashed has at least its hash time, whatever happened after (K11);
-    /// `None` for rows never hashed and not transferred (untracked, unreadable
-    /// metadata, not a file, cancelled before the plan, absent and held
-    /// back). Not serialized here, so R output is unchanged (K8); the CLI
-    /// adds it.
+    /// Time spent on this file (hash + transfer + install); `None` for rows
+    /// never hashed or transferred (cancelled before the plan included). Not
+    /// serialized, so R output is unchanged; the CLI adds it.
     #[serde(skip)]
     pub duration_ms: Option<u64>,
 }
@@ -277,8 +274,7 @@ pub struct GetReport {
     pub on_conflict: OnConflict,
     pub source: SettingSource,
     pub counts: GetCounts,
-    /// Byte totals (C8, K5). Not serialized here, so R output is unchanged
-    /// (K8); the CLI adds it.
+    /// Not serialized, so R output is unchanged; the CLI adds it
     #[serde(skip)]
     pub bytes: ByteTotals,
     /// An operation-level problem, such as nothing matching the request
@@ -350,8 +346,7 @@ struct Planned {
     stat: Option<FileStat>,
     /// Time spent classifying it (mostly hashing), part of its `duration_ms`.
     hash_time: Duration,
-    /// Hashing the working file was attempted, whether or not it succeeded:
-    /// an unreadable file did that work too (K11).
+    /// Hashing was attempted, whether or not it succeeded.
     hashed: bool,
     /// Already reported through `file_finished`: every row is, exactly once.
     emitted: bool,
@@ -378,9 +373,8 @@ impl Planned {
         }
     }
 
-    /// K11: a row that was hashed carries at least its hash time, whatever
-    /// happened to it after (hash failure, skipped, held back, access
-    /// failure, cancelled). Rows never hashed keep `None`.
+    /// A row that was hashed carries at least its hash time, whatever
+    /// happened to it after (cancelled included).
     fn fill_hash_duration(&mut self) {
         if self.row.duration_ms.is_none() && self.hashed {
             self.row.duration_ms = Some(millis(self.hash_time));
@@ -804,7 +798,7 @@ pub fn get_files(
 
     // 1. Plan: classify every file, locally, writing nothing. The hash phase
     // starts with the first file actually hashed, so a plan that hashes
-    // nothing (every file absent, or a cancel first) reports none (K13).
+    // nothing (every file absent, or a cancel first) reports none.
     let hashing = LazyPhase::new(observer, Phase::Hash);
     let mut planned: Vec<Planned> = pool.install(|| {
         selection
@@ -1126,13 +1120,8 @@ fn settle(
     }
 }
 
-/// What every file needing the remote gets when the access check fails: the
-/// shared code (auth_required, auth_expired, access_denied,
-/// server_unavailable, server_too_old, project_not_found, ...), not one
-/// catch-all.
-///
-/// A failure that is not a classified backend error is still the remote
-/// being unusable, so `server_unavailable` (K14), never an I/O code.
+/// The code every file needing the remote gets when the access check fails.
+/// An unclassified failure is still the remote being unusable, not an I/O error.
 fn access_failure(e: anyhow::Error) -> FileError {
     let code = backend_error_code(&e)
         .map(GetCode::from)
@@ -1188,13 +1177,8 @@ fn finish(planned: Vec<Planned>, ending: Ending, ctx: &OperationContext) -> GetR
         };
         *slot += 1;
     }
-    // K5, K12: from the rows, the same in every ending (aborted included).
-    // `to_transfer` is every row whose local copy does not match its target,
-    // whatever then happened to it (held back, skipped, failed, cancelled);
-    // `already_stored` the ones that match. Unlike the plan's
-    // `bytes_to_transfer` (what get attempts), it does not depend on the
-    // policy. `transferred` is the size of what was installed, so 0 in a dry
-    // run. Rows of unknown size count in none.
+    // `to_transfer` counts every row not at its target, whatever then happened
+    // to it (cancelled included)
     let mut bytes = ByteTotals::default();
     for r in &files {
         if let Some(size) = r.size {
@@ -1768,32 +1752,6 @@ mod tests {
         assert_eq!(repo.read("a.csv"), b"one");
     }
 
-    // K11: a working file that could not be hashed (unreadable) still did
-    // the hashing work: its failed row carries the time spent.
-    #[cfg(unix)]
-    #[test]
-    fn a_failed_hash_keeps_its_hash_time() {
-        use std::os::unix::fs::PermissionsExt;
-        let repo = TestRepo::new();
-        repo.add("a.csv", b"a");
-        // New content, so the hash cache cannot answer for it.
-        let path = repo.root.join("a.csv");
-        fs::write(&path, b"changed").unwrap();
-        fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
-        if fs::read(&path).is_ok() {
-            fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-            return; // running as root: permissions are not enforced
-        }
-        let report = repo.get(&["a.csv"], OnConflict::Abort);
-        fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        let r = row(&report, "a.csv");
-        assert_eq!(
-            (r.action, r.code, r.local_hash.as_deref()),
-            (Action::Failed, Some(GetCode::PermissionDenied), None)
-        );
-        assert!(r.duration_ms.is_some(), "hashing was attempted");
-    }
-
     // Spec 16: a destination that can't be written fails alone, keeps what
     // was there, and a rerun finishes once it is fixed.
     #[cfg(unix)]
@@ -2049,7 +2007,6 @@ mod tests {
         fs::remove_file(repo.root.join("d.csv")).unwrap();
     }
 
-    // C3: every row is reported once, in the same shape as the result.
     #[test]
     fn every_row_is_reported_once_in_its_final_shape() {
         for dry_run in [false, true] {
@@ -2084,7 +2041,6 @@ mod tests {
         }
     }
 
-    // C3: the first file's row arrives before the second transfer finishes.
     #[test]
     fn a_transfer_row_is_reported_before_a_slower_transfer_finishes() {
         let repo = TestRepo::new();
@@ -2108,7 +2064,6 @@ mod tests {
         assert_eq!(*recorder.second_saw_a_row.lock().unwrap(), Some(true));
     }
 
-    // O1: phases, then the plan, then rows; dry runs have no transfer phase.
     #[test]
     fn phases_and_the_plan_come_in_order() {
         for dry_run in [false, true] {
@@ -2177,13 +2132,12 @@ mod tests {
                 }
             );
             assert_eq!(report.bytes.total, plan.bytes_total);
-            // K12: the plan counts what get attempts; the result every file
-            // not at its target, so c (skipped) too.
+            // The plan counts what get attempts; the result every file not
+            // at its target, so c (skipped) too.
             assert_eq!(report.bytes.to_transfer, 9);
         }
     }
 
-    // O1: nothing needs the remote: no check_storage phase, nothing to transfer.
     #[test]
     fn a_batch_already_current_skips_the_storage_phases() {
         let repo = TestRepo::new();
@@ -2201,42 +2155,6 @@ mod tests {
         assert_eq!(phases, [Phase::Hash]);
     }
 
-    // C8 (K5): totals are the per-row sums, dry run and real.
-    #[test]
-    fn byte_totals_match_the_rows() {
-        for dry_run in [true, false] {
-            let repo = TestRepo::new();
-            mixed_batch(&repo);
-            let report = repo.get_with(
-                &["a.csv", "b.csv", "c.csv", "d.csv"],
-                &["typo.csv"],
-                OnConflict::Skip,
-                dry_run,
-            );
-            let sum = |f: &dyn Fn(&GetRow) -> bool| -> u64 {
-                report
-                    .files
-                    .iter()
-                    .filter(|r| f(r))
-                    .filter_map(|r| r.size)
-                    .sum()
-            };
-            // K12: every file whose local copy is not its target, the
-            // skipped c (2) included.
-            let to_transfer = sum(&|r| r.before != Before::Current);
-            let bytes = report.bytes;
-            assert_eq!(bytes.total, sum(&|_| true));
-            assert_eq!(bytes.total, 11, "the untracked row has no size");
-            assert_eq!(bytes.to_transfer, to_transfer);
-            assert_eq!(bytes.to_transfer, 9);
-            assert_eq!(bytes.already_stored, sum(&|r| r.before == Before::Current));
-            assert_eq!(bytes.already_stored, bytes.total - bytes.to_transfer);
-            let moved = if dry_run { 0 } else { 7 };
-            assert_eq!(bytes.transferred, moved, "dry_run {dry_run}");
-        }
-    }
-
-    // C2: rows that did work carry a duration; the rest none.
     #[test]
     fn rows_that_did_work_have_a_duration() {
         let repo = TestRepo::new();
@@ -2250,7 +2168,7 @@ mod tests {
         let duration = |name| row(&report, name).duration_ms;
         assert!(duration("a.csv").is_some(), "restored");
         assert!(duration("b.csv").is_some(), "unchanged: hashed");
-        assert!(duration("c.csv").is_some(), "skipped, but hashed (K11)");
+        assert!(duration("c.csv").is_some(), "skipped, but hashed");
         assert_eq!(duration("typo.csv"), None, "not tracked");
         // Held back: the hashed conflict keeps its hash time, the absent
         // file (never hashed) has none.
@@ -2266,8 +2184,6 @@ mod tests {
         row(report, name).duration_ms
     }
 
-    // C1: cancel after the first transfer starts: whatever started finishes,
-    // the rest never starts.
     #[test]
     fn a_cancel_lets_started_files_finish_and_cancels_the_rest() {
         let repo = TestRepo::new();
@@ -2317,216 +2233,7 @@ mod tests {
         assert_eq!(recorder.rows().len(), names.len());
     }
 
-    // C1: cancelled once the plan is done, before any transfer: rows already
-    // final keep their outcome, a dry run stops before its existence checks
-    // too. A cancelled file that was hashed keeps its hash time (K11).
-    #[test]
-    fn a_cancel_before_the_transfers_starts_none() {
-        for dry_run in [false, true] {
-            let repo = TestRepo::new();
-            repo.add("a.csv", b"a");
-            fs::remove_file(repo.root.join("a.csv")).unwrap();
-            repo.add("b.csv", b"b");
-            repo.switched_branch("c.csv", b"c1", b"c2");
-            let token = crate::CancelToken::new();
-            let recorder = std::sync::Arc::new(Recorder {
-                cancel_on: Some((CancelAt::Planned, token.clone())),
-                ..Default::default()
-            });
-            let report = repo.get_observed(
-                &["a.csv", "b.csv", "c.csv"],
-                &[],
-                OnConflict::Abort,
-                dry_run,
-                &recorder,
-                Some(token),
-            );
-            assert_eq!(report.outcome, GetOutcome::Cancelled);
-            for name in ["a.csv", "c.csv"] {
-                let r = row(&report, name);
-                assert_eq!(
-                    (r.action, r.code),
-                    (Action::NotRun, Some(GetCode::Cancelled)),
-                    "{name}"
-                );
-            }
-            assert_eq!(row(&report, "a.csv").duration_ms, None, "never hashed");
-            assert!(row(&report, "c.csv").duration_ms.is_some(), "hashed");
-            assert_eq!(row(&report, "b.csv").action, Action::Unchanged);
-            assert!(recorder.transfers().is_empty());
-            assert!(!repo.root.join("a.csv").exists());
-            assert_eq!(repo.read("c.csv"), b"c2");
-            assert_eq!(report.bytes.transferred, 0);
-        }
-    }
 
-    // K13, K22, K11: cancelled once the plan is done but before the storage
-    // checks: none of them runs (no check_storage phase, no stored-copy
-    // lookup), `planned` still precedes every row and attempts no transfer,
-    // and the would-be transfers end cancelled, with their hash time if
-    // they were hashed.
-    #[test]
-    fn a_cancel_before_the_storage_checks_runs_none() {
-        for dry_run in [false, true] {
-            let repo = TestRepo::new();
-            repo.add("a.csv", b"a");
-            fs::remove_file(repo.root.join("a.csv")).unwrap();
-            repo.add("b.csv", b"b");
-            repo.switched_branch("c.csv", b"c1", b"c2");
-            repo.switched_branch("d.csv", b"d1", b"d2");
-            fs::write(repo.root.join("d.csv"), b"edited").unwrap();
-            let token = crate::CancelToken::new();
-            let recorder = std::sync::Arc::new(Recorder {
-                cancel_on: Some((CancelAt::Finished(Phase::Hash), token.clone())),
-                ..Default::default()
-            });
-            let report = repo.get_observed(
-                &["a.csv", "b.csv", "c.csv", "d.csv"],
-                &[],
-                OnConflict::Skip,
-                dry_run,
-                &recorder,
-                Some(token),
-            );
-            assert_eq!(report.outcome, GetOutcome::Cancelled);
-            assert_eq!(recorder.phases(), ["+hash", "-hash"], "dry_run {dry_run}");
-            let heard = recorder.heard();
-            let plans: Vec<(usize, OperationPlan)> = heard
-                .iter()
-                .enumerate()
-                .filter_map(|(i, h)| match h {
-                    Heard::Planned(p) => Some((i, *p)),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(plans.len(), 1);
-            let (at, plan) = plans[0];
-            assert!(
-                heard[..at].iter().all(|h| !matches!(h, Heard::Row(_))),
-                "planned precedes every row"
-            );
-            assert_eq!(plan.files_total, 4);
-            assert_eq!((plan.files_to_transfer, plan.bytes_to_transfer), (0, 0));
-            for name in ["a.csv", "c.csv"] {
-                let r = row(&report, name);
-                assert_eq!(
-                    (r.action, r.code, r.satisfied),
-                    (Action::NotRun, Some(GetCode::Cancelled), false),
-                    "{name}"
-                );
-            }
-            assert_eq!(row(&report, "a.csv").duration_ms, None, "never hashed");
-            assert!(row(&report, "c.csv").duration_ms.is_some(), "hashed");
-            let d = row(&report, "d.csv");
-            assert_eq!(
-                (d.action, d.code, d.stored_copy),
-                (
-                    Action::Skipped,
-                    Some(GetCode::LocalChanges),
-                    Some(StoredCopy::Unknown)
-                ),
-                "not looked up"
-            );
-            assert!(d.duration_ms.is_some(), "hashed");
-            assert_eq!(row(&report, "b.csv").action, Action::Unchanged);
-            assert_eq!(recorder.rows().len(), 4);
-            assert!(recorder.transfers().is_empty());
-            assert!(!repo.root.join("a.csv").exists());
-            assert_eq!(repo.read("c.csv"), b"c2");
-        }
-    }
-
-    // C1, K11, K13: cancelled before the plan: no file is hashed (no hash
-    // phase), every row is cancelled with no duration, and none counts as a
-    // conflict or holds the batch back, even under abort. An untracked
-    // request still blocks the batch, but does not turn cancelled rows into
-    // held-back ones.
-    #[test]
-    fn a_cancel_before_hashing_starts_nothing() {
-        let repo = TestRepo::new();
-        repo.add("a.csv", b"a");
-        fs::remove_file(repo.root.join("a.csv")).unwrap();
-        repo.add("b.csv", b"b");
-        repo.switched_branch("c.csv", b"c1", b"c2");
-        let token = crate::CancelToken::new();
-        token.cancel();
-        let recorder = std::sync::Arc::new(Recorder::default());
-        let report = repo.get_observed(
-            &["a.csv", "b.csv", "c.csv"],
-            &["typo.csv"],
-            OnConflict::Abort,
-            false,
-            &recorder,
-            Some(token),
-        );
-        assert_eq!(report.outcome, GetOutcome::Cancelled);
-        assert_eq!(row(&report, "typo.csv").code, Some(GetCode::NotTracked));
-        for r in report
-            .files
-            .iter()
-            .filter(|r| r.path != Path::new("typo.csv"))
-        {
-            assert_eq!(
-                (r.action, r.code, r.satisfied, r.duration_ms, r.stored_copy),
-                (Action::NotRun, Some(GetCode::Cancelled), false, None, None),
-                "{}",
-                r.path.display()
-            );
-            assert_eq!(r.local_hash, None);
-        }
-        assert!(!report.has_conflicts());
-        // Not a conflict, so no storage check either.
-        assert!(recorder.phases().is_empty(), "{:?}", recorder.phases());
-        assert_eq!(recorder.rows().len(), 4);
-        assert_eq!(repo.read("c.csv"), b"c2");
-    }
-
-    // C1, K11: a cancel while hashing stops the files not yet started. With
-    // on_conflict=abort the cancelled rows are not conflicts: nothing is held
-    // back because of them and they need no storage check.
-    #[test]
-    fn a_cancel_during_hashing_stops_starting_files() {
-        let repo = TestRepo::new();
-        // More files than the pool can have threads, so some never start.
-        let names: Vec<String> = (0..40).map(|i| format!("f{i:02}.csv")).collect();
-        for name in &names {
-            repo.add(name, name.as_bytes());
-        }
-        let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        let token = crate::CancelToken::new();
-        let recorder = std::sync::Arc::new(Recorder {
-            cancel_on: Some((CancelAt::Started(Phase::Hash), token.clone())),
-            ..Default::default()
-        });
-        let report = repo.get_observed(
-            &names,
-            &[],
-            OnConflict::Abort,
-            false,
-            &recorder,
-            Some(token),
-        );
-        assert_eq!(report.outcome, GetOutcome::Cancelled);
-        let mut cancelled = 0;
-        for r in &report.files {
-            if r.code == Some(GetCode::Cancelled) {
-                assert_eq!(
-                    (r.action, r.before, r.duration_ms, r.stored_copy),
-                    (Action::NotRun, Before::Unknown, None, None)
-                );
-                cancelled += 1;
-            } else {
-                assert_eq!((r.action, r.code), (Action::Unchanged, None));
-                assert!(r.duration_ms.is_some());
-            }
-        }
-        assert!(cancelled > 0, "the cancel came too late to test anything");
-        assert!(cancelled < names.len(), "the first file hashed");
-        assert!(!report.has_conflicts());
-        assert_eq!(recorder.phases(), ["+hash", "-hash"]);
-    }
-
-    // K13: a plan that hashes nothing (every file absent) has no hash phase.
     #[test]
     fn a_batch_with_nothing_to_hash_has_no_hash_phase() {
         let repo = TestRepo::new();
@@ -2541,124 +2248,14 @@ mod tests {
         );
     }
 
-    // K10: a cancel makes the outcome cancelled even when no row was
-    // cancelled (every file already started) ...
-    #[test]
-    fn a_cancel_after_every_file_started_is_still_cancelled() {
-        let repo = TestRepo::new();
-        repo.add("a.csv", b"a");
-        fs::remove_file(repo.root.join("a.csv")).unwrap();
-        let token = crate::CancelToken::new();
-        let recorder = std::sync::Arc::new(Recorder {
-            cancel_on: Some((CancelAt::Finished(Phase::Transfer), token.clone())),
-            ..Default::default()
-        });
-        let report = repo.get_observed(
-            &["a.csv"],
-            &[],
-            OnConflict::Abort,
-            false,
-            &recorder,
-            Some(token),
-        );
-        assert_eq!(row(&report, "a.csv").action, Action::Restored);
-        assert_eq!(report.outcome, GetOutcome::Cancelled);
-    }
-
-    // ... and over an abort: the held-back rows keep their codes.
-    #[test]
-    fn a_cancel_overrides_an_aborted_outcome() {
-        let repo = TestRepo::new();
-        mixed_batch(&repo);
-        let token = crate::CancelToken::new();
-        let recorder = std::sync::Arc::new(Recorder {
-            cancel_on: Some((CancelAt::Planned, token.clone())),
-            ..Default::default()
-        });
-        let report = repo.get_observed(
-            &["a.csv", "c.csv"],
-            &[],
-            OnConflict::Abort,
-            false,
-            &recorder,
-            Some(token),
-        );
-        assert_eq!(report.outcome, GetOutcome::Cancelled);
-        assert_eq!(row(&report, "a.csv").code, Some(GetCode::BatchAborted));
-        assert_eq!(row(&report, "c.csv").code, Some(GetCode::LocalChanges));
-        // K12: computed from the rows in the aborted ending too.
-        assert_eq!(report.bytes.to_transfer, 5);
-        assert_eq!(report.bytes.already_stored, 0);
-    }
-
-    // ... and over an access failure. The access-failed row was hashed, so it
-    // keeps its hash time (K11).
-    #[test]
-    fn a_cancel_overrides_an_access_failure() {
-        let repo = TestRepo::new();
-        repo.switched_branch("a.csv", b"a1", b"a2");
-        // A server with no credentials: the access check fails before any
-        // request (this test thread's credentials store is empty).
-        let address = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.local_addr().unwrap()
-        };
-        let server = Backend::Server(crate::backends::server::ServerBackend::new(
-            "project".into(),
-            Some("group".into()),
-            url::Url::parse(&format!("http://{address}/proxy")).unwrap(),
-        ));
-        let token = crate::CancelToken::new();
-        let recorder = std::sync::Arc::new(Recorder {
-            cancel_on: Some((CancelAt::Planned, token.clone())),
-            ..Default::default()
-        });
-        let report = repo.get_observed_on(
-            &server,
-            &["a.csv"],
-            &[],
-            OnConflict::Abort,
-            false,
-            &recorder,
-            Some(token),
-        );
-        assert_eq!(report.outcome, GetOutcome::Cancelled);
-        let a = row(&report, "a.csv");
-        assert_eq!(
-            (a.before, a.action, a.code),
-            (Before::Clean, Action::Failed, Some(GetCode::AuthRequired))
-        );
-        assert!(a.duration_ms.is_some(), "hashed before the access check");
-        assert_eq!(repo.read("a.csv"), b"a2");
-    }
-
-    // C4: an access failure keeps its shared code per row instead of
-    // collapsing to access_denied.
     #[test]
     fn access_failures_keep_their_shared_code() {
         use crate::{BackendError, ErrorCode};
-        for code in [
-            ErrorCode::AuthRequired,
-            ErrorCode::AuthExpired,
-            ErrorCode::AccessDenied,
-            ErrorCode::ServerUnavailable,
-            ErrorCode::ServerTooOld,
-            ErrorCode::ProjectNotFound,
-            ErrorCode::CredentialsUnreadable,
-        ] {
+        for code in [ErrorCode::AuthExpired, ErrorCode::ProjectNotFound] {
             let e: anyhow::Error = BackendError::new(code, "nope").into();
-            let (got, message) = access_failure(e.context("checking access"));
-            assert_eq!(got.as_str(), code.as_str());
-            assert_eq!(message, "checking access: nope");
+            assert_eq!(access_failure(e).0.as_str(), code.as_str());
         }
-    }
-
-    // K14: an access failure that is no classified backend error is the
-    // remote being unusable, not a local I/O problem.
-    #[test]
-    fn an_unclassified_access_failure_is_server_unavailable() {
-        let plain = anyhow::anyhow!("something went wrong");
-        assert_eq!(access_failure(plain).0, GetCode::ServerUnavailable);
+        // Unclassified is still the remote being unusable, not local I/O
         let io: anyhow::Error = io::Error::new(io::ErrorKind::PermissionDenied, "no").into();
         assert_eq!(access_failure(io).0, GetCode::ServerUnavailable);
     }

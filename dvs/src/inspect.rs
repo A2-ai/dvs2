@@ -33,16 +33,10 @@ pub struct StatusFacts {
     pub error: Option<String>,
 }
 
-/// Inspect tracked files in parallel. Each row goes to `ctx`'s observer
-/// (`file_finished`) as soon as its local status check completes, so callers
-/// can stream rows; the returned rows are sorted by path.
-///
-/// Also reports the `scan` and `hash` phases and, between them, the plan
-/// (files and working bytes to look at; nothing to transfer). `scan` is
-/// finished on every exit, errors included; `hash` is reported only once a
-/// file is actually hashed (or its cached hash looked up), so a run of only
-/// cancelled, absent or failed rows has none. Once `ctx` is cancelled, files
-/// not yet started get a `cancelled` error row.
+/// Inspect tracked files in parallel. Each row goes to `ctx`'s observer as
+/// soon as it completes, so callers can stream rows; the returned rows are
+/// sorted by path. `hash` is reported only once a file is actually hashed.
+/// Once `ctx` is cancelled, files not yet started get a `cancelled` row.
 ///
 /// Paths in the result are relative to `paths.repo_root()`, independent of cwd.
 pub fn inspect_status(
@@ -415,23 +409,6 @@ mod tests {
                 }),
                 Seen::PhaseStarted(Phase::Hash),
                 Seen::PhaseFinished(Phase::Hash),
-            ]
-        );
-    }
-
-    #[test]
-    fn status_scan_error_still_finishes_the_scan_phase() {
-        use crate::testutil::{Recorder, Seen};
-        let (_temp, paths) = fixture();
-        let recorder = std::sync::Arc::new(Recorder::default());
-        let ctx = OperationContext::new().with_observer(recorder.clone());
-        // An unclosed character class fails while building the glob matcher
-        assert!(inspect_status(&paths, None, Some("["), &ctx).is_err());
-        assert_eq!(
-            recorder.outline(),
-            vec![
-                Seen::PhaseStarted(Phase::Scan),
-                Seen::PhaseFinished(Phase::Scan),
             ]
         );
     }

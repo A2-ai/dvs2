@@ -16,7 +16,7 @@ pub struct CliObserver {
     events: Option<&'static EventStream>,
     /// Human progress bars for transfers; unused with events
     bars: Option<Transfers>,
-    /// Turns a finished row into its `file_result` (C3), the same shape the
+    /// Turns a finished row into its `file_result`, the same shape the
     /// final result holds; `None` leaves the row out of the stream (status
     /// rows a filter does not select)
     rows: Option<Rows>,

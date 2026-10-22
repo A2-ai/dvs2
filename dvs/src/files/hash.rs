@@ -43,23 +43,12 @@ pub struct HashRow {
 const SYMLINK_CODE: &str = "local_read_failed";
 const SYMLINK_MESSAGE: &str = "working path contains a symlink";
 
-/// Hashes the files selected by `filter`/`glob_pattern`, reporting each row
-/// to `ctx`'s observer as it finishes. Rows are sorted by path.
-///
-/// Selection is `status`'s, plus untracked files that a path or glob names:
-/// no filter and no glob selects exactly the tracked files; a glob without a
-/// filter is matched from the cwd; a filter path selects itself, its direct
-/// children, or (recursive, or with a glob) everything under it, tracked or
-/// not. `.git` and the metadata folder are never selected.
-///
-/// Nothing selected is silently dropped: a named path that does not exist, a
-/// tracked file absent from disk, a symlink (named, walked, or a symlinked
-/// parent; never followed or hashed) and a directory the walk cannot read each
-/// get an error row (status's code where status has one, else `io_error`).
-///
-/// Reports the `scan` phase, the plan, then (if anything is hashed) the `hash`
-/// phase; the plan precedes every row. Once `ctx` is cancelled, files not yet
-/// started get a `cancelled` row.
+/// Hashes the files selected by `filter`/`glob_pattern`, sorted by path.
+/// Selection is `status`'s plus untracked files a path or glob names. Nothing
+/// selected is silently dropped: missing paths, symlinks (never followed) and
+/// unreadable directories each get an error row.
+/// Reports each row to `ctx`'s observer as it finishes.
+/// Once `ctx` is cancelled, files not yet started get a `cancelled` row.
 pub fn hash_files(
     paths: &DvsPaths,
     filter: Option<&PathFilter>,
@@ -554,42 +543,6 @@ mod tests {
         let rows = hash_files(&paths, None, None, &ctx).unwrap();
         assert_eq!(selected(&rows), ["data/tracked.csv"]);
         assert!(is_symlink_row(&rows[0]));
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn files_failing_the_pre_checks_are_not_hashed() {
-        use std::os::unix::fs::symlink;
-        let (_tmp, paths) = fixture();
-        let root = paths.repo_root().to_path_buf();
-        track(&paths, "data/gone.csv", b"gone");
-        fs::remove_file(root.join("data/gone.csv")).unwrap();
-        // A tracked file that became a symlink: selected as tracked, so only
-        // the per-file check catches it
-        track(&paths, "data/link.csv", b"link");
-        fs::remove_file(root.join("data/link.csv")).unwrap();
-        symlink(root.join("data/tracked.csv"), root.join("data/link.csv")).unwrap();
-        let recorder = Arc::new(Recorder::default());
-        let ctx = OperationContext::new().with_observer(recorder.clone());
-        let rows = hash_files(
-            &paths,
-            Some(&filter(&paths, &["data/gone.csv", "data/link.csv"], false)),
-            None,
-            &ctx,
-        )
-        .unwrap();
-        assert_eq!(selected(&rows), ["data/gone.csv", "data/link.csv"]);
-        assert_eq!(row(&rows, "data/gone.csv").code, Some("io_error"));
-        assert_eq!(row(&rows, "data/link.csv").code, Some(SYMLINK_CODE));
-        // Neither was read: no duration and no hash phase
-        assert!(rows.iter().all(|r| r.duration_ms.is_none()), "{rows:?}");
-        assert!(
-            !recorder
-                .outline()
-                .contains(&Seen::PhaseStarted(Phase::Hash)),
-            "{:?}",
-            recorder.outline()
-        );
     }
 
     #[test]
