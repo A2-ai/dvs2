@@ -22,9 +22,9 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, Backend, Compression, ErrorCode, FileMetadata, FileProgress, GetOptions, Outcome,
-    PathFilter, Status, StatusDetail, add_files, format_size, get_files, get_status,
-    set_num_threads,
+    AddDetail, AddResult, Backend, Compression, ErrorCode, FileMetadata, FileProgress, FileStatus,
+    GetOptions, Outcome, PathFilter, Status, StatusDetail, add_files, format_size, get_files,
+    get_status, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -202,6 +202,59 @@ impl<'a> From<&'a FileMetadata> for StatusRowFull<'a> {
             ..Default::default()
         }
     }
+}
+
+/// An add row as results carry it, and whether it is an error row. Success
+/// and error rows have the same keys (§9 rec 1): the success fields are null
+/// on an error row, `code`/`message`/`hint` null on a success. Built here,
+/// not by changing `AddResult`'s serialization, so R output is unchanged (K8).
+fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
+    let (value, is_error) = match &r.detail {
+        AddDetail::Success {
+            outcome,
+            hash,
+            size,
+            stored_size,
+        } => (
+            json!({
+                "path": r.path,
+                "outcome": outcome,
+                "hash": hash,
+                "size": size,
+                "stored_size": stored_size,
+            }),
+            false,
+        ),
+        AddDetail::Error { error } => (
+            json!({
+                "path": r.path,
+                "outcome": null,
+                "hash": null,
+                "size": null,
+                "stored_size": null,
+                "message": error,
+            }),
+            true,
+        ),
+    };
+    (output::file_result(value, is_error), is_error)
+}
+
+/// A status row as results carry it, and whether it is an error row: the
+/// same keys for every row (§9 rec 1), the library's `error` text as the
+/// row's `message`, like every other command's rows.
+fn status_row(row: &FileStatus) -> (serde_json::Value, bool) {
+    let (value, is_error) = match &row.detail {
+        StatusDetail::Success { status, metadata } => (
+            json!({"path": row.path, "status": status, "metadata": metadata}),
+            false,
+        ),
+        StatusDetail::Error { error } => (
+            json!({"path": row.path, "status": null, "metadata": null, "message": error}),
+            true,
+        ),
+    };
+    (output::file_result(value, is_error), is_error)
 }
 
 fn progress_style() -> ProgressStyle {
@@ -401,13 +454,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 .iter()
                 .any(|r| matches!(r.detail, AddDetail::Error { .. }));
             if cli.json {
-                let rows = results.iter().map(|r| {
-                    (
-                        serde_json::to_value(r).expect("add results serialize"),
-                        matches!(r.detail, AddDetail::Error { .. }),
-                    )
-                });
-                let (files, failed) = output::file_results(rows);
+                let (files, failed) = output::file_results(results.iter().map(add_row));
                 let mut result = output::envelope("add", dry_run, files, failed);
                 result["bytes"] = json!(report.bytes);
                 output::emit(result);
@@ -483,13 +530,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 .iter()
                 .any(|s| matches!(s.detail, StatusDetail::Error { .. }));
             if cli.json {
-                let rows = statuses.iter().map(|r| {
-                    (
-                        serde_json::to_value(r).expect("status results serialize"),
-                        matches!(r.detail, StatusDetail::Error { .. }),
-                    )
-                });
-                let (files, failed) = output::file_results(rows);
+                let (files, failed) = output::file_results(statuses.iter().map(status_row));
                 output::emit(output::envelope("status", false, files, failed));
             } else if statuses.is_empty() {
                 if show_all {
@@ -603,13 +644,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 },
             );
             if cli.json {
-                let mut value = get_cmd::to_json(&report);
-                value["error"] = report
-                    .problem
-                    .as_ref()
-                    .map(|message| json!({"code": "operation_failed", "message": message}))
-                    .unwrap_or(json!(null));
-                output::emit(value);
+                output::emit(get_cmd::to_json(&report));
             } else {
                 get_cmd::print_human(&report);
             }
@@ -675,13 +710,27 @@ fn try_main(cli: Cli) -> Result<()> {
                     let (access, connection, connection_error) = if logged_in {
                         match s.access() {
                             Ok(access) => (access, "available", None),
-                            Err(error)
-                                if cli.json
-                                    && dvs::backend_error_code(&error)
-                                        == Some(ErrorCode::ServerUnavailable) =>
-                            {
-                                (None, "unavailable", Some(format!("{error:#}")))
-                            }
+                            // The server cannot answer for this project: a
+                            // connection state, with the shared code (§9
+                            // rec 3). A rejected login stays an error
+                            // envelope (K24); a 403 is an answer, no
+                            // membership, like human mode's "no access" (K26).
+                            Err(error) if cli.json => match dvs::backend_error_code(&error) {
+                                Some(ErrorCode::AccessDenied) => (None, "available", None),
+                                Some(
+                                    code @ (ErrorCode::ServerUnavailable
+                                    | ErrorCode::ProjectNotFound
+                                    | ErrorCode::ServerTooOld),
+                                ) => (
+                                    None,
+                                    "unavailable",
+                                    Some(json!({
+                                        "code": code,
+                                        "message": format!("{error:#}"),
+                                    })),
+                                ),
+                                _ => return Err(error),
+                            },
                             Err(error) => return Err(error),
                         }
                     } else {
@@ -698,7 +747,12 @@ fn try_main(cli: Cli) -> Result<()> {
                             "connection": connection,
                             "connection_error": connection_error,
                             "user": access.as_ref().map(|a| &a.user),
-                            "access": if !logged_in || connection == "available" {
+                            // not_logged_in: no token; none: logged in, but
+                            // no membership in this project; null: the
+                            // server could not say (§9 rec 3)
+                            "access": if !logged_in {
+                                json!("not_logged_in")
+                            } else if connection == "available" {
                                 json!(access.as_ref().map_or("none", |a| a.access.as_str()))
                             } else {
                                 serde_json::Value::Null

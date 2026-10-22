@@ -82,13 +82,30 @@ pub fn error_code(error: &Error) -> &'static str {
     }
 }
 
+/// The exit status of a run that failed before it could report rows.
+///
+/// One table for every command (§9 rec 4; docs/cli-json.md):
+///
+/// | exit | meaning |
+/// |---|---|
+/// | 0 | complete |
+/// | 1 | failure, or some rows failed (`partial`/`failed`) |
+/// | 2 | usage or configuration: `invalid_arguments`, `invalid_configuration` |
+/// | 3 | `get` only: local conflicts held files back, nothing else failed |
 pub fn exit_code(error: &Error) -> i32 {
     match error_code(error) {
         "invalid_arguments" | "invalid_configuration" => crate::get_cmd::EXIT_USAGE,
-        _ => 1,
+        _ => crate::get_cmd::EXIT_FAILED,
     }
 }
 
+/// A command-level error as every envelope carries it: `{code, message,
+/// hint}`, `hint` null when there is none (§9 rec 1).
+pub fn error_json(code: &str, message: impl Into<String>) -> Value {
+    json!({"code": code, "message": message.into(), "hint": null})
+}
+
+/// The common result envelope. `failed` counts failed rows.
 pub fn envelope(command: &str, dry_run: bool, files: Vec<Value>, failed: usize) -> Value {
     let total = files.len();
     json!({
@@ -107,7 +124,6 @@ pub fn envelope(command: &str, dry_run: bool, files: Vec<Value>, failed: usize) 
             "succeeded": total - failed,
             "failed": failed,
         },
-        "problem": null,
         "error": null,
         "files": files,
     })
@@ -124,11 +140,7 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
         value["bytes"] = json!(dvs::ByteTotals::default());
     }
     value["outcome"] = json!("failed");
-    value["problem"] = json!(format!("{error:#}"));
-    value["error"] = json!({
-        "code": error_code(error),
-        "message": format!("{error:#}"),
-    });
+    value["error"] = error_json(error_code(error), format!("{error:#}"));
     value
 }
 
@@ -139,26 +151,68 @@ pub fn emit(mut value: Value) {
     println!("{value}");
 }
 
+/// Rows and the number that failed, for [`envelope`].
 pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value>, usize) {
     let mut failed = 0;
     let files = rows
         .into_iter()
-        .map(|(mut value, is_error)| {
+        .map(|(value, is_error)| {
             failed += usize::from(is_error);
-            value["code"] = if is_error {
-                json!("file_failed")
-            } else {
-                Value::Null
-            };
-            value
+            file_result(value, is_error)
         })
         .collect();
     (files, failed)
 }
 
+/// One row as results carry it: a success has a null `code`, a failure
+/// always a code.
+pub fn file_result(mut value: Value, is_error: bool) -> Value {
+    if !is_error {
+        value["code"] = Value::Null;
+    } else if value.get("code").is_none_or(Value::is_null) {
+        value["code"] = json!("file_failed");
+    }
+    row_error_fields(value)
+}
+
+/// Every row of every command has the same error fields, `code`, `message`
+/// and `hint`, null when they do not apply (§9 rec 1): a row's keys never
+/// depend on whether it failed.
+pub fn row_error_fields(mut value: Value) -> Value {
+    for key in ["code", "message", "hint"] {
+        if value.get(key).is_none() {
+            value[key] = Value::Null;
+        }
+    }
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rows_get_a_code_and_every_error_field() {
+        let (files, failed) = file_results([
+            (json!({"path": "ok"}), false),
+            (json!({"path": "bad", "message": "broken"}), true),
+            (json!({"path": "coded", "code": "io_error"}), true),
+        ]);
+        assert_eq!(failed, 2);
+        assert_eq!(
+            files[0],
+            json!({"path": "ok", "code": null, "message": null, "hint": null})
+        );
+        assert_eq!(files[1]["code"], "file_failed");
+        assert_eq!(files[1]["message"], "broken");
+        assert_eq!(files[2]["code"], "io_error");
+        let result = envelope("add", false, files, failed);
+        assert_eq!(
+            result["counts"],
+            json!({"total": 3, "succeeded": 1, "failed": 2})
+        );
+        assert!(result.get("problem").is_none());
+    }
 
     #[test]
     fn stamped_results_have_rfc3339_times_and_a_duration() {

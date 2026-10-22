@@ -308,3 +308,62 @@ fn add_bytes_split_stored_from_uploaded_content() {
         );
     }
 }
+
+/// C4, §9 rec 3, K26: info reports what the server said with the same codes, as
+/// a `connection_error: {code, message}` object.
+#[test]
+fn info_reports_connection_codes() {
+    for (failure, code) in [
+        ((503, ""), "server_unavailable"),
+        ((404, "unknown project \"proj\""), "project_not_found"),
+        ((404, ""), "server_too_old"),
+    ] {
+        let stub = Stub::start();
+        let sandbox = server_project(&stub);
+        access_fails(&stub, failure.0, failure.1);
+        let info = sandbox.run(&["--json", "info"]);
+        assert!(info.status.success(), "{}", stderr(&info));
+        let info = document(&info);
+        assert_eq!(info["connection"], "unavailable");
+        assert_eq!(info["connection_error"]["code"], code, "{info}");
+        assert!(info["connection_error"]["message"].is_string());
+        assert!(info.get("connection_code").is_none());
+        assert!(info["access"].is_null());
+    }
+    // A rejected login is an error envelope (K24)
+    let stub = Stub::start();
+    let sandbox = server_project(&stub);
+    access_fails(&stub, 401, "");
+    let info = sandbox.run(&["--json", "info"]);
+    assert_eq!(info.status.code(), Some(1));
+    assert_eq!(document(&info)["error"]["code"], "auth_expired");
+    // A 403 is an answer, no membership, like human mode's "no access" (K26)
+    let stub = Stub::start();
+    let sandbox = server_project(&stub);
+    access_fails(&stub, 403, "");
+    let info = sandbox.run(&["--json", "info"]);
+    assert_eq!(info.status.code(), Some(0), "{}", stderr(&info));
+    let info = document(&info);
+    assert!(info["error"].is_null(), "{info}");
+    assert_eq!(info["outcome"], "complete");
+    assert_eq!(info["logged_in"], true);
+    assert_eq!(info["connection"], "available");
+    assert!(info["connection_error"].is_null(), "{info}");
+    assert_eq!(info["access"], "none");
+    let human = sandbox.run(&["info"]);
+    assert!(human.status.success(), "{}", stderr(&human));
+    assert!(String::from_utf8_lossy(&human.stdout).contains("(no access)"));
+    let stub = Stub::start();
+    let sandbox = server_project(&stub);
+    let info = document(&sandbox.run(&["--json", "info"]));
+    assert_eq!(info["connection"], "available");
+    assert!(info["connection_error"].is_null());
+    assert_eq!(info["access"], "write");
+    // Not logged in is an answer, not an error, and not "none" (§9 rec 3)
+    let sandbox = Sandbox::new();
+    sandbox.init_server(&stub.url);
+    let info = document(&sandbox.run(&["--json", "info"]));
+    assert_eq!(info["logged_in"], false);
+    assert_eq!(info["access"], "not_logged_in");
+    assert!(info["connection_error"].is_null());
+}
