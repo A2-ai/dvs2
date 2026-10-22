@@ -104,6 +104,11 @@ fn backend_failures_have_one_code_at_the_top_level() {
         let add = sandbox.run(&["--json", "add", "data.txt"]);
         assert_eq!(add.status.code(), Some(1), "{code}");
         assert_eq!(document(&add)["error"]["code"], code, "{}", document(&add));
+        // availability reports the same code per row
+        let hash = "0".repeat(64);
+        let availability = sandbox.run(&["--json", "availability", &hash]);
+        assert_eq!(availability.status.code(), Some(1), "{code}");
+        assert_eq!(document(&availability)["files"][0]["code"], code);
     }
     // A server that cannot be reached at all
     let sandbox = Sandbox::new();
@@ -145,9 +150,9 @@ fn per_file_backend_failures_have_the_shared_codes() {
     }
 }
 
-/// C4, K25: get keeps `bad_metadata` for an unreadable record.
+/// C4, K25: get and status keep `bad_metadata` for an unreadable record.
 #[test]
-fn conflicted_records_keep_bad_metadata_in_get() {
+fn conflicted_records_keep_bad_metadata_in_get_and_status() {
     let stub = Stub::start();
     let sandbox = server_project(&stub);
     added(&sandbox, &["merged.txt"]);
@@ -157,6 +162,8 @@ fn conflicted_records_keep_bad_metadata_in_get() {
     );
     let get = document(&sandbox.run(&["--json", "get", "merged.txt"]));
     assert_eq!(get["files"][0]["code"], "bad_metadata");
+    let status = document(&sandbox.run(&["--json", "status"]));
+    assert_eq!(status["files"][0]["code"], "bad_metadata");
 }
 
 /// C5: machine mode leaves a rejected token in place and reports it.
@@ -222,14 +229,15 @@ fn machine_mode_keeps_an_unreadable_credentials_store() {
         vec!["--json", "add", "data.txt"],
         vec!["--json", "add", "--dry-run", "data.txt"],
         vec!["--json", "info"],
+        vec!["--json", "availability", &"0".repeat(64)],
     ] {
         let output = sandbox.run(&args);
         assert_eq!(output.status.code(), Some(1), "{args:?}");
         let result = document(&output);
-        assert_eq!(
-            result["error"]["code"], "credentials_unreadable",
-            "{result}"
-        );
+        let code = result["error"]["code"]
+            .as_str()
+            .or(result["files"][0]["code"].as_str());
+        assert_eq!(code, Some("credentials_unreadable"), "{result}");
         assert_eq!(sandbox.credentials().unwrap(), b"{ not json");
     }
     let output = sandbox.run(&["add", "data.txt"]);

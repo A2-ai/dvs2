@@ -23,7 +23,7 @@ Every command result, error results included, is one object:
 | `dry_run` | Whether this is a requested mutation preview |
 | `counts` | `{total, succeeded, failed}`; `get` adds its per-action counts (below) |
 | `error` | `null`, or the command-level error `{code, message, hint}` |
-| `files` | Per-file rows; empty for commands without rows |
+| `files` | Per-file (or per-hash, per-entry) rows; empty for commands without rows |
 | `started_at`, `finished_at` | RFC 3339 UTC with milliseconds, e.g. `2026-10-21T14:30:00.123Z` |
 | `duration_ms` | Integer milliseconds the run took |
 
@@ -45,6 +45,7 @@ to try, for people.
 ### Counts
 
 `total` is the number of rows. `failed` counts rows that failed; `succeeded` the rest.
+`history` never fails per row.
 
 `get` reports `total` and `succeeded` next to `restored`, `replaced`, `unchanged`,
 `skipped`, `not_run`, `failed`, `would_restore`, `would_replace`. `succeeded` = rows at
@@ -79,10 +80,17 @@ missing. Every row carries the same error fields:
   `null` on an error row.
 - `get`: `path`, `local_path`, `before`, `action`, `satisfied`, `size`, `target_hash`,
   `local_hash`, `stored_copy`.
-- `status`: `path`, `status`, `metadata`; `null` on an error row.
+- `status`: `path`, `status`, `metadata`, `working`, `baseline`, `state`.
+- `availability`: `hash`, `state` (`present`, `absent`, `unknown`), `in_history`, and a
+  second error pair `history_code`/`history_message` for the history lookup, which is a
+  separate request that fails on its own. `in_history` and the history pair are `null`
+  without `--path`.
+- `history`: the audit entries: `operation_id`, `timestamp`, `user`, `action`, plus the
+  common error fields.
 
-All times are RFC 3339 UTC: `started_at`/`finished_at` with milliseconds, a record's
-`add_time` as the record stores it.
+All times are RFC 3339 UTC: `started_at`/`finished_at` and history `timestamp` with
+milliseconds (the audit log on disk keeps unix seconds), a record's `add_time` as the
+record stores it.
 
 `path` values are relative to the project root (`info`'s `project_root`); `get` also
 gives `local_path`, relative to the current directory.
@@ -90,7 +98,7 @@ gives `local_path`, relative to the current directory.
 ## Codes
 
 Backend, credentials and record failures share one vocabulary, at the top level
-(`error.code`) and per row (`code`):
+(`error.code`) and per row (`code`), in every command:
 
 | code | when |
 | --- | --- |
@@ -110,10 +118,12 @@ specific is known (`get` also uses it when no tracked file matched).
 
 Row codes, besides the shared ones:
 
-- `add`, `status`: `file_failed`; the reason is in `message`.
+- `add`: `file_failed`; the reason is in `message`.
 - `get`: `local_changes`, `unknown_local`, `batch_aborted`, `not_tracked`, `not_a_file`,
   `unsafe_path`, `source_missing`, `hash_mismatch`, `destination_changed`,
   `permission_denied`, `file_in_use`, `io_error`.
+- `status`: `local_read_failed`.
+- `availability`: `backend_read_failed` for an unclassified backend failure.
 - `logout` `warnings`: `revoke_failed`.
 
 ## Exit status
@@ -135,7 +145,7 @@ was killed means the operation was interrupted: rescan before retrying.
 `dvs info --json` finds the project from the working directory. `project_root` and
 `metadata_directory` are absolute native paths. `protocol.versions` lists the supported
 result versions; `protocol.capabilities` names features (`json_results`,
-`get_conflict_policy`, `connectivity_status`).
+`get_conflict_policy`, `connectivity_status`, `status_facts`, `availability`, `history`).
 
 For a server project, `info` reports `logged_in`, `connection` (`available`,
 `unavailable`, or `unknown` when not logged in), `connection_error` (`null`, or

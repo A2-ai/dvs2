@@ -37,6 +37,7 @@ fn every_json_result_carries_its_timing() {
         .unwrap();
     assert_timed(&document(&init));
     sandbox.write("data.txt", "data");
+    let hash = "0".repeat(64);
     for args in [
         vec!["add", "--dry-run", "data.txt"],
         vec!["add", "data.txt"],
@@ -44,6 +45,8 @@ fn every_json_result_carries_its_timing() {
         vec!["get", "--dry-run", "data.txt"],
         vec!["get", "data.txt"],
         vec!["info"],
+        vec!["history"],
+        vec!["availability", &hash],
         vec!["logout"],
         vec!["add", "missing.txt"],
         vec!["get", "--on-conflict", "bogus"],

@@ -80,7 +80,9 @@ Every `--json` result is one envelope (`v`, `command`, `outcome`, `dry_run`, `co
 error envelopes included, and carries its timing: `started_at` and `finished_at` (RFC 3339 UTC
 with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and `duration_ms`. `add` and `get` results have
 `bytes: {total, to_transfer, already_stored, transferred}` (dry runs too; `transferred` is what actually moved,
-so `0` in a dry run; `to_transfer + already_stored = total`). Every time in JSON output is RFC 3339 UTC.
+so `0` in a dry run; `to_transfer + already_stored = total`). Every time in JSON output is RFC 3339 UTC:
+`started_at`/`finished_at` and history's `timestamp` with milliseconds (the audit log on disk keeps unix
+seconds), a record's `add_time` as the record stores it.
 
 Errors have one shape. The envelope's `error` is `null` or `{code, message, hint}`; every row of every command
 has `code`, `message` and `hint` (all `null` on success; `hint` is `null` where there is none). Rows have fixed
@@ -88,10 +90,10 @@ keys: a field that does not apply is `null`, never missing (an `add` error row h
 `stored_size` as `null`). `counts` always has `total`, `succeeded` and `failed` (get adds its detailed counts).
 
 Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row
-(`code`): `auth_required` (no token, not logged in), `auth_expired` (the server said 401), `access_denied`
-(403), `server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint that should exist
-answered 404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs` record, e.g. git
-conflict markers) and `credentials_unreadable`. Command-specific codes (`no_files_selected`,
+(`code`), in every command: `auth_required` (no token, not logged in), `auth_expired` (the server said 401),
+`access_denied` (403), `server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint
+that should exist answered 404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs`
+record, e.g. git conflict markers, in every command) and `credentials_unreadable`. Command-specific codes (`no_files_selected`,
 `invalid_configuration`, `invalid_arguments`, `io_error`, get's codes, ...) stay. `info --json` reports
 `connection_error` as `{code, message}` (`server_unavailable`, `project_not_found` or `server_too_old`) when
 `connection` is `unavailable`, else `null`; `access` is `not_logged_in` without a token, and `none` on a 403
@@ -501,7 +503,7 @@ Every `add` and `init` operation is logged to an append-only audit file (`audit.
 Each entry records:
 
 - `operation_id`: a UUID grouping all files from one operation
-- `timestamp`: unix seconds
+- `timestamp`: unix seconds (`dvs history --json` reports it as RFC 3339 UTC)
 - `user`: the system username of whoever ran the command
 - `action`: either `add` or `init`
 

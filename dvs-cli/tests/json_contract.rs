@@ -259,6 +259,7 @@ fn every_command_follows_the_exit_code_table_and_the_error_shape() {
     std::fs::write(root.path().join("data.txt"), "recorded").unwrap();
     let objects = storage.path().join("objects");
     let objects = objects.to_str().unwrap();
+    let hash = "0".repeat(64);
     // (arguments, exit status): 0 complete, 1 failure/partial, 2 usage/config
     let cases: Vec<(Vec<&str>, i32)> = vec![
         (vec!["add", "data.txt"], 0),
@@ -269,6 +270,10 @@ fn every_command_follows_the_exit_code_table_and_the_error_shape() {
         (vec!["get", "data.txt"], 0),
         (vec!["get", "untracked.txt"], 1),
         (vec!["info"], 0),
+        (vec!["availability", &hash], 0),
+        (vec!["availability", "not-a-hash"], 2),
+        (vec!["history"], 0),
+        (vec!["history", "../outside.txt"], 2),
         (vec!["init", "local", objects], 1),
         (vec!["attach", "proj", "http://127.0.0.1:1/"], 1),
         (vec!["attach"], 2),
@@ -306,6 +311,8 @@ fn every_command_follows_the_exit_code_table_and_the_error_shape() {
         vec!["status"],
         vec!["get"],
         vec!["info"],
+        vec!["history"],
+        vec!["availability", &hash],
         vec!["login"],
         vec!["logout"],
     ] {
@@ -354,10 +361,10 @@ fn add_success_and_error_rows_have_the_same_keys() {
     }
 }
 
-/// §9 rec 1: status rows carry `message` (not `error`) and `hint`, and the
-/// same keys whether they failed or not.
+/// §9 rec 1: status and history rows carry `message` (not `error`) and
+/// `hint`; status rows have the same keys whether they failed or not.
 #[test]
-fn status_rows_use_code_message_hint() {
+fn status_and_history_rows_use_code_message_hint() {
     let (root, _storage) = project();
     for name in ["bad.txt", "good.txt"] {
         std::fs::write(root.path().join(name), "content").unwrap();
@@ -379,6 +386,94 @@ fn status_rows_use_code_message_hint() {
         keys
     };
     assert_eq!(row_keys(bad), row_keys(good));
+    let history = document(&run(root.path(), &["history", "--json"]));
+    let rows = history["files"].as_array().unwrap();
+    assert!(!rows.is_empty(), "{history}");
+    for row in rows {
+        for field in ["code", "message", "hint"] {
+            assert_eq!(row.get(field), Some(&Value::Null), "{field}: {row}");
+        }
+    }
+}
+
+/// K25: availability never reads records, so a conflicted one changes
+/// nothing there.
+#[test]
+fn an_unreadable_record_does_not_affect_availability() {
+    let (root, _storage) = project();
+    std::fs::write(root.path().join("data.txt"), "content").unwrap();
+    let added = document(&run(root.path(), &["add", "data.txt", "--json"]));
+    let hash = added["files"][0]["hash"].as_str().unwrap().to_string();
+    let conflicted = "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> theirs\n";
+    std::fs::write(root.path().join(".dvs/data.txt.dvs"), conflicted).unwrap();
+
+    let output = run(
+        root.path(),
+        &["availability", &hash, "--path", "data.txt", "--json"],
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let row = &document(&output)["files"][0];
+    assert_eq!(row["state"], "present");
+    assert!(row["code"].is_null(), "{row}");
+}
+
+/// §9 rec 1: availability rows have fixed keys with or without `--path`.
+#[test]
+fn availability_rows_have_fixed_keys() {
+    let (root, _storage) = project();
+    let hash = "0".repeat(64);
+    let row_keys = |args: &[&str]| {
+        let value = document(&run(root.path(), args));
+        let mut keys: Vec<_> = value["files"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    };
+    let plain = row_keys(&["availability", &hash, "--json"]);
+    assert_eq!(
+        plain,
+        [
+            "code",
+            "hash",
+            "hint",
+            "history_code",
+            "history_message",
+            "in_history",
+            "message",
+            "state"
+        ]
+    );
+    assert_eq!(
+        plain,
+        row_keys(&["availability", &hash, "--path", "x.txt", "--json"])
+    );
+}
+
+/// §9 rec 2: history times are RFC 3339 UTC in JSON, and people see them.
+#[test]
+fn history_timestamps_are_rfc3339_and_shown_to_people() {
+    let (root, _storage) = project();
+    std::fs::write(root.path().join("data.txt"), "content").unwrap();
+    assert!(run(root.path(), &["add", "data.txt"]).status.success());
+    let history = document(&run(root.path(), &["history", "--json"]));
+    let entries = history["files"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        let timestamp = entry["timestamp"].as_str().expect("an RFC 3339 string");
+        // Same format as started_at: 2026-10-21T14:30:00.000Z
+        assert_eq!(timestamp.len(), 24, "{timestamp}");
+        assert!(timestamp.ends_with('Z') && timestamp.as_bytes()[10] == b'T');
+        assert!(timestamp <= history["finished_at"].as_str().unwrap());
+    }
+    let human = run(root.path(), &["history"]);
+    let text = String::from_utf8_lossy(&human.stdout);
+    let line = text.lines().find(|l| l.contains("data.txt")).unwrap();
+    let time = line.split_whitespace().next().unwrap();
+    assert_eq!(time, entries[1]["timestamp"], "{text}");
 }
 
 /// §9 rec 5: get counts carry `total` and `succeeded` next to the detail;
