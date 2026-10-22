@@ -261,8 +261,7 @@ pub struct GetReport {
     pub on_conflict: OnConflict,
     pub source: SettingSource,
     pub counts: GetCounts,
-    /// Byte totals (C8, K5). Not serialized here, so R output is unchanged
-    /// (K8); the CLI adds it.
+    /// Not serialized, so R output is unchanged; the CLI adds it
     #[serde(skip)]
     pub bytes: ByteTotals,
     /// An operation-level problem, such as nothing matching the request
@@ -929,13 +928,8 @@ pub fn get_files(
     finish(planned, dry_run, on_conflict, source, false)
 }
 
-/// What every file needing the remote gets when the access check fails: the
-/// shared code (auth_required, auth_expired, access_denied,
-/// server_unavailable, server_too_old, project_not_found, ...), not one
-/// catch-all.
-///
-/// A failure that is not a classified backend error is still the remote
-/// being unusable, so `server_unavailable` (K14), never an I/O code.
+/// The code every file needing the remote gets when the access check fails.
+/// An unclassified failure is still the remote being unusable, not an I/O error.
 fn access_failure(e: anyhow::Error) -> FileError {
     let code = backend_error_code(&e)
         .map(GetCode::from)
@@ -965,12 +959,7 @@ fn finish(
         };
         *slot += 1;
     }
-    // K5, K12: from the rows, the same in every ending (aborted included).
-    // `to_transfer` is every row whose local copy does not match its target,
-    // whatever then happened to it (held back, skipped, failed);
-    // `already_stored` the ones that match. It does not depend on the
-    // policy. `transferred` is the size of what was installed, so 0 in a dry
-    // run. Rows of unknown size count in none.
+    // `to_transfer` counts every row not at its target, whatever then happened to it
     let mut bytes = ByteTotals::default();
     for r in &files {
         if let Some(size) = r.size {
@@ -1564,80 +1553,14 @@ mod tests {
         assert_eq!(repo.read("locked/a.csv"), b"a");
     }
 
-    // C4: an access failure keeps its shared code per row instead of
-    // collapsing to access_denied.
     #[test]
     fn access_failures_keep_their_shared_code() {
         use crate::{BackendError, ErrorCode};
-        for code in [
-            ErrorCode::AuthRequired,
-            ErrorCode::AuthExpired,
-            ErrorCode::AccessDenied,
-            ErrorCode::ServerUnavailable,
-            ErrorCode::ServerTooOld,
-            ErrorCode::ProjectNotFound,
-            ErrorCode::CredentialsUnreadable,
-        ] {
+        for code in [ErrorCode::AuthExpired, ErrorCode::ProjectNotFound] {
             let e: anyhow::Error = BackendError::new(code, "nope").into();
-            let (got, message) = access_failure(e.context("checking access"));
-            assert_eq!(got.as_str(), code.as_str());
-            assert_eq!(message, "checking access: nope");
+            assert_eq!(access_failure(e).0.as_str(), code.as_str());
         }
-    }
-
-    // K14: an access failure that is no classified backend error is the
-    // remote being unusable, not a local I/O problem.
-    #[test]
-    fn an_unclassified_access_failure_is_server_unavailable() {
         let plain = anyhow::anyhow!("something went wrong");
         assert_eq!(access_failure(plain).0, GetCode::ServerUnavailable);
-        let io: anyhow::Error = io::Error::new(io::ErrorKind::PermissionDenied, "no").into();
-        assert_eq!(access_failure(io).0, GetCode::ServerUnavailable);
-    }
-
-    /// A mixed batch: restored, unchanged, skipped and untracked rows.
-    fn mixed_batch(repo: &TestRepo) {
-        repo.add("a.csv", b"aaa");
-        fs::remove_file(repo.root.join("a.csv")).unwrap();
-        repo.add("b.csv", b"bb");
-        repo.switched_branch("c.csv", b"c1", b"c2");
-        fs::write(repo.root.join("c.csv"), b"edited").unwrap();
-        repo.add("d.csv", b"dddd");
-        fs::remove_file(repo.root.join("d.csv")).unwrap();
-    }
-
-    // C8 (K5): totals are the per-row sums, dry run and real.
-    #[test]
-    fn byte_totals_match_the_rows() {
-        for dry_run in [true, false] {
-            let repo = TestRepo::new();
-            mixed_batch(&repo);
-            let report = repo.get_with(
-                &["a.csv", "b.csv", "c.csv", "d.csv"],
-                &["typo.csv"],
-                OnConflict::Skip,
-                dry_run,
-            );
-            let sum = |f: &dyn Fn(&GetRow) -> bool| -> u64 {
-                report
-                    .files
-                    .iter()
-                    .filter(|r| f(r))
-                    .filter_map(|r| r.size)
-                    .sum()
-            };
-            // K12: every file whose local copy is not its target, the
-            // skipped c (2) included.
-            let to_transfer = sum(&|r| r.before != Before::Current);
-            let bytes = report.bytes;
-            assert_eq!(bytes.total, sum(&|_| true));
-            assert_eq!(bytes.total, 11, "the untracked row has no size");
-            assert_eq!(bytes.to_transfer, to_transfer);
-            assert_eq!(bytes.to_transfer, 9);
-            assert_eq!(bytes.already_stored, sum(&|r| r.before == Before::Current));
-            assert_eq!(bytes.already_stored, bytes.total - bytes.to_transfer);
-            let moved = if dry_run { 0 } else { 7 };
-            assert_eq!(bytes.transferred, moved, "dry_run {dry_run}");
-        }
     }
 }

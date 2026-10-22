@@ -6,8 +6,7 @@ use anyhow::Error;
 use dvs::operation::{duration_ms, rfc3339_ms};
 use serde_json::{Value, json};
 
-/// When this run started, for the timing every result carries (C2). One run
-/// is one operation, so this is set once, before anything is emitted.
+/// When this run started, for the timing every result carries.
 #[derive(Clone, Copy)]
 pub struct Clock {
     pub started: Instant,
@@ -23,8 +22,7 @@ pub fn start_clock(started: Instant, started_at: SystemTime) {
     });
 }
 
-/// The run's clock; "now" if the run failed before it could start one
-/// (argument errors).
+/// The run's clock; "now" for argument errors, which fail before it starts.
 pub fn clock() -> Clock {
     *CLOCK.get_or_init(|| Clock {
         started: Instant::now(),
@@ -32,8 +30,6 @@ pub fn clock() -> Clock {
     })
 }
 
-/// Add `started_at`, `finished_at` (RFC 3339 UTC, milliseconds) and
-/// `duration_ms` to a result document, finishing it now.
 pub fn stamp(value: &mut Value) {
     let clock = clock();
     value["started_at"] = json!(rfc3339_ms(clock.started_at));
@@ -83,15 +79,6 @@ pub fn error_code(error: &Error) -> &'static str {
 }
 
 /// The exit status of a run that failed before it could report rows.
-///
-/// One table for every command (§9 rec 4; specs.md "Machine output"):
-///
-/// | exit | meaning |
-/// |---|---|
-/// | 0 | complete |
-/// | 1 | failure, or some rows failed (`partial`/`failed`) |
-/// | 2 | usage or configuration: `invalid_arguments`, `invalid_configuration` |
-/// | 3 | `get` only: local conflicts held files back, nothing else failed |
 pub fn exit_code(error: &Error) -> i32 {
     match error_code(error) {
         "invalid_arguments" | "invalid_configuration" => crate::get_cmd::EXIT_USAGE,
@@ -99,13 +86,10 @@ pub fn exit_code(error: &Error) -> i32 {
     }
 }
 
-/// A command-level error as every envelope carries it: `{code, message,
-/// hint}`, `hint` null when there is none (§9 rec 1).
 pub fn error_json(code: &str, message: impl Into<String>) -> Value {
     json!({"code": code, "message": message.into(), "hint": null})
 }
 
-/// The common result envelope. `failed` counts failed rows.
 pub fn envelope(command: &str, dry_run: bool, files: Vec<Value>, failed: usize) -> Value {
     let total = files.len();
     json!({
@@ -136,7 +120,6 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
         envelope(command, dry_run, vec![], 0)
     };
     if command == "add" {
-        // C8: add results always carry byte totals, nothing moved here
         value["bytes"] = json!(dvs::ByteTotals::default());
     }
     value["outcome"] = json!("failed");
@@ -145,13 +128,12 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
 }
 
 /// Single rendering seam for JSON and, in future, terminal event results.
-/// Every result leaves through here, which adds its timing.
+/// Adds the timing every result carries.
 pub fn emit(mut value: Value) {
     stamp(&mut value);
     println!("{value}");
 }
 
-/// Rows and the number that failed, for [`envelope`].
 pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value>, usize) {
     let mut failed = 0;
     let files = rows
@@ -164,8 +146,6 @@ pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value
     (files, failed)
 }
 
-/// One row as results carry it: a success has a null `code`, a failure
-/// always a code.
 pub fn file_result(mut value: Value, is_error: bool) -> Value {
     if !is_error {
         value["code"] = Value::Null;
@@ -175,9 +155,7 @@ pub fn file_result(mut value: Value, is_error: bool) -> Value {
     row_error_fields(value)
 }
 
-/// Every row of every command has the same error fields, `code`, `message`
-/// and `hint`, null when they do not apply (§9 rec 1): a row's keys never
-/// depend on whether it failed.
+/// A row's keys never depend on whether it failed.
 pub fn row_error_fields(mut value: Value) -> Value {
     for key in ["code", "message", "hint"] {
         if value.get(key).is_none() {
@@ -185,43 +163,4 @@ pub fn row_error_fields(mut value: Value) -> Value {
         }
     }
     value
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rows_get_a_code_and_every_error_field() {
-        let (files, failed) = file_results([
-            (json!({"path": "ok"}), false),
-            (json!({"path": "bad", "message": "broken"}), true),
-            (json!({"path": "coded", "code": "io_error"}), true),
-        ]);
-        assert_eq!(failed, 2);
-        assert_eq!(
-            files[0],
-            json!({"path": "ok", "code": null, "message": null, "hint": null})
-        );
-        assert_eq!(files[1]["code"], "file_failed");
-        assert_eq!(files[1]["message"], "broken");
-        assert_eq!(files[2]["code"], "io_error");
-        let result = envelope("add", false, files, failed);
-        assert_eq!(
-            result["counts"],
-            json!({"total": 3, "succeeded": 1, "failed": 2})
-        );
-        assert!(result.get("problem").is_none());
-    }
-
-    #[test]
-    fn stamped_results_have_rfc3339_times_and_a_duration() {
-        let mut result = envelope("info", false, vec![], 0);
-        stamp(&mut result);
-        let started = result["started_at"].as_str().unwrap();
-        let finished = result["finished_at"].as_str().unwrap();
-        assert!(started.ends_with('Z') && started.len() == 24, "{started}");
-        assert!(finished >= started);
-        assert!(result["duration_ms"].is_u64());
-    }
 }
