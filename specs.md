@@ -134,6 +134,45 @@ reports, per hash and in input order, whether storage has that content, without 
 not exist in this checkout. It takes files, not folders: a path that is a folder is refused with
 `invalid_arguments` (exit `2`), as is a path outside the project.
 
+```shell
+❯ dvs availability --help
+Check whether explicitly named BLAKE3 content is stored, without downloading it
+
+Usage: dvs availability [OPTIONS] <HASHES>...
+
+Arguments:
+  <HASHES>...  BLAKE3 hashes to look up
+
+Options:
+  -h, --help  Print help
+
+Global Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+```
+
+```shell
+❯ dvs history --help
+Show the stored upload history of files
+
+Usage: dvs history [OPTIONS] <PATHS>...
+
+Arguments:
+  <PATHS>...  Files to show the history of (not folders)
+
+Options:
+  -h, --help  Print help
+
+Global Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+```
+
+Human `history` is a table, newest first: the time in UTC, the user, the path, the start of the BLAKE3 hash and
+the add's message.
+
 Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row (`code`):
 `auth_required` (no token, not logged in), `auth_expired` (the server said 401), `access_denied` (403),
 `server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint that should exist answered
@@ -154,7 +193,24 @@ absolute native paths. For a server project it reports `logged_in`, `connection`
 `project_not_found` or `server_too_old`) when `connection` is `unavailable`, else `null`. `access` is the
 server's level (`read`, `write`, `admin`), `not_logged_in` without a token, `none` on a 403 (no membership:
 `connection` is `available`, exit `0`, like human mode's "no access"), or `null` when the server could not say;
-a rejected login (401, `auth_expired`) is an error envelope.
+a rejected login (401, `auth_expired`) is an error envelope. Every project also reports `on_conflict` and
+`on_conflict_source`, what `get` does with local changes and where that was set (`null` when the setting is
+invalid; human `info` shows the error on its `on_conflict` line).
+
+```shell
+❯ dvs info --help
+Show the project configuration and the server info is using a dvs-server backend
+
+Usage: dvs info [OPTIONS]
+
+Options:
+  -h, --help  Print help
+
+Global Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+```
 
 Exit codes, for every command: `0` complete; `1` failure, or some rows failed; `2` usage or configuration
 (`invalid_arguments`, `invalid_configuration`); `3` `get` only, local conflicts held files back and nothing
@@ -351,21 +407,25 @@ Adds the given files to dvs. You can use a glob or paths. If you pass a director
 Usage: dvs add [OPTIONS] [PATHS]...
 
 Arguments:
-  [PATHS]...  
+  [PATHS]...  Files to add, or directories to search with --glob
 
 Options:
-      --json               Output results as JSON
-      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
-      --glob <GLOB>        
+      --glob <GLOB>        Add the files matching this glob, e.g. '*.csv'
   -m, --message <MESSAGE>  An optional message to add
       --dry-run            Show what would be added without making any actual changes
   -h, --help               Print help
+
+Global Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
 ```
 
 You can run `dvs add *.csv` and it will be expanded by your shell before calling `dvs`.
 To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library. The glob string must be quoted (for example `--glob '*.csv'`) so the shell does not expand it before `dvs` sees it.
 
-A batch refused for an invalid input path exits with `1` and adds nothing. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`. A cancelled batch exits with `130` (see Cancellation).
+A batch refused for an invalid input path (including a directory without `--glob`) is `invalid_arguments`,
+exits with `2` and adds nothing. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`. A cancelled batch exits with `130` (see Cancellation).
 
 #### Rust library
 
@@ -446,17 +506,20 @@ Retrieves the given files from dvs storage. You can use a glob or paths. If you 
 Usage: dvs get [OPTIONS] [PATHS]...
 
 Arguments:
-  [PATHS]...  
+  [PATHS]...  Tracked files or directories to retrieve
 
 Options:
-      --json                  Output results as JSON
-      --threads <THREADS>     Number of threads for parallel operations (0 = auto-detect)
-  -g, --glob <GLOB>           
+  -g, --glob <GLOB>           Only retrieve the tracked files matching this glob, e.g. '*.csv'
   -r, --recursive             Recursively include files in subdirectories for directory inputs. Without this flag, directories return only their direct children
       --dry-run               Show what would be retrieved without making any actual changes
       --on-conflict <POLICY>  What to do with files whose local version dvs did not put there (local changes, or no record): abort changes nothing, skip leaves them and gets the rest, overwrite replaces them. Defaults to DVS_GET_ON_CONFLICT, then [get] on_conflict in dvs.toml, then abort [possible values: abort, skip, overwrite]
   -f, --force                 Replace files with local changes (same as --on-conflict overwrite)
   -h, --help                  Print help
+
+Global Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
 ```
 
 Passing `-r, --recursive` with an explicit directory walks its subdirectories. The CLI requires a path or `--glob`.
@@ -464,8 +527,10 @@ When no explicit paths are given (R's `dvs_get()`), `get` is scoped to the curre
 directly under it, and with `-r` it restores every tracked file beneath it. (At the repo root, `-r` therefore
 restores every tracked file in the project.)
 
-Human output lists each file that changed or needs attention, then a summary naming the policy and where it came
-from, then the commands to keep or discard local changes.
+Human output lists each file that changed or needs attention, then, after a blank line, a summary. Under it,
+`on_conflict = <policy> (<source>)` appears on its own line only when the policy acted, that is when a file
+with local changes or no record was skipped, held back or replaced. Then come the commands to keep or discard
+local changes.
 
 `--json` prints one envelope (this replaced the earlier bare array). When `get` cannot start (not in a project,
 invalid configuration) it is the shared error envelope, without `on_conflict`/`source`.
@@ -547,23 +612,27 @@ Arguments:
   [PATHS]...  Paths (files or directories) to check status for
 
 Options:
+  -r, --recursive      Recursively include files in subdirectories for given directories Without this flag, directories return only their direct children
+  -g, --glob <GLOB>    Only include the tracked files matching this glob, e.g. '*.csv'
+      --current        Include the files that are current
+      --absent         Include the files that are absent
+      --stale          Include files unchanged since the last successful get, when metadata has advanced
+      --modified       Include files changed since the last successful get
+      --unsynced       Include differing files whose local baseline is unavailable
+      --with-metadata  Show all metadata columns in the table output
+  -h, --help           Print help
+
+Global Options:
       --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
       --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
-  -r, --recursive          Recursively include files in subdirectories for given directories
-  -g, --glob <GLOB>        
-      --current            Include the files that are current
-      --absent             Include the files that are absent
-      --stale              Include files unchanged since the last successful get, when metadata has advanced
-      --modified           Include files changed since the last successful get
-      --unsynced           Include differing files whose local baseline is unavailable
-      --with-metadata      Show all metadata columns in the table output
-  -h, --help               Print help
 ```
 
 By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`,
 `--stale`, `--modified`, and `--unsynced` flags are filters: when one or more status flags are provided, only files matching those states are shown.
 
-This will exit with `1` if one or more files could not be inspected.
+Human output ends, after a blank line, with a summary line ("Checked 3, 1 failed"), which also counts
+cancelled files. This will exit with `1` if one or more files could not be inspected.
 
 Each named path filters independently. A path that matches no tracked file is dropped silently rather than
 failing the command, so a partly misspelled invocation such as `dvs status good.bin bogus.bin` still exits
@@ -659,6 +728,7 @@ The `add` action is an object that contains
 
 - `file`: path and hashes of the added file
 - `compression`: `"zstd"` or `"none"`, see the Compression section
+- `message`: the `--message` given to `add`, when there was one
 
 The `init` action is an object that contains
 
