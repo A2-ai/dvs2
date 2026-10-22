@@ -1,13 +1,28 @@
-//! Operation reporting on a local project: timing (C2) and byte totals (C8).
+//! Operation reporting on a local project: timing (C2), `dvs hash` (C7) and
+//! byte totals (C8).
 mod common;
 
-use common::{Sandbox, document};
+use common::{Sandbox, document, stderr};
 use serde_json::{Value, json};
 
 fn local_project() -> Sandbox {
     let sandbox = Sandbox::new();
     sandbox.init_local();
     sandbox
+}
+
+fn tracked(sandbox: &Sandbox, files: &[(&str, &str)]) {
+    for (name, contents) in files {
+        sandbox.write(name, contents);
+    }
+    let names: Vec<_> = files.iter().map(|(name, _)| *name).collect();
+    let output = sandbox
+        .dvs()
+        .args(["--json", "add"])
+        .args(&names)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", document(&output));
 }
 
 fn is_rfc3339_ms(value: &Value) -> bool {
@@ -42,6 +57,7 @@ fn every_json_result_carries_its_timing() {
         vec!["add", "--dry-run", "data.txt"],
         vec!["add", "data.txt"],
         vec!["status"],
+        vec!["hash", "data.txt"],
         vec!["get", "--dry-run", "data.txt"],
         vec!["get", "data.txt"],
         vec!["info"],
@@ -52,7 +68,17 @@ fn every_json_result_carries_its_timing() {
         vec!["get", "--on-conflict", "bogus"],
     ] {
         let output = sandbox.dvs().arg("--json").args(&args).output().unwrap();
-        assert_timed(&document(&output));
+        let result = document(&output);
+        assert_timed(&result);
+        if args[0] == "hash" {
+            for row in result["files"].as_array().unwrap() {
+                assert!(
+                    row["duration_ms"].is_u64() || row["duration_ms"].is_null(),
+                    "{args:?}: {row}"
+                );
+                assert!(row.get("duration_ms").is_some(), "{args:?}: {row}");
+            }
+        }
     }
     let outside = tempfile::tempdir().unwrap();
     assert_timed(&document(
@@ -62,6 +88,124 @@ fn every_json_result_carries_its_timing() {
             .output()
             .unwrap(),
     ));
+}
+
+/// C7: hashes for tracked and untracked files, from the cache or computed,
+/// selected like status, never touching records or the baseline.
+#[test]
+fn hash_reports_hashes_for_selected_files() {
+    let sandbox = local_project();
+    tracked(&sandbox, &[("tracked.txt", "tracked v1")]);
+    sandbox.write("untracked.txt", "untracked");
+    sandbox.write("dir/a.csv", "a");
+    sandbox.write("dir/nested/b.csv", "b");
+    sandbox.write("dir/c.txt", "c");
+
+    let first = document(&sandbox.run(&["--json", "hash", "untracked.txt"]));
+    assert_eq!(first["command"], "hash");
+    assert_eq!(first["outcome"], "complete");
+    assert_eq!(first["dry_run"], false);
+    assert_eq!(
+        first["counts"],
+        json!({"total": 1, "succeeded": 1, "failed": 0})
+    );
+    let row = &first["files"][0];
+    assert_eq!(row["path"], "untracked.txt");
+    assert_eq!(row["hash_source"], "computed");
+    assert_eq!(row["size"], 9);
+    assert_eq!(row["hashes"]["blake3"].as_str().unwrap().len(), 64);
+    assert!(row["duration_ms"].is_u64());
+    assert!(row["code"].is_null() && row["message"].is_null());
+    let again = document(&sandbox.run(&["--json", "hash", "untracked.txt"]));
+    assert_eq!(again["files"][0]["hash_source"], "cache");
+    assert_eq!(again["files"][0]["hashes"], row["hashes"]);
+
+    // No paths: the tracked files status would show, nothing untracked
+    let all = document(&sandbox.run(&["--json", "hash"]));
+    let paths: Vec<_> = all["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].clone())
+        .collect();
+    assert_eq!(paths, vec![json!("tracked.txt")]);
+    // A directory: its direct children; -r: everything below; a glob
+    let paths = |args: &[&str]| -> Vec<String> {
+        let mut full = vec!["--json", "hash"];
+        full.extend_from_slice(args);
+        document(&sandbox.run(&full))["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["path"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(paths(&["dir"]), vec!["dir/a.csv", "dir/c.txt"]);
+    assert_eq!(
+        paths(&["-r", "dir"]),
+        vec!["dir/a.csv", "dir/c.txt", "dir/nested/b.csv"]
+    );
+    assert_eq!(paths(&["dir", "-g", "*.csv"]), vec!["dir/a.csv"]);
+    assert_eq!(
+        paths(&["-g", "**/*.csv"]),
+        vec!["dir/a.csv", "dir/nested/b.csv"]
+    );
+
+    // A missing path is an error row, never dropped
+    let missing = sandbox.run(&["--json", "hash", "untracked.txt", "nope.txt"]);
+    assert_eq!(missing.status.code(), Some(1));
+    let result = document(&missing);
+    assert_eq!(result["outcome"], "partial");
+    assert_eq!(
+        result["counts"],
+        json!({"total": 2, "succeeded": 1, "failed": 1})
+    );
+    assert_eq!(result["files"][0]["path"], "nope.txt");
+    assert!(result["files"][0]["code"].is_string());
+    assert!(result["files"][0]["hashes"].is_null());
+
+    // Hashing a changed tracked file leaves the record and the baseline alone
+    let record = sandbox.read(".dvs/tracked.txt.dvs");
+    sandbox.write("tracked.txt", "tracked v2, edited");
+    let edited = document(&sandbox.run(&["--json", "hash", "tracked.txt"]));
+    assert_eq!(edited["files"][0]["hash_source"], "computed");
+    assert_eq!(sandbox.read(".dvs/tracked.txt.dvs"), record);
+    let status = document(&sandbox.run(&["--json", "status", "tracked.txt"]));
+    // Still differs from the baseline: hash did not record the edit
+    assert_eq!(status["files"][0]["state"], "modified", "{status}");
+
+    // Human output: a table on stdout
+    let human = sandbox.run(&["hash", "untracked.txt"]);
+    assert!(human.status.success());
+    let text = common::stdout(&human);
+    assert!(
+        text.contains("untracked.txt") && text.contains(row["hashes"]["blake3"].as_str().unwrap())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn hash_reports_an_unreadable_file_as_a_row_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = local_project();
+    sandbox.write("secret.txt", "secret");
+    sandbox.write("open.txt", "open");
+    let secret = sandbox.project().join("secret.txt");
+    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&secret).is_ok() {
+        // Running as root: permissions do not stop reads
+        return;
+    }
+    let output = sandbox.run(&["--json", "hash", "open.txt", "secret.txt"]);
+    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let result = document(&output);
+    assert_eq!(result["files"][1]["path"], "secret.txt");
+    assert_eq!(result["files"][1]["code"], "io_error");
+    assert!(result["files"][1]["message"].is_string());
+    assert_eq!(result["files"][0]["code"], Value::Null);
+    let human = sandbox.run(&["hash", "open.txt"]);
+    assert!(human.status.success(), "{}", stderr(&human));
 }
 
 fn sizes(result: &Value, keep: impl Fn(&Value) -> bool) -> u64 {

@@ -267,6 +267,8 @@ fn every_command_follows_the_exit_code_table_and_the_error_shape() {
         (vec!["add", "--bogus"], 2),
         (vec!["status"], 0),
         (vec!["status", "--bogus"], 2),
+        (vec!["hash", "data.txt"], 0),
+        (vec!["hash", "missing.txt"], 1),
         (vec!["get", "data.txt"], 0),
         (vec!["get", "untracked.txt"], 1),
         (vec!["info"], 0),
@@ -309,6 +311,7 @@ fn every_command_follows_the_exit_code_table_and_the_error_shape() {
     for args in [
         vec!["add", "data.txt"],
         vec!["status"],
+        vec!["hash"],
         vec!["get"],
         vec!["info"],
         vec!["history"],
@@ -361,10 +364,10 @@ fn add_success_and_error_rows_have_the_same_keys() {
     }
 }
 
-/// §9 rec 1: status and history rows carry `message` (not `error`) and
-/// `hint`; status rows have the same keys whether they failed or not.
+/// §9 rec 1: status, hash and history rows carry `message` (not `error`)
+/// and `hint`; status rows have the same keys whether they failed or not.
 #[test]
-fn status_and_history_rows_use_code_message_hint() {
+fn status_hash_and_history_rows_use_code_message_hint() {
     let (root, _storage) = project();
     for name in ["bad.txt", "good.txt"] {
         std::fs::write(root.path().join(name), "content").unwrap();
@@ -386,6 +389,11 @@ fn status_and_history_rows_use_code_message_hint() {
         keys
     };
     assert_eq!(row_keys(bad), row_keys(good));
+    let hash = document(&run(root.path(), &["hash", "bad.txt", "--json"]));
+    let row = &hash["files"][0];
+    for field in ["code", "message", "hint"] {
+        assert_eq!(row.get(field), Some(&Value::Null), "{field}: {row}");
+    }
     let history = document(&run(root.path(), &["history", "--json"]));
     let rows = history["files"].as_array().unwrap();
     assert!(!rows.is_empty(), "{history}");

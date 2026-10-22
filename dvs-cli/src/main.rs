@@ -24,7 +24,7 @@ use dvs::init::init;
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddResult, Backend, Compression, ErrorCode, FileMetadata, FileProgress, GetOptions,
-    Outcome, PathFilter, add_files, format_size, get_files, set_num_threads,
+    Outcome, PathFilter, add_files, format_size, get_files, hash_files, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -122,6 +122,20 @@ pub enum Command {
         #[clap(long)]
         with_metadata: bool,
     },
+    /// Prints the hashes of files, tracked or not, using and filling the hash cache.
+    /// Never changes a record or the baseline. With no paths, hashes the tracked files,
+    /// like status
+    #[command(next_display_order = 100)]
+    Hash {
+        /// Paths (files or directories) to hash
+        paths: Vec<PathBuf>,
+        /// Recursively include files in subdirectories for given directories
+        /// Without this flag, directories return only their direct children.
+        #[clap(long, short, conflicts_with = "glob")]
+        recursive: bool,
+        #[clap(long, short, conflicts_with = "recursive")]
+        glob: Option<String>,
+    },
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
     /// With no paths, gets the tracked files directly in the current directory;
@@ -185,6 +199,13 @@ struct StatusRow {
     path: String,
     status: String,
     size: String,
+}
+
+#[derive(Tabled)]
+struct HashTableRow {
+    path: String,
+    size: String,
+    blake3: String,
 }
 
 #[derive(Default, Tabled)]
@@ -259,6 +280,19 @@ fn status_row(row: &dvs::inspect::StatusFacts) -> serde_json::Value {
         object.insert("message".into(), message);
     }
     output::row_error_fields(value)
+}
+
+/// A hash row as results carry it, with every row's error fields.
+fn hash_row(row: &dvs::HashRow) -> serde_json::Value {
+    output::row_error_fields(serde_json::to_value(row).expect("hash rows serialize"))
+}
+
+fn print_table<T: Tabled>(rows: Vec<T>) {
+    let mut table = tabled::Table::new(rows);
+    table
+        .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
+        .with(Modify::new(Rows::first()).with(Alignment::left()));
+    println!("{table}");
 }
 
 fn progress_style() -> ProgressStyle {
@@ -594,6 +628,50 @@ fn try_main(cli: Cli) -> Result<()> {
                 if !cli.json {
                     eprintln!("Error: Some files failed to get status");
                 }
+                return Err(Exit(1).into());
+            }
+        }
+        Command::Hash {
+            paths: user_paths,
+            recursive,
+            glob,
+        } => {
+            let config = find_config(&current_dir, credentials)?;
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
+            let filter = (!user_paths.is_empty())
+                .then(|| PathFilter::from_user_paths(user_paths, recursive, &dvs_paths));
+            let rows = hash_files(&dvs_paths, filter.as_ref(), glob.as_deref())?;
+            let failed = rows.iter().filter(|r| r.code.is_some()).count();
+            if cli.json {
+                let files = rows.iter().map(hash_row).collect();
+                output::emit(output::envelope("hash", false, files, failed));
+            } else {
+                for row in &rows {
+                    if let Some(message) = &row.message {
+                        eprintln!("Error hashing {}: {message}", row.path.display());
+                    }
+                }
+                let hashed: Vec<HashTableRow> = rows
+                    .iter()
+                    .filter_map(|row| {
+                        let hashes = row.hashes.as_ref()?;
+                        Some(HashTableRow {
+                            path: row.path.display().to_string(),
+                            size: row.size.map(format_size).unwrap_or_default(),
+                            blake3: hashes.blake3.clone(),
+                        })
+                    })
+                    .collect();
+                if rows.is_empty() {
+                    println!("No files to hash");
+                } else if !hashed.is_empty() {
+                    print_table(hashed);
+                }
+                if failed > 0 {
+                    eprintln!("Error: Some files failed to hash");
+                }
+            }
+            if failed > 0 {
                 return Err(Exit(1).into());
             }
         }
@@ -961,6 +1039,7 @@ impl Command {
             Self::Attach { .. } => "attach",
             Self::Add { .. } => "add",
             Self::Status { .. } => "status",
+            Self::Hash { .. } => "hash",
             Self::Get { .. } => "get",
             Self::Info => "info",
             Self::Availability { .. } => "availability",
