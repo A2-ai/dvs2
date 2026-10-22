@@ -234,10 +234,8 @@ impl<'a> From<&'a FileMetadata> for StatusRowFull<'a> {
     }
 }
 
-/// An add row as results carry it, and whether it is an error row. Success
-/// and error rows have the same keys (§9 rec 1): the success fields are null
-/// on an error row, `code`/`message`/`hint` null on a success. Built here,
-/// not by changing `AddResult`'s serialization, so R output is unchanged (K8).
+/// An add row and whether it failed. Built here, not by changing
+/// `AddResult`'s serialization, so R output is unchanged.
 fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
     let (value, is_error) = match &r.detail {
         AddDetail::Success {
@@ -267,11 +265,10 @@ fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
             true,
         ),
     };
-    (output::file_result(value, is_error), is_error)
+    (value, is_error)
 }
 
-/// A status row as results carry it: the library's `error` text is the row's
-/// `message`, like every other command's rows (§9 rec 1).
+/// The library's `error` text is the row's `message`, as on every other row.
 fn status_row(row: &dvs::inspect::StatusFacts) -> serde_json::Value {
     let mut value = serde_json::to_value(row).expect("status rows serialize");
     if let Some(object) = value.as_object_mut()
@@ -282,7 +279,6 @@ fn status_row(row: &dvs::inspect::StatusFacts) -> serde_json::Value {
     output::row_error_fields(value)
 }
 
-/// A hash row as results carry it, with every row's error fields.
 fn hash_row(row: &dvs::HashRow) -> serde_json::Value {
     output::row_error_fields(serde_json::to_value(row).expect("hash rows serialize"))
 }
@@ -364,10 +360,7 @@ fn try_main(cli: Cli) -> Result<()> {
         set_num_threads(n);
     }
     let current_dir = std::env::current_dir()?;
-    // C5: machine mode (--json) never changes stored credentials: a rejected
-    // token or an unparsable store is reported and left in place. People get
-    // them repaired, and are told to run `dvs login`. Only login and logout
-    // change credentials on purpose.
+    // Machine mode never changes stored credentials
     let credentials = if cli.json {
         CredentialPolicy::Preserve
     } else {
@@ -760,8 +753,7 @@ fn try_main(cli: Cli) -> Result<()> {
                     }
                 }
                 Backend::Server(s) => {
-                    // Not logged in is an answer, not an error: no token, or
-                    // nowhere a login could have been stored (`auth_required`)
+                    // Not logged in is an answer, not an error
                     let logged_in = if cli.json {
                         match dvs::auth::get_token_readonly(&s.url) {
                             Ok(token) => token.is_some(),
@@ -789,11 +781,7 @@ fn try_main(cli: Cli) -> Result<()> {
                         };
                         match access_result {
                             Ok(access) => (access, "available", None),
-                            // The server cannot answer for this project: a
-                            // connection state, with the shared code (§9
-                            // rec 3). A rejected login stays an error
-                            // envelope (K24); a 403 is an answer, no
-                            // membership, like human mode's "no access" (K26).
+                            // A 403 is an answer (no membership); a rejected login stays an error
                             Err(error) if cli.json => match dvs::backend_error_code(&error) {
                                 Some(ErrorCode::AccessDenied) => (None, "available", None),
                                 Some(
@@ -826,9 +814,6 @@ fn try_main(cli: Cli) -> Result<()> {
                             "connection": connection,
                             "connection_error": connection_error,
                             "user": access.as_ref().map(|a| &a.user),
-                            // not_logged_in: no token; none: logged in, but
-                            // no membership in this project; null: the
-                            // server could not say (§9 rec 3)
                             "access": if !logged_in {
                                 json!("not_logged_in")
                             } else if connection == "available" {
@@ -974,20 +959,11 @@ fn try_main(cli: Cli) -> Result<()> {
                 // a token the user asked to drop is worse than one revoke call too few.
                 let revoke_error = revoke_token(url, &token).err();
                 if cli.json {
-                    if let Err(delete_error) = delete_token(url) {
-                        let mut result = output::problem("logout", false, &delete_error);
-                        result["revoked"] = json!(revoke_error.is_none());
-                        result["warnings"] = json!(
-                            revoke_error
-                                .as_ref()
-                                .map(|e| json!({"code": "revoke_failed", "message": e.to_string()}))
-                                .into_iter()
-                                .collect::<Vec<_>>()
-                        );
-                        output::emit(result);
-                        return Err(Exit(1).into());
-                    }
-                    let mut result = output::envelope("logout", false, vec![], 0);
+                    let deleted = delete_token(url);
+                    let mut result = match &deleted {
+                        Err(delete_error) => output::problem("logout", false, delete_error),
+                        Ok(_) => output::envelope("logout", false, vec![], 0),
+                    };
                     result["revoked"] = json!(revoke_error.is_none());
                     result["warnings"] = json!(
                         revoke_error
@@ -997,6 +973,9 @@ fn try_main(cli: Cli) -> Result<()> {
                             .collect::<Vec<_>>()
                     );
                     output::emit(result);
+                    if deleted.is_err() {
+                        return Err(Exit(1).into());
+                    }
                 } else {
                     if let Some(e) = &revoke_error {
                         eprintln!("Warning: could not revoke the token on the server: {e}");
@@ -1075,7 +1054,6 @@ fn main() {
             error.exit();
         }
     };
-    // Every result is timed from here (C2)
     output::start_clock(Instant::now(), SystemTime::now());
     let json = cli.json;
     let command = cli.command.name();
