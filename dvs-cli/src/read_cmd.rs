@@ -150,10 +150,8 @@ pub fn availability(
                 ("unknown", json!(error.code), json!(error.message))
             }
         };
-        // Fixed keys (§9 rec 1): the history fields are null when no `--path`
-        // was given or the history lookup succeeded. They stay a second
-        // `code`/`message` pair: the storage check and the history lookup are
-        // separate requests that fail separately, and one row can carry both.
+        // The storage check and the history lookup fail separately, so one
+        // row can carry both errors
         let mut row = json!({
             "hash": normalized,
             "state": state,
@@ -196,8 +194,7 @@ pub fn history(
         .map(|e| {
             let timestamp = std::time::SystemTime::from(e.timestamp);
             let mut value = serde_json::to_value(e)?;
-            // RFC 3339 UTC like every other time in JSON output (§9 rec 2);
-            // the audit log on disk keeps unix seconds
+            // The audit log on disk keeps unix seconds
             value["timestamp"] = json!(dvs::operation::rfc3339_ms(timestamp));
             Ok(value)
         })

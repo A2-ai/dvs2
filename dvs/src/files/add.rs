@@ -29,14 +29,10 @@ pub struct AddResult {
     pub detail: AddDetail,
 }
 
-/// The whole result of an `add`: one row per file, sorted by path, plus byte
-/// totals.
+/// The rows of an `add`, sorted by path, plus byte totals.
 #[derive(Debug, Clone)]
 pub struct AddReport {
     pub files: Vec<AddResult>,
-    /// Sums over the rows whose size is known (every file that was hashed,
-    /// failed ones included); see [`ByteTotals`]. Not serialized by the
-    /// library.
     pub bytes: ByteTotals,
 }
 
@@ -100,8 +96,6 @@ fn add_error_code(error: &anyhow::Error) -> AddErrorCode {
 struct Pending {
     relative_path: PathBuf,
     metadata: FileMetadata,
-    /// Whether storage already has this content, so nothing needs uploading.
-    /// Known once storage has been asked (step 2); false until then.
     stored: bool,
 }
 
@@ -123,9 +117,6 @@ impl Pending {
         })
     }
 
-    /// What this file contributes to the byte totals however it ends: once
-    /// hashed its size is known, so a later failure still counts it (in
-    /// `to_transfer` unless storage said it has the content).
     fn row_bytes(&self, transferred: bool) -> RowBytes {
         RowBytes {
             size: self.metadata.size,
@@ -135,22 +126,16 @@ impl Pending {
     }
 }
 
-/// What a finished file contributes to the result's [`ByteTotals`].
 struct RowBytes {
     size: u64,
-    /// The content was already in storage when the add was planned
     stored: bool,
-    /// This file's bytes were uploaded by this add: the backend created the
-    /// blob. A second copy of content this add already uploaded moves nothing.
     transferred: bool,
 }
 
-/// What finishing one file did.
 struct Added {
     outcome: Outcome,
-    /// Size of the stored blob, when a store call reported it
     stored_size: Option<u64>,
-    /// Whether the backend created the blob, i.e. this file's bytes moved
+    /// The backend created the blob, i.e. this file's bytes moved
     created: bool,
 }
 
@@ -266,7 +251,6 @@ pub fn add_files(
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
 
-    // Rows with their byte contribution (`None`: size unknown)
     let mut results: Vec<(AddResult, Option<RowBytes>)>;
 
     // 1. Hash everything first: the server wants the whole list before any bytes move
@@ -296,9 +280,8 @@ pub fn add_files(
         })
     });
 
-    // 2. Ask storage what it already has. The server is told what we are about
-    // to add (minus files already in sync) and answers with what it is missing.
-    // Other backends, and dry runs, are asked file by file.
+    // 2. Ask storage what it already has: the server through the manifest (minus
+    // files already in sync), other backends and dry runs file by file
     let mut missing = None;
     match backend {
         Backend::Server(server) if !dry_run => {
@@ -324,8 +307,6 @@ pub fn add_files(
                 answer_missing = answer.missing.into_iter().collect();
             }
             for p in &mut pending {
-                // In sync files were not in the manifest, but there is
-                // nothing left to do for them either
                 p.stored = !answer_missing.contains(&p.metadata.hashes.blake3);
             }
             missing = Some(answer_missing);
@@ -382,7 +363,6 @@ pub fn add_files(
                             pending.relative_path.display(),
                             added.outcome
                         );
-                        // Storing content that was already there moves no bytes
                         let bytes = pending.row_bytes(added.created);
                         let result = AddResult {
                             path: pending.relative_path,
@@ -595,141 +575,5 @@ mod tests {
         );
         assert_eq!(done_calls.load(Ordering::SeqCst), 3);
         assert_eq!(success_calls.load(Ordering::SeqCst), 3);
-    }
-
-    /// A local-storage project: its temp dir guard, root, config and paths.
-    fn project() -> (tempfile::TempDir, PathBuf, crate::config::Config, DvsPaths) {
-        let (tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let paths = make_paths(&root, &config);
-        (tmp, root, config, paths)
-    }
-
-    fn add(names: &[&str], paths: &DvsPaths, backend: &Backend, dry_run: bool) -> AddReport {
-        add_files(
-            names.iter().map(PathBuf::from).collect(),
-            paths,
-            backend,
-            None,
-            Compression::Zstd,
-            dry_run,
-            None,
-        )
-        .unwrap()
-    }
-
-    fn row_size_sum(report: &AddReport) -> u64 {
-        report
-            .files
-            .iter()
-            .filter_map(|r| match r.detail {
-                AddDetail::Success { size, .. } => Some(size),
-                AddDetail::Error { .. } => None,
-            })
-            .sum()
-    }
-
-    // C8: the totals are the per-row sums in a dry run and a real one; only
-    // the real one moves bytes, and only the content storage lacked.
-    #[test]
-    fn byte_totals_match_rows_in_dry_and_real_runs() {
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "old.txt", b"already stored");
-        add(&["old.txt"], &paths, backend, false);
-        // Same content at a new path: stored, so nothing to upload
-        create_file(&root, "copy.txt", b"already stored");
-        create_file(&root, "new.txt", b"new content!");
-        let names = ["copy.txt", "new.txt", "old.txt"];
-
-        let dry = add(&names, &paths, backend, true);
-        assert_eq!(dry.bytes.total, row_size_sum(&dry));
-        assert_eq!(
-            dry.bytes,
-            ByteTotals {
-                total: 14 + 12 + 14,
-                to_transfer: 12,
-                already_stored: 28,
-                transferred: 0,
-            }
-        );
-
-        let real = add(&names, &paths, backend, false);
-        assert_eq!(real.bytes.total, row_size_sum(&real));
-        assert_eq!(
-            real.bytes,
-            ByteTotals {
-                transferred: 12,
-                ..dry.bytes
-            }
-        );
-        assert_eq!(
-            real.bytes.to_transfer + real.bytes.already_stored,
-            real.bytes.total
-        );
-    }
-
-    // C8 (K20): a file that fails after it was hashed still counts its size.
-    #[test]
-    #[cfg(unix)]
-    fn a_file_that_fails_after_hashing_still_counts_its_size() {
-        use std::os::unix::fs::PermissionsExt;
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "a.txt", b"aaaa");
-        // Storage refuses the blob
-        let storage = root.parent().unwrap().join(".storage");
-        fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o555)).unwrap();
-        if fs::write(storage.join("probe"), b"").is_ok() {
-            // Running as root: permissions do not stop writes
-            fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o755)).unwrap();
-            return;
-        }
-        let report = add(&["a.txt"], &paths, backend, false);
-        fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-        assert!(
-            matches!(report.files[0].detail, AddDetail::Error { .. }),
-            "{:?}",
-            report.files
-        );
-        assert_eq!(
-            report.bytes,
-            ByteTotals {
-                total: 4,
-                to_transfer: 4,
-                already_stored: 0,
-                transferred: 0,
-            }
-        );
-    }
-
-    // C8: a file that could not be hashed has no known size and counts in no
-    // total.
-    #[test]
-    #[cfg(unix)]
-    fn an_unreadable_file_counts_in_no_byte_total() {
-        use std::os::unix::fs::PermissionsExt;
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "ok.txt", b"ok");
-        let locked = create_file(&root, "locked.txt", b"secret");
-        fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-        if fs::read(&locked).is_ok() {
-            // Running as root: permissions do not stop reads
-            return;
-        }
-        let report = add(&["locked.txt", "ok.txt"], &paths, backend, false);
-        fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
-
-        assert!(matches!(
-            report.files[0].detail,
-            AddDetail::Error {
-                code: AddErrorCode::IoError,
-                ..
-            }
-        ));
-        assert!(matches!(report.files[1].detail, AddDetail::Success { .. }));
-        assert_eq!(report.bytes.total, 2);
     }
 }

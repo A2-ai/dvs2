@@ -48,9 +48,7 @@ pub fn inspect_status(
     Ok(results)
 }
 
-/// Inspect tracked files in parallel and call `on_row` as each local status
-/// check completes. Callers that need additional backend facts can resolve
-/// those before publishing the row.
+/// Inspect tracked files in parallel and call `on_row` as each row completes.
 pub fn inspect_status_with_callback(
     paths: &DvsPaths,
     filter: Option<&PathFilter>,
