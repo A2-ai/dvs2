@@ -7,19 +7,55 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use etcetera::BaseStrategy;
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::backends::server::join_url;
+use crate::backends::server::{http_status_code, join_url};
+use crate::error::{BackendError, ErrorCode};
 use crate::utils::http_agent;
 
 type TokenStore = HashMap<String, String>;
 
+#[cfg(not(test))]
 fn get_token_store_path() -> Result<PathBuf> {
+    use etcetera::BaseStrategy;
     let d = etcetera::choose_base_strategy()?.config_dir();
     Ok(d.join("dvs").join("credentials.json"))
+}
+
+/// Unit tests never see the real user's credentials: each test thread reads
+/// and writes only the store it pointed at, or one that does not exist.
+#[cfg(test)]
+fn get_token_store_path() -> Result<PathBuf> {
+    test_store::path()
+}
+
+/// Per-thread credentials path for unit tests in this crate.
+#[cfg(test)]
+pub(crate) mod test_store {
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+
+    thread_local! {
+        static PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    }
+
+    /// Point this thread's credentials store at `path`.
+    pub(crate) fn set(path: &Path) {
+        PATH.with(|p| *p.borrow_mut() = Some(path.to_path_buf()));
+    }
+
+    pub(crate) fn path() -> anyhow::Result<PathBuf> {
+        Ok(PATH.with(|p| p.borrow().clone()).unwrap_or_else(|| {
+            std::env::temp_dir()
+                .join(format!(
+                    "dvs-unit-tests-no-credentials-{}",
+                    std::process::id()
+                ))
+                .join("credentials.json")
+        }))
+    }
 }
 
 fn create_private_dir(dir: &Path) -> Result<()> {
@@ -102,6 +138,42 @@ pub fn delete_token(url: &Url) -> Result<bool> {
     }
 }
 
+/// A transport failure talking to the auth endpoints.
+fn unreachable(base_url: &Url, e: ureq::Error) -> anyhow::Error {
+    BackendError::new(
+        ErrorCode::ServerUnavailable,
+        format!("cannot reach the dvs server at {base_url}: {e}"),
+    )
+    .into()
+}
+
+/// A 2xx from an auth endpoint whose body is not what it promises.
+fn invalid_response(base_url: &Url, e: ureq::Error) -> anyhow::Error {
+    BackendError::new(
+        ErrorCode::ServerUnavailable,
+        format!("Invalid response from the dvs server at {base_url}: {e}"),
+    )
+    .into()
+}
+
+/// An auth endpoint answered a status it has no meaning of its own for: the
+/// shared code if [`http_status_code`] has one, else a plain server error.
+fn status_error(base_url: &Url, status: u16) -> anyhow::Error {
+    let Some(code) = http_status_code(status, "") else {
+        return anyhow::anyhow!("Server error: {status}");
+    };
+    let message = match code {
+        ErrorCode::ServerTooOld => format!(
+            "the dvs server at {base_url} does not support this request ({status}); it is older than this dvs"
+        ),
+        ErrorCode::ServerUnavailable => {
+            format!("the dvs server at {base_url} is not working ({status})")
+        }
+        _ => format!("Server error: {status}"),
+    };
+    BackendError::new(code, message).into()
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct DeviceAuthorizationResponse {
     pub device_code: String,
@@ -116,11 +188,17 @@ pub fn get_client_approve_url(base_url: &Url, user_code: &str) -> Result<Url> {
 
 pub fn initiate_device_approval(base_url: &Url) -> Result<DeviceAuthorizationResponse> {
     let url = join_url(base_url, "api/oauth/device/authorize")?;
-    let mut resp = http_agent().post(url.as_str()).send_empty()?;
+    let mut resp = http_agent()
+        .post(url.as_str())
+        .send_empty()
+        .map_err(|e| unreachable(base_url, e))?;
     if !resp.status().is_success() {
-        bail!("Server error: {}", resp.status());
+        return Err(status_error(base_url, resp.status().as_u16()));
     }
-    let r = resp.body_mut().read_json::<DeviceAuthorizationResponse>()?;
+    let r = resp
+        .body_mut()
+        .read_json::<DeviceAuthorizationResponse>()
+        .map_err(|e| invalid_response(base_url, e))?;
     Ok(r)
 }
 
@@ -136,17 +214,25 @@ pub struct TokenResponse {
 
 pub fn query_for_token(base_url: &Url, device_code: &str) -> Result<Option<TokenResponse>> {
     let url = join_url(base_url, "api/oauth/token")?;
-    let mut resp = http_agent().post(url.as_str()).send_json(TokenPayload {
-        device_code: device_code.to_string(),
-    })?;
+    let mut resp = http_agent()
+        .post(url.as_str())
+        .send_json(TokenPayload {
+            device_code: device_code.to_string(),
+        })
+        .map_err(|e| unreachable(base_url, e))?;
     match resp.status().as_u16() {
         200 => {
-            let r = resp.body_mut().read_json::<TokenResponse>()?;
+            let r = resp
+                .body_mut()
+                .read_json::<TokenResponse>()
+                .map_err(|e| invalid_response(base_url, e))?;
             Ok(Some(r))
         }
         400 => bail!("User code expired"),
         401 => Ok(None),
+        // The endpoint's own 404: the server forgot this device code
         404 => bail!("Unknown device code"),
+        code @ (405 | 500..) => Err(status_error(base_url, code)),
         _ => bail!("Unknown server error: {}", resp.status()),
     }
 }
@@ -178,9 +264,10 @@ pub fn revoke_token(base_url: &Url, token: &str) -> Result<()> {
     let resp = http_agent()
         .delete(url.as_str())
         .header("authorization", format!("Bearer {token}"))
-        .call()?;
+        .call()
+        .map_err(|e| unreachable(base_url, e))?;
     if !resp.status().is_success() {
-        bail!("Server error: {}", resp.status());
+        return Err(status_error(base_url, resp.status().as_u16()));
     }
     Ok(())
 }
@@ -189,6 +276,22 @@ pub fn revoke_token(base_url: &Url, token: &str) -> Result<()> {
 mod readonly_tests {
     use super::*;
     use crate::backends::server::test_http::stub;
+    use crate::error::backend_error_code;
+
+    fn url() -> Url {
+        Url::parse("https://example.test/").unwrap()
+    }
+
+    #[test]
+    fn login_and_logout_still_write_the_store() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("dvs").join("credentials.json");
+        test_store::set(&path);
+        store_token(&url(), "token").unwrap();
+        assert_eq!(get_token(&url()).unwrap().as_deref(), Some("token"));
+        assert!(delete_token(&url()).unwrap());
+        assert_eq!(get_token(&url()).unwrap(), None);
+    }
 
     #[test]
     fn the_approve_url_keeps_the_proxy_prefix() {
@@ -239,5 +342,51 @@ mod readonly_tests {
             assert!(query_for_token(&url, "d").is_err(), "{base}");
             assert!(revoke_token(&url, "t").is_err(), "{base}");
         }
+    }
+
+    #[test]
+    fn auth_endpoint_failures_are_coded() {
+        for (status, expected) in [
+            (404, ErrorCode::ServerTooOld),
+            (405, ErrorCode::ServerTooOld),
+            (503, ErrorCode::ServerUnavailable),
+        ] {
+            let (base, handle) = stub("/", status, "");
+            let error = initiate_device_approval(&base).err().unwrap();
+            assert_eq!(backend_error_code(&error), Some(expected), "{status}");
+            handle.join().unwrap();
+        }
+        // The token endpoint's own 404 keeps its meaning
+        let (base, handle) = stub("/", 404, "unknown device code");
+        let error = query_for_token(&base, "d").err().unwrap();
+        assert_eq!(backend_error_code(&error), None);
+        handle.join().unwrap();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        drop(listener);
+        let error = revoke_token(&base, "t").unwrap_err();
+        assert_eq!(
+            backend_error_code(&error),
+            Some(ErrorCode::ServerUnavailable)
+        );
+    }
+
+    #[test]
+    fn an_invalid_body_on_a_2xx_is_server_unavailable() {
+        let (base, handle) = stub("/", 200, "this is not json");
+        let error = initiate_device_approval(&base).err().unwrap();
+        assert_eq!(
+            backend_error_code(&error),
+            Some(ErrorCode::ServerUnavailable)
+        );
+        handle.join().unwrap();
+        let (base, handle) = stub("/", 200, "this is not json");
+        let error = query_for_token(&base, "d").err().unwrap();
+        assert_eq!(
+            backend_error_code(&error),
+            Some(ErrorCode::ServerUnavailable)
+        );
+        handle.join().unwrap();
     }
 }

@@ -21,8 +21,9 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, Backend, Compression, FileMetadata, FileProgress, GetOptions, Outcome, PathFilter,
-    Status, StatusDetail, add_files, format_size, get_files, get_status, set_num_threads,
+    AddDetail, Backend, Compression, ErrorCode, FileMetadata, FileProgress, GetOptions, Outcome,
+    PathFilter, Status, StatusDetail, add_files, format_size, get_files, get_status,
+    set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -642,9 +643,8 @@ fn try_main(cli: Cli) -> Result<()> {
                             Ok(access) => (access, "available", None),
                             Err(error)
                                 if cli.json
-                                    && error
-                                        .downcast_ref::<dvs::backends::server::Unreachable>()
-                                        .is_some() =>
+                                    && dvs::backend_error_code(&error)
+                                        == Some(ErrorCode::ServerUnavailable) =>
                             {
                                 (None, "unavailable", Some(format!("{error:#}")))
                             }

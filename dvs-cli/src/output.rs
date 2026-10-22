@@ -34,6 +34,8 @@ pub fn error_code(error: &Error) -> &'static str {
         "no_files_selected"
     } else if error.downcast_ref::<dvs::config::ConfigError>().is_some() {
         "invalid_configuration"
+    } else if let Some(code) = dvs::backend_error_code(error) {
+        code.as_str()
     } else if error.downcast_ref::<std::io::Error>().is_some() {
         "io_error"
     } else {

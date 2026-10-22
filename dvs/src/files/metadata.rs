@@ -5,6 +5,7 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::error::{BackendError, ErrorCode};
 use crate::paths::ProjectPath;
 use crate::{Backend, Compression, DvsPaths, Hashes, Outcome, StoreRequest};
 
@@ -107,7 +108,15 @@ impl FileMetadata {
 
         if dvs_file_exists && storage_exists {
             // we read the file anyway to make sure it's not 2 files having the same hash
-            let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)?;
+            // An unreadable record (e.g. git conflict markers) is
+            // `bad_metadata`, as in get and status (K25)
+            let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)
+                .map_err(|e| {
+                BackendError::new(
+                    ErrorCode::BadMetadata,
+                    format!("cannot read {}: {e}", dvs_file_path.display()),
+                )
+            })?;
             if existing == *self {
                 log::debug!(
                     "File {} is already in sync",
@@ -301,6 +310,51 @@ mod tests {
         // Metadata file should exist
         assert!(dvs_dir.join("data.bin.dvs").is_file());
         assert!(backend.exists(&metadata.hashes).unwrap());
+    }
+
+    // K25: an unreadable record (e.g. git conflict markers) is
+    // `bad_metadata`, the code get and status use for it too, and is left
+    // in place for the user to fix.
+    #[test]
+    fn save_reports_an_unreadable_record_as_bad_metadata() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+        let file_path = create_file(&root, "data.bin", b"binary data");
+        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        metadata
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                None,
+            )
+            .unwrap();
+        let conflicted = "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> theirs\n";
+        fs::write(dvs_dir.join("data.bin.dvs"), conflicted).unwrap();
+
+        let error = metadata
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(
+            crate::backend_error_code(&error),
+            Some(ErrorCode::BadMetadata)
+        );
+        assert!(error.to_string().contains("data.bin.dvs"), "{error}");
+        assert_eq!(
+            fs::read_to_string(dvs_dir.join("data.bin.dvs")).unwrap(),
+            conflicted
+        );
     }
 
     #[test]
