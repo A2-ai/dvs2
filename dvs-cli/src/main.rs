@@ -96,18 +96,13 @@ pub enum Command {
         metadata_folder_name: Option<String>,
     },
     /// Adds the given files to dvs. You can use a glob or paths.
-    /// A directory adds the files directly in it; add -r for everything beneath it.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
     /// At least one path or --glob must be provided
     #[command(next_display_order = 100)]
     Add {
-        /// Files or directories to add
+        /// Files to add, or directories to search with --glob
         #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
-        /// Recursively include files in subdirectories for directory inputs.
-        /// Without this flag, directories add only their direct children.
-        #[clap(long, short, conflicts_with = "glob")]
-        recursive: bool,
         /// Add the files matching this glob, e.g. '*.csv'
         #[clap(long)]
         glob: Option<String>,
@@ -370,7 +365,7 @@ fn report_cancelled(not_started: usize, what: &str) {
     );
 }
 
-/// One line closing a human add: "dvs add: added 2, 1 unchanged, 1 failed".
+/// One line closing a human add: "Added 2, 1 unchanged, 1 failed".
 fn add_summary(results: &[AddResult], dry_run: bool) -> String {
     let (mut added, mut unchanged, mut failed, mut cancelled) = (0, 0, 0, 0);
     for result in results {
@@ -387,7 +382,7 @@ fn add_summary(results: &[AddResult], dry_run: bool) -> String {
             AddDetail::Cancelled { .. } => cancelled += 1,
         }
     }
-    let verb = if dry_run { "would add" } else { "added" };
+    let verb = if dry_run { "Would add" } else { "Added" };
     let parts: Vec<String> = [
         (added, format!("{verb} {added}")),
         (unchanged, format!("{unchanged} unchanged")),
@@ -398,15 +393,15 @@ fn add_summary(results: &[AddResult], dry_run: bool) -> String {
     .filter(|(n, _)| *n > 0)
     .map(|(_, part)| part)
     .collect();
-    format!(
-        "dvs add{}: {}",
-        if dry_run { " (dry run)" } else { "" },
-        if parts.is_empty() {
-            "nothing to do".to_string()
-        } else {
-            parts.join(", ")
-        }
-    )
+    if parts.is_empty() {
+        return "Nothing to add".to_string();
+    }
+    let mut line = parts.join(", ");
+    // Whichever part comes first starts the sentence
+    if let Some(first) = line.get(..1) {
+        line.replace_range(..1, &first.to_uppercase());
+    }
+    line
 }
 
 /// 130 if cancelled, over everything else, then 1 if any row failed.
@@ -601,21 +596,12 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
         }
         Command::Add {
             paths,
-            recursive,
             glob,
             message,
             dry_run,
         } => {
             let config = find_config(&current_dir, credentials)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            // A directory without a glob adds its files, as get, status and hash
-            // select them; explicit files ignore the glob
-            let glob = glob.or_else(|| {
-                paths
-                    .iter()
-                    .any(|p| current_dir.join(p).is_dir())
-                    .then(|| if recursive { "**/*" } else { "*" }.to_string())
-            });
             let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
                 .into_iter()
                 .collect();
@@ -685,9 +671,9 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 }
                 let line = add_summary(results, dry_run);
                 if summary.outcome == RunOutcome::Complete {
-                    println!("{line}");
+                    println!("\n{line}");
                 } else {
-                    eprintln!("{line}");
+                    eprintln!("\n{line}");
                 }
                 report_cancelled(summary.counts.cancelled, "added");
             }
