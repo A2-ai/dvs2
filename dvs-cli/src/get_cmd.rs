@@ -16,7 +16,8 @@ pub const EXIT_CONFLICTS: i32 = 3;
 pub fn exit_code(report: &GetReport) -> i32 {
     if report.has_failures() {
         EXIT_FAILED
-    } else if report.has_conflicts() {
+    } else if report.outcome == GetOutcome::Aborted && report.has_conflicts() {
+        // Only abort stops on conflicts; a skip the policy asked for is success
         EXIT_CONFLICTS
     } else {
         EXIT_OK

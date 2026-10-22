@@ -308,8 +308,9 @@ are null.
   `source_missing`, `hash_mismatch`, `access_denied`, `server_unavailable`, `destination_changed`, `permission_denied`, `file_in_use`,
   `io_error`, `bad_metadata`.
 
-Exit codes: `0` complete; `1` any failure or operation problem (takes priority); `3` only conflicts held files
-back; `2` usage or configuration errors.
+Exit codes: `0` complete, including files left as they are because `on_conflict = skip` asked for it; `1` any
+failure or operation problem (takes priority); `3` `on_conflict = abort` held files back because of conflicts
+(nothing was written); `2` usage or configuration errors.
 
 #### Rust library
 
