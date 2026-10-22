@@ -1,4 +1,4 @@
-//! Operation context and observer hooks, byte totals, and timing helpers.
+//! Operation context and observer hooks, counts, byte totals and timing helpers.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -8,7 +8,6 @@ use serde::Serialize;
 
 use crate::files::add::AddResult;
 use crate::files::get::GetRow;
-use crate::files::hash::HashRow;
 use crate::inspect::StatusFacts;
 use crate::progress::FileProgress;
 
@@ -41,7 +40,7 @@ impl Phase {
 }
 
 /// What an operation is about to do, known once selection and storage checks
-/// are done. `hash` and `status` report zero `*_to_transfer`.
+/// are done. `status` reports zero `*_to_transfer`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct OperationPlan {
     pub files_total: u64,
@@ -75,13 +74,30 @@ impl ByteTotals {
     }
 }
 
+/// Row counts for a result: `succeeded + failed == total`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct Counts {
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+}
+
+impl Counts {
+    pub fn new(total: usize, failed: usize) -> Self {
+        Counts {
+            total,
+            succeeded: total - failed,
+            failed,
+        }
+    }
+}
+
 /// A file's final row, in the same shape the command's result will hold.
 #[derive(Debug, Clone, Copy)]
 pub enum FileRow<'a> {
     Add(&'a AddResult),
     Get(&'a GetRow),
     Status(&'a StatusFacts),
-    Hash(&'a HashRow),
 }
 
 /// Hooks an operation calls as it runs. Called from worker threads, possibly

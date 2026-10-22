@@ -238,11 +238,14 @@ impl EventStream {
         self.state.lock().unwrap().result.take()
     }
 
-    /// Write exactly one terminal event. This is the same complete document
-    /// emitted by `--json`, including startup errors and per-file failures.
+    /// Write exactly one terminal event: the `--json` document without
+    /// `files`, whose rows were already sent as `file_result` events.
     /// Progress the throttle held back is reported first, so the last
     /// `operation_progress` is always the final count.
-    pub fn finish(&self, result: Value, exit_code: i32) -> io::Result<()> {
+    pub fn finish(&self, mut result: Value, exit_code: i32) -> io::Result<()> {
+        if let Some(result) = result.as_object_mut() {
+            result.remove("files");
+        }
         let mut state = self.state.lock().unwrap();
         if state.progress.pending() {
             state.progress.mark(Instant::now());
@@ -340,7 +343,8 @@ mod tests {
     fn terminal_result_is_exact_and_late_events_are_ignored() {
         let capture = Capture::default();
         let stream = EventStream::new("get", Box::new(capture.clone()));
-        let result = json!({"v": 1, "command": "get", "outcome": "partial", "files": []});
+        let result =
+            json!({"v": 1, "command": "get", "outcome": "partial", "counts": {"total": 0}});
         stream.finish(result.clone(), 1).unwrap();
         stream.waiting_for_auth("ignored", "ignored");
         stream.finish(json!({"ignored": true}), 0).unwrap();
@@ -353,14 +357,14 @@ mod tests {
     }
 
     #[test]
-    fn streamed_file_results_are_not_repeated_at_finish() {
+    fn file_rows_are_sent_once_and_left_out_of_the_finished_result() {
         let capture = Capture::default();
         let stream = EventStream::new("status", Box::new(capture.clone()));
         let first = json!({"path": "a.txt", "status": "current"});
         let second = json!({"path": "b.txt", "status": "absent"});
         stream.file_result(first.clone());
         stream.file_result(second.clone());
-        let result = json!({"files": [first.clone(), second.clone()]});
+        let result = json!({"counts": {"total": 2}, "files": [first.clone(), second.clone()]});
         stream.record_streamed_result(result.clone());
         stream.finish(result, 0).unwrap();
 
@@ -371,6 +375,8 @@ mod tests {
             .map(|event| event["result"].clone())
             .collect();
         assert_eq!(rows, vec![first, second]);
+        let finished = events.last().unwrap();
+        assert_eq!(finished["result"], json!({"counts": {"total": 2}}));
     }
 
     #[test]
