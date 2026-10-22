@@ -22,7 +22,8 @@ version each one runs.
 
 ## Also call out in the PR description
 
-These only affect the cluster you deploy to, so they don't need the label:
+When nothing above applies, these only affect the cluster you deploy to and don't need
+the label:
 
 - Adds or renames a config key the cookbook writes.
 - Needs a matching cookbook or peer-component change.
