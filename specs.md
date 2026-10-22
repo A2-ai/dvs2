@@ -138,7 +138,7 @@ get's codes (see get), `status` `local_read_failed`, `hash` `local_read_failed` 
 `dvs info --json` finds the project from the working directory. `project_root` and `metadata_directory` are
 absolute native paths; `protocol.versions` lists the supported result versions and `protocol.capabilities`
 names features (`json_results`, `get_conflict_policy`, `connectivity_status`, `status_facts`, `availability`,
-`history`). For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
+`history`, `event_stream`, `device_login_events`). For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
 `unknown` when not logged in), `connection_error`, `user`, `access` and `groups`; a local project reports
 `connection: "not_applicable"`. `connection_error` is `{code, message}` (`server_unavailable`,
 `project_not_found` or `server_too_old`) when `connection` is `unavailable`, else `null`. `access` is the
@@ -154,20 +154,25 @@ means the operation was interrupted: rescan before retrying.
 Machine mode never changes stored credentials: a 401 is `auth_expired` and the token stays; an unparsable
 credentials store is `credentials_unreadable` and stays. Human mode still forgets a rejected token and deletes
 an unparsable store, and says to run `dvs login`. Only `dvs login` and `dvs logout` change credentials on
-purpose. `login --json` reports `authentication_required` instead of starting device login. Credentials and
-device secrets are never written to results. `logout --json` deletes the local credential even if remote
+purpose. `login --json` reports `authentication_required` before starting device login; with `--emit-events`
+it emits `waiting_for_auth` instead. Credentials and device secrets are never written to results or events. `logout --json` deletes the local credential even if remote
 revocation fails: `revoked` is `true` for a confirmed revocation, `false` for a failed revoke call, `null` when
 there was no token; `warnings` is always an array of `{code, message}`.
 
 A server URL may carry a path prefix (a proxy, `https://host/dvs`, with or without the trailing slash): every
 request, login included, goes under it.
 
-`--emit-events` writes NDJSON: `operation_started`, `waiting_for_auth` (device login), `transfer_started`,
-`transfer_progress`, `transfer_finished` (with `duration_ms`), `file_result` (`status` streams each row as its
-local check completes, in completion order; other commands emit one per result row just before the end; the
-same shape as in the result), and `operation_finished` (`result`, `exit_code`, `started_at`, `finished_at`,
-`duration_ms`). Every event has `v`, `operation_id`, `seq`, `type`, `ts` (unix milliseconds) and `elapsed_ms`
-(since the operation started).
+`--emit-events` (instead of `--json`) writes NDJSON, one event per line, while the command runs and ends
+with the same result document: `operation_started` (`command`), `waiting_for_auth` (`user_code`,
+`approval_url`; device login), `transfer_started` (`path`, `total_bytes`), `transfer_progress` (`path`,
+`bytes`, `total_bytes`; at most 10 per second per transfer), `transfer_finished` (`path`, `bytes`,
+`total_bytes`, `success`, `duration_ms`), `file_result` (`result`: one row, the same shape as in the result's
+`files`; `status` streams each row as its local check completes, in completion order, while the final result's
+`files` keeps its own order; other commands emit one per result row just before the end), and
+`operation_finished` (`result`, the full result document, `exit_code`, `started_at`, `finished_at`,
+`duration_ms`; always last). Every event has `v`, `operation_id` (`"<pid>-<nanos>"`), `seq` (0, 1, 2, ...),
+`type`, `ts` (unix milliseconds) and `elapsed_ms` (since the operation started). Transfer events describe
+transfer work only: the result is authoritative (a transfer can succeed and the install still fail).
 
 #### R package
 
