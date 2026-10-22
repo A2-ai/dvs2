@@ -112,7 +112,7 @@ fn add_no_match_is_a_file_selection_failure_not_invalid_arguments() {
     assert_eq!(result["error"]["code"], "no_files_selected");
     assert_eq!(result["command"], "add");
     assert!(
-        result["problem"]
+        result["error"]["message"]
             .as_str()
             .unwrap()
             .contains("Path not found: missing.txt")
@@ -204,7 +204,7 @@ fn server_info_reports_unknown_connection_without_credentials() {
     );
     assert_eq!(document(&output)["logged_in"], false);
     assert_eq!(document(&output)["connection"], "unknown");
-    assert_eq!(document(&output)["access"], "none");
+    assert_eq!(document(&output)["access"], "not_logged_in");
     let credentials = root.path().join("test-config/dvs");
     std::fs::create_dir_all(&credentials).unwrap();
     std::fs::write(
@@ -216,7 +216,8 @@ fn server_info_reports_unknown_connection_without_credentials() {
     assert!(disconnected.status.success());
     let value = document(&disconnected);
     assert_eq!(value["connection"], "unavailable");
-    assert!(value["connection_error"].is_string());
+    assert_eq!(value["connection_error"]["code"], "server_unavailable");
+    assert!(value["connection_error"]["message"].is_string());
     assert!(value["access"].is_null());
     assert!(value["groups"].is_null());
     let login = run(root.path(), &["login", "http://127.0.0.1:1/", "--json"]);
@@ -234,4 +235,285 @@ fn help_version_and_literal_flags_keep_conventional_behavior() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("Not in a DVS repository"));
+}
+
+/// Every key of every object in a document, recursively.
+fn keys(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map {
+                out.push(key.clone());
+                keys(value, out);
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| keys(item, out)),
+        _ => {}
+    }
+}
+
+/// §9 rec 4: one exit-code table for every command, and (rec 1) one error
+/// shape: no `problem` anywhere, `error` is null or `{code, message, hint}`.
+#[test]
+fn every_command_follows_the_exit_code_table_and_the_error_shape() {
+    let (root, storage) = project();
+    std::fs::write(root.path().join("data.txt"), "recorded").unwrap();
+    let objects = storage.path().join("objects");
+    let objects = objects.to_str().unwrap();
+    let hash = "0".repeat(64);
+    // (arguments, exit status): 0 complete, 1 failure/partial, 2 usage/config
+    let cases: Vec<(Vec<&str>, i32)> = vec![
+        (vec!["add", "data.txt"], 0),
+        (vec!["add", "missing.txt"], 1),
+        (vec!["add", "--bogus"], 2),
+        (vec!["status"], 0),
+        (vec!["status", "--bogus"], 2),
+        (vec!["hash", "data.txt"], 0),
+        (vec!["hash", "missing.txt"], 1),
+        (vec!["get", "data.txt"], 0),
+        (vec!["get", "untracked.txt"], 1),
+        (vec!["info"], 0),
+        (vec!["availability", &hash], 0),
+        (vec!["availability", "not-a-hash"], 2),
+        (vec!["history"], 0),
+        (vec!["history", "../outside.txt"], 2),
+        (vec!["init", "local", objects], 1),
+        (vec!["attach", "proj", "http://127.0.0.1:1/"], 1),
+        (vec!["attach"], 2),
+        (vec!["login"], 1),
+        (vec!["logout"], 1),
+    ];
+    for (args, expected) in cases {
+        let output = run(root.path(), &[&["--json"], &args[..]].concat());
+        assert_eq!(output.status.code(), Some(expected), "{args:?}");
+        let value = document(&output);
+        let mut all = Vec::new();
+        keys(&value, &mut all);
+        assert!(!all.contains(&"problem".to_string()), "{args:?}: {value}");
+        if expected == 0 {
+            assert!(value["error"].is_null(), "{args:?}: {value}");
+        } else if value["files"].as_array().is_none_or(Vec::is_empty) {
+            let error = value["error"].as_object().expect("an error object");
+            let mut fields: Vec<_> = error.keys().cloned().collect();
+            fields.sort();
+            assert_eq!(fields, ["code", "hint", "message"], "{args:?}");
+        }
+    }
+    // 3: get held back by local conflicts, nothing else failed
+    std::fs::write(root.path().join("data.txt"), "local edit").unwrap();
+    assert_eq!(
+        run(root.path(), &["--json", "get", "data.txt"])
+            .status
+            .code(),
+        Some(3)
+    );
+    // 2: configuration
+    std::fs::write(root.path().join("dvs.toml"), "invalid = [").unwrap();
+    for args in [
+        vec!["add", "data.txt"],
+        vec!["status"],
+        vec!["hash"],
+        vec!["get"],
+        vec!["info"],
+        vec!["history"],
+        vec!["availability", &hash],
+        vec!["login"],
+        vec!["logout"],
+    ] {
+        let output = run(root.path(), &[&["--json"], &args[..]].concat());
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert_eq!(document(&output)["error"]["code"], "invalid_configuration");
+    }
+}
+
+/// §9 rec 1: add rows have fixed keys, success or error.
+#[test]
+fn add_success_and_error_rows_have_the_same_keys() {
+    let (root, _storage) = project();
+    std::fs::write(root.path().join("good.txt"), "content").unwrap();
+    std::fs::write(root.path().join("bad.txt"), "content").unwrap();
+    std::fs::create_dir(root.path().join(".dvs/bad.txt.dvs")).unwrap();
+    let result = document(&run(root.path(), &["add", "good.txt", "bad.txt", "--json"]));
+    let row_keys = |row: &Value| {
+        let mut keys: Vec<_> = row.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        keys
+    };
+    let files = result["files"].as_array().unwrap();
+    let (bad, good) = (&files[0], &files[1]);
+    assert_eq!(good["path"], "good.txt");
+    assert_eq!(
+        row_keys(good),
+        [
+            "code",
+            "hash",
+            "hint",
+            "message",
+            "outcome",
+            "path",
+            "size",
+            "stored_size"
+        ]
+    );
+    assert_eq!(row_keys(good), row_keys(bad));
+    assert!(good["code"].is_null() && good["message"].is_null() && good["hint"].is_null());
+    assert_eq!(good["outcome"], "copied");
+    assert!(bad["code"].is_string(), "{bad}");
+    assert!(bad["message"].is_string());
+    for field in ["outcome", "hash", "size", "stored_size", "hint"] {
+        assert!(bad[field].is_null(), "{field}: {bad}");
+    }
+}
+
+/// §9 rec 1: status, hash and history rows carry `message` (not `error`)
+/// and `hint`; status rows have the same keys whether they failed or not.
+#[test]
+fn status_hash_and_history_rows_use_code_message_hint() {
+    let (root, _storage) = project();
+    for name in ["bad.txt", "good.txt"] {
+        std::fs::write(root.path().join(name), "content").unwrap();
+        assert!(run(root.path(), &["add", name]).status.success());
+    }
+    std::fs::write(root.path().join(".dvs/bad.txt.dvs"), "not metadata").unwrap();
+    let status = document(&run(root.path(), &["status", "--json"]));
+    let (bad, good) = (&status["files"][0], &status["files"][1]);
+    assert!(bad["code"].is_string(), "{bad}");
+    assert!(bad["message"].is_string(), "{bad}");
+    assert!(bad.get("error").is_none(), "{bad}");
+    assert_eq!(bad.get("hint"), Some(&Value::Null), "{bad}");
+    for field in ["code", "message", "hint"] {
+        assert_eq!(good.get(field), Some(&Value::Null), "{field}: {good}");
+    }
+    let row_keys = |row: &Value| {
+        let mut keys: Vec<_> = row.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        keys
+    };
+    assert_eq!(row_keys(bad), row_keys(good));
+    let hash = document(&run(root.path(), &["hash", "bad.txt", "--json"]));
+    let row = &hash["files"][0];
+    for field in ["code", "message", "hint"] {
+        assert_eq!(row.get(field), Some(&Value::Null), "{field}: {row}");
+    }
+    let history = document(&run(root.path(), &["history", "--json"]));
+    let rows = history["files"].as_array().unwrap();
+    assert!(!rows.is_empty(), "{history}");
+    for row in rows {
+        for field in ["code", "message", "hint"] {
+            assert_eq!(row.get(field), Some(&Value::Null), "{field}: {row}");
+        }
+    }
+}
+
+/// K25: availability never reads records, so a conflicted one changes
+/// nothing there.
+#[test]
+fn an_unreadable_record_does_not_affect_availability() {
+    let (root, _storage) = project();
+    std::fs::write(root.path().join("data.txt"), "content").unwrap();
+    let added = document(&run(root.path(), &["add", "data.txt", "--json"]));
+    let hash = added["files"][0]["hash"].as_str().unwrap().to_string();
+    let conflicted = "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> theirs\n";
+    std::fs::write(root.path().join(".dvs/data.txt.dvs"), conflicted).unwrap();
+
+    let output = run(
+        root.path(),
+        &["availability", &hash, "--path", "data.txt", "--json"],
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let row = &document(&output)["files"][0];
+    assert_eq!(row["state"], "present");
+    assert!(row["code"].is_null(), "{row}");
+}
+
+/// §9 rec 1: availability rows have fixed keys with or without `--path`.
+#[test]
+fn availability_rows_have_fixed_keys() {
+    let (root, _storage) = project();
+    let hash = "0".repeat(64);
+    let row_keys = |args: &[&str]| {
+        let value = document(&run(root.path(), args));
+        let mut keys: Vec<_> = value["files"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    };
+    let plain = row_keys(&["availability", &hash, "--json"]);
+    assert_eq!(
+        plain,
+        [
+            "code",
+            "hash",
+            "hint",
+            "history_code",
+            "history_message",
+            "in_history",
+            "message",
+            "state"
+        ]
+    );
+    assert_eq!(
+        plain,
+        row_keys(&["availability", &hash, "--path", "x.txt", "--json"])
+    );
+}
+
+/// §9 rec 2: history times are RFC 3339 UTC in JSON, and people see them.
+#[test]
+fn history_timestamps_are_rfc3339_and_shown_to_people() {
+    let (root, _storage) = project();
+    std::fs::write(root.path().join("data.txt"), "content").unwrap();
+    assert!(run(root.path(), &["add", "data.txt"]).status.success());
+    let history = document(&run(root.path(), &["history", "--json"]));
+    let entries = history["files"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        let timestamp = entry["timestamp"].as_str().expect("an RFC 3339 string");
+        // Same format as started_at: 2026-10-21T14:30:00.000Z
+        assert_eq!(timestamp.len(), 24, "{timestamp}");
+        assert!(timestamp.ends_with('Z') && timestamp.as_bytes()[10] == b'T');
+        assert!(timestamp <= history["finished_at"].as_str().unwrap());
+    }
+    let human = run(root.path(), &["history"]);
+    let text = String::from_utf8_lossy(&human.stdout);
+    let line = text.lines().find(|l| l.contains("data.txt")).unwrap();
+    let time = line.split_whitespace().next().unwrap();
+    assert_eq!(time, entries[1]["timestamp"], "{text}");
+}
+
+/// §9 rec 5: get counts carry `total` and `succeeded` next to the detail;
+/// held-back rows are in neither `succeeded` nor `failed`.
+#[test]
+fn get_counts_have_total_and_succeeded() {
+    let (root, _storage) = project();
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        std::fs::write(root.path().join(name), name).unwrap();
+    }
+    assert!(
+        run(root.path(), &["add", "a.txt", "b.txt", "c.txt"])
+            .status
+            .success()
+    );
+    std::fs::remove_file(root.path().join("a.txt")).unwrap();
+    let dry = document(&run(root.path(), &["get", "--dry-run", "--json"]));
+    assert_eq!(dry["counts"]["total"], 3, "{dry}");
+    assert_eq!(dry["counts"]["succeeded"], 3);
+    assert_eq!(dry["counts"]["would_restore"], 1);
+    let get = document(&run(root.path(), &["get", "--json"]));
+    assert_eq!(get["counts"]["total"], 3);
+    assert_eq!(get["counts"]["succeeded"], 3);
+    assert_eq!(get["counts"]["restored"], 1);
+    assert_eq!(get["counts"]["unchanged"], 2);
+    // A conflict holds the other files back: in neither succeeded nor failed
+    std::fs::remove_file(root.path().join("a.txt")).unwrap();
+    std::fs::write(root.path().join("b.txt"), "local edit").unwrap();
+    let aborted = document(&run(root.path(), &["get", "--json"]));
+    assert_eq!(aborted["outcome"], "aborted");
+    assert_eq!(aborted["counts"]["total"], 3);
+    assert_eq!(aborted["counts"]["succeeded"], 1);
+    assert_eq!(aborted["counts"]["failed"], 0);
+    assert_eq!(aborted["counts"]["not_run"], 2);
 }
