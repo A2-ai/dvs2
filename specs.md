@@ -485,7 +485,7 @@ Options:
   -g, --glob <GLOB>        
       --current            Include the files that are current
       --absent             Include the files that are absent
-      --stale              Include files unchanged since the last successful get when metadata has advanced
+      --stale              Include files unchanged since the last successful get, when metadata has advanced
       --modified           Include files changed since the last successful get
       --unsynced           Include differing files whose local baseline is unavailable
       --with-metadata      Show all metadata columns in the table output

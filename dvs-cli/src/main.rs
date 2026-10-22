@@ -242,11 +242,11 @@ struct StatusSelection {
 fn status_row_selected(row: &dvs::inspect::StatusFacts, selection: StatusSelection) -> bool {
     selection.show_all
         || row.error.is_some()
-        || (selection.current && row.status == Status::Current)
-        || (selection.absent && row.status == Status::Absent)
-        || (selection.stale && row.status == Status::Stale)
-        || (selection.modified && row.status == Status::Modified)
-        || (selection.unsynced && row.status == Status::Unsynced)
+        || (selection.current && row.status == Some(Status::Current))
+        || (selection.absent && row.status == Some(Status::Absent))
+        || (selection.stale && row.status == Some(Status::Stale))
+        || (selection.modified && row.status == Some(Status::Modified))
+        || (selection.unsynced && row.status == Some(Status::Unsynced))
 }
 
 /// Stream each row as soon as its local baseline comparison completes.
@@ -634,7 +634,7 @@ fn try_main(cli: Cli) -> Result<()> {
                             row.metadata.as_ref().map(|metadata| {
                                 let mut formatted = StatusRowFull::from(metadata);
                                 formatted.path = row.path.display().to_string();
-                                formatted.status = row.status.to_string();
+                                formatted.status = row.status_name();
                                 formatted
                             })
                         })
@@ -650,7 +650,7 @@ fn try_main(cli: Cli) -> Result<()> {
                         .filter(|row| row.error.is_none())
                         .map(|row| StatusRow {
                             path: row.path.display().to_string(),
-                            status: row.status.to_string(),
+                            status: row.status_name(),
                             size: row
                                 .metadata
                                 .as_ref()

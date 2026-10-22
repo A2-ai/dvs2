@@ -107,6 +107,8 @@ echo "  --threads"
 echo "  --recursive"
 echo "  --current"
 echo "  --absent"
+echo "  --stale"
+echo "  --modified"
 echo "  --unsynced"
 echo "  --with-metadata"
 

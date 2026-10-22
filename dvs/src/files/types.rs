@@ -27,8 +27,6 @@ pub enum Status {
     Modified,
     /// Local file differs from metadata, but no baseline exists to explain why.
     Unsynced,
-    /// Local status inspection failed.
-    Error,
 }
 
 impl fmt::Display for Status {
@@ -39,7 +37,6 @@ impl fmt::Display for Status {
             Status::Stale => write!(f, "stale"),
             Status::Modified => write!(f, "modified"),
             Status::Unsynced => write!(f, "unsynced"),
-            Status::Error => write!(f, "error"),
             Status::Untracked => write!(f, "untracked"),
         }
     }
