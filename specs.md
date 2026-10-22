@@ -260,7 +260,7 @@ be able to discard someone's local changes. Use the flag or the environment vari
 
 ```shell
 ❯ dvs get --help
-Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. With no paths, gets the tracked files directly in the current directory; add -r for everything beneath it
+Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided; to restore every tracked file, pass `--glob '**/*'`
 
 Usage: dvs get [OPTIONS] [PATHS]...
 
@@ -278,8 +278,8 @@ Options:
   -h, --help                  Print help
 ```
 
-Passing `-r, --recursive` with an explicit directory walks its subdirectories. When no explicit paths are given,
-`get` is scoped to the current directory (relative to the repo root): without `-r` it restores the tracked files
+Passing `-r, --recursive` with an explicit directory walks its subdirectories. The CLI requires a path or `--glob`.
+When no explicit paths are given (R's `dvs_get()`), `get` is scoped to the current directory (relative to the repo root): without `-r` it restores the tracked files
 directly under it, and with `-r` it restores every tracked file beneath it. (At the repo root, `-r` therefore
 restores every tracked file in the project.)
 
