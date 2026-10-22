@@ -907,12 +907,22 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
         Command::Info => {
             let config = find_config(&current_dir, credentials)?;
             let compression = config.compression().to_string();
+            // What get does with local changes, and where that was set. An
+            // invalid setting is shown, not an error: only get refuses to run
+            let on_conflict = config.get_on_conflict(None);
+            let on_conflict_line = match &on_conflict {
+                Ok((policy, source)) => format!("on_conflict {policy} ({source})"),
+                Err(error) => format!("on_conflict invalid: {error}"),
+            };
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let info_json = |fields: serde_json::Value| {
                 let mut result = output::envelope("info", false, vec![], 0);
                 for (key, value) in fields.as_object().expect("info fields are an object") {
                     result[key] = value.clone();
                 }
+                result["on_conflict"] = json!(on_conflict.as_ref().ok().map(|(p, _)| p));
+                result["on_conflict_source"] =
+                    json!(on_conflict.as_ref().ok().map(|(_, s)| s.as_str()));
                 result["project_root"] = json!(dvs_paths.repo_root());
                 result["metadata_directory"] = json!(dvs_paths.metadata_folder());
                 result["protocol"] = json!({"versions": [1], "capabilities": ["json_results", "get_conflict_policy", "connectivity_status", "status_facts", "availability", "history", "event_stream", "device_login_events"]});
@@ -934,6 +944,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                         println!("backend     local");
                         println!("storage     {}", l.path.display());
                         println!("compression {compression}");
+                        println!("{on_conflict_line}");
                     }
                 }
                 Backend::Server(s) => {
@@ -1037,6 +1048,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                             }
                         }
                         println!("compression {compression}");
+                        println!("{on_conflict_line}");
                     }
                 }
             }

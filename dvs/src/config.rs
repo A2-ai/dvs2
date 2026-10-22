@@ -208,12 +208,12 @@ impl SettingSource {
     }
 }
 
-/// For people: names the file rather than "config".
+/// For people: names where the setting was made rather than "config".
 impl std::fmt::Display for SettingSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            SettingSource::Argument => "argument",
-            SettingSource::Env => "env",
+            SettingSource::Argument => "command line",
+            SettingSource::Env => GET_ON_CONFLICT_ENV,
             SettingSource::Config => "dvs.toml",
             SettingSource::Default => "default",
         })
