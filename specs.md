@@ -99,7 +99,7 @@ as the record stores it. The only exception is event `ts` (unix milliseconds).
 
 ```json
 {"v":1,"command":"add","outcome":"failed","dry_run":false,
- "counts":{"total":0,"succeeded":0,"failed":0},
+ "counts":{"total":0,"succeeded":0,"failed":0,"cancelled":0},
  "bytes":{"total":0,"to_transfer":0,"already_stored":0,"transferred":0},
  "error":{"code":"no_files_selected","message":"Path not found: missing.txt","hint":null},
  "files":[],"started_at":"2026-10-21T14:30:00.120Z","finished_at":"2026-10-21T14:30:00.123Z","duration_ms":3}
@@ -113,9 +113,9 @@ as the record stores it. The only exception is event `ts` (unix milliseconds).
 Errors have one shape. The envelope's `error` is `null` or `{code, message, hint}`; every row of every command
 has `code`, `message` and `hint` (all `null` on success; `hint` is `null` where there is none). Rows have fixed
 keys: a field that does not apply is `null`, never missing (an `add` error row has `outcome`, `hash`, `size`,
-`stored_size` as `null`). `counts` always has `total` (the rows), `failed` (rows that failed) and `succeeded`
-(the rest, except `cancelled` rows, see Cancellation; get adds its detailed counts and defines `succeeded`
-itself). `error` is a failure of the whole
+`stored_size` as `null`). `counts` always has `total` (the rows), `failed` (rows that failed), `cancelled` (rows a
+cancel stopped, see Cancellation) and `succeeded` (the rest), so `total = succeeded + failed + cancelled`; get
+adds its detailed counts and defines `succeeded` itself. `error` is a failure of the whole
 command; per-file failures stay in the rows, so a `partial` result normally has `error: null`. A `hint` is the
 next thing to try, for people (only `get` fills row hints today).
 
@@ -192,7 +192,7 @@ Ctrl-C/Ctrl-Break). A signal that was already
 ignored when `dvs` started (for example SIGHUP under `nohup`) stays ignored. They stop *starting* files: a
 file in flight finishes atomically (a verified temp file and rename for `get`, the complete upload and record
 for `add`). Files that never started get `code: "cancelled"` (also `action: "cancelled"` in `get`); they count in
-`counts.total` but in neither `succeeded` nor `failed`. The outcome is `cancelled` whenever the request came
+`counts.total` and `counts.cancelled`, in neither `succeeded` nor `failed`. The outcome is `cancelled` whenever the request came
 before the operation finished, the full result is still written, and the exit code is `130`, over every
 other exit code. A second signal exits `130` at once, without a result.
 
@@ -565,7 +565,7 @@ named path that is missing, a tracked file absent from disk, a symlink and an un
 error row; nothing selected is dropped silently. It exits `1` if any file could not be hashed.
 
 ```json
-{"v": 1, "command": "hash", "outcome": "complete", "dry_run": false, "counts": {"total": 1, "succeeded": 1, "failed": 0},
+{"v": 1, "command": "hash", "outcome": "complete", "dry_run": false, "counts": {"total": 1, "succeeded": 1, "failed": 0, "cancelled": 0},
  "files": [{"path": "data/a.csv", "hashes": {"blake3": "…"}, "size": 1048576, "hash_source": "cache", "duration_ms": 0, "code": null, "message": null, "hint": null}]}
 ```
 

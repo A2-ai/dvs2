@@ -97,8 +97,8 @@ pub fn error_json(code: &str, message: impl Into<String>) -> Value {
     json!({"code": code, "message": message.into(), "hint": null})
 }
 
-/// `failed` counts failed rows; `cancelled` rows count in `total` only. A
-/// cancelled run's `outcome` is set by the caller ([`cancelled`]).
+/// `failed` counts failed rows and `cancelled` the rows a cancel stopped, so
+/// `total = succeeded + failed + cancelled`. A cancelled run's `outcome` is set by the caller ([`cancelled`]).
 pub fn envelope(command: &str, dry_run: bool, files: Vec<Value>, failed: usize) -> Value {
     let total = files.len();
     let cancelled = files.iter().filter(|row| is_cancelled_row(row)).count();
@@ -117,6 +117,7 @@ pub fn envelope(command: &str, dry_run: bool, files: Vec<Value>, failed: usize) 
             "total": total,
             "succeeded": total - failed - cancelled,
             "failed": failed,
+            "cancelled": cancelled,
         },
         "error": null,
         "files": files,
@@ -208,7 +209,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cancelled_rows_count_in_total_only() {
+    fn cancelled_rows_are_counted_apart() {
         let (files, failed) = file_results([
             (json!({"path": "ok"}), false),
             (json!({"path": "bad", "code": "io_error"}), true),
@@ -218,7 +219,7 @@ mod tests {
         let mut result = envelope("add", false, files, failed);
         assert_eq!(
             result["counts"],
-            json!({"total": 3, "succeeded": 1, "failed": 1})
+            json!({"total": 3, "succeeded": 1, "failed": 1, "cancelled": 1})
         );
         assert_eq!(result["files"][0]["code"], Value::Null);
         assert_eq!(result["files"][2]["code"], "cancelled");
