@@ -81,19 +81,15 @@ impl FileMetadata {
         Ok(())
     }
 
-    /// Returns whether the file already existed in the dvs folder and therefore is an update
-    /// and what storage reported, if it stored anything.
-    /// Copies the source file to storage and saves metadata atomically (both succeed or neither).
-    pub fn save(
-        &mut self,
-        operation_id: Uuid,
-        source_file: impl AsRef<Path>,
+    /// Whether storage has the content and the metadata file already says
+    /// exactly this, so saving would change nothing.
+    pub(crate) fn is_saved(
+        &self,
         backend: &Backend,
         paths: &DvsPaths,
-        relative_path: impl AsRef<Path>,
-        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-    ) -> Result<(Outcome, Option<StoreResult>)> {
-        let dvs_file_path = paths.metadata_path(relative_path.as_ref());
+        relative_path: &Path,
+    ) -> Result<bool> {
+        let dvs_file_path = paths.metadata_path(relative_path);
         let dvs_file_exists = dvs_file_path.is_file();
         // Only check if file exists on the server if it exists locally
         // Backend will dedup anyway
@@ -101,7 +97,7 @@ impl FileMetadata {
 
         log::debug!(
             "Saving {}: metadata_exists={}, storage_exists={}",
-            relative_path.as_ref().display(),
+            relative_path.display(),
             dvs_file_exists,
             storage_exists
         );
@@ -116,12 +112,27 @@ impl FileMetadata {
                 )
             })?;
             if existing == *self {
-                log::debug!(
-                    "File {} is already in sync",
-                    relative_path.as_ref().display()
-                );
-                return Ok((Outcome::Present, None));
+                log::debug!("File {} is already in sync", relative_path.display());
+                return Ok(true);
             }
+        }
+        Ok(false)
+    }
+
+    /// Returns whether the file already existed in the dvs folder and therefore is an update
+    /// and what storage reported, if it stored anything.
+    /// Copies the source file to storage and saves metadata atomically (both succeed or neither).
+    pub fn save(
+        &mut self,
+        operation_id: Uuid,
+        source_file: impl AsRef<Path>,
+        backend: &Backend,
+        paths: &DvsPaths,
+        relative_path: impl AsRef<Path>,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<(Outcome, Option<StoreResult>)> {
+        if self.is_saved(backend, paths, relative_path.as_ref())? {
+            return Ok((Outcome::Present, None));
         }
 
         let stored = self.store_and_write(

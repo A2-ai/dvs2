@@ -172,6 +172,7 @@ pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value
     (files, failed)
 }
 
+/// Streamed rows go through here too, so they match the result's rows.
 pub fn file_result(mut value: Value, is_error: bool) -> Value {
     if !is_error {
         value["code"] = Value::Null;
