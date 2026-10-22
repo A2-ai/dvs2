@@ -98,16 +98,17 @@ Backend and credentials failures share one set of codes, at the top level (`erro
 (`code`), in every command: `auth_required` (no token, not logged in), `auth_expired` (the server said 401),
 `access_denied` (403), `server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint
 that should exist answered 404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs`
-record, e.g. git conflict markers, in every command) and `credentials_unreadable`. Command-specific codes (`no_files_selected`,
-`invalid_configuration`, `invalid_arguments`, `io_error`, get's codes, ...) stay. `info --json` reports
-`connection_error` as `{code, message}` (`server_unavailable`, `project_not_found` or `server_too_old`) when
-`connection` is `unavailable`, else `null`; `access` is `not_logged_in` without a token, and `none` on a 403
-(no membership: `connection` is `available`, exit `0`, like human mode's "no access"); a rejected login (401,
-`auth_expired`) is an error envelope.
+record, e.g. git conflict markers, in every command), `cancelled` (the file never started, see below) and
+`credentials_unreadable`. Command-specific codes (`no_files_selected`, `invalid_configuration`,
+`invalid_arguments`, `io_error`, get's codes, ...) stay. `info --json` reports `connection_error` as
+`{code, message}` (`server_unavailable`, `project_not_found` or `server_too_old`) when `connection` is
+`unavailable`, else `null`; `access` is `not_logged_in` without a token, and `none` on a 403 (no membership:
+`connection` is `available`, exit `0`, like human mode's "no access"); a rejected login (401, `auth_expired`)
+is an error envelope.
 
 Exit codes, for every command: `0` complete; `1` failure, or some rows failed; `2` usage or configuration
 (`invalid_arguments`, `invalid_configuration`); `3` `get` only, local conflicts held files back and nothing
-else failed.
+else failed; `130` cancelled, over every other code.
 
 Machine mode never changes stored credentials: a 401 is `auth_expired` and the token stays; an unparsable
 credentials store is `credentials_unreadable` and stays. Human mode still forgets a rejected token and deletes
@@ -127,6 +128,18 @@ in completion order, the same shape as in the result), `operation_progress` (`fi
 last one; the final count is always reported before the end), and `operation_finished` (`result`,
 `exit_code`, `started_at`, `finished_at`, `duration_ms`). Every event has `v`, `operation_id`, `seq`, `type`,
 `ts` (unix milliseconds) and `elapsed_ms` (since the operation started).
+
+##### Cancellation
+
+`add`, `get`, `status` and `hash` stop on SIGINT (Ctrl-C), SIGTERM or SIGHUP, and with `--emit-events` also
+when stdin, if it is a pipe or socket, reaches end of file (the client went away; Unix only, on Windows use
+Ctrl-C/Ctrl-Break). A signal that was already
+ignored when `dvs` started (for example SIGHUP under `nohup`) stays ignored. They stop *starting* files: a
+file in flight finishes atomically (a verified temp file and rename for `get`, the complete upload and record
+for `add`). Files that never started get `code: "cancelled"` (`action: "not_run"` in `get`); they count in
+`counts.total` but in neither `succeeded` nor `failed`. The outcome is `cancelled` whenever the request came
+before the operation finished, the full result is still written, and the exit code is `130`, over every
+other exit code. A second signal exits `130` at once, without a result.
 
 #### R package
 
@@ -243,7 +256,7 @@ Options:
 You can run `dvs add *.csv` and it will be expanded by your shell before calling `dvs`.
 To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library. The glob string must be quoted (for example `--glob '*.csv'`) so the shell does not expand it before `dvs` sees it.
 
-A batch refused for an invalid input path exits with `1` and adds nothing. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`.
+A batch refused for an invalid input path exits with `1` and adds nothing. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`. A cancelled batch exits with `130` (see Cancellation).
 
 #### Rust library
 
@@ -359,22 +372,22 @@ are null.
             "code": "local_changes", "message": "…", "hint": "keep your version: dvs add data/b.csv; …"}]}
 ```
 
-- `outcome`: `complete`, `aborted` (nothing written), `partial` or `failed`.
+- `outcome`: `complete`, `aborted` (nothing written), `partial`, `failed` or `cancelled`.
 - `satisfied`: the file is at its tracked version afterwards; in a dry run, that it would be.
 - A shared cause (`access_denied`, `server_unavailable`) is printed once in human output, not per file.
 - `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run`, `failed`, `would_restore`, `would_replace`.
 - `code`: `local_changes`, `unknown_local`, `batch_aborted`, `not_tracked`, `not_a_file`, `unsafe_path`,
   `source_missing`, `hash_mismatch`, `access_denied`, `server_unavailable`, `destination_changed`, `permission_denied`, `file_in_use`,
-  `io_error`, `bad_metadata`, and the other shared codes (`auth_required`, `auth_expired`, `server_too_old`,
-  `project_not_found`, `credentials_unreadable`).
+  `io_error`, `bad_metadata`, the shared codes (`auth_required`, `auth_expired`, `server_too_old`,
+  `project_not_found`, `credentials_unreadable`, ...) and `cancelled`.
 - `counts`: `total` (every row) and `succeeded` (rows at their target: restored, replaced, unchanged, and
   would_restore/would_replace in a dry run) next to the per-action counts; `failed` is the `failed` action.
-  Skipped and `not_run` rows (held back) are in neither `succeeded` nor `failed`.
+  Skipped and `not_run` rows (held back or cancelled) are in neither `succeeded` nor `failed`.
 - `bytes`: `to_transfer` is the size of every row whose local copy does not match its target (held back,
   skipped and failed rows included), `already_stored` of the rows that match.
 
 Exit codes: `0` complete; `1` any failure or operation problem (takes priority); `3` only conflicts held files
-back; `2` usage or configuration errors.
+back; `2` usage or configuration errors; `130` cancelled (over all of these).
 
 #### Rust library
 

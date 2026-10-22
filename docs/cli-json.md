@@ -22,7 +22,7 @@ Every command result, error results included, is one object:
 | --- | --- |
 | `v` | Protocol version, currently `1` |
 | `command` | Command name; `cli` for argument parsing errors |
-| `outcome` | `complete`, `partial` or `failed`; `get` also uses `aborted` |
+| `outcome` | `complete`, `partial`, `failed` or `cancelled`; `get` also uses `aborted` |
 | `dry_run` | Whether this is a requested mutation preview |
 | `counts` | `{total, succeeded, failed}`; `get` adds its per-action counts (below) |
 | `error` | `null`, or the command-level error `{code, message, hint}` |
@@ -47,14 +47,15 @@ to try, for people.
 
 ### Counts
 
-`total` is the number of rows. `failed` counts rows that failed; `succeeded` the rest.
-`history` never fails per row.
+`total` is the number of rows. `failed` counts rows that failed. Rows with code
+`cancelled` (never started, see [Cancellation](#cancellation)) count in `total` but in
+neither `succeeded` nor `failed`. `history` never fails per row.
 
 `get` reports `total` and `succeeded` next to `restored`, `replaced`, `unchanged`,
 `skipped`, `not_run`, `failed`, `would_restore`, `would_replace`. `succeeded` = rows at
 their target afterwards (restored + replaced + unchanged; in a dry run also
 would_restore + would_replace). `failed` = the `failed` action. Skipped and `not_run`
-rows (held back by a conflict) are in neither.
+rows (held back by a conflict, or cancelled) are in neither.
 
 ### Bytes
 
@@ -116,6 +117,7 @@ Backend, credentials and record failures share one vocabulary, at the top level
 | `server_too_old` | an endpoint that should exist answered 404/405 |
 | `project_not_found` | the project does not exist on the server (404) |
 | `bad_metadata` | an unreadable `.dvs` record, e.g. git conflict markers |
+| `cancelled` | the file never started (C1) |
 | `credentials_unreadable` | the credentials store exists but cannot be read |
 
 Command-level codes: `not_in_project`, `invalid_configuration`, `invalid_arguments`,
@@ -144,9 +146,19 @@ One table for every command:
 | `1` | failure, or some rows failed (`partial`/`failed`); `get` failures beat conflicts |
 | `2` | usage or configuration: `invalid_arguments`, `invalid_configuration` |
 | `3` | `get` only: local conflicts held files back and nothing else failed |
+| `130` | cancelled, over every other status |
 
 A result written before a nonzero exit is authoritative. No result after the process
 was killed means the operation was interrupted: rescan before retrying.
+
+## Cancellation
+
+`add`, `get`, `status` and `hash` stop on SIGINT, SIGTERM or SIGHUP, and with
+`--emit-events` also when stdin, if it is a pipe or socket, reaches end of file (Unix
+only; on Windows use Ctrl-C/Ctrl-Break). They stop starting files; files in flight finish atomically. Files that never started get
+`code: "cancelled"` (`action: "not_run"` in `get`). The outcome is `cancelled` whenever
+the request came before the operation finished, the full result is still written, and
+the exit status is `130`. A second signal exits `130` at once, without a result.
 
 ## Events
 
