@@ -124,10 +124,11 @@ pub enum Command {
     },
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
-    /// With no paths, gets the tracked files directly in the current directory;
-    /// add -r for everything beneath it.
+    /// At least one path or --glob must be provided; to restore every tracked file,
+    /// pass `--glob '**/*'`.
     #[command(next_display_order = 100)]
     Get {
+        #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
         #[clap(long, short, conflicts_with = "recursive")]
         glob: Option<String>,

@@ -342,7 +342,7 @@ be able to discard someone's local changes. Use the flag or the environment vari
 
 ```shell
 ❯ dvs get --help
-Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. With no paths, gets the tracked files directly in the current directory; add -r for everything beneath it
+Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided; to restore every tracked file, pass `--glob '**/*'`
 
 Usage: dvs get [OPTIONS] [PATHS]...
 
@@ -360,8 +360,8 @@ Options:
   -h, --help                  Print help
 ```
 
-Passing `-r, --recursive` with an explicit directory walks its subdirectories. When no explicit paths are given,
-`get` is scoped to the current directory (relative to the repo root): without `-r` it restores the tracked files
+Passing `-r, --recursive` with an explicit directory walks its subdirectories. The CLI requires a path or `--glob`.
+When no explicit paths are given (R's `dvs_get()`), `get` is scoped to the current directory (relative to the repo root): without `-r` it restores the tracked files
 directly under it, and with `-r` it restores every tracked file beneath it. (At the repo root, `-r` therefore
 restores every tracked file in the project.)
 
@@ -382,7 +382,9 @@ are null.
             "code": "local_changes", "message": "…", "hint": "keep your version: dvs add data/b.csv; …"}]}
 ```
 
-- `outcome`: `complete`, `aborted` (nothing written), `partial` or `failed`.
+- `outcome`: `complete`, `aborted` (nothing written), `partial` (also when every file was skipped as
+  `on_conflict = skip` asked) or `failed`.
+- `hint`: the next step, in CLI syntax, filled in by the library.
 - `satisfied`: the file is at its tracked version afterwards; in a dry run, that it would be.
 - A shared cause (`access_denied`, `server_unavailable`) is printed once in human output, not per file.
 - `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run`, `failed`, `would_restore`, `would_replace`.
@@ -396,16 +398,19 @@ are null.
 - `bytes`: `to_transfer` is the size of every row whose local copy does not match its target (held back,
   skipped and failed rows included), `already_stored` of the rows that match.
 
-Exit codes: `0` complete; `1` any failure or operation problem (takes priority); `3` only conflicts held files
-back; `2` usage or configuration errors.
+Exit codes: `0` did as asked, including files left as they are because `on_conflict = skip` asked for it; `1` any
+failure or operation problem (takes priority); `3` `on_conflict = abort` held files back because of conflicts
+(nothing was written); `2` usage or configuration errors.
 
 #### Rust library
 
 `select_paths_for_get` resolves the request and returns the tracked paths plus the unmatched ones, which become
 `not_tracked` rows rather than an error. `get_files(selection, paths, backend, GetOptions { dry_run, on_conflict,
 source }, on_file_start)` returns a `GetReport` with the outcome, counts, an optional operation-level `problem`,
-and one `GetRow` per file sorted by path. `Config::get_on_conflict` applies the precedence and returns a
-`ConfigError` for a project-sourced `overwrite`.
+and one `GetRow` per file sorted by path. `GetReport::verdict()` decides whether get did as asked (a skip the
+policy asked for counts as done), failed, or was held back by `abort`; the CLI exit code and R's `on_error` both
+read it. `Config::get_on_conflict` applies the precedence and returns a `ConfigError` for a project-sourced
+`overwrite`.
 
 #### R package
 
@@ -415,14 +420,15 @@ dvs_get(paths = character(0), glob = NULL, recursive = FALSE, dry_run = FALSE,
 ```
 
 - `on_conflict`: `NULL` inherits (env, then dvs.toml, then `"abort"`), or `"abort"`, `"skip"`, `"overwrite"`.
-- `on_error`: `"return"` (default) only returns the result; `"warn"` also warns; `"error"` raises. The condition
-  has class `dvs_get_incomplete` and carries the result as `cnd$result`. No warning by default, so
+- `on_error`: when get did not do as asked (the CLI's exit `1` or `3`), `"return"` (default) only returns the
+  result; `"warn"` also warns; `"error"` raises. The condition has class `dvs_get_incomplete` and carries the
+  result as `cnd$result`. No warning by default, so
   `options(warn = 2)` cannot prevent `res <- dvs_get()` from assigning.
 
-It always returns a tibble of class `dvs_get_result` with the same columns as the JSON rows, also with zero rows
-(for example outside a project). `dvs_result_info(res)` returns the operation information (outcome, policy and
-its source, counts, problem), and printing shows it as a header. Invalid arguments and configuration errors
-(`dvs_config_error`) are the only immediate errors.
+It returns a tibble of class `dvs_get_result` with the same columns as the JSON rows. `dvs_result_info(res)`
+returns the operation information (outcome, `did_as_asked`, policy and its source, counts, problem), and printing
+shows it as a header. Invalid arguments, not being in a dvs project, and configuration errors (`dvs_config_error`)
+are the only immediate errors.
 
 ### status
 
