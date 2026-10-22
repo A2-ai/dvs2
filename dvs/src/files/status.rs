@@ -1,5 +1,6 @@
 //! Local facts for machine-readable status, using cached hashes when available.
 use crate::cache::{self, FileStat};
+use crate::operation::{FileRow, Hashing, OperationContext, OperationPlan};
 use crate::{DvsPaths, ErrorCode, FileMetadata, Hashes, PathFilter};
 use anyhow::Result;
 use fs_err as fs;
@@ -26,38 +27,53 @@ pub struct StatusFacts {
     pub error: Option<String>,
 }
 
+/// Inspect tracked files in parallel. Each row goes to `ctx`'s observer as
+/// soon as it completes, so callers can stream rows; the returned rows are
+/// sorted by path. Hashing is reported only once a file is actually hashed.
+///
 /// Paths in the result are relative to `paths.repo_root()`, independent of cwd.
 pub fn inspect_status(
     paths: &DvsPaths,
     filter: Option<&PathFilter>,
     glob_pattern: Option<&str>,
+    ctx: &OperationContext,
 ) -> Result<Vec<StatusFacts>> {
+    let observer = ctx.observer();
     let (entries, cache, pool) = status_scan_inputs(paths, filter, glob_pattern)?;
+    // What hashing will read: the working files that are regular files. An
+    // extra stat per file, so only when someone hears the plan.
+    let bytes_total = if ctx.is_observed() {
+        pool.install(|| {
+            entries
+                .par_iter()
+                .filter_map(|path| fs::symlink_metadata(paths.file_path(path)).ok())
+                .filter(|meta| meta.is_file())
+                .map(|meta| meta.len())
+                .sum()
+        })
+    } else {
+        0
+    };
+    observer.planned(&OperationPlan {
+        files_total: entries.len() as u64,
+        bytes_total,
+        files_to_transfer: 0,
+        bytes_to_transfer: 0,
+    });
+    let hashing = Hashing::new(observer);
     let mut results = pool.install(|| {
         entries
             .into_par_iter()
-            .map(|path| inspect_path(path, paths, &cache))
+            .map(|path| {
+                let row = inspect_path(path, paths, &cache, &hashing);
+                observer.file_finished(FileRow::Status(&row));
+                row
+            })
             .collect::<Vec<_>>()
     });
+    hashing.finish();
     results.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(results)
-}
-
-/// Inspect tracked files in parallel and call `on_row` as each row completes.
-pub fn inspect_status_with_callback(
-    paths: &DvsPaths,
-    filter: Option<&PathFilter>,
-    glob_pattern: Option<&str>,
-    on_row: impl Fn(&StatusFacts) + Sync + Send,
-) -> Result<()> {
-    let (entries, cache, pool) = status_scan_inputs(paths, filter, glob_pattern)?;
-    pool.install(|| {
-        entries.into_par_iter().for_each(|path| {
-            let row = inspect_path(path, paths, &cache);
-            on_row(&row);
-        });
-    });
-    Ok(())
 }
 
 fn status_scan_inputs(
@@ -90,6 +106,7 @@ fn inspect_path(
     path: PathBuf,
     paths: &DvsPaths,
     cache: &Option<Mutex<cache::HashCache>>,
+    hashing: &Hashing<'_>,
 ) -> StatusFacts {
     let mut row = StatusFacts {
         path: path.clone(),
@@ -139,6 +156,9 @@ fn inspect_path(
         };
         anyhow::ensure!(full.is_file(), "working path is not a regular file");
         row.working.size = Some(stat.size);
+        // Hashing starts here: a cache lookup counts, while
+        // absent and failed rows never start hashing.
+        hashing.begin();
         let hit = cache
             .as_ref()
             .and_then(|c| c.lock().ok()?.lookup(&key, &stat).ok().flatten());
@@ -177,6 +197,7 @@ fn inspect_path(
 mod tests {
     use super::*;
     use crate::Compression;
+    use crate::operation::OperationObserver;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
     use std::sync::mpsc;
     use uuid::Uuid;
@@ -201,18 +222,18 @@ mod tests {
     #[test]
     fn cache_miss_computes_status_facts() {
         let (_temp, paths) = fixture();
-        let rows = inspect_status(&paths, None, None).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
         assert_eq!(rows[0].status, "current");
         assert_eq!(rows[0].working.hash_source, Some("computed"));
         #[cfg(feature = "cache")]
         {
-            let rows = inspect_status(&paths, None, None).unwrap();
+            let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
             assert_eq!(rows[0].status, "current");
             assert_eq!(rows[0].working.hash_source, Some("cache"));
             // A changed stat invalidates the cache without reading new file content.
             fs::write(paths.repo_root().join("data.txt"), b"changed content").unwrap();
             assert_eq!(
-                inspect_status(&paths, None, None).unwrap()[0].status,
+                inspect_status(&paths, None, None, &OperationContext::new()).unwrap()[0].status,
                 "unsynced"
             );
         }
@@ -221,7 +242,7 @@ mod tests {
     fn missing_and_bad_metadata_are_distinct() {
         let (_temp, paths) = fixture();
         fs::remove_file(paths.repo_root().join("data.txt")).unwrap();
-        let rows = inspect_status(&paths, None, None).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
         assert_eq!(rows[0].status, "absent");
         assert!(rows[0].error.is_none());
         fs::write(
@@ -229,7 +250,7 @@ mod tests {
             b"broken",
         )
         .unwrap();
-        let rows = inspect_status(&paths, None, None).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
         assert_eq!(rows[0].status, "error");
         assert_eq!(rows[0].code, Some(ErrorCode::BadMetadata));
     }
@@ -237,17 +258,28 @@ mod tests {
     #[test]
     fn callback_receives_a_completed_row_before_the_scan_returns() {
         let (_temp, paths) = fixture();
+        struct Pausing {
+            rows: Mutex<mpsc::Sender<StatusFacts>>,
+            resume: Mutex<mpsc::Receiver<()>>,
+        }
+        impl OperationObserver for Pausing {
+            fn file_finished(&self, row: FileRow<'_>) {
+                let FileRow::Status(row) = row else {
+                    panic!("status only reports status rows")
+                };
+                self.rows.lock().unwrap().send(row.clone()).unwrap();
+                self.resume.lock().unwrap().recv().unwrap();
+            }
+        }
         let (row_sender, row_receiver) = mpsc::channel();
         let (continue_sender, continue_receiver) = mpsc::channel();
-        let continue_receiver = Mutex::new(continue_receiver);
+        let ctx = OperationContext::new().with_observer(std::sync::Arc::new(Pausing {
+            rows: Mutex::new(row_sender),
+            resume: Mutex::new(continue_receiver),
+        }));
 
         std::thread::scope(|scope| {
-            let scan = scope.spawn(|| {
-                inspect_status_with_callback(&paths, None, None, |row| {
-                    row_sender.send(row.clone()).unwrap();
-                    continue_receiver.lock().unwrap().recv().unwrap();
-                })
-            });
+            let scan = scope.spawn(|| inspect_status(&paths, None, None, &ctx));
             let row = row_receiver
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
@@ -265,7 +297,7 @@ mod tests {
         let paths =
             DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name()).unwrap();
 
-        let statuses = inspect_status(&paths, None, None).unwrap();
+        let statuses = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
         assert!(statuses.is_empty());
     }
 
@@ -299,14 +331,16 @@ mod tests {
             paths: vec![PathBuf::from("dir1")],
             recursive: false,
         };
-        let statuses = inspect_status(&paths, Some(&filter), None).unwrap();
+        let statuses =
+            inspect_status(&paths, Some(&filter), None, &OperationContext::new()).unwrap();
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
 
         // Absolute path filter via from_user_paths
         let abs_path = paths.repo_root().join("dir1/b.txt");
         let filter = PathFilter::from_user_paths(vec![abs_path], false, &paths);
-        let statuses = inspect_status(&paths, Some(&filter), None).unwrap();
+        let statuses =
+            inspect_status(&paths, Some(&filter), None, &OperationContext::new()).unwrap();
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
     }
@@ -318,12 +352,14 @@ mod tests {
         // No filter (whole repo) + glob: the glob still applies, matched against
         // the full repo-relative path. `*.txt` (literal separator) hits only
         // root-level files.
-        let statuses = inspect_status(&paths, None, Some("*.txt")).unwrap();
+        let statuses =
+            inspect_status(&paths, None, Some("*.txt"), &OperationContext::new()).unwrap();
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("a.txt"));
 
         // `**/*.txt` reaches every tracked file.
-        let statuses = inspect_status(&paths, None, Some("**/*.txt")).unwrap();
+        let statuses =
+            inspect_status(&paths, None, Some("**/*.txt"), &OperationContext::new()).unwrap();
         assert_eq!(statuses.len(), 4);
     }
 
@@ -337,7 +373,7 @@ mod tests {
             DvsPaths::new(fs::canonicalize(root.join("dir1")).unwrap(), root, ".dvs").unwrap();
 
         // Literal separator: only the direct child dir1/b.txt, not a.txt/dir2.
-        let got: Vec<_> = inspect_status(&sub, None, Some("*.txt"))
+        let got: Vec<_> = inspect_status(&sub, None, Some("*.txt"), &OperationContext::new())
             .unwrap()
             .into_iter()
             .map(|f| f.path)
@@ -345,7 +381,7 @@ mod tests {
         assert_eq!(got, vec![PathBuf::from("dir1/b.txt")]);
 
         // Recursive glob reaches dir1/sub/c.txt, still scoped under dir1.
-        let got: Vec<_> = inspect_status(&sub, None, Some("**/*.txt"))
+        let got: Vec<_> = inspect_status(&sub, None, Some("**/*.txt"), &OperationContext::new())
             .unwrap()
             .into_iter()
             .map(|f| f.path)
@@ -353,6 +389,19 @@ mod tests {
         assert_eq!(
             got,
             vec![PathBuf::from("dir1/b.txt"), PathBuf::from("dir1/sub/c.txt")]
+        );
+    }
+
+    #[test]
+    fn observed_status_plans_the_bytes_to_hash() {
+        let (_temp, paths) = fixture();
+        let recorder = std::sync::Arc::new(crate::testutil::Recorder::default());
+        let ctx = OperationContext::new().with_observer(recorder.clone());
+        inspect_status(&paths, None, None, &ctx).unwrap();
+        // The extra stat pass, done only when observed, sizes the plan
+        assert_eq!(
+            recorder.seen(),
+            ["plan 1 8 0 0", "hash start", "row data.txt", "hash end"]
         );
     }
 }

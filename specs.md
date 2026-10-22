@@ -90,7 +90,8 @@ mutation preview), `error`, and for commands with rows (`add`, `get`, `status`, 
 own fields (`add`/`get` `bytes`, `get` `on_conflict`/`source`, `init` `project_root`, `logout`
 `revoked`/`warnings`, `info` its discovery fields). It carries its timing: `started_at` and `finished_at`
 (RFC 3339 UTC with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and `duration_ms` (integer milliseconds).
-Every time in JSON output is RFC 3339 UTC: `started_at`/`finished_at` and history's `timestamp` with
+`add` and `get` rows have a `duration_ms` for that file's work (hash, transfer, record), `null` for a row that
+did no work. Every time in JSON output is RFC 3339 UTC: `started_at`/`finished_at` and history's `timestamp` with
 milliseconds (the audit log on disk keeps unix seconds), a record's `add_time` is given
 as the record stores it. The only exception is event `ts` (unix milliseconds).
 
@@ -104,7 +105,7 @@ as the record stores it. The only exception is event `ts` (unix milliseconds).
 
 `add` and `get` results have `bytes: {total, to_transfer, already_stored, transferred}` (dry runs too):
 `total` is the sizes of the rows whose size is known; `to_transfer` the bytes that need moving (`add`: upload;
-`get`: see get); `already_stored` the rest (`add`: storage already has the content), so
+`get`: see get); `already_stored` the rest (`add`: the server already has the content), so
 `to_transfer + already_stored = total`; `transferred` what actually moved, so `0` in a dry run.
 
 Errors have one shape. The envelope's `error` is `null` or `{code, message, hint}`; every row of every command
@@ -169,15 +170,20 @@ request, login included, goes under it.
 
 `--emit-events` (instead of `--json`) writes NDJSON, one event per line, while the command runs and ends
 with the result document: `operation_started` (`command`), `waiting_for_auth` (`user_code`,
-`approval_url`; device login), `transfer_started` (`path`, `total_bytes`), `transfer_progress` (`path`,
-`bytes`, `total_bytes`; at most 10 per second per transfer), `transfer_finished` (`path`, `bytes`,
-`total_bytes`, `success`, `duration_ms`), `file_result` (`result`: one row, the same shape as a `--json`
-`files` row; each row is sent once: `status` streams each row as its local check completes, in completion
-order; other commands emit one per row just before the end), and `operation_finished` (`result`, the `--json`
-document without `files`, so the envelope and `counts`; `exit_code`, `started_at`, `finished_at`,
-`duration_ms`; always last). Every event has `v`, `operation_id` (`"<pid>-<nanos>"`), `seq` (0, 1, 2, ...),
-`type`, `ts` (unix milliseconds) and `elapsed_ms` (since the operation started). Transfer events describe
-transfer work only: the result is authoritative (a transfer can succeed and the install still fail).
+`approval_url`; device login), `operation_planned` (`files_total`, `bytes_total`, `files_to_transfer`,
+`bytes_to_transfer`; once, before any row), `hash_started`/`hash_finished` (`add`, `get`
+and `status`; only when a file is hashed), `transfer_started` (`path`,
+`total_bytes`), `transfer_progress` (`path`, `bytes`, `total_bytes`; at most 10 per second per transfer),
+`transfer_finished` (`path`, `bytes`, `total_bytes`, `success`, `duration_ms`), `file_result` (`result`: one
+row, the same shape as a `--json` `files` row, sent once, as soon as it is final, in completion order),
+`operation_progress` (`files_done`, `files_total`, `bytes_done`, `bytes_to_transfer`: files against the
+plan's `files_total`, moved bytes against its `bytes_to_transfer`; at most every 250 ms and only once a file
+finished or 1% of the bytes moved since the last one; the final count is always reported before the end), and
+`operation_finished` (`result`, the `--json` document without `files`, so the envelope and `counts`;
+`exit_code`, `started_at`, `finished_at`, `duration_ms`; always last). Every event has `v`, `operation_id`
+(`"<pid>-<nanos>"`), `seq` (0, 1, 2, ...), `type`, `ts` (unix milliseconds) and `elapsed_ms` (since the
+operation started). Transfer events describe transfer work only: the result is authoritative (a transfer can
+succeed and the install still fail).
 
 #### R package
 
