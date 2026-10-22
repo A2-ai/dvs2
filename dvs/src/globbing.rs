@@ -72,6 +72,11 @@ pub fn resolve_paths_for_add(
                     if !entry_path.is_file() || entry_path.starts_with(&metadata_root) {
                         continue;
                     }
+                    // dvs writes .gitignore files next to tracked data: only an
+                    // explicit path adds one, never a glob
+                    if entry.file_name() == ".gitignore" {
+                        continue;
+                    }
 
                     // Get path relative to the walked directory for matching
                     let relative_to_dir = match entry_path.strip_prefix(&full_path) {
@@ -257,6 +262,26 @@ mod tests {
         // We keep it, it will be rejected later down the line since it's a dir
         assert!(result.contains(&PathBuf::from("data")));
         assert!(result.contains(&PathBuf::from("foo.txt")));
+    }
+
+    #[test]
+    fn add_glob_skips_gitignore_unless_explicit() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        File::create(dvs_paths.repo_root().join("data/.gitignore")).unwrap();
+        File::create(dvs_paths.repo_root().join("data/subdir/.gitignore")).unwrap();
+
+        let walked =
+            resolve_paths_for_add(vec![PathBuf::from("data")], Some("**/*"), &dvs_paths).unwrap();
+        assert!(walked.contains(&PathBuf::from("data/a.csv")));
+        assert!(!walked.iter().any(|p| p.ends_with(".gitignore")));
+
+        let walked = resolve_paths_for_add(vec![], Some("data/*"), &dvs_paths).unwrap();
+        assert!(!walked.iter().any(|p| p.ends_with(".gitignore")));
+
+        let explicit =
+            resolve_paths_for_add(vec![PathBuf::from("data/.gitignore")], None, &dvs_paths)
+                .unwrap();
+        assert!(explicit.contains(&PathBuf::from("data/.gitignore")));
     }
 
     #[test]
