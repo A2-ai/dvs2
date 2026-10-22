@@ -123,7 +123,7 @@ specific is known (`get` also uses it when no tracked file matched).
 
 Row codes, besides the shared ones:
 
-- `add`: `file_failed`; the reason is in `message`.
+- `add`: `io_error`, `operation_failed`; `file_failed` if a failure has no code.
 - `get`: `local_changes`, `unknown_local`, `batch_aborted`, `not_tracked`, `not_a_file`,
   `unsafe_path`, `source_missing`, `hash_mismatch`, `destination_changed`,
   `permission_denied`, `file_in_use`, `io_error`.

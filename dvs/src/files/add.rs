@@ -63,15 +63,33 @@ pub enum AddErrorCode {
     ServerUnavailable,
     IoError,
     OperationFailed,
+    AuthRequired,
+    AuthExpired,
+    ServerTooOld,
+    ProjectNotFound,
+    BadMetadata,
+    CredentialsUnreadable,
+}
+
+impl From<ErrorCode> for AddErrorCode {
+    fn from(code: ErrorCode) -> Self {
+        match code {
+            ErrorCode::AuthRequired => AddErrorCode::AuthRequired,
+            ErrorCode::AuthExpired => AddErrorCode::AuthExpired,
+            ErrorCode::AccessDenied => AddErrorCode::AccessDenied,
+            ErrorCode::ServerUnavailable => AddErrorCode::ServerUnavailable,
+            ErrorCode::ServerTooOld => AddErrorCode::ServerTooOld,
+            ErrorCode::ProjectNotFound => AddErrorCode::ProjectNotFound,
+            ErrorCode::BadMetadata => AddErrorCode::BadMetadata,
+            ErrorCode::CredentialsUnreadable => AddErrorCode::CredentialsUnreadable,
+        }
+    }
 }
 
 fn add_error_code(error: &anyhow::Error) -> AddErrorCode {
-    match backend_error_code(error) {
-        Some(ErrorCode::AccessDenied) => return AddErrorCode::AccessDenied,
-        Some(ErrorCode::ServerUnavailable) => return AddErrorCode::ServerUnavailable,
-        _ => {}
-    }
-    if error.downcast_ref::<std::io::Error>().is_some() {
+    if let Some(code) = backend_error_code(error) {
+        code.into()
+    } else if error.downcast_ref::<std::io::Error>().is_some() {
         AddErrorCode::IoError
     } else {
         AddErrorCode::OperationFailed
@@ -704,7 +722,13 @@ mod tests {
         let report = add(&["locked.txt", "ok.txt"], &paths, backend, false);
         fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        assert!(matches!(report.files[0].detail, AddDetail::Error { .. }));
+        assert!(matches!(
+            report.files[0].detail,
+            AddDetail::Error {
+                code: AddErrorCode::IoError,
+                ..
+            }
+        ));
         assert!(matches!(report.files[1].detail, AddDetail::Success { .. }));
         assert_eq!(report.bytes.total, 2);
     }

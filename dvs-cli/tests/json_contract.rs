@@ -426,16 +426,28 @@ fn status_hash_and_history_rows_use_code_message_hint() {
     }
 }
 
-/// K25: availability never reads records, so a conflicted one changes
-/// nothing there.
+/// K25: an unreadable `.dvs` record is `bad_metadata` in add too, never
+/// `invalid_record`; availability never reads records, so a conflicted one
+/// changes nothing there.
 #[test]
-fn an_unreadable_record_does_not_affect_availability() {
+fn an_unreadable_record_is_bad_metadata_in_add() {
     let (root, _storage) = project();
     std::fs::write(root.path().join("data.txt"), "content").unwrap();
     let added = document(&run(root.path(), &["add", "data.txt", "--json"]));
     let hash = added["files"][0]["hash"].as_str().unwrap().to_string();
     let conflicted = "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> theirs\n";
     std::fs::write(root.path().join(".dvs/data.txt.dvs"), conflicted).unwrap();
+
+    let output = run(root.path(), &["add", "data.txt", "--json"]);
+    assert_eq!(output.status.code(), Some(1));
+    let row = &document(&output)["files"][0];
+    assert_eq!(row["code"], "bad_metadata", "{row}");
+    assert!(row["message"].as_str().unwrap().contains("data.txt.dvs"));
+    // The record is left for the user to fix
+    assert_eq!(
+        std::fs::read_to_string(root.path().join(".dvs/data.txt.dvs")).unwrap(),
+        conflicted
+    );
 
     let output = run(
         root.path(),

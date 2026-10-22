@@ -119,8 +119,9 @@ fn backend_failures_have_one_code_at_the_top_level() {
     assert_eq!(document(&add)["error"]["code"], "server_unavailable");
 }
 
-/// C4: per-file failures carry the shared codes in get rows, and a failed
-/// access check gives every file its shared code, not one catch-all.
+/// C4: per-file failures carry the same shared codes in add and get rows,
+/// and a failed access check gives every file its shared code, not one
+/// catch-all.
 #[test]
 fn per_file_backend_failures_have_the_shared_codes() {
     for (status, body, code) in [
@@ -130,6 +131,16 @@ fn per_file_backend_failures_have_the_shared_codes() {
         (405, "", "server_too_old"),
         (500, "", "server_unavailable"),
     ] {
+        let stub = Stub::start();
+        let sandbox = server_project(&stub);
+        sandbox.write("up.txt", "upload me");
+        stub.fail(route("PUT", "blobs/"), status, body);
+        let add = sandbox.run(&["--json", "add", "up.txt"]);
+        assert_eq!(add.status.code(), Some(1));
+        let result = document(&add);
+        assert_eq!(result["files"][0]["code"], code, "{result}");
+        assert_eq!(result["outcome"], "failed");
+
         let stub = Stub::start();
         let sandbox = server_project(&stub);
         added(&sandbox, &["down.txt"]);
