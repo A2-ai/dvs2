@@ -108,7 +108,6 @@ fn add_file_failures_have_stable_codes_and_keep_the_message() {
     assert_eq!(result["files"][0]["code"], "io_error");
     assert!(result["files"][0]["message"].as_str().is_some());
 }
-
 #[test]
 fn partial_add_has_one_result_and_nonzero_exit() {
     let (root, _storage) = project();
@@ -279,9 +278,9 @@ fn keys(value: &Value, out: &mut Vec<String>) {
 fn every_command_follows_the_exit_code_table_and_the_error_shape() {
     let (root, storage) = project();
     std::fs::write(root.path().join("data.txt"), "recorded").unwrap();
+    let hash = "0".repeat(64);
     let objects = storage.path().join("objects");
     let objects = objects.to_str().unwrap();
-    let hash = "0".repeat(64);
     // (arguments, exit status): 0 complete, 1 failure/partial, 2 usage/config
     let cases: Vec<(Vec<&str>, i32)> = vec![
         (vec!["add", "data.txt"], 0),
@@ -293,11 +292,11 @@ fn every_command_follows_the_exit_code_table_and_the_error_shape() {
         (vec!["hash", "missing.txt"], 1),
         (vec!["get", "data.txt"], 0),
         (vec!["get", "untracked.txt"], 1),
-        (vec!["info"], 0),
         (vec!["availability", &hash], 0),
         (vec!["availability", "not-a-hash"], 2),
         (vec!["history"], 0),
         (vec!["history", "../outside.txt"], 2),
+        (vec!["info"], 0),
         (vec!["init", "local", objects], 1),
         (vec!["attach", "proj", "http://127.0.0.1:1/"], 1),
         (vec!["attach"], 2),
@@ -367,6 +366,7 @@ fn add_success_and_error_rows_have_the_same_keys() {
         row_keys(good),
         [
             "code",
+            "duration_ms",
             "hash",
             "hint",
             "message",

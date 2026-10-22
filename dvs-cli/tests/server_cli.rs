@@ -1,8 +1,11 @@
-//! The CLI against a stand-in dvs-server: error codes (C4), credentials in
-//! machine mode (C5), URL path prefixes (C6) and byte totals (C8).
+//! The CLI against a stand-in dvs-server: streamed rows (C3), error codes
+//! (C4), credentials in machine mode (C5), URL path prefixes (C6) and byte
+//! totals (C8).
 mod common;
 
-use common::{PROJECT, Sandbox, Stub, document, route, stderr};
+use common::{
+    Live, PROJECT, Sandbox, Stub, by_path, document, file_results, parse_stream, route, stderr,
+};
 use serde_json::Value;
 
 /// A logged-in server project.
@@ -28,6 +31,79 @@ fn added(sandbox: &Sandbox, names: &[&str]) {
     for name in names {
         std::fs::remove_file(sandbox.project().join(name)).unwrap();
     }
+}
+
+/// C3: add and get stream each row when it is final, not at the end.
+#[test]
+fn add_and_get_stream_each_row_before_slower_files_finish() {
+    let stub = Stub::start();
+    let sandbox = server_project(&stub);
+    sandbox.write("a-fast.txt", "fast");
+    sandbox.write("b-slow.txt", "slow content");
+    let held = stub.hold(|request| request.method == "PUT" && request.body == b"slow content");
+    let mut command = sandbox.dvs();
+    command.args([
+        "--emit-events",
+        "--threads",
+        "4",
+        "add",
+        "a-fast.txt",
+        "b-slow.txt",
+    ]);
+    let mut live = Live::spawn(command);
+    held.wait();
+    // The stub still holds the slow upload, so this can only arrive if rows
+    // are streamed as they finish
+    let row = live.next_event(|event| event["type"] == "file_result");
+    assert_eq!(row["result"]["path"], "a-fast.txt");
+    held.release();
+    let (code, out, _) = live.finish();
+    assert_eq!(code, 0);
+    let events = parse_stream(out.as_bytes(), 0);
+    let first_row = events
+        .iter()
+        .position(|e| e["type"] == "file_result")
+        .unwrap();
+    let slow_finished = events
+        .iter()
+        .position(|e| e["type"] == "transfer_finished" && e["path"] == "b-slow.txt")
+        .unwrap();
+    assert!(first_row < slow_finished);
+    let result = &events.last().unwrap()["result"];
+    assert_eq!(
+        result["files"].as_array().unwrap().clone(),
+        by_path(file_results(&events))
+    );
+    assert_eq!(result["files"][0]["path"], "a-fast.txt");
+
+    for name in ["a-fast.txt", "b-slow.txt"] {
+        std::fs::remove_file(sandbox.project().join(name)).unwrap();
+    }
+    let held = stub.hold(|request| request.method == "GET" && request.query.contains("b-slow"));
+    let mut command = sandbox.dvs();
+    command.args([
+        "--emit-events",
+        "--threads",
+        "4",
+        "get",
+        "a-fast.txt",
+        "b-slow.txt",
+    ]);
+    let mut live = Live::spawn(command);
+    held.wait();
+    let row = live.next_event(|event| event["type"] == "file_result");
+    assert_eq!(row["result"]["path"], "a-fast.txt");
+    assert_eq!(row["result"]["action"], "restored");
+    held.release();
+    let (code, out, _) = live.finish();
+    assert_eq!(code, 0);
+    let events = parse_stream(out.as_bytes(), 0);
+    let result = &events.last().unwrap()["result"];
+    assert_eq!(result["outcome"], "complete");
+    assert_eq!(
+        result["files"].as_array().unwrap().clone(),
+        by_path(file_results(&events))
+    );
 }
 
 /// C6: a server behind a path prefix, with and without the trailing slash,

@@ -1,5 +1,6 @@
 //! Local facts for machine-readable status, using cached hashes when available.
 use crate::cache::{self, FileStat};
+use crate::operation::{FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard};
 use crate::{DvsPaths, FileMetadata, Hashes, PathFilter, Status};
 use anyhow::Result;
 use fs_err as fs;
@@ -31,40 +32,56 @@ pub struct StatusFacts {
     pub error: Option<String>,
 }
 
+/// Inspect tracked files in parallel. Each row goes to `ctx`'s observer
+/// (`file_finished`) as soon as its local status check completes, so callers
+/// can stream rows; the returned rows are sorted by path.
+///
+/// Also reports the `scan` and `hash` phases and, between them, the plan
+/// (files and working bytes to look at; nothing to transfer). `scan` is
+/// finished on every exit, errors included; `hash` is reported only once a
+/// file is actually hashed (or its cached hash looked up), so a run of only
+/// absent or failed rows has none.
+///
 /// Paths in the result are relative to `paths.repo_root()`, independent of cwd.
 pub fn inspect_status(
     paths: &DvsPaths,
     filter: Option<&PathFilter>,
     glob_pattern: Option<&str>,
+    ctx: &OperationContext,
 ) -> Result<Vec<StatusFacts>> {
+    let observer = ctx.observer();
+    let scan = PhaseGuard::start(observer, Phase::Scan);
     let (entries, cache, pool) = status_scan_inputs(paths, filter, glob_pattern)?;
+    // What hashing will read: the working files that are regular files
+    let bytes_total = pool.install(|| {
+        entries
+            .par_iter()
+            .filter_map(|path| fs::symlink_metadata(paths.file_path(path)).ok())
+            .filter(|meta| meta.is_file())
+            .map(|meta| meta.len())
+            .sum()
+    });
+    scan.finish();
+    observer.planned(&OperationPlan {
+        files_total: entries.len() as u64,
+        bytes_total,
+        files_to_transfer: 0,
+        bytes_to_transfer: 0,
+    });
+    let hashing = LazyPhase::new(observer, Phase::Hash);
     let mut results = pool.install(|| {
         entries
             .into_par_iter()
-            .map(|path| inspect_path(path, paths, &cache))
+            .map(|path| {
+                let row = inspect_path(path, paths, &cache, &hashing);
+                observer.file_finished(FileRow::Status(&row));
+                row
+            })
             .collect::<Vec<_>>()
     });
+    hashing.finish();
     results.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(results)
-}
-
-/// Inspect tracked files in parallel and call `on_row` as each local status
-/// check completes. Callers that need additional backend facts can resolve
-/// those before publishing the row.
-pub fn inspect_status_with_callback(
-    paths: &DvsPaths,
-    filter: Option<&PathFilter>,
-    glob_pattern: Option<&str>,
-    on_row: impl Fn(&StatusFacts) + Sync + Send,
-) -> Result<()> {
-    let (entries, cache, pool) = status_scan_inputs(paths, filter, glob_pattern)?;
-    pool.install(|| {
-        entries.into_par_iter().for_each(|path| {
-            let row = inspect_path(path, paths, &cache);
-            on_row(&row);
-        });
-    });
-    Ok(())
 }
 
 fn status_scan_inputs(
@@ -97,6 +114,7 @@ fn inspect_path(
     path: PathBuf,
     paths: &DvsPaths,
     cache: &Option<Mutex<cache::HashCache>>,
+    hashing: &LazyPhase<'_>,
 ) -> StatusFacts {
     let mut row = StatusFacts {
         path: path.clone(),
@@ -151,6 +169,9 @@ fn inspect_path(
         };
         anyhow::ensure!(full.is_file(), "working path is not a regular file");
         row.working.size = Some(stat.size);
+        // Hashing starts here, as in `hash`: a cache lookup counts, while
+        // absent and failed rows never open the phase.
+        hashing.begin();
         let hit = cache
             .as_ref()
             .and_then(|c| c.lock().ok()?.lookup(&key, &stat).ok().flatten());
@@ -197,6 +218,7 @@ fn inspect_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::operation::OperationObserver;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
     use std::sync::Mutex;
     use std::sync::mpsc;
@@ -221,18 +243,18 @@ mod tests {
     #[test]
     fn cache_miss_computes_status_facts() {
         let (_temp, paths) = fixture();
-        let rows = inspect_status(&paths, None, None).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
         assert_eq!(rows[0].status, Status::Current);
         assert_eq!(rows[0].working.hash_source, Some("computed"));
         #[cfg(feature = "cache")]
         {
-            let rows = inspect_status(&paths, None, None).unwrap();
+            let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
             assert_eq!(rows[0].status, Status::Current);
             assert_eq!(rows[0].working.hash_source, Some("cache"));
             // A changed stat invalidates the cache without reading new file content.
             fs::write(paths.repo_root().join("data.txt"), b"changed content").unwrap();
             assert_eq!(
-                inspect_status(&paths, None, None).unwrap()[0].status,
+                inspect_status(&paths, None, None, &OperationContext::new()).unwrap()[0].status,
                 Status::Unsynced
             );
         }
@@ -241,7 +263,7 @@ mod tests {
     fn missing_and_bad_metadata_are_distinct() {
         let (_temp, paths) = fixture();
         fs::remove_file(paths.repo_root().join("data.txt")).unwrap();
-        let rows = inspect_status(&paths, None, None).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
         assert_eq!(rows[0].status, Status::Absent);
         assert!(rows[0].error.is_none());
         fs::write(
@@ -249,7 +271,7 @@ mod tests {
             b"broken",
         )
         .unwrap();
-        let rows = inspect_status(&paths, None, None).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
         assert_eq!(rows[0].status, Status::Error);
         assert_eq!(rows[0].code, Some("bad_metadata"));
     }
@@ -257,17 +279,28 @@ mod tests {
     #[test]
     fn callback_receives_a_completed_row_before_the_scan_returns() {
         let (_temp, paths) = fixture();
+        struct Pausing {
+            rows: Mutex<mpsc::Sender<StatusFacts>>,
+            resume: Mutex<mpsc::Receiver<()>>,
+        }
+        impl OperationObserver for Pausing {
+            fn file_finished(&self, row: FileRow<'_>) {
+                let FileRow::Status(row) = row else {
+                    panic!("status only reports status rows")
+                };
+                self.rows.lock().unwrap().send(row.clone()).unwrap();
+                self.resume.lock().unwrap().recv().unwrap();
+            }
+        }
         let (row_sender, row_receiver) = mpsc::channel();
         let (continue_sender, continue_receiver) = mpsc::channel();
-        let continue_receiver = Mutex::new(continue_receiver);
+        let ctx = OperationContext::new().with_observer(std::sync::Arc::new(Pausing {
+            rows: Mutex::new(row_sender),
+            resume: Mutex::new(continue_receiver),
+        }));
 
         std::thread::scope(|scope| {
-            let scan = scope.spawn(|| {
-                inspect_status_with_callback(&paths, None, None, |row| {
-                    row_sender.send(row.clone()).unwrap();
-                    continue_receiver.lock().unwrap().recv().unwrap();
-                })
-            });
+            let scan = scope.spawn(|| inspect_status(&paths, None, None, &ctx));
             let row = row_receiver
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
@@ -283,7 +316,7 @@ mod tests {
     fn baseline_distinguishes_clean_old_version_from_edits() {
         let (_temp, paths) = fixture();
         let cache = cache::open_cache(&paths).unwrap();
-        let rows = inspect_status(&paths, None, None).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
         let original = rows[0].working.hashes.as_ref().unwrap();
         cache
             .set_baseline(
@@ -299,10 +332,51 @@ mod tests {
             serde_json::to_vec(&target).unwrap(),
         )
         .unwrap();
-        let stale = inspect_status(&paths, None, None).unwrap();
+        let stale = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
         assert_eq!(stale[0].status, Status::Stale);
         fs::write(paths.repo_root().join("data.txt"), b"user edits").unwrap();
-        let modified = inspect_status(&paths, None, None).unwrap();
+        let modified = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
         assert_eq!(modified[0].status, Status::Modified);
+    }
+
+    #[test]
+    fn status_reports_a_hash_phase_when_a_file_is_hashed() {
+        use crate::testutil::{Recorder, Seen};
+        let (_temp, paths) = fixture();
+        let recorder = std::sync::Arc::new(Recorder::default());
+        let ctx = OperationContext::new().with_observer(recorder.clone());
+        inspect_status(&paths, None, None, &ctx).unwrap();
+        assert_eq!(
+            recorder.outline(),
+            vec![
+                Seen::PhaseStarted(Phase::Scan),
+                Seen::PhaseFinished(Phase::Scan),
+                Seen::Planned(OperationPlan {
+                    files_total: 1,
+                    bytes_total: 8,
+                    files_to_transfer: 0,
+                    bytes_to_transfer: 0,
+                }),
+                Seen::PhaseStarted(Phase::Hash),
+                Seen::PhaseFinished(Phase::Hash),
+            ]
+        );
+    }
+
+    #[test]
+    fn status_scan_error_still_finishes_the_scan_phase() {
+        use crate::testutil::{Recorder, Seen};
+        let (_temp, paths) = fixture();
+        let recorder = std::sync::Arc::new(Recorder::default());
+        let ctx = OperationContext::new().with_observer(recorder.clone());
+        // An unclosed character class fails while building the glob matcher
+        assert!(inspect_status(&paths, None, Some("["), &ctx).is_err());
+        assert_eq!(
+            recorder.outline(),
+            vec![
+                Seen::PhaseStarted(Phase::Scan),
+                Seen::PhaseFinished(Phase::Scan),
+            ]
+        );
     }
 }

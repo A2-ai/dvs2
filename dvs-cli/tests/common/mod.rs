@@ -522,3 +522,79 @@ pub fn tree(dir: &Path) -> Vec<String> {
     out.sort();
     out
 }
+
+/// Spawned `dvs` whose stdout lines arrive on a channel as they are written.
+pub struct Live {
+    pub child: std::process::Child,
+    lines: mpsc::Receiver<String>,
+    pub seen: Vec<String>,
+    reader: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Live {
+    pub fn spawn(mut command: Command) -> Self {
+        let mut child = command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (send, lines) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if send.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            child,
+            lines,
+            seen: Vec::new(),
+            reader: Some(reader),
+        }
+    }
+
+    /// Read events until one satisfies `until`; returns it.
+    pub fn next_event(&mut self, until: impl Fn(&Value) -> bool) -> Value {
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(WAIT)
+                .unwrap_or_else(|_| panic!("no matching event; saw:\n{}", self.seen.join("\n")));
+            self.seen.push(line.clone());
+            let event: Value = serde_json::from_str(&line).unwrap();
+            if until(&event) {
+                return event;
+            }
+        }
+    }
+
+    /// Wait for the process; returns its exit code and every stdout line.
+    pub fn finish(mut self) -> (i32, String, String) {
+        let status = self.child.wait().unwrap();
+        if let Some(reader) = self.reader.take() {
+            reader.join().unwrap();
+        }
+        while let Ok(line) = self.lines.try_recv() {
+            self.seen.push(line);
+        }
+        let mut err = String::new();
+        if let Some(mut stderr) = self.child.stderr.take() {
+            let _ = stderr.read_to_string(&mut err);
+        }
+        let mut out = self.seen.join("\n");
+        out.push('\n');
+        (status.code().unwrap_or(-1), out, err)
+    }
+}
+
+/// A test that fails part-way must not leave `dvs` running (a held
+/// transfer would keep it alive until [`WAIT`] runs out).
+impl Drop for Live {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}

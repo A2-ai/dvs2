@@ -291,10 +291,13 @@ pub fn print_human(report: &GetReport) {
     }
 }
 
-/// One row as `get --json` reports it.
+/// One row as `get --json` reports it, and as `--emit-events` streams it
+/// the moment it is final (C3).
 pub fn row_json(r: &GetRow) -> serde_json::Value {
     let mut v = serde_json::to_value(r).expect("rows serialize");
     v["hint"] = json!(hint(r));
+    // Not serialized by the library (K8): the CLI's rows carry it (C2)
+    v["duration_ms"] = json!(r.duration_ms);
     v
 }
 

@@ -1,9 +1,62 @@
-//! What a running operation reports about itself beyond its rows: byte
-//! totals, and the clock helpers its timing is reported with.
+//! What a running operation (`add`, `get`, `status`, `hash`) shares with its
+//! caller: when it started, and an observer that hears about progress as it
+//! happens.
+//!
+//! The library only reports facts through [`OperationObserver`]: the plan,
+//! phases, transfer bytes and finished rows. Frontends decide what to do with
+//! them (the CLI turns them into NDJSON events and aggregates and throttles
+//! operation progress; the R package drives a progress bar). Every hook has a
+//! no-op default, so an observer implements only what it uses.
 
+use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+
+use crate::files::add::AddResult;
+use crate::files::get::GetRow;
+use crate::files::hash::HashRow;
+use crate::inspect::StatusFacts;
+use crate::progress::FileProgress;
+
+/// A stage of an operation. A phase that does not occur is not reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Phase {
+    /// Selecting and validating the files to work on
+    Scan,
+    /// Hashing working files
+    Hash,
+    /// Asking storage what it has (access check, manifest, existence checks)
+    CheckStorage,
+    /// Moving bytes to or from storage
+    Transfer,
+    /// Writing records, baselines and the gitignore
+    Record,
+}
+
+impl Phase {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Phase::Scan => "scan",
+            Phase::Hash => "hash",
+            Phase::CheckStorage => "check_storage",
+            Phase::Transfer => "transfer",
+            Phase::Record => "record",
+        }
+    }
+}
+
+/// What an operation is about to do, known once selection and storage checks
+/// are done. `hash` and `status` report zero `*_to_transfer`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct OperationPlan {
+    pub files_total: u64,
+    pub bytes_total: u64,
+    pub files_to_transfer: u64,
+    pub bytes_to_transfer: u64,
+}
 
 /// Byte totals for an `add` or `get` result, dry run included.
 ///
@@ -33,6 +86,161 @@ impl ByteTotals {
         if transferred {
             self.transferred += size;
         }
+    }
+}
+
+/// A file's final row, in the same shape the command's result will hold.
+#[derive(Debug, Clone, Copy)]
+pub enum FileRow<'a> {
+    Add(&'a AddResult),
+    Get(&'a GetRow),
+    Status(&'a StatusFacts),
+    Hash(&'a HashRow),
+}
+
+/// Hooks an operation calls as it runs. Called from worker threads, possibly
+/// concurrently; implementations serialize their own output.
+pub trait OperationObserver: Send + Sync {
+    /// Once, after selection and storage checks, before any transfer.
+    fn planned(&self, _plan: &OperationPlan) {}
+
+    fn phase_started(&self, _phase: Phase) {}
+
+    fn phase_finished(&self, _phase: Phase) {}
+
+    /// A transfer of `total_bytes` for `path` is starting. The returned
+    /// callbacks receive byte deltas and the transfer's success; `None` means
+    /// nobody is watching this transfer.
+    fn transfer_started(&self, _path: &Path, _total_bytes: u64) -> Option<FileProgress> {
+        None
+    }
+
+    /// A file's outcome is final, in completion order.
+    fn file_finished(&self, _row: FileRow<'_>) {}
+}
+
+/// A started phase that reports `phase_finished` when dropped, so a phase is
+/// closed on every exit, `?` and `bail!` included.
+#[must_use = "dropping the guard finishes the phase at once"]
+pub struct PhaseGuard<'a> {
+    observer: &'a dyn OperationObserver,
+    phase: Phase,
+}
+
+impl<'a> PhaseGuard<'a> {
+    /// Reports `phase_started` now and `phase_finished` on drop.
+    pub fn start(observer: &'a dyn OperationObserver, phase: Phase) -> Self {
+        observer.phase_started(phase);
+        Self { observer, phase }
+    }
+
+    /// Finishes the phase here, for readability; the same as dropping it.
+    pub fn finish(self) {}
+}
+
+impl Drop for PhaseGuard<'_> {
+    fn drop(&mut self) {
+        self.observer.phase_finished(self.phase);
+    }
+}
+
+/// A phase that starts the first time work in it begins, from any thread, and
+/// is never reported if no work does. Finished on drop if it started.
+pub struct LazyPhase<'a> {
+    observer: &'a dyn OperationObserver,
+    phase: Phase,
+    started: std::sync::Once,
+}
+
+impl<'a> LazyPhase<'a> {
+    pub fn new(observer: &'a dyn OperationObserver, phase: Phase) -> Self {
+        Self {
+            observer,
+            phase,
+            started: std::sync::Once::new(),
+        }
+    }
+
+    /// Call before each piece of work in the phase. The first call reports
+    /// `phase_started`; concurrent callers wait for it, so no work in the
+    /// phase is reported before the phase is.
+    pub fn begin(&self) {
+        self.started
+            .call_once(|| self.observer.phase_started(self.phase));
+    }
+
+    /// Finishes the phase here if it started; the same as dropping it.
+    pub fn finish(self) {}
+}
+
+impl Drop for LazyPhase<'_> {
+    fn drop(&mut self) {
+        if self.started.is_completed() {
+            self.observer.phase_finished(self.phase);
+        }
+    }
+}
+
+/// Hears nothing. The default observer.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoopObserver;
+
+impl OperationObserver for NoopObserver {}
+
+/// Adapts an `on_file_start` callback (the pre-observer progress API) into an
+/// observer that only watches transfers.
+pub struct TransferObserver<F>(pub F);
+
+impl<F> OperationObserver for TransferObserver<F>
+where
+    F: Fn(&Path, u64) -> FileProgress + Send + Sync,
+{
+    fn transfer_started(&self, path: &Path, total_bytes: u64) -> Option<FileProgress> {
+        Some((self.0)(path, total_bytes))
+    }
+}
+
+/// Passed to every operation. One context is one operation: one start time.
+#[derive(Clone)]
+pub struct OperationContext {
+    started: Instant,
+    started_at: SystemTime,
+    observer: Arc<dyn OperationObserver>,
+}
+
+impl Default for OperationContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OperationContext {
+    /// Starts now, observed by nobody.
+    pub fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            started_at: SystemTime::now(),
+            observer: Arc::new(NoopObserver),
+        }
+    }
+
+    pub fn with_observer(mut self, observer: Arc<dyn OperationObserver>) -> Self {
+        self.observer = observer;
+        self
+    }
+
+    pub fn observer(&self) -> &dyn OperationObserver {
+        &*self.observer
+    }
+
+    /// Monotonic start, for `elapsed_ms` and durations.
+    pub fn started(&self) -> Instant {
+        self.started
+    }
+
+    /// Wall-clock start, for `started_at`.
+    pub fn started_at(&self) -> SystemTime {
+        self.started_at
     }
 }
 
@@ -72,5 +280,57 @@ mod tests {
         assert_eq!(unix_ms(time), 1_761_057_000_123);
         assert_eq!(rfc3339_ms(time), "2025-10-21T14:30:00.123Z");
         assert_eq!(rfc3339_ms(UNIX_EPOCH), "1970-01-01T00:00:00.000Z");
+    }
+
+    #[derive(Default)]
+    struct Phases(std::sync::Mutex<Vec<(bool, Phase)>>);
+
+    impl OperationObserver for Phases {
+        fn phase_started(&self, phase: Phase) {
+            self.0.lock().unwrap().push((true, phase));
+        }
+        fn phase_finished(&self, phase: Phase) {
+            self.0.lock().unwrap().push((false, phase));
+        }
+    }
+
+    #[test]
+    fn phase_guards_finish_on_every_exit() {
+        let seen = Phases::default();
+        let early_exit = || -> Result<(), ()> {
+            let _scan = PhaseGuard::start(&seen, Phase::Scan);
+            Err(())?;
+            Ok(())
+        };
+        assert!(early_exit().is_err());
+        // A lazy phase nobody began is never reported; one begun twice is
+        // reported once
+        LazyPhase::new(&seen, Phase::CheckStorage).finish();
+        let transfer = LazyPhase::new(&seen, Phase::Transfer);
+        transfer.begin();
+        transfer.begin();
+        drop(transfer);
+        assert_eq!(
+            *seen.0.lock().unwrap(),
+            vec![
+                (true, Phase::Scan),
+                (false, Phase::Scan),
+                (true, Phase::Transfer),
+                (false, Phase::Transfer),
+            ]
+        );
+    }
+
+    #[test]
+    fn phases_serialize_as_their_names() {
+        for phase in [
+            Phase::Scan,
+            Phase::Hash,
+            Phase::CheckStorage,
+            Phase::Transfer,
+            Phase::Record,
+        ] {
+            assert_eq!(serde_json::to_value(phase).unwrap(), phase.as_str());
+        }
     }
 }

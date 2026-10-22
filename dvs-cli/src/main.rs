@@ -1,13 +1,12 @@
 mod events;
 mod get_cmd;
+mod observer;
 mod output;
 mod read_cmd;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::thread;
-use std::time::{Instant, SystemTime};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
@@ -26,9 +25,12 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, AddResult, Backend, Compression, ErrorCode, FileMetadata, FileProgress, GetOptions,
-    Outcome, PathFilter, Status, add_files, format_size, get_files, hash_files, set_num_threads,
+    AddDetail, AddResult, Backend, Compression, ErrorCode, FileMetadata, FileProgress, FileRow,
+    GetOptions, OperationContext, Outcome, PathFilter, Status, add_files, format_size, get_files,
+    hash_files, set_num_threads,
 };
+
+use crate::observer::CliObserver;
 
 #[derive(Debug, Subcommand)]
 pub enum Init {
@@ -208,17 +210,17 @@ pub struct Cli {
 }
 
 #[derive(Tabled)]
-struct StatusRow {
-    path: String,
-    status: String,
-    size: String,
-}
-
-#[derive(Tabled)]
 struct HashTableRow {
     path: String,
     size: String,
     blake3: String,
+}
+
+#[derive(Tabled)]
+struct StatusRow {
+    path: String,
+    status: String,
+    size: String,
 }
 
 #[derive(Default, Tabled)]
@@ -267,37 +269,6 @@ fn status_row_selected(row: &dvs::inspect::StatusFacts, selection: StatusSelecti
         || (selection.unsynced && row.status == Status::Unsynced)
 }
 
-/// Stream each row as soon as its local baseline comparison completes.
-fn inspect_status_events(
-    paths: &DvsPaths,
-    filter: Option<&PathFilter>,
-    glob_pattern: Option<&str>,
-    selection: StatusSelection,
-) -> Result<Vec<dvs::inspect::StatusFacts>> {
-    let events = events::active().expect("status event publishing requires event mode");
-    let (sender, receiver) = mpsc::sync_channel(32);
-    let mut results = Vec::new();
-    thread::scope(|scope| -> Result<()> {
-        let scan = scope.spawn(move || {
-            dvs::inspect::inspect_status_with_callback(paths, filter, glob_pattern, |row| {
-                let _ = sender.send(row.clone());
-            })
-        });
-        while let Ok(row) = receiver.recv() {
-            if status_row_selected(&row, selection) {
-                events.file_result(status_row(&row));
-            }
-            results.push(row);
-        }
-
-        scan.join()
-            .map_err(|_| anyhow!("Status inspection worker panicked"))??;
-        results.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(())
-    })?;
-    Ok(results)
-}
-
 /// An add row as results carry it, and whether it is an error row. Success
 /// and error rows have the same keys (§9 rec 1): the success fields are null
 /// on an error row, `code`/`message`/`hint` null on a success. Built here,
@@ -332,7 +303,10 @@ fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
             true,
         ),
     };
-    (output::file_result(value, is_error), is_error)
+    let mut value = output::file_result(value, is_error);
+    // Not serialized by the library (K8): the CLI's rows carry it (C2)
+    value["duration_ms"] = json!(r.duration_ms);
+    (value, is_error)
 }
 
 /// A status row as results carry it: the library's `error` text is the row's
@@ -352,6 +326,7 @@ fn hash_row(row: &dvs::HashRow) -> serde_json::Value {
     output::row_error_fields(serde_json::to_value(row).expect("hash rows serialize"))
 }
 
+/// A table with right-aligned sizes, as status and hash print them.
 fn print_table<T: Tabled>(rows: Vec<T>) {
     let mut table = tabled::Table::new(rows);
     table
@@ -430,15 +405,15 @@ fn run_device_login(url: &Url, machine: bool) -> Result<()> {
     Ok(())
 }
 
-fn try_main(cli: Cli) -> Result<()> {
+fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
     if let Some(n) = cli.threads {
         set_num_threads(n);
     }
     let current_dir = std::env::current_dir()?;
-    // C5: machine mode (--json) never changes stored credentials: a rejected
-    // token or an unparsable store is reported and left in place. People get
-    // them repaired, and are told to run `dvs login`. Only login and logout
-    // change credentials on purpose.
+    // C5: machine mode (cli.json, which --emit-events implies) never changes
+    // stored credentials: a rejected token or an unparsable store is
+    // reported and left in place. People get them repaired, and are told to
+    // run `dvs login`. Only login and logout change credentials on purpose.
     let credentials = if cli.json {
         CredentialPolicy::Preserve
     } else {
@@ -543,15 +518,15 @@ fn try_main(cli: Cli) -> Result<()> {
             }
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
-
-            let human_progress = make_progress_callback(config.progress_bytes_threshold());
-            let on_file_start = move |path: &std::path::Path, size| {
-                if let Some(events) = events::active() {
-                    events.progress(path, size)
-                } else {
-                    human_progress(path, size)
-                }
-            };
+            let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
+                FileRow::Add(r) => Some(add_row(r).0),
+                _ => None,
+            });
+            if show_progress {
+                observer =
+                    observer.with_bars(make_progress_callback(config.progress_bytes_threshold()));
+            }
+            let ctx = ctx.clone().with_observer(Arc::new(observer));
             let report = add_files(
                 all_paths,
                 &dvs_paths,
@@ -559,11 +534,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 message,
                 config.compression(),
                 dry_run,
-                if show_progress || (!dry_run && events::active().is_some()) {
-                    Some(&on_file_start)
-                } else {
-                    None
-                },
+                &ctx,
             )?;
             let results = &report.files;
             let has_errors = results
@@ -573,7 +544,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 let (files, failed) = output::file_results(results.iter().map(add_row));
                 let mut result = output::envelope("add", dry_run, files, failed);
                 result["bytes"] = json!(report.bytes);
-                output::emit(result);
+                output::emit_streamed(result);
             } else {
                 for result in results {
                     match &result.detail {
@@ -603,11 +574,11 @@ fn try_main(cli: Cli) -> Result<()> {
                         },
                     }
                 }
-            }
-            if has_errors {
-                if !cli.json {
+                if has_errors {
                     eprintln!("Error: Some files failed to add");
                 }
+            }
+            if has_errors {
                 return Err(Exit(1).into());
             }
         }
@@ -634,18 +605,18 @@ fn try_main(cli: Cli) -> Result<()> {
                 unsynced,
             };
 
-            let filter = if user_paths.is_empty() {
-                None
-            } else {
-                Some(PathFilter::from_user_paths(
-                    user_paths, recursive, &dvs_paths,
-                ))
-            };
-            let mut statuses = if events::active().is_some() {
-                inspect_status_events(&dvs_paths, filter.as_ref(), glob.as_deref(), selection)?
-            } else {
-                dvs::inspect::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref())?
-            };
+            let filter = (!user_paths.is_empty())
+                .then(|| PathFilter::from_user_paths(user_paths, recursive, &dvs_paths));
+            // Rows stream as soon as their local check completes
+            let observer = CliObserver::new(false).with_rows(move |row| match row {
+                FileRow::Status(row) if status_row_selected(row, selection) => {
+                    Some(status_row(row))
+                }
+                _ => None,
+            });
+            let ctx = ctx.clone().with_observer(Arc::new(observer));
+            let mut statuses =
+                dvs::inspect::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
             if !show_all {
                 statuses.retain(|row| status_row_selected(row, selection));
             }
@@ -684,11 +655,7 @@ fn try_main(cli: Cli) -> Result<()> {
                             })
                         })
                         .collect();
-                    let mut table = tabled::Table::new(rows);
-                    table
-                        .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
-                        .with(Modify::new(Rows::first()).with(Alignment::left()));
-                    println!("{table}");
+                    print_table(rows);
                 } else {
                     let rows: Vec<StatusRow> = statuses
                         .iter()
@@ -703,17 +670,11 @@ fn try_main(cli: Cli) -> Result<()> {
                                 .unwrap_or_default(),
                         })
                         .collect();
-                    let mut table = tabled::Table::new(rows);
-                    table
-                        .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
-                        .with(Modify::new(Rows::first()).with(Alignment::left()));
-                    println!("{table}");
+                    print_table(rows);
                 }
             }
             if failed > 0 {
-                if !cli.json {
-                    eprintln!("Error: Some files failed to get status");
-                }
+                eprintln!("Error: Some files failed to get status");
                 return Err(Exit(1).into());
             }
         }
@@ -726,11 +687,16 @@ fn try_main(cli: Cli) -> Result<()> {
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let filter = (!user_paths.is_empty())
                 .then(|| PathFilter::from_user_paths(user_paths, recursive, &dvs_paths));
-            let rows = hash_files(&dvs_paths, filter.as_ref(), glob.as_deref())?;
+            let observer = CliObserver::new(false).with_rows(|row| match row {
+                FileRow::Hash(row) => Some(hash_row(row)),
+                _ => None,
+            });
+            let ctx = ctx.clone().with_observer(Arc::new(observer));
+            let rows = hash_files(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
             let failed = rows.iter().filter(|r| r.code.is_some()).count();
             if cli.json {
                 let files = rows.iter().map(hash_row).collect();
-                output::emit(output::envelope("hash", false, files, failed));
+                output::emit_streamed(output::envelope("hash", false, files, failed));
             } else {
                 for row in &rows {
                     if let Some(message) = &row.message {
@@ -787,14 +753,15 @@ fn try_main(cli: Cli) -> Result<()> {
             let (config, on_conflict, source, dvs_paths, selection) = setup()?;
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
-            let human_progress = make_progress_callback(config.progress_bytes_threshold());
-            let on_file_start = move |path: &std::path::Path, size| {
-                if let Some(events) = events::active() {
-                    events.progress(path, size)
-                } else {
-                    human_progress(path, size)
-                }
-            };
+            let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
+                FileRow::Get(r) => Some(get_cmd::row_json(r)),
+                _ => None,
+            });
+            if show_progress {
+                observer =
+                    observer.with_bars(make_progress_callback(config.progress_bytes_threshold()));
+            }
+            let ctx = ctx.clone().with_observer(Arc::new(observer));
             let report = get_files(
                 selection,
                 &dvs_paths,
@@ -804,14 +771,10 @@ fn try_main(cli: Cli) -> Result<()> {
                     on_conflict,
                     source,
                 },
-                if show_progress || (!dry_run && events::active().is_some()) {
-                    Some(&on_file_start)
-                } else {
-                    None
-                },
+                &ctx,
             );
             if cli.json {
-                output::emit(get_cmd::to_json(&report));
+                output::emit_streamed(get_cmd::to_json(&report));
             } else {
                 get_cmd::print_human(&report);
             }
@@ -1175,8 +1138,10 @@ fn main() {
             error.exit();
         }
     };
-    // Every result is timed from here (C2)
-    output::start_clock(Instant::now(), SystemTime::now());
+    // One operation per run: its start time is shared by every library call
+    // the command makes, and times every result (C2).
+    let ctx = OperationContext::new();
+    output::start_clock(ctx.started(), ctx.started_at());
     let command = cli.command.name();
     let dry_run = cli.command.dry_run();
     if cli.emit_events {
@@ -1185,7 +1150,7 @@ fn main() {
         cli.json = true;
     }
     let json = cli.json;
-    let code = match try_main(cli) {
+    let code = match try_main(cli, &ctx) {
         Ok(()) => 0,
         Err(error) => {
             if let Some(Exit(code)) = error.downcast_ref::<Exit>() {

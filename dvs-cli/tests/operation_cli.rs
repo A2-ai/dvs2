@@ -1,8 +1,8 @@
-//! Operation reporting on a local project: timing (C2), `dvs hash` (C7) and
-//! byte totals (C8).
+//! Operation reporting on a local project: timing (C2), `dvs hash` (C7),
+//! byte totals (C8) and plan/phase/progress events (O1).
 mod common;
 
-use common::{Sandbox, by_path, document, file_results, parse_stream, stderr};
+use common::{Sandbox, by_path, document, file_results, of_type, parse_stream, stderr};
 use serde_json::{Value, json};
 
 fn local_project() -> Sandbox {
@@ -70,8 +70,8 @@ fn every_json_result_carries_its_timing() {
         let output = sandbox.dvs().arg("--json").args(&args).output().unwrap();
         let result = document(&output);
         assert_timed(&result);
-        if args[0] == "hash" {
-            for row in result["files"].as_array().unwrap() {
+        for row in result["files"].as_array().unwrap() {
+            if ["add", "get", "hash"].contains(&args[0]) {
                 assert!(
                     row["duration_ms"].is_u64() || row["duration_ms"].is_null(),
                     "{args:?}: {row}"
@@ -143,9 +143,13 @@ fn every_event_carries_ts_and_elapsed_ms() {
     }
     for kind in [
         "operation_started",
+        "operation_planned",
+        "phase_started",
+        "phase_finished",
         "transfer_started",
         "transfer_finished",
         "file_result",
+        "operation_progress",
         "operation_finished",
     ] {
         assert!(kinds.contains(kind), "{kind}: {kinds:?}");
@@ -362,4 +366,87 @@ fn add_and_get_report_byte_totals_matching_their_rows() {
         refused["bytes"],
         json!({"total": 0, "to_transfer": 0, "already_stored": 0, "transferred": 0})
     );
+}
+
+/// O1: the plan comes once before any row, phases pair up, and progress is
+/// throttled but always ends on the final count.
+#[test]
+fn plan_phases_and_throttled_progress() {
+    let sandbox = local_project();
+    let names: Vec<String> = (0..400).map(|i| format!("f{i:03}.txt")).collect();
+    for name in &names {
+        sandbox.write(name, format!("file {name}"));
+    }
+    for command in [&["add"][..], &["status"], &["hash"], &["get"]] {
+        let mut args = vec!["--emit-events"];
+        args.extend_from_slice(command);
+        if command[0] == "add" {
+            args.extend(names.iter().map(String::as_str));
+        }
+        if command[0] == "get" {
+            for name in names.iter().take(200) {
+                std::fs::remove_file(sandbox.project().join(name)).unwrap();
+            }
+        }
+        let output = sandbox.dvs().args(&args).output().unwrap();
+        let events = parse_stream(&output.stdout, 0);
+        let planned = of_type(&events, "operation_planned");
+        assert_eq!(planned.len(), 1, "{command:?}");
+        let plan = planned[0];
+        assert_eq!(plan["files_total"], 400, "{plan}");
+        let plan_at = plan["seq"].as_u64().unwrap();
+        assert!(
+            of_type(&events, "file_result")
+                .iter()
+                .all(|row| row["seq"].as_u64().unwrap() > plan_at)
+        );
+        if command[0] != "add" && command[0] != "get" {
+            assert_eq!(plan["files_to_transfer"], 0);
+            assert_eq!(plan["bytes_to_transfer"], 0);
+        }
+        if command[0] == "get" {
+            assert_eq!(plan["files_to_transfer"], 200, "{plan}");
+        }
+
+        // Phases: each one started once and finished after it started
+        let mut open = std::collections::BTreeMap::new();
+        for event in &events {
+            let phase = event["phase"].as_str().unwrap_or_default().to_string();
+            match event["type"].as_str().unwrap() {
+                "phase_started" => assert!(open.insert(phase, true).is_none()),
+                "phase_finished" => assert_eq!(open.remove(&phase), Some(true), "{phase}"),
+                _ => {}
+            }
+        }
+        assert!(open.is_empty(), "{open:?}");
+        assert!(!of_type(&events, "phase_started").is_empty());
+
+        // Progress: bounded by the 250 ms throttle, ending at the final count
+        let progress = of_type(&events, "operation_progress");
+        let elapsed = events.last().unwrap()["elapsed_ms"].as_u64().unwrap();
+        assert!(!progress.is_empty(), "{command:?}");
+        assert!(
+            progress.len() as u64 <= elapsed / 250 + 2,
+            "{} progress events in {elapsed} ms",
+            progress.len()
+        );
+        let last = progress.last().unwrap();
+        assert_eq!(last["files_done"], 400, "{last}");
+        assert_eq!(last["files_total"], 400);
+        assert_eq!(last["bytes_total"], plan["bytes_to_transfer"]);
+        for pair in progress.windows(2) {
+            assert!(pair[1]["elapsed_ms"].as_u64() >= pair[0]["elapsed_ms"].as_u64());
+            let gap = pair[1]["ts"].as_u64().unwrap() - pair[0]["ts"].as_u64().unwrap();
+            // All but the final flush are throttled
+            if pair[1] != *last {
+                assert!(gap >= 249, "{gap} ms between progress events");
+            }
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.get("rate").is_some() || e.get("eta").is_some()),
+            "no rate or ETA fields"
+        );
+    }
 }

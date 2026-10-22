@@ -6,8 +6,9 @@ use anyhow::Error;
 use dvs::operation::{duration_ms, rfc3339_ms};
 use serde_json::{Value, json};
 
-/// When this run started, for the timing every result carries (C2). One run
-/// is one operation, so this is set once, before anything is emitted.
+/// When this run's operation started, for the timing every result carries
+/// (C2). One run is one operation, so this is set once, from the operation
+/// context, before anything is emitted.
 #[derive(Clone, Copy)]
 pub struct Clock {
     pub started: Instant,
@@ -186,7 +187,7 @@ pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value
 }
 
 /// One row as results carry it: a success has a null `code`, a failure
-/// always a code.
+/// always a code. Streamed rows go through here too, so they match.
 pub fn file_result(mut value: Value, is_error: bool) -> Value {
     if !is_error {
         value["code"] = Value::Null;

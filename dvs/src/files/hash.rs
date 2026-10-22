@@ -17,7 +17,9 @@ use walkdir::WalkDir;
 use crate::cache::{self, HashSource};
 use crate::globbing::build_glob_matcher;
 use crate::hashes::Hashes;
-use crate::operation::duration_ms;
+use crate::operation::{
+    FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard, duration_ms,
+};
 use crate::paths::{DvsPaths, PathFilter};
 
 /// One selected file. Every field is always present (null when not
@@ -40,8 +42,8 @@ pub struct HashRow {
 const SYMLINK_CODE: &str = "local_read_failed";
 const SYMLINK_MESSAGE: &str = "working path contains a symlink";
 
-/// Hashes the files selected by `filter`/`glob_pattern`. Rows are sorted by
-/// path.
+/// Hashes the files selected by `filter`/`glob_pattern`, reporting each row
+/// to `ctx`'s observer as it finishes. Rows are sorted by path.
 ///
 /// Selection is `status`'s, plus untracked files that a path or glob names:
 /// no filter and no glob selects exactly the tracked files; a glob without a
@@ -53,30 +55,59 @@ const SYMLINK_MESSAGE: &str = "working path contains a symlink";
 /// tracked file absent from disk, a symlink (named, walked, or a symlinked
 /// parent; never followed or hashed) and a directory the walk cannot read each
 /// get an error row (status's code where status has one, else `io_error`).
+///
+/// Reports the `scan` phase, the plan, then (if anything is hashed) the `hash`
+/// phase; the plan precedes every row.
 pub fn hash_files(
     paths: &DvsPaths,
     filter: Option<&PathFilter>,
     glob_pattern: Option<&str>,
+    ctx: &OperationContext,
 ) -> Result<Vec<HashRow>> {
+    let observer = ctx.observer();
+    let scan = PhaseGuard::start(observer, Phase::Scan);
     let selected = select_working_files(paths, filter, glob_pattern)?;
+    scan.finish();
+    observer.planned(&OperationPlan {
+        files_total: selected.len() as u64,
+        bytes_total: selected
+            .values()
+            .map(|s| match s {
+                Selected::File(size) => *size,
+                Selected::Problem(..) => 0,
+            })
+            .sum(),
+        files_to_transfer: 0,
+        bytes_to_transfer: 0,
+    });
 
     let mut to_hash = Vec::with_capacity(selected.len());
     let mut rows = Vec::new();
     for (path, selected) in selected {
         match selected {
-            Selected::File => to_hash.push(path),
-            Selected::Problem(code, message) => rows.push(error_row(path, code, message, None)),
+            Selected::File(_) => to_hash.push(path),
+            Selected::Problem(code, message) => {
+                let row = error_row(path, code, message, None);
+                observer.file_finished(FileRow::Hash(&row));
+                rows.push(row);
+            }
         }
     }
 
+    let hashing = LazyPhase::new(observer, Phase::Hash);
     let cache = cache::try_open_cache(paths);
     let pool = crate::utils::get_threadpool(to_hash.len().max(1))?;
     rows.extend(pool.install(|| {
         to_hash
             .into_par_iter()
-            .map(|path| hash_one(path, paths, cache.as_ref()))
+            .map(|path| {
+                let row = hash_one(path, paths, cache.as_ref(), &hashing);
+                observer.file_finished(FileRow::Hash(&row));
+                row
+            })
             .collect::<Vec<_>>()
     }));
+    hashing.finish();
     rows.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(rows)
 }
@@ -99,11 +130,13 @@ fn error_row(
 }
 
 /// Hashes one selected file. The checks that need no reading come first and
-/// fail with a `null` duration: such a row did no hashing work.
+/// fail with a `null` duration: such a row did no hashing work, and only a
+/// file about to be read starts the `hash` phase.
 fn hash_one(
     path: PathBuf,
     paths: &DvsPaths,
     cache: Option<&std::sync::Mutex<cache::HashCache>>,
+    hashing: &LazyPhase<'_>,
 ) -> HashRow {
     let root = paths.repo_root();
     let full = paths.file_path(&path);
@@ -134,6 +167,7 @@ fn hash_one(
             return error_row(path, "io_error", e.to_string(), None);
         }
     }
+    hashing.begin();
     let start = Instant::now();
     let key = path.to_string_lossy().into_owned();
     match cache::hashes_for_file_with_source(&full, &key, cache) {
@@ -157,10 +191,10 @@ fn hash_one(
     }
 }
 
-/// A selected path: a file to hash, or the problem the scan found with it,
-/// which becomes its error row.
+/// A selected path: a file to hash (with its size at scan time, 0 if unknown)
+/// or the problem the scan found with it, which becomes its error row.
 enum Selected {
-    File,
+    File(u64),
     Problem(&'static str, String),
 }
 
@@ -180,13 +214,22 @@ fn select_working_files(
     let filter = filter.or(cwd_filter.as_ref());
     let root = paths.repo_root();
     let metadata_root = paths.metadata_folder();
+    let size_of = |relative: &Path| {
+        std::fs::symlink_metadata(root.join(relative))
+            .ok()
+            .filter(|m| m.is_file())
+            .map_or(0, |m| m.len())
+    };
 
     // What status selects: the tracked files the filter matches, present or not
     let mut selected: BTreeMap<PathBuf, Selected> = paths
         .tracked_paths()
         .into_iter()
         .filter(|path| filter.is_none_or(|f| f.matches(path, glob.as_ref())))
-        .map(|path| (path, Selected::File))
+        .map(|path| {
+            let size = size_of(&path);
+            (path, Selected::File(size))
+        })
         .collect();
     // Untracked files only where a path or glob names them
     let Some(filter) = filter else {
@@ -262,9 +305,10 @@ fn select_working_files(
                         .or_insert_with(symlink);
                 }
             } else if entry.file_type().is_file() && matched {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                 selected
                     .entry(relative.to_path_buf())
-                    .or_insert(Selected::File);
+                    .or_insert(Selected::File(size));
             }
         }
     }
@@ -293,9 +337,10 @@ fn crosses_symlink(root: &Path, path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
+    use crate::testutil::{Recorder, Seen, create_file, create_temp_git_repo, init_dvs_repo};
     use crate::{Compression, FileMetadata};
     use fs_err as fs;
+    use std::sync::Arc;
 
     /// A project with a tracked `data/tracked.csv` and untracked files beside
     /// and below it.
@@ -324,7 +369,13 @@ mod tests {
     #[test]
     fn hashes_tracked_and_untracked_files_alike() {
         let (_tmp, paths) = fixture();
-        let rows = hash_files(&paths, Some(&filter(&paths, &["data"], false)), None).unwrap();
+        let rows = hash_files(
+            &paths,
+            Some(&filter(&paths, &["data"], false)),
+            None,
+            &OperationContext::new(),
+        )
+        .unwrap();
         assert_eq!(selected(&rows), ["data/tracked.csv", "data/untracked.txt"]);
         let (expected, size) =
             Hashes::compute_from_path(&paths.file_path(Path::new("data/untracked.txt")), &[])
@@ -340,8 +391,9 @@ mod tests {
     #[test]
     fn selection_follows_status_rules() {
         let (_tmp, paths) = fixture();
+        let ctx = OperationContext::new();
         // Recursive directory
-        let rows = hash_files(&paths, Some(&filter(&paths, &["data"], true)), None).unwrap();
+        let rows = hash_files(&paths, Some(&filter(&paths, &["data"], true)), None, &ctx).unwrap();
         assert_eq!(
             selected(&rows),
             [
@@ -355,23 +407,25 @@ mod tests {
             &paths,
             Some(&filter(&paths, &["data"], false)),
             Some("**/*.csv"),
+            &ctx,
         )
         .unwrap();
         assert_eq!(selected(&rows), ["data/sub/deep.csv", "data/tracked.csv"]);
         // A bare glob is matched from the cwd (the root here), one level deep
-        let rows = hash_files(&paths, None, Some("*.csv")).unwrap();
+        let rows = hash_files(&paths, None, Some("*.csv"), &ctx).unwrap();
         assert_eq!(selected(&rows), ["top.csv"]);
         // An explicit file
         let rows = hash_files(
             &paths,
             Some(&filter(&paths, &["data/sub/deep.csv"], false)),
             None,
+            &ctx,
         )
         .unwrap();
         assert_eq!(selected(&rows), ["data/sub/deep.csv"]);
         // The whole project, named, without the metadata folder or .git
         create_file(paths.repo_root(), ".git/HEAD", b"ref: refs/heads/main");
-        let rows = hash_files(&paths, Some(&filter(&paths, &["."], true)), None).unwrap();
+        let rows = hash_files(&paths, Some(&filter(&paths, &["."], true)), None, &ctx).unwrap();
         let all = selected(&rows);
         for path in [
             "data/sub/deep.csv",
@@ -388,7 +442,7 @@ mod tests {
             "{all:?}"
         );
         // Nothing named: exactly the tracked files, as status selects them
-        let rows = hash_files(&paths, None, None).unwrap();
+        let rows = hash_files(&paths, None, None, &ctx).unwrap();
         assert_eq!(selected(&rows), ["data/tracked.csv"]);
     }
 
@@ -409,9 +463,10 @@ mod tests {
         let (_tmp, paths) = fixture();
         track(&paths, "data/gone.csv", b"gone");
         fs::remove_file(paths.file_path(Path::new("data/gone.csv"))).unwrap();
+        let ctx = OperationContext::new();
 
         // A tracked file absent from disk is selected, as status selects it
-        let rows = hash_files(&paths, None, None).unwrap();
+        let rows = hash_files(&paths, None, None, &ctx).unwrap();
         assert_eq!(selected(&rows), ["data/gone.csv", "data/tracked.csv"]);
         assert_eq!(rows[0].code, Some("io_error"));
         assert!(rows[0].hashes.is_none() && rows[0].message.is_some());
@@ -423,6 +478,7 @@ mod tests {
             &paths,
             Some(&filter(&paths, &["nope.csv", "data/gone.csv"], false)),
             None,
+            &ctx,
         )
         .unwrap();
         assert_eq!(selected(&rows), ["data/gone.csv", "nope.csv"]);
@@ -437,6 +493,7 @@ mod tests {
         let root = paths.repo_root().to_path_buf();
         symlink(root.join("data/tracked.csv"), root.join("data/link.csv")).unwrap();
         symlink(root.join("data/sub"), root.join("data/linkdir")).unwrap();
+        let ctx = OperationContext::new();
         let is_symlink_row = |r: &HashRow| {
             r.code == Some("local_read_failed")
                 && r.message.as_deref() == Some("working path contains a symlink")
@@ -452,13 +509,14 @@ mod tests {
                 false,
             )),
             None,
+            &ctx,
         )
         .unwrap();
         assert_eq!(selected(&rows), ["data/link.csv", "data/linkdir/deep.csv"]);
         assert!(rows.iter().all(is_symlink_row), "{rows:?}");
 
         // Walked: one row per link, nothing read through the directory link
-        let rows = hash_files(&paths, Some(&filter(&paths, &["data"], true)), None).unwrap();
+        let rows = hash_files(&paths, Some(&filter(&paths, &["data"], true)), None, &ctx).unwrap();
         assert_eq!(
             selected(&rows),
             [
@@ -476,6 +534,7 @@ mod tests {
             &paths,
             Some(&filter(&paths, &["data"], false)),
             Some("**/*.csv"),
+            &ctx,
         )
         .unwrap();
         assert!(is_symlink_row(row(&rows, "data/linkdir")));
@@ -485,7 +544,7 @@ mod tests {
         let tracked = root.join("data/tracked.csv");
         fs::rename(&tracked, root.join("data/real.csv")).unwrap();
         symlink(root.join("data/real.csv"), &tracked).unwrap();
-        let rows = hash_files(&paths, None, None).unwrap();
+        let rows = hash_files(&paths, None, None, &ctx).unwrap();
         assert_eq!(selected(&rows), ["data/tracked.csv"]);
         assert!(is_symlink_row(&rows[0]));
     }
@@ -503,17 +562,27 @@ mod tests {
         track(&paths, "data/link.csv", b"link");
         fs::remove_file(root.join("data/link.csv")).unwrap();
         symlink(root.join("data/tracked.csv"), root.join("data/link.csv")).unwrap();
+        let recorder = Arc::new(Recorder::default());
+        let ctx = OperationContext::new().with_observer(recorder.clone());
         let rows = hash_files(
             &paths,
             Some(&filter(&paths, &["data/gone.csv", "data/link.csv"], false)),
             None,
+            &ctx,
         )
         .unwrap();
         assert_eq!(selected(&rows), ["data/gone.csv", "data/link.csv"]);
         assert_eq!(row(&rows, "data/gone.csv").code, Some("io_error"));
         assert_eq!(row(&rows, "data/link.csv").code, Some(SYMLINK_CODE));
-        // Neither was read: no duration
+        // Neither was read: no duration and no hash phase
         assert!(rows.iter().all(|r| r.duration_ms.is_none()), "{rows:?}");
+        assert!(
+            !recorder
+                .outline()
+                .contains(&Seen::PhaseStarted(Phase::Hash)),
+            "{:?}",
+            recorder.outline()
+        );
     }
 
     #[test]
@@ -529,13 +598,27 @@ mod tests {
             fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
             return;
         }
-        let rows = hash_files(&paths, Some(&filter(&paths, &["data"], true)), None);
+        let recorder = Arc::new(Recorder::default());
+        let ctx = OperationContext::new().with_observer(recorder.clone());
+        let rows = hash_files(&paths, Some(&filter(&paths, &["data"], true)), None, &ctx);
         fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
         let rows = rows.unwrap();
         let locked_row = row(&rows, "data/locked");
         assert_eq!(locked_row.code, Some("io_error"));
         assert!(locked_row.message.is_some() && locked_row.duration_ms.is_none());
         assert_eq!(rows.iter().filter(|r| r.code.is_none()).count(), 3);
+        // The scan's error row is reported after the plan, like every row
+        let seen = recorder.seen();
+        let planned = seen
+            .iter()
+            .position(|s| matches!(s, Seen::Planned(_)))
+            .unwrap();
+        let first_row = seen
+            .iter()
+            .position(|s| matches!(s, Seen::Finished { .. }))
+            .unwrap();
+        assert!(planned < first_row, "{seen:?}");
+        assert_eq!(recorder.finished().len(), rows.len());
     }
 
     #[test]
@@ -543,15 +626,22 @@ mod tests {
     fn second_hash_comes_from_the_cache_and_baseline_is_untouched() {
         let (_tmp, paths) = fixture();
         let only = filter(&paths, &["data/tracked.csv"], false);
-        let first = hash_files(&paths, Some(&only), None).unwrap();
+        let ctx = OperationContext::new();
+        let first = hash_files(&paths, Some(&only), None, &ctx).unwrap();
         assert_eq!(first[0].hash_source, Some(HashSource::Computed));
-        let second = hash_files(&paths, Some(&only), None).unwrap();
+        let second = hash_files(&paths, Some(&only), None, &ctx).unwrap();
         assert_eq!(second[0].hash_source, Some(HashSource::Cache));
         assert_eq!(first[0].hashes, second[0].hashes);
         let cache = cache::open_cache(&paths).unwrap();
         assert_eq!(cache.baseline("data/tracked.csv").unwrap(), None);
         // No record appears for an untracked file
-        hash_files(&paths, Some(&filter(&paths, &["top.csv"], false)), None).unwrap();
+        hash_files(
+            &paths,
+            Some(&filter(&paths, &["top.csv"], false)),
+            None,
+            &ctx,
+        )
+        .unwrap();
         assert!(!paths.metadata_path(Path::new("top.csv")).exists());
     }
 
@@ -566,7 +656,13 @@ mod tests {
             // Running as root: permissions do not stop reads
             return;
         }
-        let rows = hash_files(&paths, Some(&filter(&paths, &["data"], false)), None).unwrap();
+        let rows = hash_files(
+            &paths,
+            Some(&filter(&paths, &["data"], false)),
+            None,
+            &OperationContext::new(),
+        )
+        .unwrap();
         fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
         let row = rows
             .iter()
@@ -575,5 +671,29 @@ mod tests {
         assert_eq!(row.code, Some("io_error"));
         assert!(row.message.is_some() && row.hashes.is_none());
         assert_eq!(rows.iter().filter(|r| r.code.is_none()).count(), 2);
+    }
+
+    #[test]
+    fn observer_calls() {
+        let (_tmp, paths) = fixture();
+        let recorder = Arc::new(Recorder::default());
+        let ctx = OperationContext::new().with_observer(recorder.clone());
+        let rows = hash_files(&paths, Some(&filter(&paths, &["data"], true)), None, &ctx).unwrap();
+        assert_eq!(recorder.finished().len(), rows.len());
+        assert_eq!(
+            recorder.outline(),
+            vec![
+                Seen::PhaseStarted(Phase::Scan),
+                Seen::PhaseFinished(Phase::Scan),
+                Seen::Planned(OperationPlan {
+                    files_total: 3,
+                    bytes_total: 4 + 7 + 9,
+                    files_to_transfer: 0,
+                    bytes_to_transfer: 0,
+                }),
+                Seen::PhaseStarted(Phase::Hash),
+                Seen::PhaseFinished(Phase::Hash),
+            ]
+        );
     }
 }

@@ -28,7 +28,8 @@ use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
     Compression, FileMetadata, FileProgress, FileStatus, GetCode, GetOptions, GetReport, GetRow,
-    Hashes, PathFilter, Status, StatusDetail, add_files, get_files, get_status, set_num_threads,
+    Hashes, OperationContext, PathFilter, Status, StatusDetail, TransferObserver, add_files,
+    get_files, get_status, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -226,7 +227,8 @@ pub(crate) fn dvs_add(
     let dry_run = dry_run.unwrap_or(false);
     let results = if progress_callback.is_some() {
         run_with_progress(|tx| {
-            let on_file_start = progress_on_file_start(tx);
+            let ctx = OperationContext::new()
+                .with_observer(Arc::new(TransferObserver(progress_on_file_start(tx))));
             add_files(
                 all_paths.clone(),
                 &dvs_paths,
@@ -234,7 +236,7 @@ pub(crate) fn dvs_add(
                 message.clone(),
                 config.compression(),
                 dry_run,
-                Some(&on_file_start),
+                &ctx,
             )
             .map(|report| report.files)
         })?
@@ -246,7 +248,7 @@ pub(crate) fn dvs_add(
             message,
             config.compression(),
             dry_run,
-            None,
+            &OperationContext::new(),
         )?
         .files
     };
@@ -548,17 +550,24 @@ pub(crate) fn dvs_get(
 
     let report = if progress_callback.is_some() && !dry_run {
         run_with_progress(|tx| {
-            let on_file_start = progress_on_file_start(tx);
+            let ctx = OperationContext::new()
+                .with_observer(Arc::new(TransferObserver(progress_on_file_start(tx))));
             Ok(get_files(
                 selection,
                 &dvs_paths,
                 config.backend(),
                 options,
-                Some(&on_file_start),
+                &ctx,
             ))
         })?
     } else {
-        get_files(selection, &dvs_paths, config.backend(), options, None)
+        get_files(
+            selection,
+            &dvs_paths,
+            config.backend(),
+            options,
+            &OperationContext::new(),
+        )
     };
     Ok(get_result_list(&report, None))
 }

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
 use fs_err as fs;
@@ -15,9 +16,11 @@ use crate::config::Compression;
 use crate::error::{ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
-use crate::operation::ByteTotals;
+use crate::operation::{
+    ByteTotals, FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard,
+    duration_ms, millis,
+};
 use crate::paths::{DvsPaths, ProjectPath};
-use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
 use crate::{Outcome, cache};
 
@@ -27,6 +30,11 @@ pub struct AddResult {
     pub path: PathBuf,
     #[serde(flatten)]
     pub detail: AddDetail,
+    /// Time spent on this file (hash + transfer + record); `None` when it did
+    /// no work. Not serialized by the library, so the R package's output is
+    /// unchanged; the CLI adds it to its rows.
+    #[serde(skip)]
+    pub duration_ms: Option<u64>,
 }
 
 /// The whole result of an `add`: one row per file, sorted by path, plus byte
@@ -96,6 +104,18 @@ fn add_error_code(error: &anyhow::Error) -> AddErrorCode {
     }
 }
 
+fn error_row(path: PathBuf, error: &anyhow::Error, duration_ms: Option<u64>) -> AddResult {
+    log::warn!("Failed to add {}: {error}", path.display());
+    AddResult {
+        path,
+        detail: AddDetail::Error {
+            code: add_error_code(error),
+            error: error.to_string(),
+        },
+        duration_ms,
+    }
+}
+
 /// A file to add: the metadata it will get, waiting on the backend.
 struct Pending {
     relative_path: PathBuf,
@@ -103,6 +123,8 @@ struct Pending {
     /// Whether storage already has this content, so nothing needs uploading.
     /// Known once storage has been asked (step 2); false until then.
     stored: bool,
+    /// Time spent on this file so far: hashing, then storage and record
+    work: Duration,
 }
 
 impl Pending {
@@ -125,7 +147,8 @@ impl Pending {
 
     /// What this file contributes to the byte totals however it ends: once
     /// hashed its size is known, so a later failure still counts it (in
-    /// `to_transfer` unless storage said it has the content).
+    /// `to_transfer` unless storage said it has the content), and the
+    /// result's `total` matches the plan's `bytes_total`.
     fn row_bytes(&self, transferred: bool) -> RowBytes {
         RowBytes {
             size: self.metadata.size,
@@ -217,10 +240,27 @@ fn add_file(
     })
 }
 
+/// Whether [`add_file`] (not in a dry run) will make a store call, i.e. may
+/// move bytes. Mirrors its branches: the local backend stores unless the file
+/// is in storage and its record already says exactly this (as
+/// `save_reporting` checks); the server only gets the content it said it is
+/// missing.
+fn may_move_bytes(pending: &Pending, paths: &DvsPaths, missing: Option<&HashSet<String>>) -> bool {
+    match missing {
+        None => !(pending.stored && pending.in_sync(paths)),
+        Some(missing) => missing.contains(&pending.metadata.hashes.blake3),
+    }
+}
+
 /// Adds files matching a glob pattern to DVS.
 ///
 /// The pattern is matched against files relative to cwd.
 /// Files are stored with paths relative to repo_root.
+///
+/// Reports to `ctx`'s observer as it goes: phases (only those in which work
+/// happens, each finished also on an error exit), the plan (once storage has
+/// been asked what it has, and always before any row), each transfer, and
+/// each row as soon as it is final.
 pub fn add_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
@@ -228,10 +268,15 @@ pub fn add_files(
     message: Option<String>,
     compression: Compression,
     dry_run: bool,
-    on_file_start: Option<&OnFileStart>,
+    ctx: &OperationContext,
 ) -> Result<AddReport> {
+    let observer = ctx.observer();
+    let scan = PhaseGuard::start(observer, Phase::Scan);
     let matched_paths = paths.validate_for_add(&files);
     if matched_paths.is_empty() {
+        scan.finish();
+        // Still planned, once: nothing to add, and no rows follow
+        observer.planned(&OperationPlan::default());
         return Ok(AddReport {
             files: Vec::new(),
             bytes: ByteTotals::default(),
@@ -259,20 +304,28 @@ pub fn add_files(
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
 
-    // Fail fast on auth/permission problems before doing any work
+    // Fail fast on auth/permission problems before doing any work. Part of the
+    // scan so that it runs before hashing, which can take long
     backend.check_access()?;
+    scan.finish();
 
+    let files_total = valid_paths.len() as u64;
     let pool = get_threadpool(valid_paths.len())?;
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
 
-    // Rows with their byte contribution (`None`: size unknown)
+    // Rows final before the plan, with their byte contribution (`None`: size
+    // unknown). They are reported only once the plan is, so that `planned`
+    // precedes every row.
     let mut results: Vec<(AddResult, Option<RowBytes>)>;
 
     // 1. Hash everything first: the server wants the whole list before any bytes move
+    let hashing = LazyPhase::new(observer, Phase::Hash);
     let mut pending: Vec<Pending>;
     (pending, results) = pool.install(|| {
         valid_paths.into_par_iter().partition_map(|relative_path| {
+            hashing.begin();
+            let start = Instant::now();
             let full_path = paths.file_path(&relative_path);
             let rel_str = relative_path.to_string_lossy();
             match cache::hashes_for_file(&full_path, &rel_str, cache.as_ref()) {
@@ -280,21 +333,15 @@ pub fn add_files(
                     metadata: FileMetadata::from_hashes(hashes, size, compression, message.clone()),
                     relative_path,
                     stored: false,
+                    work: start.elapsed(),
                 }),
                 Err(e) => {
-                    log::warn!("Failed to add {}: {e}", relative_path.display());
-                    let row = AddResult {
-                        path: relative_path,
-                        detail: AddDetail::Error {
-                            code: add_error_code(&e),
-                            error: e.to_string(),
-                        },
-                    };
-                    Either::Right((row, None))
+                    Either::Right((error_row(relative_path, &e, Some(duration_ms(start))), None))
                 }
             }
         })
     });
+    hashing.finish();
 
     // 2. Ask storage what it already has. The server is told what we are about
     // to add (minus files already in sync) and answers with what it is missing.
@@ -309,7 +356,9 @@ pub fn add_files(
                 .collect::<Result<Vec<_>>>()?;
             let checkout = crate::git::current_checkout(paths.repo_root());
             let mut answer_missing = HashSet::new();
+            // Everything in sync: no manifest, so no storage check either
             if !entries.is_empty() {
+                let _check = PhaseGuard::start(observer, Phase::CheckStorage);
                 let answer = server.manifest(&UploadManifest {
                     operation_id,
                     message: message.clone(),
@@ -331,90 +380,102 @@ pub fn add_files(
             missing = Some(answer_missing);
         }
         _ => {
+            let check = LazyPhase::new(observer, Phase::CheckStorage);
             let (checked, unchecked): (Vec<Pending>, Vec<_>) = pool.install(|| {
                 pending.into_par_iter().partition_map(|mut p| {
+                    check.begin();
+                    let start = Instant::now();
                     match backend.exists(&p.metadata.hashes) {
                         Ok(stored) => {
                             p.stored = stored;
+                            p.work += start.elapsed();
                             Either::Left(p)
                         }
                         Err(e) => {
-                            log::warn!("Failed to add {}: {e}", p.relative_path.display());
                             let bytes = p.row_bytes(false);
-                            let row = AddResult {
-                                path: p.relative_path,
-                                detail: AddDetail::Error {
-                                    code: add_error_code(&e),
-                                    error: e.to_string(),
-                                },
-                            };
+                            let work = p.work + start.elapsed();
+                            let row = error_row(p.relative_path, &e, Some(millis(work)));
                             Either::Right((row, Some(bytes)))
                         }
                     }
                 })
             });
+            check.finish();
             pending = checked;
             results.extend(unchecked);
         }
     }
 
+    let to_transfer = pending.iter().filter(|p| !p.stored);
+    let known_sizes = results.iter().filter_map(|(_, bytes)| bytes.as_ref());
+    observer.planned(&OperationPlan {
+        files_total,
+        bytes_total: pending.iter().map(|p| p.metadata.size).sum::<u64>()
+            + known_sizes.map(|b| b.size).sum::<u64>(),
+        files_to_transfer: to_transfer.clone().count() as u64,
+        bytes_to_transfer: to_transfer.map(|p| p.metadata.size).sum(),
+    });
+    for (row, _) in &results {
+        observer.file_finished(FileRow::Add(row));
+    }
+
     // 3. Store what is missing and write the metadata files
-    results.extend(pool.install(|| {
-        pending
-            .into_par_iter()
-            .map(|mut pending| {
-                let file_progress =
-                    on_file_start.map(|f| f(&pending.relative_path, pending.metadata.size));
-                let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
-                let added = add_file(
-                    &mut pending,
-                    paths,
-                    backend,
-                    operation_id,
-                    missing.as_ref(),
-                    dry_run,
-                    on_bytes,
+    let transfer = LazyPhase::new(observer, Phase::Transfer);
+    let finish_one = |mut pending: Pending| -> (AddResult, Option<RowBytes>) {
+        // Only a store call can move bytes: a file already in sync and a
+        // record the server already has are no transfer work
+        if !dry_run && may_move_bytes(&pending, paths, missing.as_ref()) {
+            transfer.begin();
+        }
+        let start = Instant::now();
+        let file_progress =
+            observer.transfer_started(&pending.relative_path, pending.metadata.size);
+        let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
+        let added = add_file(
+            &mut pending,
+            paths,
+            backend,
+            operation_id,
+            missing.as_ref(),
+            dry_run,
+            on_bytes,
+        );
+        pending.work += start.elapsed();
+        let (result, bytes) = match added {
+            Ok(added) => {
+                log::info!(
+                    "Successfully added {} ({:?})",
+                    pending.relative_path.display(),
+                    added.outcome
                 );
-                let (result, bytes) = match added {
-                    Ok(added) => {
-                        log::info!(
-                            "Successfully added {} ({:?})",
-                            pending.relative_path.display(),
-                            added.outcome
-                        );
-                        // Storing content that was already there moves no bytes
-                        let bytes = pending.row_bytes(added.created);
-                        let result = AddResult {
-                            path: pending.relative_path,
-                            detail: AddDetail::Success {
-                                outcome: added.outcome,
-                                hash: pending.metadata.hashes.blake3,
-                                size: pending.metadata.size,
-                                stored_size: added.stored_size.unwrap_or(pending.metadata.size),
-                            },
-                        };
-                        (result, bytes)
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to add {}: {e}", pending.relative_path.display());
-                        let bytes = pending.row_bytes(false);
-                        let result = AddResult {
-                            path: pending.relative_path,
-                            detail: AddDetail::Error {
-                                code: add_error_code(&e),
-                                error: e.to_string(),
-                            },
-                        };
-                        (result, bytes)
-                    }
+                // Storing content that was already there moves no bytes
+                let bytes = pending.row_bytes(added.created);
+                let result = AddResult {
+                    path: pending.relative_path,
+                    detail: AddDetail::Success {
+                        outcome: added.outcome,
+                        hash: pending.metadata.hashes.blake3,
+                        size: pending.metadata.size,
+                        stored_size: added.stored_size.unwrap_or(pending.metadata.size),
+                    },
+                    duration_ms: Some(millis(pending.work)),
                 };
-                if let Some(fp) = &file_progress {
-                    (fp.on_done)(matches!(result.detail, AddDetail::Success { .. }));
-                }
-                (result, Some(bytes))
-            })
-            .collect::<Vec<_>>()
-    }));
+                (result, bytes)
+            }
+            Err(e) => {
+                let bytes = pending.row_bytes(false);
+                let row = error_row(pending.relative_path, &e, Some(millis(pending.work)));
+                (row, bytes)
+            }
+        };
+        if let Some(fp) = &file_progress {
+            (fp.on_done)(matches!(result.detail, AddDetail::Success { .. }));
+        }
+        observer.file_finished(FileRow::Add(&result));
+        (result, Some(bytes))
+    };
+    results.extend(pool.install(|| pending.into_par_iter().map(finish_one).collect::<Vec<_>>()));
+    transfer.finish();
 
     let mut bytes = ByteTotals::default();
     let mut results: Vec<AddResult> = results
@@ -433,7 +494,8 @@ pub fn add_files(
         .filter(|r| matches!(r.detail, AddDetail::Success { .. }))
         .map(|r| r.path.clone())
         .collect();
-    if !dry_run {
+    if !dry_run && !successful_paths.is_empty() {
+        let _record = PhaseGuard::start(observer, Phase::Record);
         // Successfully added bytes are what dvs last placed at these paths, so a
         // later `get` may replace them without asking (see files/get.rs).
         for r in &results {
@@ -441,8 +503,6 @@ pub fn add_files(
                 cache::record_baseline(cache.as_ref(), &r.path.to_string_lossy(), hash, *size);
             }
         }
-    }
-    if !dry_run && !successful_paths.is_empty() {
         if let Err(e) = add_to_gitignore(paths.repo_root(), &successful_paths) {
             log::warn!("Failed to update .gitignore: {e}");
         }
@@ -457,28 +517,26 @@ pub fn add_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::operation::TransferObserver;
     use crate::progress::FileProgress;
-    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
+    use crate::testutil::{Recorder, Seen, create_file, create_temp_git_repo, init_dvs_repo};
     use fs_err as fs;
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
-        DvsPaths::new(
-            root.to_path_buf(),
-            root.to_path_buf(),
-            config.metadata_folder_name(),
-        )
-        .unwrap()
+    /// A local-storage project: its temp dir guard, root, config and paths.
+    fn project() -> (tempfile::TempDir, PathBuf, crate::config::Config, DvsPaths) {
+        let (tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let paths = DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name());
+        (tmp, root, config, paths.unwrap())
     }
 
     #[test]
     fn add_files_aborts_batch_when_any_file_missing() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let (_tmp, root, config, paths) = project();
         let backend = config.backend();
-        let paths = make_paths(&root, &config);
 
         // One valid file alongside a missing one.
         create_file(&root, "a.txt", b"a");
@@ -490,7 +548,7 @@ mod tests {
             None,
             Compression::Zstd,
             false,
-            None,
+            &OperationContext::new(),
         )
         .unwrap_err()
         .to_string();
@@ -505,10 +563,8 @@ mod tests {
 
     #[test]
     fn add_files_aborts_when_path_outside_or_directory() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let (_tmp, root, config, paths) = project();
         let backend = config.backend();
-        let paths = make_paths(&root, &config);
 
         // Valid file
         create_file(&root, "a.txt", b"a");
@@ -530,7 +586,7 @@ mod tests {
             None,
             Compression::Zstd,
             false,
-            None,
+            &OperationContext::new(),
         )
         .unwrap_err()
         .to_string();
@@ -546,10 +602,8 @@ mod tests {
 
     #[test]
     fn add_files_invokes_on_done_for_each_file() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let (_tmp, root, config, paths) = project();
         let backend = config.backend();
-        let paths = make_paths(&root, &config);
 
         create_file(&root, "a.txt", b"a");
         create_file(&root, "b.txt", b"b");
@@ -582,7 +636,7 @@ mod tests {
             None,
             Compression::Zstd,
             false,
-            Some(&on_file_start),
+            &OperationContext::new().with_observer(Arc::new(TransferObserver(on_file_start))),
         )
         .unwrap()
         .files;
@@ -597,15 +651,13 @@ mod tests {
         assert_eq!(success_calls.load(Ordering::SeqCst), 3);
     }
 
-    /// A local-storage project: its temp dir guard, root, config and paths.
-    fn project() -> (tempfile::TempDir, PathBuf, crate::config::Config, DvsPaths) {
-        let (tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let paths = make_paths(&root, &config);
-        (tmp, root, config, paths)
-    }
-
-    fn add(names: &[&str], paths: &DvsPaths, backend: &Backend, dry_run: bool) -> AddReport {
+    fn add(
+        names: &[&str],
+        paths: &DvsPaths,
+        backend: &Backend,
+        dry_run: bool,
+        ctx: &OperationContext,
+    ) -> AddReport {
         add_files(
             names.iter().map(PathBuf::from).collect(),
             paths,
@@ -613,63 +665,44 @@ mod tests {
             None,
             Compression::Zstd,
             dry_run,
-            None,
+            ctx,
         )
         .unwrap()
     }
 
-    fn row_size_sum(report: &AddReport) -> u64 {
-        report
-            .files
-            .iter()
-            .filter_map(|r| match r.detail {
-                AddDetail::Success { size, .. } => Some(size),
-                AddDetail::Error { .. } => None,
-            })
-            .sum()
+    fn code(row: &AddResult) -> Option<AddErrorCode> {
+        match row.detail {
+            AddDetail::Success { .. } => None,
+            AddDetail::Error { code, .. } => Some(code),
+        }
     }
 
-    // C8: the totals are the per-row sums in a dry run and a real one; only
-    // the real one moves bytes, and only the content storage lacked.
     #[test]
-    fn byte_totals_match_rows_in_dry_and_real_runs() {
+    fn a_phase_is_finished_when_add_bails() {
         let (_tmp, root, config, paths) = project();
         let backend = config.backend();
-        create_file(&root, "old.txt", b"already stored");
-        add(&["old.txt"], &paths, backend, false);
-        // Same content at a new path: stored, so nothing to upload
-        create_file(&root, "copy.txt", b"already stored");
-        create_file(&root, "new.txt", b"new content!");
-        let names = ["copy.txt", "new.txt", "old.txt"];
+        create_file(&root, "a.txt", b"a");
 
-        let dry = add(&names, &paths, backend, true);
-        assert_eq!(dry.bytes.total, row_size_sum(&dry));
+        let recorder = Arc::new(Recorder::default());
+        add_files(
+            vec!["a.txt".into(), "missing.csv".into()],
+            &paths,
+            backend,
+            None,
+            Compression::Zstd,
+            false,
+            &OperationContext::new().with_observer(recorder.clone()),
+        )
+        .unwrap_err();
         assert_eq!(
-            dry.bytes,
-            ByteTotals {
-                total: 14 + 12 + 14,
-                to_transfer: 12,
-                already_stored: 28,
-                transferred: 0,
-            }
-        );
-
-        let real = add(&names, &paths, backend, false);
-        assert_eq!(real.bytes.total, row_size_sum(&real));
-        assert_eq!(
-            real.bytes,
-            ByteTotals {
-                transferred: 12,
-                ..dry.bytes
-            }
-        );
-        assert_eq!(
-            real.bytes.to_transfer + real.bytes.already_stored,
-            real.bytes.total
+            recorder.outline(),
+            vec![
+                Seen::PhaseStarted(Phase::Scan),
+                Seen::PhaseFinished(Phase::Scan),
+            ]
         );
     }
 
-    // C8 (K20): a file that fails after it was hashed still counts its size.
     #[test]
     #[cfg(unix)]
     fn a_file_that_fails_after_hashing_still_counts_its_size() {
@@ -685,14 +718,18 @@ mod tests {
             fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o755)).unwrap();
             return;
         }
-        let report = add(&["a.txt"], &paths, backend, false);
+        let recorder = Arc::new(Recorder::default());
+        let report = add(
+            &["a.txt"],
+            &paths,
+            backend,
+            false,
+            &OperationContext::new().with_observer(recorder.clone()),
+        );
         fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        assert!(
-            matches!(report.files[0].detail, AddDetail::Error { .. }),
-            "{:?}",
-            report.files
-        );
+        assert!(code(&report.files[0]).is_some(), "{:?}", report.files);
+        assert_eq!(recorder.plan().bytes_total, 4);
         assert_eq!(
             report.bytes,
             ByteTotals {
@@ -704,11 +741,295 @@ mod tests {
         );
     }
 
-    // C8: a file that could not be hashed has no known size and counts in no
-    // total.
     #[test]
     #[cfg(unix)]
-    fn an_unreadable_file_counts_in_no_byte_total() {
+    fn nothing_hashed_means_no_storage_check() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, root, config, paths) = project();
+        let backend = config.backend();
+        let locked = create_file(&root, "locked.txt", b"secret");
+        fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&locked).is_ok() {
+            // Running as root: permissions do not stop reads
+            return;
+        }
+        let recorder = Arc::new(Recorder::default());
+        add(
+            &["locked.txt"],
+            &paths,
+            backend,
+            false,
+            &OperationContext::new().with_observer(recorder.clone()),
+        );
+        fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            recorder.outline(),
+            vec![
+                Seen::PhaseStarted(Phase::Scan),
+                Seen::PhaseFinished(Phase::Scan),
+                Seen::PhaseStarted(Phase::Hash),
+                Seen::PhaseFinished(Phase::Hash),
+                Seen::Planned(OperationPlan {
+                    files_total: 1,
+                    ..OperationPlan::default()
+                }),
+            ]
+        );
+    }
+
+    /// The plan is reported once, before every one of `rows` rows.
+    fn assert_planned_before_rows(recorder: &Recorder, rows: usize) {
+        let seen = recorder.seen();
+        let planned: Vec<_> = seen
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(s, Seen::Planned(_)))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(planned.len(), 1, "{seen:?}");
+        let finished: Vec<_> = seen
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(s, Seen::Finished { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(finished.len(), rows, "{seen:?}");
+        assert!(finished.iter().all(|&i| i > planned[0]), "{seen:?}");
+    }
+
+    #[test]
+    fn add_reports_phases_and_plan_in_order() {
+        let (_tmp, root, config, paths) = project();
+        let backend = config.backend();
+        create_file(&root, "a.txt", b"aaaa");
+        create_file(&root, "b.txt", b"bb");
+
+        let plan = OperationPlan {
+            files_total: 2,
+            bytes_total: 6,
+            files_to_transfer: 2,
+            bytes_to_transfer: 6,
+        };
+        let dry = Arc::new(Recorder::default());
+        add(
+            &["a.txt", "b.txt"],
+            &paths,
+            backend,
+            true,
+            &OperationContext::new().with_observer(dry.clone()),
+        );
+        // A dry run moves nothing and records nothing
+        assert_eq!(
+            dry.outline(),
+            vec![
+                Seen::PhaseStarted(Phase::Scan),
+                Seen::PhaseFinished(Phase::Scan),
+                Seen::PhaseStarted(Phase::Hash),
+                Seen::PhaseFinished(Phase::Hash),
+                Seen::PhaseStarted(Phase::CheckStorage),
+                Seen::PhaseFinished(Phase::CheckStorage),
+                Seen::Planned(plan),
+            ]
+        );
+
+        let real = Arc::new(Recorder::default());
+        add(
+            &["a.txt", "b.txt"],
+            &paths,
+            backend,
+            false,
+            &OperationContext::new().with_observer(real.clone()),
+        );
+        assert_eq!(
+            real.outline(),
+            vec![
+                Seen::PhaseStarted(Phase::Scan),
+                Seen::PhaseFinished(Phase::Scan),
+                Seen::PhaseStarted(Phase::Hash),
+                Seen::PhaseFinished(Phase::Hash),
+                Seen::PhaseStarted(Phase::CheckStorage),
+                Seen::PhaseFinished(Phase::CheckStorage),
+                Seen::Planned(plan),
+                Seen::PhaseStarted(Phase::Transfer),
+                Seen::PhaseFinished(Phase::Transfer),
+                Seen::PhaseStarted(Phase::Record),
+                Seen::PhaseFinished(Phase::Record),
+            ]
+        );
+        // Every row finished after the plan, once, with its time
+        let seen = real.seen();
+        let planned_at = seen.iter().position(|s| *s == Seen::Planned(plan)).unwrap();
+        let finished = real.finished();
+        assert_eq!(finished.len(), 2);
+        assert!(
+            finished
+                .iter()
+                .all(|(_, code, ms)| code.is_none() && ms.is_some())
+        );
+        assert!(
+            seen.iter()
+                .position(|s| matches!(s, Seen::Finished { .. }))
+                .unwrap()
+                > planned_at
+        );
+
+        // Nothing left to transfer the second time
+        let again = Arc::new(Recorder::default());
+        add(
+            &["a.txt", "b.txt"],
+            &paths,
+            backend,
+            true,
+            &OperationContext::new().with_observer(again.clone()),
+        );
+        assert!(again.outline().contains(&Seen::Planned(OperationPlan {
+            files_to_transfer: 0,
+            bytes_to_transfer: 0,
+            ..plan
+        })));
+    }
+
+    #[test]
+    fn transfer_phase_only_when_bytes_may_move() {
+        let (_tmp, root, config, paths) = project();
+        let backend = config.backend();
+        create_file(&root, "a.txt", b"aaaa");
+        create_file(&root, "b.txt", b"bb");
+        add(
+            &["a.txt", "b.txt"],
+            &paths,
+            backend,
+            false,
+            &OperationContext::new(),
+        );
+
+        // Everything in sync: no store call, so no transfer phase
+        let in_sync = Arc::new(Recorder::default());
+        let report = add(
+            &["a.txt", "b.txt"],
+            &paths,
+            backend,
+            false,
+            &OperationContext::new().with_observer(in_sync.clone()),
+        );
+        assert!(report.files.iter().all(|r| matches!(
+            r.detail,
+            AddDetail::Success {
+                outcome: Outcome::Present,
+                ..
+            }
+        )));
+        assert!(
+            !in_sync
+                .outline()
+                .contains(&Seen::PhaseStarted(Phase::Transfer)),
+            "{:?}",
+            in_sync.outline()
+        );
+
+        // A new file is stored, so the phase happens
+        create_file(&root, "c.txt", b"c");
+        let with_new = Arc::new(Recorder::default());
+        add(
+            &["a.txt", "c.txt"],
+            &paths,
+            backend,
+            false,
+            &OperationContext::new().with_observer(with_new.clone()),
+        );
+        let outline = with_new.outline();
+        assert!(
+            outline.contains(&Seen::PhaseStarted(Phase::Transfer)),
+            "{outline:?}"
+        );
+        assert!(
+            outline.contains(&Seen::PhaseFinished(Phase::Transfer)),
+            "{outline:?}"
+        );
+    }
+
+    #[test]
+    fn empty_selection_is_still_planned() {
+        let (_tmp, _root, config, paths) = project();
+        let backend = config.backend();
+        let recorder = Arc::new(Recorder::default());
+        let report = add(
+            &[],
+            &paths,
+            backend,
+            false,
+            &OperationContext::new().with_observer(recorder.clone()),
+        );
+        assert!(report.files.is_empty());
+        assert_eq!(
+            recorder.outline(),
+            vec![
+                Seen::PhaseStarted(Phase::Scan),
+                Seen::PhaseFinished(Phase::Scan),
+                Seen::Planned(OperationPlan::default()),
+            ]
+        );
+        assert_planned_before_rows(&recorder, 0);
+    }
+
+    fn row_size_sum(report: &AddReport) -> u64 {
+        report
+            .files
+            .iter()
+            .filter_map(|r| match r.detail {
+                AddDetail::Success { size, .. } => Some(size),
+                AddDetail::Error { .. } => None,
+            })
+            .sum()
+    }
+
+    #[test]
+    fn byte_totals_match_rows_in_dry_and_real_runs() {
+        let (_tmp, root, config, paths) = project();
+        let backend = config.backend();
+        create_file(&root, "old.txt", b"already stored");
+        add(
+            &["old.txt"],
+            &paths,
+            backend,
+            false,
+            &OperationContext::new(),
+        );
+        // Same content at a new path: stored, so nothing to upload
+        create_file(&root, "copy.txt", b"already stored");
+        create_file(&root, "new.txt", b"new content!");
+        let names = ["copy.txt", "new.txt", "old.txt"];
+
+        let dry = add(&names, &paths, backend, true, &OperationContext::new());
+        assert_eq!(dry.bytes.total, row_size_sum(&dry));
+        assert_eq!(
+            dry.bytes,
+            ByteTotals {
+                total: 14 + 12 + 14,
+                to_transfer: 12,
+                already_stored: 28,
+                transferred: 0,
+            }
+        );
+
+        let real = add(&names, &paths, backend, false, &OperationContext::new());
+        assert_eq!(real.bytes.total, row_size_sum(&real));
+        assert_eq!(
+            real.bytes,
+            ByteTotals {
+                transferred: 12,
+                ..dry.bytes
+            }
+        );
+        assert_eq!(
+            real.bytes.to_transfer + real.bytes.already_stored,
+            real.bytes.total
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unreadable_file_gets_a_timed_error_row() {
         use std::os::unix::fs::PermissionsExt;
         let (_tmp, root, config, paths) = project();
         let backend = config.backend();
@@ -719,17 +1040,24 @@ mod tests {
             // Running as root: permissions do not stop reads
             return;
         }
-        let report = add(&["locked.txt", "ok.txt"], &paths, backend, false);
+
+        let recorder = Arc::new(Recorder::default());
+        let report = add(
+            &["locked.txt", "ok.txt"],
+            &paths,
+            backend,
+            false,
+            &OperationContext::new().with_observer(recorder.clone()),
+        );
         fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        assert!(matches!(
-            report.files[0].detail,
-            AddDetail::Error {
-                code: AddErrorCode::IoError,
-                ..
-            }
-        ));
-        assert!(matches!(report.files[1].detail, AddDetail::Success { .. }));
+        assert_eq!(code(&report.files[0]), Some(AddErrorCode::IoError));
+        assert!(report.files[0].duration_ms.is_some());
+        assert_eq!(code(&report.files[1]), None);
+        // The hash error is reported after the plan, like every row
+        assert_planned_before_rows(&recorder, 2);
+        // The failed row has no known size, so it counts in no total
         assert_eq!(report.bytes.total, 2);
+        assert_eq!(recorder.plan().bytes_total, 2);
     }
 }

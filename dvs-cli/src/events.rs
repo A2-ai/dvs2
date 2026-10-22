@@ -4,18 +4,25 @@
 //! remains authoritative: a transfer can finish before installation fails.
 //!
 //! Every event carries `ts` (unix milliseconds) and `elapsed_ms` (since the
-//! operation started).
+//! operation started). Operation-level progress (O1) is aggregated here from
+//! the library's facts (plan, transfer byte deltas, finished files) and
+//! throttled, so a large transfer emits a bounded number of lines.
 
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use dvs::FileProgress;
 use dvs::operation::{duration_ms, rfc3339_ms, unix_ms};
+use dvs::{FileProgress, OperationPlan, Phase};
 use serde_json::{Value, json};
 
 static ACTIVE: OnceLock<EventStream> = OnceLock::new();
+
+/// At most one `operation_progress` this often...
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
+/// ...and only once a file finished or this share of the bytes moved.
+const PROGRESS_BYTES_PERCENT: u64 = 1;
 
 pub fn active() -> Option<&'static EventStream> {
     ACTIVE.get()
@@ -39,6 +46,60 @@ struct State {
     result: Option<Value>,
     started: Instant,
     started_at: SystemTime,
+    progress: Progress,
+}
+
+/// The operation's aggregate progress and what the last
+/// `operation_progress` said. Nothing is emitted before the plan.
+#[derive(Default)]
+struct Progress {
+    planned: bool,
+    files_done: u64,
+    files_total: u64,
+    bytes_done: u64,
+    /// The plan's `bytes_to_transfer`: what moving bytes count against (K12)
+    bytes_total: u64,
+    /// When the last progress event was emitted, or the plan arrived
+    last_at: Option<Instant>,
+    last_files: u64,
+    last_bytes: u64,
+}
+
+impl Progress {
+    fn fields(&self) -> Value {
+        json!({
+            "files_done": self.files_done,
+            "files_total": self.files_total,
+            "bytes_done": self.bytes_done,
+            "bytes_total": self.bytes_total,
+        })
+    }
+
+    /// Whether the throttle lets a progress event out now.
+    fn due(&self, now: Instant) -> bool {
+        if !self.planned {
+            return false;
+        }
+        let waited = self
+            .last_at
+            .is_none_or(|last| now.duration_since(last) >= PROGRESS_INTERVAL);
+        let file_finished = self.files_done != self.last_files;
+        let moved = self.bytes_done.saturating_sub(self.last_bytes);
+        let bytes_moved =
+            moved > 0 && moved.saturating_mul(100) >= self.bytes_total * PROGRESS_BYTES_PERCENT;
+        waited && (file_finished || bytes_moved)
+    }
+
+    /// Whether something changed since the last progress event.
+    fn pending(&self) -> bool {
+        self.planned && (self.files_done != self.last_files || self.bytes_done != self.last_bytes)
+    }
+
+    fn mark(&mut self, now: Instant) {
+        self.last_at = Some(now);
+        self.last_files = self.files_done;
+        self.last_bytes = self.bytes_done;
+    }
 }
 
 impl EventStream {
@@ -62,6 +123,7 @@ impl EventStream {
                 result: None,
                 started: clock.started,
                 started_at: clock.started_at,
+                progress: Progress::default(),
             })),
         };
         stream.emit("operation_started", json!({"command": command}), false);
@@ -73,8 +135,8 @@ impl EventStream {
         Self::emit_locked(&mut state, kind, fields, terminal);
     }
 
-    /// Write one event with the state already locked, so a caller can read
-    /// shared state and emit from it atomically.
+    /// Write one event with the state already locked, so a caller can update
+    /// shared progress and emit from it atomically.
     fn emit_locked(state: &mut State, kind: &str, mut fields: Value, terminal: bool) {
         if state.finished || state.error.is_some() {
             return;
@@ -114,6 +176,48 @@ impl EventStream {
         self.emit("file_result", json!({"result": result}), false);
     }
 
+    /// The operation's plan, once, before any file is reported. It also
+    /// starts operation progress: files count against `files_total`, moving
+    /// bytes against `bytes_to_transfer`.
+    pub fn planned(&self, plan: &OperationPlan) {
+        let mut state = self.state.lock().unwrap();
+        let now = Instant::now();
+        let progress = &mut state.progress;
+        progress.planned = true;
+        progress.files_total = plan.files_total;
+        progress.bytes_total = plan.bytes_to_transfer;
+        progress.last_at = Some(now);
+        Self::emit_locked(&mut state, "operation_planned", json!(plan), false);
+    }
+
+    pub fn phase_started(&self, phase: Phase) {
+        self.emit("phase_started", json!({"phase": phase.as_str()}), false);
+    }
+
+    pub fn phase_finished(&self, phase: Phase) {
+        self.emit("phase_finished", json!({"phase": phase.as_str()}), false);
+    }
+
+    /// A file's outcome is final: count it, and report progress if due.
+    pub fn file_done(&self) {
+        self.advance(|progress| progress.files_done += 1);
+    }
+
+    fn bytes_moved(&self, delta: u64) {
+        self.advance(|progress| progress.bytes_done = progress.bytes_done.saturating_add(delta));
+    }
+
+    fn advance(&self, update: impl FnOnce(&mut Progress)) {
+        let mut state = self.state.lock().unwrap();
+        update(&mut state.progress);
+        let now = Instant::now();
+        if state.progress.due(now) {
+            state.progress.mark(now);
+            let fields = state.progress.fields();
+            Self::emit_locked(&mut state, "operation_progress", fields, false);
+        }
+    }
+
     /// Capture the same result document used by JSON mode. The dispatcher adds
     /// its actual process exit status when it writes the terminal event.
     pub fn record_result(&self, result: Value) {
@@ -136,8 +240,15 @@ impl EventStream {
 
     /// Write exactly one terminal event. This is the same complete document
     /// emitted by `--json`, including startup errors and per-file failures.
+    /// Progress the throttle held back is reported first, so the last
+    /// `operation_progress` is always the final count.
     pub fn finish(&self, result: Value, exit_code: i32) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
+        if state.progress.pending() {
+            state.progress.mark(Instant::now());
+            let fields = state.progress.fields();
+            Self::emit_locked(&mut state, "operation_progress", fields, false);
+        }
         let fields = json!({
             "result": result,
             "exit_code": exit_code,
@@ -154,7 +265,8 @@ impl EventStream {
     }
 
     /// Byte callbacks report deltas. Coalesce them to at most ten progress
-    /// events per second per transfer, always flushing the final count.
+    /// events per second per transfer, always flushing the final count. The
+    /// deltas also drive operation progress.
     pub fn progress(&self, path: &Path, total_bytes: u64) -> FileProgress {
         let path = path.to_path_buf();
         self.emit(
@@ -170,6 +282,7 @@ impl EventStream {
         let done_stream = self.clone();
         FileProgress {
             on_bytes: Box::new(move |delta| {
+                bytes_stream.bytes_moved(delta);
                 let mut progress = bytes_progress.lock().unwrap();
                 progress.0 = progress.0.saturating_add(delta);
                 if progress.1.elapsed() >= Duration::from_millis(100) {
@@ -222,31 +335,6 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
-    }
-
-    #[test]
-    fn every_event_has_a_timestamp_and_the_operation_elapsed_time() {
-        let capture = Capture::default();
-        let stream = EventStream::new("add", Box::new(capture.clone()));
-        let transfer = stream.progress(Path::new("a.txt"), 4);
-        (transfer.on_bytes)(4);
-        (transfer.on_done)(true);
-        stream.file_result(json!({"path": "a.txt"}));
-        stream.finish(json!({}), 0).unwrap();
-        let events = events(&capture);
-        for event in &events {
-            assert!(event["ts"].as_u64().unwrap() > 1_700_000_000_000, "{event}");
-            assert!(event["elapsed_ms"].is_u64(), "{event}");
-        }
-        let finished = events.last().unwrap();
-        assert!(finished["duration_ms"].is_u64());
-        assert!(finished["started_at"].as_str().unwrap().ends_with('Z'));
-        assert!(finished["finished_at"].as_str() >= finished["started_at"].as_str());
-        let transfer_finished = events
-            .iter()
-            .find(|e| e["type"] == "transfer_finished")
-            .unwrap();
-        assert!(transfer_finished["duration_ms"].is_u64());
     }
 
     #[test]
@@ -314,6 +402,110 @@ mod tests {
             .collect();
         assert_eq!(finishes.len(), 8);
         assert!(finishes.iter().all(|event| event["bytes"] == 15));
+    }
+
+    fn plan(files_total: u64, bytes_to_transfer: u64) -> OperationPlan {
+        OperationPlan {
+            files_total,
+            bytes_total: bytes_to_transfer,
+            files_to_transfer: files_total,
+            bytes_to_transfer,
+        }
+    }
+
+    #[test]
+    fn every_event_has_a_timestamp_and_the_operation_elapsed_time() {
+        let capture = Capture::default();
+        let stream = EventStream::new("add", Box::new(capture.clone()));
+        stream.planned(&plan(1, 4));
+        stream.phase_started(Phase::Transfer);
+        let transfer = stream.progress(Path::new("a.txt"), 4);
+        (transfer.on_bytes)(4);
+        (transfer.on_done)(true);
+        stream.phase_finished(Phase::Transfer);
+        stream.file_done();
+        stream.finish(json!({}), 0).unwrap();
+        let events = events(&capture);
+        for event in &events {
+            assert!(event["ts"].as_u64().unwrap() > 1_700_000_000_000, "{event}");
+            assert!(event["elapsed_ms"].is_u64(), "{event}");
+        }
+        let finished = events.last().unwrap();
+        assert!(finished["duration_ms"].is_u64());
+        assert!(finished["started_at"].as_str().unwrap().ends_with('Z'));
+        assert!(finished["finished_at"].as_str() >= finished["started_at"].as_str());
+        let transfer_finished = events
+            .iter()
+            .find(|e| e["type"] == "transfer_finished")
+            .unwrap();
+        assert!(transfer_finished["duration_ms"].is_u64());
+        assert_eq!(events[1]["type"], "operation_planned");
+        assert_eq!(events[1]["bytes_to_transfer"], 4);
+        assert_eq!(events[2]["phase"], "transfer");
+    }
+
+    fn progress_events(capture: &Capture) -> Vec<Value> {
+        events(capture)
+            .into_iter()
+            .filter(|e| e["type"] == "operation_progress")
+            .collect()
+    }
+
+    #[test]
+    fn progress_is_throttled_and_the_final_count_is_always_reported() {
+        let capture = Capture::default();
+        let stream = EventStream::new("get", Box::new(capture.clone()));
+        let started = Instant::now();
+        stream.planned(&plan(5000, 0));
+        for _ in 0..5000 {
+            stream.file_done();
+        }
+        let throttled = progress_events(&capture).len() as u128;
+        // At most one per 250 ms since the plan
+        assert!(
+            throttled <= started.elapsed().as_millis() / 250,
+            "{throttled}"
+        );
+        stream.finish(json!({}), 0).unwrap();
+        let progress = progress_events(&capture);
+        let last = progress.last().unwrap();
+        assert_eq!(last["files_done"], 5000);
+        assert_eq!(last["files_total"], 5000);
+        // The final count is the event right before the terminal one
+        let all = events(&capture);
+        assert_eq!(all[all.len() - 2], *last);
+    }
+
+    #[test]
+    fn bytes_alone_report_progress_only_once_they_move_one_percent() {
+        let capture = Capture::default();
+        let stream = EventStream::new("add", Box::new(capture.clone()));
+        stream.planned(&plan(1, 10_000));
+        let transfer = stream.progress(Path::new("big.bin"), 10_000);
+        std::thread::sleep(PROGRESS_INTERVAL + Duration::from_millis(50));
+        (transfer.on_bytes)(50);
+        assert!(progress_events(&capture).is_empty(), "0.5% is not enough");
+        (transfer.on_bytes)(60);
+        let progress = progress_events(&capture);
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0]["bytes_done"], 110);
+        assert_eq!(progress[0]["bytes_total"], 10_000);
+        // Right after one, nothing more for a while however much moves
+        (transfer.on_bytes)(5_000);
+        assert_eq!(progress_events(&capture).len(), 1);
+        stream.finish(json!({}), 0).unwrap();
+        let progress = progress_events(&capture);
+        assert_eq!(progress.len(), 2);
+        assert_eq!(progress[1]["bytes_done"], 5_110);
+    }
+
+    #[test]
+    fn nothing_changed_since_the_last_progress_means_no_final_one() {
+        let capture = Capture::default();
+        let stream = EventStream::new("status", Box::new(capture.clone()));
+        stream.planned(&plan(0, 0));
+        stream.finish(json!({}), 0).unwrap();
+        assert!(progress_events(&capture).is_empty());
     }
 
     #[test]

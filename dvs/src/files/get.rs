@@ -10,15 +10,17 @@
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use crate::cache::{FileStat, HashCache, baseline_for, record_baseline, try_open_cache};
 use crate::config::{OnConflict, SettingSource};
 use crate::error::{ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::globbing::GetSelection;
-use crate::operation::ByteTotals;
+use crate::operation::{
+    ByteTotals, FileRow, LazyPhase, OperationContext, OperationPlan, Phase, millis,
+};
 use crate::paths::ProjectPath;
-use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
 use crate::{Backend, Compression, DvsPaths, RetrieveRequest, cache};
 use fs_err as fs;
@@ -215,6 +217,13 @@ pub struct GetRow {
     /// The next command to run. Left empty by core: each frontend phrases it
     /// in its own syntax.
     pub hint: Option<String>,
+    /// Time spent on this file (hash + transfer + install). Any row that was
+    /// hashed has at least its hash time, whatever happened after (K11);
+    /// `None` for rows never hashed and not transferred (untracked, unreadable
+    /// metadata, not a file, absent and held back). Not serialized here, so R output is unchanged (K8); the CLI
+    /// adds it.
+    #[serde(skip)]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -332,9 +341,45 @@ struct Planned {
     /// The working file's stat when it was classified, to detect it changing
     /// while its replacement downloads. None when it was absent.
     stat: Option<FileStat>,
+    /// Time spent classifying it (mostly hashing), part of its `duration_ms`.
+    hash_time: Duration,
+    /// Hashing the working file was attempted, whether or not it succeeded:
+    /// an unreadable file did that work too (K11).
+    hashed: bool,
+    /// Already reported through `file_finished`: every row is, exactly once.
+    emitted: bool,
 }
 
 impl Planned {
+    fn new(row: GetRow) -> Self {
+        Planned {
+            row,
+            metadata: None,
+            stat: None,
+            hash_time: Duration::ZERO,
+            hashed: false,
+            emitted: false,
+        }
+    }
+
+    /// Report the row as final, unless it already was.
+    fn emit(&mut self, ctx: &OperationContext) {
+        if !self.emitted {
+            self.emitted = true;
+            self.fill_hash_duration();
+            ctx.observer().file_finished(FileRow::Get(&self.row));
+        }
+    }
+
+    /// K11: a row that was hashed carries at least its hash time, whatever
+    /// happened to it after (hash failure, skipped, held back, access
+    /// failure). Rows never hashed keep `None`.
+    fn fill_hash_duration(&mut self) {
+        if self.row.duration_ms.is_none() && self.hashed {
+            self.row.duration_ms = Some(millis(self.hash_time));
+        }
+    }
+
     /// Classified as a conflict (rows that already failed in the plan are not).
     fn is_conflict(&self) -> bool {
         self.row.before.is_conflict() && self.row.action != Action::Failed
@@ -356,17 +401,7 @@ impl Planned {
     }
 
     fn set(&mut self, action: Action, code: Option<GetCode>, message: Option<String>) {
-        self.row.action = action;
-        self.row.satisfied = matches!(
-            action,
-            Action::Restored
-                | Action::Replaced
-                | Action::Unchanged
-                | Action::WouldRestore
-                | Action::WouldReplace
-        );
-        self.row.code = code;
-        self.row.message = message;
+        set_row(&mut self.row, action, code, message);
     }
 
     fn conflict_code(&self) -> GetCode {
@@ -384,6 +419,20 @@ impl Planned {
             "differs from the tracked version, and dvs has no record of writing it".to_string()
         }
     }
+}
+
+fn set_row(row: &mut GetRow, action: Action, code: Option<GetCode>, message: Option<String>) {
+    row.action = action;
+    row.satisfied = matches!(
+        action,
+        Action::Restored
+            | Action::Replaced
+            | Action::Unchanged
+            | Action::WouldRestore
+            | Action::WouldReplace
+    );
+    row.code = code;
+    row.message = message;
 }
 
 /// An absolute path as a path from the project root, if it is inside it
@@ -469,16 +518,19 @@ fn blank_row(paths: &DvsPaths, relative_path: &Path) -> GetRow {
         code: None,
         message: None,
         hint: None,
+        duration_ms: None,
     }
 }
 
-/// Classify one tracked file. Reads only local state.
-fn plan_file(paths: &DvsPaths, relative_path: &Path, cache: Option<&Mutex<HashCache>>) -> Planned {
-    let mut planned = Planned {
-        row: blank_row(paths, relative_path),
-        metadata: None,
-        stat: None,
-    };
+/// Classify one tracked file. Reads only local state. `hashing` begins
+/// just before the working file is hashed.
+fn plan_file(
+    paths: &DvsPaths,
+    relative_path: &Path,
+    cache: Option<&Mutex<HashCache>>,
+    hashing: &LazyPhase<'_>,
+) -> Planned {
+    let mut planned = Planned::new(blank_row(paths, relative_path));
     let fail = |mut planned: Planned, before: Before, code: GetCode, message: String| {
         planned.row.before = before;
         planned.set(Action::Failed, Some(code), Some(message));
@@ -549,6 +601,8 @@ fn plan_file(paths: &DvsPaths, relative_path: &Path, cache: Option<&Mutex<HashCa
 
     let rel_str = relative_path.to_string_lossy();
     let stat = FileStat::from_path(&target).ok();
+    hashing.begin();
+    planned.hashed = true;
     let (hashes, size) = match cache::hashes_for_file(&target, &rel_str, cache) {
         Ok(h) => h,
         Err(e) => {
@@ -680,12 +734,21 @@ fn install(
 ///
 /// Never errors: every problem is reported in the returned rows or as the
 /// report's `problem`.
+///
+/// Reports to `ctx`'s observer as it goes: the `hash` phase (the plan, only
+/// when it hashes some working file), the
+/// `check_storage` phase when anything needs the remote, `planned` once the
+/// plan and storage checks are done, then every row through `file_finished`
+/// exactly once, as soon as it is final (rows decided before the transfers
+/// first, then each transfer as it completes). In a dry run the existence
+/// checks that stand in for transfers belong to `check_storage`, so there is
+/// no `transfer` phase.
 pub fn get_files(
     selection: GetSelection,
     paths: &DvsPaths,
     backend: &Backend,
     options: GetOptions,
-    on_file_start: Option<&OnFileStart>,
+    ctx: &OperationContext,
 ) -> GetReport {
     let GetOptions {
         dry_run,
@@ -702,15 +765,37 @@ pub fn get_files(
     };
     let cache = try_open_cache(paths);
     let cache = cache.as_ref();
+    let observer = ctx.observer();
+    let ending = |planned, aborted| {
+        finish(
+            planned,
+            Ending {
+                dry_run,
+                on_conflict,
+                source,
+                aborted,
+            },
+            ctx,
+        )
+    };
 
-    // 1. Plan: classify every file, locally, writing nothing.
+    // 1. Plan: classify every file, locally, writing nothing. The hash phase
+    // starts with the first file actually hashed, so a plan that hashes
+    // nothing (every file absent) reports none (K13).
+    let hashing = LazyPhase::new(observer, Phase::Hash);
     let mut planned: Vec<Planned> = pool.install(|| {
         selection
             .tracked
             .into_par_iter()
-            .map(|p| plan_file(paths, &p, cache))
+            .map(|p| {
+                let started = Instant::now();
+                let mut planned = plan_file(paths, &p, cache, &hashing);
+                planned.hash_time = started.elapsed();
+                planned
+            })
             .collect()
     });
+    hashing.finish();
     let cwd_rel = paths
         .cwd_relative_to_root()
         .map(Path::to_path_buf)
@@ -723,11 +808,7 @@ pub fn get_files(
         } else {
             Some(normalize(&cwd_rel.join(&user_path)))
         };
-        let mut p = Planned {
-            row: blank_row(paths, inside.as_deref().unwrap_or(&user_path)),
-            metadata: None,
-            stat: None,
-        };
+        let mut p = Planned::new(blank_row(paths, inside.as_deref().unwrap_or(&user_path)));
         let is_dir = paths.file_path(&p.row.path).is_dir();
         if inside.is_none() {
             p.row.local_path = user_path;
@@ -751,6 +832,8 @@ pub fn get_files(
         .filter(|p| p.row.before == Before::Current)
     {
         p.set(Action::Unchanged, None, None);
+        // Hashing it was the work: nothing to transfer.
+        p.row.duration_ms = Some(millis(p.hash_time));
         if !dry_run {
             if let Some(m) = &p.metadata {
                 record_baseline(
@@ -768,14 +851,20 @@ pub fn get_files(
     let needs_remote = planned
         .iter()
         .any(|p| p.needs_transfer(on_conflict) || p.is_conflict());
+    let end_check_storage = || {
+        if needs_remote {
+            observer.phase_finished(Phase::CheckStorage);
+        }
+    };
     let access = if needs_remote {
+        observer.phase_started(Phase::CheckStorage);
         backend.check_access().map_err(access_failure)
     } else {
         Ok(())
     };
     for p in planned.iter_mut().filter(|p| p.is_conflict()) {
         p.row.stored_copy = Some(match (&access, &p.row.local_hash) {
-            (Ok(()), Some(blake3)) => {
+            (Ok(()), Some(blake3)) if needs_remote => {
                 let hashes = crate::Hashes {
                     blake3: blake3.clone(),
                     md5: None,
@@ -809,7 +898,10 @@ pub fn get_files(
                 );
             }
         }
-        return finish(planned, dry_run, on_conflict, source, true);
+        end_check_storage();
+        let plan = operation_plan(&planned, &[]);
+        observer.planned(&plan);
+        return ending(planned, true);
     }
     for p in planned
         .iter_mut()
@@ -826,107 +918,158 @@ pub fn get_files(
         .filter(|(_, p)| p.needs_transfer(on_conflict))
         .map(|(i, _)| i)
         .collect();
+    let plan = operation_plan(&planned, &transfer_idx);
     if let Err((code, message)) = &access {
         for &i in &transfer_idx {
             planned[i].set(Action::Failed, Some(*code), Some(message.clone()));
         }
-        return finish(planned, dry_run, on_conflict, source, false);
+        end_check_storage();
+        observer.planned(&plan);
+        return ending(planned, false);
+    }
+    // A dry run's existence checks are storage checks: check_storage stays
+    // open across them, and there is no transfer phase.
+    if !dry_run {
+        end_check_storage();
+    }
+    observer.planned(&plan);
+    // Everything that will not be transferred is final now.
+    for p in planned.iter_mut() {
+        if !p.needs_transfer(on_conflict) {
+            p.emit(ctx);
+        }
     }
 
+    let transfers = !dry_run && !transfer_idx.is_empty();
+    if transfers {
+        observer.phase_started(Phase::Transfer);
+    }
     let operation_id = Uuid::new_v4();
-    let outcomes: Vec<(usize, Result<(), FileError>)> = pool.install(|| {
+    let finished: Vec<(usize, GetRow)> = pool.install(|| {
         transfer_idx
             .par_iter()
             .map(|&i| {
                 let p = &planned[i];
+                let mut row = p.row.clone();
+                let started = Instant::now();
+                let result = transfer(p, backend, paths, dry_run, operation_id, ctx);
+                settle(&mut row, p, result, dry_run, paths, cache);
+                row.duration_ms = Some(millis(p.hash_time + started.elapsed()));
+                // Final the moment its own transfer is done, not when the batch is.
+                observer.file_finished(FileRow::Get(&row));
+                (i, row)
+            })
+            .collect()
+    });
+    for (i, row) in finished {
+        planned[i].row = row;
+        planned[i].emitted = true;
+    }
+    if transfers {
+        observer.phase_finished(Phase::Transfer);
+    } else if dry_run {
+        end_check_storage();
+    }
+
+    ending(planned, false)
+}
+
+/// Fetch one planned file (a dry run only asks storage whether it is there).
+fn transfer(
+    p: &Planned,
+    backend: &Backend,
+    paths: &DvsPaths,
+    dry_run: bool,
+    operation_id: Uuid,
+    ctx: &OperationContext,
+) -> Result<(), FileError> {
+    let metadata = p
+        .metadata
+        .as_ref()
+        .expect("planned transfers have metadata");
+    if dry_run {
+        return match backend.exists(&metadata.hashes) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err((
+                GetCode::SourceMissing,
+                "this version is not in storage".to_string(),
+            )),
+            Err(e) => Err((code_for(&e), format!("{e:#}"))),
+        };
+    }
+    let file_progress = ctx.observer().transfer_started(&p.row.path, metadata.size);
+    let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
+    let result = install(
+        backend,
+        paths,
+        &p.row.path,
+        metadata,
+        &p.stat,
+        operation_id,
+        on_bytes,
+    );
+    if let Some(fp) = &file_progress {
+        (fp.on_done)(result.is_ok());
+    }
+    result
+}
+
+/// Make `row` (a copy of `p.row`) final for its transfer's `result`, and
+/// record what a real install wrote.
+fn settle(
+    row: &mut GetRow,
+    p: &Planned,
+    result: Result<(), FileError>,
+    dry_run: bool,
+    paths: &DvsPaths,
+    cache: Option<&Mutex<HashCache>>,
+) {
+    let was_absent = p.row.before == Before::Absent;
+    let was_conflict = p.is_conflict();
+    match result {
+        Ok(()) => {
+            let action = match (dry_run, was_absent) {
+                (true, true) => Action::WouldRestore,
+                (true, false) => Action::WouldReplace,
+                (false, true) => Action::Restored,
+                (false, false) => Action::Replaced,
+            };
+            let message = was_conflict.then(|| {
+                match (dry_run, p.row.before == Before::Modified) {
+                    (true, true) => "local changes would be discarded",
+                    (false, true) => "local changes were discarded",
+                    (true, false) => "the local version would be replaced",
+                    (false, false) => "the local version was replaced",
+                }
+                .to_string()
+            });
+            set_row(row, action, None, message);
+            if !dry_run {
                 let metadata = p
                     .metadata
                     .as_ref()
                     .expect("planned transfers have metadata");
-                if dry_run {
-                    let found = backend.exists(&metadata.hashes);
-                    return (
-                        i,
-                        match found {
-                            Ok(true) => Ok(()),
-                            Ok(false) => Err((
-                                GetCode::SourceMissing,
-                                "this version is not in storage".to_string(),
-                            )),
-                            Err(e) => Err((code_for(&e), format!("{e:#}"))),
-                        },
-                    );
-                }
-                let file_progress = on_file_start.map(|f| f(&p.row.path, metadata.size));
-                let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
-                let result = install(
-                    backend,
-                    paths,
-                    &p.row.path,
-                    metadata,
-                    &p.stat,
-                    operation_id,
-                    on_bytes,
-                );
-                if let Some(fp) = &file_progress {
-                    (fp.on_done)(result.is_ok());
-                }
-                (i, result)
-            })
-            .collect()
-    });
-
-    for (i, result) in outcomes {
-        let p = &mut planned[i];
-        let was_absent = p.row.before == Before::Absent;
-        let was_conflict = p.is_conflict();
-        match result {
-            Ok(()) => {
-                let action = match (dry_run, was_absent) {
-                    (true, true) => Action::WouldRestore,
-                    (true, false) => Action::WouldReplace,
-                    (false, true) => Action::Restored,
-                    (false, false) => Action::Replaced,
-                };
-                let message = was_conflict.then(|| {
-                    match (dry_run, p.row.before == Before::Modified) {
-                        (true, true) => "local changes would be discarded",
-                        (false, true) => "local changes were discarded",
-                        (true, false) => "the local version would be replaced",
-                        (false, false) => "the local version was replaced",
-                    }
-                    .to_string()
-                });
-                p.set(action, None, message);
-                if !dry_run {
-                    let metadata = p
-                        .metadata
-                        .as_ref()
-                        .expect("planned transfers have metadata");
-                    let rel_str = p.row.path.to_string_lossy().into_owned();
-                    record_baseline(cache, &rel_str, &metadata.hashes.blake3, metadata.size);
-                    if let Some(mtx) = cache {
-                        if let Ok(stat) = FileStat::from_path(&paths.file_path(&p.row.path)) {
-                            if let Err(e) =
-                                mtx.lock()
-                                    .unwrap()
-                                    .insert(&rel_str, &stat, &metadata.hashes)
-                            {
-                                log::warn!("Cache store failed after get for {rel_str}: {e}");
-                            }
+                let rel_str = p.row.path.to_string_lossy().into_owned();
+                record_baseline(cache, &rel_str, &metadata.hashes.blake3, metadata.size);
+                if let Some(mtx) = cache {
+                    if let Ok(stat) = FileStat::from_path(&paths.file_path(&p.row.path)) {
+                        if let Err(e) =
+                            mtx.lock()
+                                .unwrap()
+                                .insert(&rel_str, &stat, &metadata.hashes)
+                        {
+                            log::warn!("Cache store failed after get for {rel_str}: {e}");
                         }
                     }
-                    log::info!("Retrieved {} ({})", p.row.path.display(), action.as_str());
                 }
-            }
-            Err((code, message)) => {
-                log::warn!("Failed to get {}: {message}", p.row.path.display());
-                p.set(Action::Failed, Some(code), Some(message));
+                log::info!("Retrieved {} ({})", p.row.path.display(), action.as_str());
             }
         }
+        Err((code, message)) => {
+            log::warn!("Failed to get {}: {message}", p.row.path.display());
+            set_row(row, Action::Failed, Some(code), Some(message));
+        }
     }
-
-    finish(planned, dry_run, on_conflict, source, false)
 }
 
 /// What every file needing the remote gets when the access check fails: the
@@ -943,14 +1086,40 @@ fn access_failure(e: anyhow::Error) -> FileError {
     (code, format!("{e:#}"))
 }
 
-fn finish(
-    planned: Vec<Planned>,
+/// The plan as reported to the observer: every row, and the ones to download.
+/// Rows of unknown size count in no byte total.
+fn operation_plan(planned: &[Planned], transfer_idx: &[usize]) -> OperationPlan {
+    let size = |p: &Planned| p.row.size.unwrap_or(0);
+    OperationPlan {
+        files_total: planned.len() as u64,
+        bytes_total: planned.iter().map(size).sum(),
+        files_to_transfer: transfer_idx.len() as u64,
+        bytes_to_transfer: transfer_idx.iter().map(|&i| size(&planned[i])).sum(),
+    }
+}
+
+/// How a `get` ended, for [`finish`].
+struct Ending {
     dry_run: bool,
     on_conflict: OnConflict,
     source: SettingSource,
     aborted: bool,
-) -> GetReport {
-    let files: Vec<GetRow> = planned.into_iter().map(|p| p.row).collect();
+}
+
+fn finish(planned: Vec<Planned>, ending: Ending, ctx: &OperationContext) -> GetReport {
+    let Ending {
+        dry_run,
+        on_conflict,
+        source,
+        aborted,
+    } = ending;
+    let files: Vec<GetRow> = planned
+        .into_iter()
+        .map(|mut p| {
+            p.emit(ctx);
+            p.row
+        })
+        .collect();
     let mut counts = GetCounts::default();
     for r in &files {
         let slot = match r.action {
@@ -968,7 +1137,8 @@ fn finish(
     // K5, K12: from the rows, the same in every ending (aborted included).
     // `to_transfer` is every row whose local copy does not match its target,
     // whatever then happened to it (held back, skipped, failed);
-    // `already_stored` the ones that match. It does not depend on the
+    // `already_stored` the ones that match. Unlike the plan's
+    // `bytes_to_transfer` (what get attempts), it does not depend on the
     // policy. `transferred` is the size of what was installed, so 0 in a dry
     // run. Rows of unknown size count in none.
     let mut bytes = ByteTotals::default();
@@ -1044,7 +1214,7 @@ mod tests {
                 None,
                 Compression::Zstd,
                 false,
-                None,
+                &OperationContext::new(),
             )
             .unwrap()
             .files;
@@ -1100,7 +1270,7 @@ mod tests {
                     on_conflict,
                     source: SettingSource::Argument,
                 },
-                None,
+                &OperationContext::new(),
             )
         }
 
@@ -1491,7 +1661,13 @@ mod tests {
             on_conflict: OnConflict::Skip,
             source: SettingSource::Argument,
         };
-        let report = get_files(selection, &in_data, repo.backend(), options, None);
+        let report = get_files(
+            selection,
+            &in_data,
+            repo.backend(),
+            options,
+            &OperationContext::new(),
+        );
         let local = |name: &str| row(&report, name).local_path.clone();
         assert_eq!(local("data/x.csv"), PathBuf::from("x.csv"));
         assert_eq!(local("data/typo.csv"), PathBuf::from("typo.csv"));
@@ -1533,6 +1709,32 @@ mod tests {
         assert_eq!(repo.read("a.csv"), b"one");
     }
 
+    // K11: a working file that could not be hashed (unreadable) still did
+    // the hashing work: its failed row carries the time spent.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_hash_keeps_its_hash_time() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        // New content, so the hash cache cannot answer for it.
+        let path = repo.root.join("a.csv");
+        fs::write(&path, b"changed").unwrap();
+        fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&path).is_ok() {
+            fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            return; // running as root: permissions are not enforced
+        }
+        let report = repo.get(&["a.csv"], OnConflict::Abort);
+        fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let r = row(&report, "a.csv");
+        assert_eq!(
+            (r.action, r.code, r.local_hash.as_deref()),
+            (Action::Failed, Some(GetCode::PermissionDenied), None)
+        );
+        assert!(r.duration_ms.is_some(), "hashing was attempted");
+    }
+
     // Spec 16: a destination that can't be written fails alone, keeps what
     // was there, and a rerun finishes once it is fixed.
     #[cfg(unix)]
@@ -1564,35 +1766,156 @@ mod tests {
         assert_eq!(repo.read("locked/a.csv"), b"a");
     }
 
-    // C4: an access failure keeps its shared code per row instead of
-    // collapsing to access_denied.
-    #[test]
-    fn access_failures_keep_their_shared_code() {
-        use crate::{BackendError, ErrorCode};
-        for code in [
-            ErrorCode::AuthRequired,
-            ErrorCode::AuthExpired,
-            ErrorCode::AccessDenied,
-            ErrorCode::ServerUnavailable,
-            ErrorCode::ServerTooOld,
-            ErrorCode::ProjectNotFound,
-            ErrorCode::CredentialsUnreadable,
-        ] {
-            let e: anyhow::Error = BackendError::new(code, "nope").into();
-            let (got, message) = access_failure(e.context("checking access"));
-            assert_eq!(got.as_str(), code.as_str());
-            assert_eq!(message, "checking access: nope");
+    /// What an observer heard, in order.
+    #[derive(Debug, Clone)]
+    enum Heard {
+        Planned(OperationPlan),
+        Started(Phase),
+        Finished(Phase),
+        Transfer,
+        Row(GetRow),
+    }
+
+    /// Records everything; optionally holds the second transfer open until
+    /// another row is reported.
+    #[derive(Default)]
+    struct Recorder {
+        heard: Mutex<Vec<Heard>>,
+        rows_seen: std::sync::Condvar,
+        hold_second_transfer: bool,
+        /// Whether the held transfer saw another file's row before it finished
+        second_saw_a_row: Mutex<Option<bool>>,
+    }
+
+    impl Recorder {
+        fn phases(&self) -> Vec<String> {
+            self.heard()
+                .into_iter()
+                .filter_map(|h| match h {
+                    Heard::Started(p) => Some(format!("+{}", p.as_str())),
+                    Heard::Finished(p) => Some(format!("-{}", p.as_str())),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn heard(&self) -> Vec<Heard> {
+            self.heard.lock().unwrap().clone()
+        }
+
+        fn rows(&self) -> Vec<GetRow> {
+            self.heard()
+                .into_iter()
+                .filter_map(|h| match h {
+                    Heard::Row(r) => Some(r),
+                    _ => None,
+                })
+                .collect()
         }
     }
 
-    // K14: an access failure that is no classified backend error is the
-    // remote being unusable, not a local I/O problem.
-    #[test]
-    fn an_unclassified_access_failure_is_server_unavailable() {
-        let plain = anyhow::anyhow!("something went wrong");
-        assert_eq!(access_failure(plain).0, GetCode::ServerUnavailable);
-        let io: anyhow::Error = io::Error::new(io::ErrorKind::PermissionDenied, "no").into();
-        assert_eq!(access_failure(io).0, GetCode::ServerUnavailable);
+    impl crate::OperationObserver for std::sync::Arc<Recorder> {
+        fn planned(&self, plan: &OperationPlan) {
+            self.heard.lock().unwrap().push(Heard::Planned(*plan));
+        }
+        fn phase_started(&self, phase: Phase) {
+            self.heard.lock().unwrap().push(Heard::Started(phase));
+        }
+        fn phase_finished(&self, phase: Phase) {
+            self.heard.lock().unwrap().push(Heard::Finished(phase));
+        }
+        fn transfer_started(
+            &self,
+            path: &Path,
+            _total_bytes: u64,
+        ) -> Option<crate::progress::FileProgress> {
+            let nth = {
+                let mut heard = self.heard.lock().unwrap();
+                heard.push(Heard::Transfer);
+                heard
+                    .iter()
+                    .filter(|h| matches!(h, Heard::Transfer))
+                    .count()
+            };
+            if !(self.hold_second_transfer && nth == 2) {
+                return None;
+            }
+            let me = self.clone();
+            let path = path.to_path_buf();
+            Some(crate::progress::FileProgress {
+                on_bytes: Box::new(|_| {}),
+                on_done: Box::new(move |_| {
+                    // The slow transfer: it does not finish until another
+                    // file's row is reported (or 5 s pass).
+                    let other_row = |heard: &Vec<Heard>| {
+                        heard
+                            .iter()
+                            .any(|h| matches!(h, Heard::Row(r) if r.path != path))
+                    };
+                    let heard = me.heard.lock().unwrap();
+                    let (heard, _) = me
+                        .rows_seen
+                        .wait_timeout_while(heard, std::time::Duration::from_secs(5), |h| {
+                            !other_row(h)
+                        })
+                        .unwrap();
+                    *me.second_saw_a_row.lock().unwrap() = Some(other_row(&heard));
+                }),
+            })
+        }
+        fn file_finished(&self, row: crate::FileRow<'_>) {
+            let crate::FileRow::Get(row) = row else {
+                panic!("get reported a non-get row");
+            };
+            self.heard.lock().unwrap().push(Heard::Row(row.clone()));
+            self.rows_seen.notify_all();
+        }
+    }
+
+    impl TestRepo {
+        fn get_observed(
+            &self,
+            names: &[&str],
+            unmatched: &[&str],
+            on_conflict: OnConflict,
+            dry_run: bool,
+            recorder: &std::sync::Arc<Recorder>,
+        ) -> GetReport {
+            let backend = self.backend();
+            self.get_observed_on(backend, names, unmatched, on_conflict, dry_run, recorder)
+        }
+
+        fn get_observed_on(
+            &self,
+            backend: &Backend,
+            names: &[&str],
+            unmatched: &[&str],
+            on_conflict: OnConflict,
+            dry_run: bool,
+            recorder: &std::sync::Arc<Recorder>,
+        ) -> GetReport {
+            let selection = GetSelection {
+                tracked: names.iter().map(PathBuf::from).collect::<HashSet<_>>(),
+                unmatched: unmatched.iter().map(PathBuf::from).collect(),
+            };
+            let ctx = OperationContext::new().with_observer(std::sync::Arc::new(recorder.clone()));
+            get_files(
+                selection,
+                &self.paths,
+                backend,
+                GetOptions {
+                    dry_run,
+                    on_conflict,
+                    source: SettingSource::Argument,
+                },
+                &ctx,
+            )
+        }
+    }
+
+    /// The JSON shape of a row plus the fields JSON skips.
+    fn shape(r: &GetRow) -> (serde_json::Value, Option<u64>) {
+        (serde_json::to_value(r).unwrap(), r.duration_ms)
     }
 
     /// A mixed batch: restored, unchanged, skipped and untracked rows.
@@ -1604,6 +1927,155 @@ mod tests {
         fs::write(repo.root.join("c.csv"), b"edited").unwrap();
         repo.add("d.csv", b"dddd");
         fs::remove_file(repo.root.join("d.csv")).unwrap();
+    }
+
+    // C3: every row is reported once, in the same shape as the result.
+    #[test]
+    fn every_row_is_reported_once_in_its_final_shape() {
+        for dry_run in [false, true] {
+            let repo = TestRepo::new();
+            mixed_batch(&repo);
+            let recorder = std::sync::Arc::new(Recorder::default());
+            let report = repo.get_observed(
+                &["a.csv", "b.csv", "c.csv", "d.csv"],
+                &["typo.csv"],
+                OnConflict::Skip,
+                dry_run,
+                &recorder,
+            );
+            let rows = recorder.rows();
+            assert_eq!(rows.len(), report.files.len(), "{rows:#?}");
+            for final_row in &report.files {
+                let reported: Vec<_> = rows.iter().filter(|r| r.path == final_row.path).collect();
+                assert_eq!(
+                    reported.len(),
+                    1,
+                    "{} reported once",
+                    final_row.path.display()
+                );
+                assert_eq!(shape(reported[0]), shape(final_row));
+            }
+            // files[] keeps its order: sorted by path
+            let order: Vec<_> = report.files.iter().map(|r| r.path.clone()).collect();
+            let mut sorted = order.clone();
+            sorted.sort();
+            assert_eq!(order, sorted);
+        }
+    }
+
+    // C3: the first file's row arrives before the second transfer finishes.
+    #[test]
+    fn a_transfer_row_is_reported_before_a_slower_transfer_finishes() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        repo.add("b.csv", b"b");
+        fs::remove_file(repo.root.join("a.csv")).unwrap();
+        fs::remove_file(repo.root.join("b.csv")).unwrap();
+        let recorder = std::sync::Arc::new(Recorder {
+            hold_second_transfer: true,
+            ..Default::default()
+        });
+        let report = repo.get_observed(
+            &["a.csv", "b.csv"],
+            &[],
+            OnConflict::Abort,
+            false,
+            &recorder,
+        );
+        assert_eq!(report.outcome, GetOutcome::Complete);
+        assert_eq!(*recorder.second_saw_a_row.lock().unwrap(), Some(true));
+    }
+
+    // O1: phases, then the plan, then rows; dry runs have no transfer phase.
+    #[test]
+    fn phases_and_the_plan_come_in_order() {
+        for dry_run in [false, true] {
+            let repo = TestRepo::new();
+            mixed_batch(&repo);
+            let recorder = std::sync::Arc::new(Recorder::default());
+            let report = repo.get_observed(
+                &["a.csv", "b.csv", "c.csv", "d.csv"],
+                &[],
+                OnConflict::Skip,
+                dry_run,
+                &recorder,
+            );
+            let heard = recorder.heard();
+            let marks: Vec<String> = heard
+                .iter()
+                .filter_map(|h| match h {
+                    Heard::Started(p) => Some(format!("+{}", p.as_str())),
+                    Heard::Finished(p) => Some(format!("-{}", p.as_str())),
+                    Heard::Planned(_) => Some("planned".to_string()),
+                    _ => None,
+                })
+                .collect();
+            let expected: &[&str] = if dry_run {
+                &[
+                    "+hash",
+                    "-hash",
+                    "+check_storage",
+                    "planned",
+                    "-check_storage",
+                ]
+            } else {
+                &[
+                    "+hash",
+                    "-hash",
+                    "+check_storage",
+                    "-check_storage",
+                    "planned",
+                    "+transfer",
+                    "-transfer",
+                ]
+            };
+            assert_eq!(marks, expected, "dry_run {dry_run}");
+            // No row before the plan.
+            let planned_at = heard
+                .iter()
+                .position(|h| matches!(h, Heard::Planned(_)))
+                .unwrap();
+            assert!(
+                heard[..planned_at]
+                    .iter()
+                    .all(|h| !matches!(h, Heard::Row(_)))
+            );
+            let Heard::Planned(plan) = heard[planned_at] else {
+                unreachable!()
+            };
+            // a (3) and d (4) need downloading; b (2) is current, c (2) skipped.
+            assert_eq!(
+                plan,
+                OperationPlan {
+                    files_total: 4,
+                    bytes_total: 11,
+                    files_to_transfer: 2,
+                    bytes_to_transfer: 7,
+                }
+            );
+            assert_eq!(report.bytes.total, plan.bytes_total);
+            // K12: the plan counts what get attempts; the result every file
+            // not at its target, so c (skipped) too.
+            assert_eq!(report.bytes.to_transfer, 9);
+        }
+    }
+
+    // O1: nothing needs the remote: no check_storage phase, nothing to transfer.
+    #[test]
+    fn a_batch_already_current_skips_the_storage_phases() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        let recorder = std::sync::Arc::new(Recorder::default());
+        repo.get_observed(&["a.csv"], &[], OnConflict::Abort, false, &recorder);
+        let phases: Vec<_> = recorder
+            .heard()
+            .into_iter()
+            .filter_map(|h| match h {
+                Heard::Started(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(phases, [Phase::Hash]);
     }
 
     // C8 (K5): totals are the per-row sums, dry run and real.
@@ -1639,5 +2111,81 @@ mod tests {
             let moved = if dry_run { 0 } else { 7 };
             assert_eq!(bytes.transferred, moved, "dry_run {dry_run}");
         }
+    }
+
+    // C2: rows that did work carry a duration; the rest none.
+    #[test]
+    fn rows_that_did_work_have_a_duration() {
+        let repo = TestRepo::new();
+        mixed_batch(&repo);
+        let report = repo.get_with(
+            &["a.csv", "b.csv", "c.csv", "d.csv"],
+            &["typo.csv"],
+            OnConflict::Skip,
+            false,
+        );
+        let duration = |name| row(&report, name).duration_ms;
+        assert!(duration("a.csv").is_some(), "restored");
+        assert!(duration("b.csv").is_some(), "unchanged: hashed");
+        assert!(duration("c.csv").is_some(), "skipped, but hashed (K11)");
+        assert_eq!(duration("typo.csv"), None, "not tracked");
+        // Held back: the hashed conflict keeps its hash time, the absent
+        // file (never hashed) has none.
+        let repo = TestRepo::new();
+        mixed_batch(&repo);
+        let report = repo.get(&["a.csv", "c.csv"], OnConflict::Abort);
+        assert_eq!(report.outcome, GetOutcome::Aborted);
+        assert_eq!(duration_of(&report, "a.csv"), None);
+        assert!(duration_of(&report, "c.csv").is_some(), "held back, hashed");
+    }
+
+    fn duration_of(report: &GetReport, name: &str) -> Option<u64> {
+        row(report, name).duration_ms
+    }
+
+    // K13: a plan that hashes nothing (every file absent) has no hash phase.
+    #[test]
+    fn a_batch_with_nothing_to_hash_has_no_hash_phase() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        fs::remove_file(repo.root.join("a.csv")).unwrap();
+        let recorder = std::sync::Arc::new(Recorder::default());
+        let report = repo.get_observed(&["a.csv"], &[], OnConflict::Abort, false, &recorder);
+        assert_eq!(report.outcome, GetOutcome::Complete);
+        assert_eq!(
+            recorder.phases(),
+            ["+check_storage", "-check_storage", "+transfer", "-transfer"]
+        );
+    }
+
+    // C4: an access failure keeps its shared code per row instead of
+    // collapsing to access_denied.
+    #[test]
+    fn access_failures_keep_their_shared_code() {
+        use crate::{BackendError, ErrorCode};
+        for code in [
+            ErrorCode::AuthRequired,
+            ErrorCode::AuthExpired,
+            ErrorCode::AccessDenied,
+            ErrorCode::ServerUnavailable,
+            ErrorCode::ServerTooOld,
+            ErrorCode::ProjectNotFound,
+            ErrorCode::CredentialsUnreadable,
+        ] {
+            let e: anyhow::Error = BackendError::new(code, "nope").into();
+            let (got, message) = access_failure(e.context("checking access"));
+            assert_eq!(got.as_str(), code.as_str());
+            assert_eq!(message, "checking access: nope");
+        }
+    }
+
+    // K14: an access failure that is no classified backend error is the
+    // remote being unusable, not a local I/O problem.
+    #[test]
+    fn an_unclassified_access_failure_is_server_unavailable() {
+        let plain = anyhow::anyhow!("something went wrong");
+        assert_eq!(access_failure(plain).0, GetCode::ServerUnavailable);
+        let io: anyhow::Error = io::Error::new(io::ErrorKind::PermissionDenied, "no").into();
+        assert_eq!(access_failure(io).0, GetCode::ServerUnavailable);
     }
 }
