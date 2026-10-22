@@ -203,7 +203,7 @@ fn summary(report: &GetReport) -> String {
     // changes or no record was skipped, held back or replaced
     if policy_acted(report) {
         line.push_str(&format!(
-            " (on_conflict = {}, {})",
+            "\non_conflict = {} ({})",
             report.on_conflict, report.source
         ));
     }
