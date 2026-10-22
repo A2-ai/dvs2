@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use fs_err as fs;
 use rayon::iter::Either;
 use rayon::prelude::*;
@@ -310,10 +310,14 @@ fn add_all(
         })
         .collect::<Vec<_>>();
     if !invalid.is_empty() {
-        bail!(
-            "Refusing to add, the following paths are invalid:\n{}",
-            invalid.join("\n")
-        );
+        return Err(crate::Error::new(
+            ErrorCode::InvalidArguments,
+            format!(
+                "Refusing to add, the following paths are invalid:\n{}",
+                invalid.join("\n")
+            ),
+        )
+        .into());
     }
 
     let valid_paths = matched_paths
@@ -624,8 +628,9 @@ mod tests {
             false,
             &OperationContext::new(),
         )
-        .unwrap_err()
-        .to_string();
+        .unwrap_err();
+        assert_eq!(backend_error_code(&err), Some(ErrorCode::InvalidArguments));
+        let err = err.to_string();
         assert!(err.contains("outside project"), "unexpected error: {err}");
         assert!(err.contains("directory"), "unexpected error: {err}");
 
