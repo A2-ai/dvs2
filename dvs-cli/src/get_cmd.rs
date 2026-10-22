@@ -7,7 +7,7 @@ use dvs::{Action, Before, GetCode, GetOutcome, GetReport, GetRow, StoredCopy, fo
 use serde_json::json;
 
 /// Exit codes. Every command shares one table (`output::exit_code`,
-/// docs/cli-json.md); only `get` uses 3. Usage and configuration errors exit
+/// specs.md "Machine output"); only `get` uses 3. Usage and configuration errors exit
 /// 2 (clap and `main`); cancelled runs 130 (`cancel::EXIT_CANCELLED`).
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAILED: i32 = 1;

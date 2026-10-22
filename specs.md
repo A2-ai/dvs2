@@ -12,9 +12,9 @@ All configuration is handled in a `dvs.toml` config file.
 
 All CLI commands take a `--json` flag if you want to get JSON output.
 
-The CLI JSON protocol ([docs/cli-json.md](docs/cli-json.md)) specifies machine-readable envelopes,
-errors, exit statuses, events and discovery. Client read queries specify rich status facts, content availability,
-and history.
+The CLI JSON protocol (machine-readable envelopes, errors, exit statuses, events and discovery) is specified
+under [Machine output (`--json`, `--emit-events`)](#machine-output---json---emit-events). Client read queries
+specify rich status facts, content availability, and history.
 
 The Rust library must not contain anything specific to the CLI or the R package: no `miniextendr-*` dependency, no `println!`/`eprintln!`/`dbg!`. It may depend on the `log` facade but must not pull in a `log` implementer. Logger setup belongs in `dvs-cli` and `dvs-rpkg`.
 
@@ -79,55 +79,109 @@ of pipelines, or non-interactive workflows. Returning error codes is necessary.
 
 ##### Machine output (`--json`, `--emit-events`)
 
-Every `--json` result is one envelope (`v`, `command`, `outcome`, `dry_run`, `counts`, `error`, `files`, ...),
-error envelopes included, and carries its timing: `started_at` and `finished_at` (RFC 3339 UTC
-with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and `duration_ms`. `add`, `get` and `hash` rows have a
-`duration_ms` for that file's work (hash, transfer, record), `null` for a row that did no work. `add` and `get`
-results have `bytes: {total, to_transfer, already_stored, transferred}` (dry runs too; `transferred` is what
-actually moved, so `0` in a dry run; `to_transfer + already_stored = total`). Every time in JSON output is
-RFC 3339 UTC: `started_at`/`finished_at` and history's `timestamp` with milliseconds (the audit log on disk
-keeps unix seconds), a record's `add_time` as the record stores it. The only exception is event `ts` (unix
-milliseconds).
+This is protocol version 1. `--json` is global: it goes before or after the subcommand (after the argument
+terminator `--` it is a literal path). A command writes one JSON document to stdout, startup, configuration and
+argument failures included; stderr is for diagnostics, which clients must never parse. Explicit `--help` and
+`--version` keep human output and exit `0`. Codes are the API; messages are display text and may change. Clients
+check both the result and the exit status, and tolerate additional fields and unknown codes without treating
+them as success. Incompatible semantics need a new protocol version.
+
+Every `--json` result is one envelope, error envelopes included: `v` (`1`), `command` (`cli` for argument
+parsing errors), `outcome` (`complete`, `partial` or `failed`; `get` also `aborted`), `dry_run` (a requested
+mutation preview), `counts`, `error`, `files` (the per-file, per-hash or per-entry rows; empty for commands
+without rows), plus the command's own fields (`add`/`get` `bytes`, `get` `on_conflict`/`source`, `init`
+`project_root`, `logout` `revoked`/`warnings`, `info` its discovery fields). It carries its timing:
+`started_at` and `finished_at` (RFC 3339 UTC with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and
+`duration_ms` (integer milliseconds). `add`, `get` and `hash` rows have a `duration_ms` for that file's work
+(hash, transfer, record), `null` for a row that did no work. Every time in JSON output is RFC 3339 UTC: `started_at`/`finished_at`
+and history's `timestamp` with milliseconds (the audit log on disk keeps unix seconds), a record's `add_time`
+as the record stores it. The only exception is event `ts` (unix milliseconds).
+
+```json
+{"v":1,"command":"add","outcome":"failed","dry_run":false,
+ "counts":{"total":0,"succeeded":0,"failed":0},
+ "bytes":{"total":0,"to_transfer":0,"already_stored":0,"transferred":0},
+ "error":{"code":"no_files_selected","message":"Path not found: missing.txt","hint":null},
+ "files":[],"started_at":"2026-10-21T14:30:00.120Z","finished_at":"2026-10-21T14:30:00.123Z","duration_ms":3}
+```
+
+`add` and `get` results have `bytes: {total, to_transfer, already_stored, transferred}` (dry runs too):
+`total` is the sizes of the rows whose size is known; `to_transfer` the bytes that need moving (`add`: upload;
+`get`: see get); `already_stored` the rest (`add`: the server already has the content), so
+`to_transfer + already_stored = total`; `transferred` what actually moved, so `0` in a dry run.
 
 Errors have one shape. The envelope's `error` is `null` or `{code, message, hint}`; every row of every command
 has `code`, `message` and `hint` (all `null` on success; `hint` is `null` where there is none). Rows have fixed
 keys: a field that does not apply is `null`, never missing (an `add` error row has `outcome`, `hash`, `size`,
-`stored_size` as `null`). `counts` always has `total`, `succeeded` and `failed` (get adds its detailed counts).
+`stored_size` as `null`). `counts` always has `total` (the rows), `failed` (rows that failed) and `succeeded`
+(the rest; get adds its detailed counts and defines `succeeded` itself). `error` is a failure of the whole
+command; per-file failures stay in the rows, so a `partial` result normally has `error: null`. A `hint` is the
+next thing to try, for people (only `get` fills row hints today).
+
+Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; `get` see get;
+`status` `path`, `status`, `metadata`, `working`, `baseline`; `hash` see hash; `availability` `hash`,
+`state` (`present`, `absent`, `unknown`), `in_history`, and a second error pair `history_code`/`history_message`
+for the history lookup, a separate request that fails on its own (`in_history` and the history pair are `null`
+without `--path`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action` (history never
+fails per row). `path` is relative to the project root (`info`'s `project_root`); get's `local_path` is relative
+to the current directory.
 
 Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row
 (`code`), in every command: `auth_required` (no token, not logged in), `auth_expired` (the server said 401),
 `access_denied` (403), `server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint
 that should exist answered 404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs`
 record, e.g. git conflict markers, in every command), `cancelled` (the file never started, see below) and
-`credentials_unreadable`. Command-specific codes (`no_files_selected`, `invalid_configuration`,
-`invalid_arguments`, `io_error`, get's codes, ...) stay. `info --json` reports `connection_error` as
-`{code, message}` (`server_unavailable`, `project_not_found` or `server_too_old`) when `connection` is
-`unavailable`, else `null`; `access` is `not_logged_in` without a token, and `none` on a 403 (no membership:
-`connection` is `available`, exit `0`, like human mode's "no access"); a rejected login (401, `auth_expired`)
-is an error envelope.
+`credentials_unreadable` (the store exists but cannot be read). Command-level codes: `not_in_project`, `invalid_configuration`, `invalid_arguments`,
+`no_files_selected`, `authentication_required` (device login needs an interactive `dvs login`), `io_error`,
+and `operation_failed`, the honest fallback when nothing more specific is known (`get` also uses it when no
+tracked file matched). Row codes besides the shared ones: `add` `io_error`, `operation_failed`, and `file_failed`
+if a failure has no code, get's codes (see get), `status` `local_read_failed`, `hash` `local_read_failed` (symlinks) and `io_error`,
+`availability` `backend_read_failed` (an unclassified backend failure), and `logout` `warnings`
+`revoke_failed`.
+
+`dvs info --json` finds the project from the working directory. `project_root` and `metadata_directory` are
+absolute native paths; `protocol.versions` lists the supported result versions and `protocol.capabilities`
+names features (`json_results`, `get_conflict_policy`, `connectivity_status`, `status_facts`, `availability`,
+`history`, `event_stream`, `device_login_events`). For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
+`unknown` when not logged in), `connection_error`, `user`, `access` and `groups`; a local project reports
+`connection: "not_applicable"`. `connection_error` is `{code, message}` (`server_unavailable`,
+`project_not_found` or `server_too_old`) when `connection` is `unavailable`, else `null`. `access` is the
+server's level (`read`, `write`, `admin`), `not_logged_in` without a token, `none` on a 403 (no membership:
+`connection` is `available`, exit `0`, like human mode's "no access"), or `null` when the server could not
+say; a rejected login (401, `auth_expired`) is an error envelope.
 
 Exit codes, for every command: `0` complete; `1` failure, or some rows failed; `2` usage or configuration
 (`invalid_arguments`, `invalid_configuration`); `3` `get` only, local conflicts held files back and nothing
-else failed; `130` cancelled, over every other code.
+else failed; `130` cancelled, over every other code. A result written before a nonzero exit is authoritative.
+No result after the process was killed means the operation was interrupted: rescan before retrying.
 
 Machine mode never changes stored credentials: a 401 is `auth_expired` and the token stays; an unparsable
 credentials store is `credentials_unreadable` and stays. Human mode still forgets a rejected token and deletes
 an unparsable store, and says to run `dvs login`. Only `dvs login` and `dvs logout` change credentials on
-purpose.
+purpose. `login --json` reports `authentication_required` before starting device login; with `--emit-events`
+it emits `waiting_for_auth` instead. Credentials and device secrets are never written to results or events. `logout --json` deletes the local credential even if remote
+revocation fails: `revoked` is `true` for a confirmed revocation, `false` for a failed revoke call, `null` when
+there was no token; `warnings` is always an array of `{code, message}`.
 
 A server URL may carry a path prefix (a proxy, `https://host/dvs`, with or without the trailing slash): every
 request, login included, goes under it.
 
-`--emit-events` writes NDJSON: `operation_started`, `operation_planned` (`files_total`, `bytes_total`,
-`files_to_transfer`, `bytes_to_transfer`; once, before any row), `phase_started`/`phase_finished` (`phase`:
-`scan`, `hash`, `check_storage`, `transfer`, `record`; only phases where work happens), `transfer_started`,
-`transfer_progress`, `transfer_finished` (with `duration_ms`), `file_result` (each row as soon as it is final,
-in completion order, the same shape as in the result), `operation_progress` (`files_done`, `files_total`,
-`bytes_done`, `bytes_total`: files against the plan's `files_total`, moved bytes against its
-`bytes_to_transfer`; at most every 250 ms and only once a file finished or 1% of the bytes moved since the
-last one; the final count is always reported before the end), and `operation_finished` (`result`,
-`exit_code`, `started_at`, `finished_at`, `duration_ms`). Every event has `v`, `operation_id`, `seq`, `type`,
-`ts` (unix milliseconds) and `elapsed_ms` (since the operation started).
+`--emit-events` (instead of `--json`) writes NDJSON, one event per line, while the command runs and ends
+with the same result document: `operation_started` (`command`), `waiting_for_auth` (`user_code`,
+`approval_url`; device login), `operation_planned` (`files_total`, `bytes_total`, `files_to_transfer`,
+`bytes_to_transfer`; once, before any row), `phase_started`/`phase_finished` (`phase`: `scan`, `hash`,
+`check_storage`, `transfer`, `record`; only phases where work happens), `transfer_started` (`path`,
+`total_bytes`), `transfer_progress` (`path`, `bytes`, `total_bytes`; at most 10 per second per transfer),
+`transfer_finished` (`path`, `bytes`, `total_bytes`, `success`, `duration_ms`), `file_result` (`result`: one
+row, the same shape as in the result's `files`, as soon as it is final, in completion order; the final
+result's `files` keeps its own order), `operation_progress` (`files_done`, `files_total`, `bytes_done`,
+`bytes_total`: files against the plan's `files_total`, moved bytes against its `bytes_to_transfer`; at most
+every 250 ms and only once a file finished or 1% of the bytes moved since the last one; the final count is
+always reported before the end), and `operation_finished` (`result`, the full result document, `exit_code`,
+`started_at`, `finished_at`, `duration_ms`; always last). Every event has `v`, `operation_id`
+(`"<pid>-<nanos>"`), `seq` (0, 1, 2, ...), `type`, `ts` (unix milliseconds) and `elapsed_ms` (since the
+operation started). Transfer events describe transfer work only: the result is authoritative (a transfer can
+succeed and the install still fail).
 
 ##### Cancellation
 
