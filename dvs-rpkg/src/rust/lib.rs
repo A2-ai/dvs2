@@ -692,7 +692,7 @@ fn get_result_list(report: &GetReport, setup_failed: Option<bool>) -> List {
     );
 
     let c = &report.counts;
-    let mut counts: Vec<(&'static str, SEXP)> = Vec::with_capacity(8);
+    let mut counts: Vec<(&'static str, SEXP)> = Vec::with_capacity(9);
     let mut count =
         |name: &'static str, n: usize| counts.push((name, protect((n as i32).into_sexp())));
     count("restored", c.restored);
@@ -700,6 +700,7 @@ fn get_result_list(report: &GetReport, setup_failed: Option<bool>) -> List {
     count("unchanged", c.unchanged);
     count("skipped", c.skipped);
     count("not_run", c.not_run);
+    count("cancelled", c.cancelled);
     count("failed", c.failed);
     count("would_restore", c.would_restore);
     count("would_replace", c.would_replace);

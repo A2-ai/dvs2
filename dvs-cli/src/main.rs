@@ -867,7 +867,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
             } else {
                 get_cmd::print_human(&report);
                 if report.outcome == GetOutcome::Cancelled {
-                    report_cancelled(get_cmd::cancelled_count(&report), "retrieved");
+                    report_cancelled(report.counts.cancelled, "retrieved");
                 }
             }
             if report.outcome == GetOutcome::Cancelled {

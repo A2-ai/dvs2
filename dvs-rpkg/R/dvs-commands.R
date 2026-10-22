@@ -103,7 +103,7 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   and always the same columns: `path`, `local_path`, `before` (`"absent"`,
 #'   `"current"`, `"clean"`, `"modified"`, `"unknown"`, `"not_tracked"`,
 #'   `"not_a_file"`, `"unsafe_path"`), `action` (`"restored"`, `"replaced"`,
-#'   `"unchanged"`, `"skipped"`, `"not_run"`, `"failed"`, `"would_restore"`,
+#'   `"unchanged"`, `"skipped"`, `"not_run"`, `"cancelled"`, `"failed"`, `"would_restore"`,
 #'   `"would_replace"`), `satisfied`, `size`, `target_hash`, `local_hash`,
 #'   `stored_copy`, `code`, `message` and `hint`. [dvs_result_info()] returns
 #'   the outcome and the policy that applied. Configuration errors (for example
@@ -215,6 +215,7 @@ dvs_get_summary <- function(info, files = NULL) {
     unchanged = "%d already current",
     skipped = "skipped %d",
     not_run = "%d held back",
+    cancelled = "cancelled %d",
     failed = "%d failed"
   )
   parts <- character(0)

@@ -191,7 +191,7 @@ when stdin, if it is a pipe or socket, reaches end of file (the client went away
 Ctrl-C/Ctrl-Break). A signal that was already
 ignored when `dvs` started (for example SIGHUP under `nohup`) stays ignored. They stop *starting* files: a
 file in flight finishes atomically (a verified temp file and rename for `get`, the complete upload and record
-for `add`). Files that never started get `code: "cancelled"` (`action: "not_run"` in `get`); they count in
+for `add`). Files that never started get `code: "cancelled"` (also `action: "cancelled"` in `get`); they count in
 `counts.total` but in neither `succeeded` nor `failed`. The outcome is `cancelled` whenever the request came
 before the operation finished, the full result is still written, and the exit code is `130`, over every
 other exit code. A second signal exits `130` at once, without a result.
@@ -420,7 +420,7 @@ are null.
 ```json
 {"v": 1, "command": "get", "outcome": "aborted", "dry_run": false,
  "on_conflict": "abort", "source": "default",
- "counts": {"total": 3, "succeeded": 1, "restored": 0, "replaced": 0, "unchanged": 1, "skipped": 0, "not_run": 2, "failed": 0, "would_restore": 0, "would_replace": 0},
+ "counts": {"total": 3, "succeeded": 1, "restored": 0, "replaced": 0, "unchanged": 1, "skipped": 0, "not_run": 2, "cancelled": 0, "failed": 0, "would_restore": 0, "would_replace": 0},
  "error": null,
  "files": [{"path": "data/b.csv", "local_path": "data/b.csv", "before": "modified", "action": "not_run",
             "satisfied": false, "size": 7, "target_hash": "…", "local_hash": "…", "stored_copy": "absent",
@@ -430,14 +430,15 @@ are null.
 - `outcome`: `complete`, `aborted` (nothing written), `partial`, `failed` or `cancelled`.
 - `satisfied`: the file is at its tracked version afterwards; in a dry run, that it would be.
 - A shared cause (`access_denied`, `server_unavailable`) is printed once in human output, not per file.
-- `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run`, `failed`, `would_restore`, `would_replace`.
+- `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run` (held back), `cancelled`, `failed`, `would_restore`,
+  `would_replace`.
 - `code`: `local_changes`, `unknown_local`, `batch_aborted`, `not_tracked`, `not_a_file`, `unsafe_path`,
   `source_missing`, `hash_mismatch`, `access_denied`, `server_unavailable`, `destination_changed`, `permission_denied`, `file_in_use`,
   `io_error`, `bad_metadata`, the shared codes (`auth_required`, `auth_expired`, `server_too_old`,
   `project_not_found`, `credentials_unreadable`, ...) and `cancelled`.
 - `counts`: `total` (every row) and `succeeded` (rows at their target: restored, replaced, unchanged, and
   would_restore/would_replace in a dry run) next to the per-action counts; `failed` is the `failed` action.
-  Skipped and `not_run` rows (held back or cancelled) are in neither `succeeded` nor `failed`.
+  Skipped, `not_run` (held back) and `cancelled` rows are in neither `succeeded` nor `failed`.
 - `bytes`: `to_transfer` is the size of every row whose local copy does not match its target (held back,
   skipped and failed rows included), `already_stored` of the rows that match.
 

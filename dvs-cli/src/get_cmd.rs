@@ -102,6 +102,7 @@ fn label(action: Action) -> &'static str {
         Action::Unchanged => "unchanged",
         Action::Skipped => "skipped",
         Action::NotRun => "not run",
+        Action::Cancelled => "cancelled",
         Action::Failed => "failed",
         Action::WouldRestore => "would restore",
         Action::WouldReplace => "would replace",
@@ -115,8 +116,6 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 /// The non-zero counts, in a fixed order: "restored 2, 3 already current".
 fn counts_phrase(report: &GetReport) -> String {
     let c = &report.counts;
-    // Cancelled rows are `not_run` too, but nothing held them back
-    let cancelled = cancelled_count(report);
     let parts = [
         (c.restored, "restored {}"),
         (c.replaced, "replaced {}"),
@@ -124,8 +123,8 @@ fn counts_phrase(report: &GetReport) -> String {
         (c.would_replace, "would replace {}"),
         (c.unchanged, "{} already current"),
         (c.skipped, "skipped {}"),
-        (c.not_run - cancelled, "{} held back"),
-        (cancelled, "cancelled {}"),
+        (c.not_run, "{} held back"),
+        (c.cancelled, "cancelled {}"),
         (c.failed, "{} failed"),
     ];
     let out: Vec<String> = parts
@@ -140,19 +139,10 @@ fn counts_phrase(report: &GetReport) -> String {
     }
 }
 
-/// Files a cancel request stopped before they started.
-pub fn cancelled_count(report: &GetReport) -> usize {
-    report
-        .files
-        .iter()
-        .filter(|r| r.code == Some(GetCode::Cancelled))
-        .count()
-}
-
 /// Rows listed one per line: every file that changed or needs attention.
 /// Cancelled files are only counted, as add, status and hash do.
 fn is_listed(row: &GetRow) -> bool {
-    row.action != Action::Unchanged && row.code != Some(GetCode::Cancelled)
+    !matches!(row.action, Action::Unchanged | Action::Cancelled)
 }
 
 /// Why conflicts stopped things, separating edits from files with no record.
@@ -315,7 +305,7 @@ pub fn row_json(r: &GetRow) -> serde_json::Value {
 }
 
 /// get's counts plus `total` and `succeeded` (rows at their target). Skipped
-/// and not_run rows (held back or cancelled) are in neither. Added here, not
+/// not_run (held back) and cancelled rows are in neither. Added here, not
 /// in `GetCounts`, so R output is unchanged.
 fn counts_json(report: &GetReport) -> serde_json::Value {
     let c = &report.counts;

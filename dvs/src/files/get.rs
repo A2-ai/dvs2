@@ -78,6 +78,8 @@ pub enum Action {
     Unchanged,
     Skipped,
     NotRun,
+    /// Stopped by a cancel request before it started
+    Cancelled,
     Failed,
     WouldRestore,
     WouldReplace,
@@ -91,6 +93,7 @@ impl Action {
             Action::Unchanged => "unchanged",
             Action::Skipped => "skipped",
             Action::NotRun => "not_run",
+            Action::Cancelled => "cancelled",
             Action::Failed => "failed",
             Action::WouldRestore => "would_restore",
             Action::WouldReplace => "would_replace",
@@ -238,7 +241,7 @@ pub enum GetOutcome {
     Partial,
     /// Nothing is at its target, or the operation could not run
     Failed,
-    /// Stopped by a cancel request; files that never started are `not_run`
+    /// Stopped by a cancel request; files that never started are `cancelled`
     Cancelled,
 }
 
@@ -261,6 +264,7 @@ pub struct GetCounts {
     pub unchanged: usize,
     pub skipped: usize,
     pub not_run: usize,
+    pub cancelled: usize,
     pub failed: usize,
     pub would_restore: usize,
     pub would_replace: usize,
@@ -384,7 +388,7 @@ impl Planned {
     /// Cancelled before the plan looked at it: never a conflict, never
     /// held back, never transferred.
     fn is_cancelled(&self) -> bool {
-        self.row.code == Some(GetCode::Cancelled)
+        self.row.action == Action::Cancelled
     }
 
     /// Classified as a conflict (rows that already failed in the plan, or
@@ -395,7 +399,6 @@ impl Planned {
 
     fn needs_transfer(&self, on_conflict: OnConflict) -> bool {
         self.row.action == Action::NotRun
-            && !self.is_cancelled()
             && (matches!(self.row.before, Before::Absent | Before::Clean)
                 || (self.is_conflict() && on_conflict == OnConflict::Overwrite))
     }
@@ -447,7 +450,12 @@ fn set_row(row: &mut GetRow, action: Action, code: Option<GetCode>, message: Opt
 /// A file a cancel stopped before it started.
 fn cancel_row(row: &mut GetRow) {
     let message = "cancelled before it started".to_string();
-    set_row(row, Action::NotRun, Some(GetCode::Cancelled), Some(message));
+    set_row(
+        row,
+        Action::Cancelled,
+        Some(GetCode::Cancelled),
+        Some(message),
+    );
 }
 
 /// An absolute path as a path from the project root, if it is inside it
@@ -758,8 +766,7 @@ fn install(
 /// first, then each transfer as it completes). In a dry run the existence
 /// checks that stand in for transfers belong to `check_storage`, so there is
 /// no `transfer` phase. A cancel stops files from *starting*: a file already
-/// downloading finishes (verified temp file + rename), the rest are `not_run`
-/// with code `cancelled`.
+/// downloading finishes (verified temp file + rename), the rest are `cancelled`.
 pub fn get_files(
     selection: GetSelection,
     paths: &DvsPaths,
@@ -1171,6 +1178,7 @@ fn finish(planned: Vec<Planned>, ending: Ending, ctx: &OperationContext) -> GetR
             Action::Unchanged => &mut counts.unchanged,
             Action::Skipped => &mut counts.skipped,
             Action::NotRun => &mut counts.not_run,
+            Action::Cancelled => &mut counts.cancelled,
             Action::Failed => &mut counts.failed,
             Action::WouldRestore => &mut counts.would_restore,
             Action::WouldReplace => &mut counts.would_replace,
@@ -2197,14 +2205,15 @@ mod tests {
             } else {
                 assert_eq!(
                     (r.action, r.code, r.satisfied, r.duration_ms),
-                    (Action::NotRun, Some(GetCode::Cancelled), false, None)
+                    (Action::Cancelled, Some(GetCode::Cancelled), false, None)
                 );
                 assert!(!repo.root.join(&r.path).exists());
                 cancelled += 1;
             }
         }
         assert!(cancelled > 0, "the cancel came too late to test anything");
-        assert_eq!(report.counts.not_run, cancelled);
+        assert_eq!(report.counts.cancelled, cancelled);
+        assert_eq!(report.counts.not_run, 0);
         assert_eq!(report.counts.restored, started.len());
         assert!(!repo.temp_files_left());
         // Cancelled rows are reported too, once each.
