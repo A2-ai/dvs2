@@ -115,8 +115,12 @@ command; per-file failures stay in the rows, so a `partial` result normally has 
 next thing to try, for people (only `get` fills row hints today).
 
 Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; `get` see get;
-`status` `path`, `status`, `metadata` (`null` on an error row). `path` is relative to the project root
-(`info`'s `project_root`); get's `local_path` is relative to the current directory.
+`status` `path`, `status`, `metadata`, `working`, `baseline`, `state`; `hash` see hash; `availability` `hash`,
+`state` (`present`, `absent`, `unknown`), `in_history`, and a second error pair `history_code`/`history_message`
+for the history lookup, a separate request that fails on its own (`in_history` and the history pair are `null`
+without `--path`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action` (history never
+fails per row). `path` is relative to the project root (`info`'s `project_root`); get's `local_path` is relative
+to the current directory.
 
 Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row
 (`code`), in every command: `auth_required` (no token, not logged in), `auth_expired` (the server said 401),
