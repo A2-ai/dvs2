@@ -365,6 +365,67 @@ fn report_cancelled(not_started: usize, what: &str) {
     );
 }
 
+/// One line closing a human add: "dvs add: added 2, 1 unchanged, 1 failed".
+fn add_summary(results: &[AddResult], dry_run: bool) -> String {
+    let (mut added, mut unchanged, mut failed, mut cancelled) = (0, 0, 0, 0);
+    for result in results {
+        match &result.detail {
+            AddDetail::Success {
+                outcome: Outcome::Copied,
+                ..
+            } => added += 1,
+            AddDetail::Success {
+                outcome: Outcome::Present,
+                ..
+            } => unchanged += 1,
+            AddDetail::Error { .. } => failed += 1,
+            AddDetail::Cancelled { .. } => cancelled += 1,
+        }
+    }
+    let verb = if dry_run { "would add" } else { "added" };
+    let parts: Vec<String> = [
+        (added, format!("{verb} {added}")),
+        (unchanged, format!("{unchanged} unchanged")),
+        (failed, format!("{failed} failed")),
+        (cancelled, format!("cancelled {cancelled}")),
+    ]
+    .into_iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(_, part)| part)
+    .collect();
+    format!(
+        "dvs add{}: {}",
+        if dry_run { " (dry run)" } else { "" },
+        if parts.is_empty() {
+            "nothing to do".to_string()
+        } else {
+            parts.join(", ")
+        }
+    )
+}
+
+/// Adds the exact `--glob` to use when add refused a directory.
+fn add_directory_hint(error: anyhow::Error, dirs: &[PathBuf]) -> anyhow::Error {
+    let refused_dir = dvs::AddPathStatus::IsDirectory
+        .reason()
+        .is_some_and(|reason| error.to_string().contains(reason));
+    if dirs.is_empty() || !refused_dir {
+        return error;
+    }
+    let mut message = format!("{error}\nTo add the files in a directory, use a glob:");
+    for dir in dirs {
+        let dir = dir.to_string_lossy();
+        let dir = dir.trim_end_matches(['/', '\\']);
+        let quote = |glob: String| format!("'{}'", glob.replace('\'', r"'\''"));
+        message.push_str(&format!(
+            "\n  dvs add --glob {}   (files directly in {dir})\n  dvs add --glob {}   (including subdirectories)",
+            quote(format!("{dir}/*")),
+            quote(format!("{dir}/**/*")),
+        ));
+    }
+    anyhow!(message)
+}
+
 /// 130 if cancelled, over everything else, then 1 if any row failed.
 fn summary_exit(summary: &RunSummary) -> Result<()> {
     if summary.outcome == RunOutcome::Cancelled {
@@ -563,6 +624,16 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
         } => {
             let config = find_config(&current_dir, credentials)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
+            // Without a glob a directory is refused; suggest the glob that adds it
+            let dirs: Vec<PathBuf> = if glob.is_none() {
+                paths
+                    .iter()
+                    .filter(|p| current_dir.join(p).is_dir())
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
                 .into_iter()
                 .collect();
@@ -588,7 +659,8 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 config.compression(),
                 dry_run,
                 &ctx,
-            )?;
+            )
+            .map_err(|error| add_directory_hint(error, &dirs))?;
             let summary = report.summary();
             let results = &report.files;
             if cli.json {
@@ -622,12 +694,19 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                                     format_size(*size),
                                 );
                             }
-                            Outcome::Present => {}
+                            Outcome::Present => println!(
+                                "Unchanged: {} [{}] already tracked",
+                                result.path.display(),
+                                format_size(*size),
+                            ),
                         },
                     }
                 }
-                if summary.counts.failed > 0 {
-                    eprintln!("Error: Some files failed to add");
+                let line = add_summary(results, dry_run);
+                if summary.outcome == RunOutcome::Complete {
+                    println!("{line}");
+                } else {
+                    eprintln!("{line}");
                 }
                 report_cancelled(summary.counts.cancelled, "added");
             }
