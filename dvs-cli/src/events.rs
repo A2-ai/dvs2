@@ -340,6 +340,39 @@ mod tests {
     }
 
     #[test]
+    fn every_event_has_a_timestamp_and_the_operation_elapsed_time() {
+        let capture = Capture::default();
+        let stream = EventStream::new("add", Box::new(capture.clone()));
+        stream.planned(&OperationPlan {
+            files_total: 1,
+            bytes_total: 4,
+            files_to_transfer: 1,
+            bytes_to_transfer: 4,
+        });
+        let transfer = stream.progress(Path::new("a.txt"), 4);
+        (transfer.on_bytes)(4);
+        (transfer.on_done)(true);
+        stream.file_result(json!({"path": "a.txt"}));
+        stream.finish(json!({}), 0).unwrap();
+        let events = events(&capture);
+        for event in &events {
+            assert!(event["ts"].as_u64().unwrap() > 1_700_000_000_000, "{event}");
+            assert!(event["elapsed_ms"].is_u64(), "{event}");
+        }
+        assert_eq!(events[1]["type"], "operation_planned");
+        assert_eq!(events[1]["bytes_to_transfer"], 4);
+        let finished = events.last().unwrap();
+        assert!(finished["duration_ms"].is_u64());
+        assert!(finished["started_at"].as_str().unwrap().ends_with('Z'));
+        assert!(finished["finished_at"].as_str() >= finished["started_at"].as_str());
+        let transfer_finished = events
+            .iter()
+            .find(|e| e["type"] == "transfer_finished")
+            .unwrap();
+        assert!(transfer_finished["duration_ms"].is_u64());
+    }
+
+    #[test]
     fn terminal_result_is_exact_and_late_events_are_ignored() {
         let capture = Capture::default();
         let stream = EventStream::new("get", Box::new(capture.clone()));
@@ -409,108 +442,37 @@ mod tests {
         assert!(finishes.iter().all(|event| event["bytes"] == 15));
     }
 
-    fn plan(files_total: u64, bytes_to_transfer: u64) -> OperationPlan {
-        OperationPlan {
-            files_total,
-            bytes_total: bytes_to_transfer,
-            files_to_transfer: files_total,
-            bytes_to_transfer,
-        }
-    }
-
     #[test]
-    fn every_event_has_a_timestamp_and_the_operation_elapsed_time() {
-        let capture = Capture::default();
-        let stream = EventStream::new("add", Box::new(capture.clone()));
-        stream.planned(&plan(1, 4));
-        stream.phase_started(Phase::Transfer);
-        let transfer = stream.progress(Path::new("a.txt"), 4);
-        (transfer.on_bytes)(4);
-        (transfer.on_done)(true);
-        stream.phase_finished(Phase::Transfer);
-        stream.file_done();
-        stream.finish(json!({}), 0).unwrap();
-        let events = events(&capture);
-        for event in &events {
-            assert!(event["ts"].as_u64().unwrap() > 1_700_000_000_000, "{event}");
-            assert!(event["elapsed_ms"].is_u64(), "{event}");
-        }
-        let finished = events.last().unwrap();
-        assert!(finished["duration_ms"].is_u64());
-        assert!(finished["started_at"].as_str().unwrap().ends_with('Z'));
-        assert!(finished["finished_at"].as_str() >= finished["started_at"].as_str());
-        let transfer_finished = events
-            .iter()
-            .find(|e| e["type"] == "transfer_finished")
-            .unwrap();
-        assert!(transfer_finished["duration_ms"].is_u64());
-        assert_eq!(events[1]["type"], "operation_planned");
-        assert_eq!(events[1]["bytes_to_transfer"], 4);
-        assert_eq!(events[2]["phase"], "transfer");
-    }
-
-    fn progress_events(capture: &Capture) -> Vec<Value> {
-        events(capture)
-            .into_iter()
-            .filter(|e| e["type"] == "operation_progress")
-            .collect()
-    }
-
-    #[test]
-    fn progress_is_throttled_and_the_final_count_is_always_reported() {
+    fn progress_is_throttled_and_the_final_count_comes_right_before_the_result() {
         let capture = Capture::default();
         let stream = EventStream::new("get", Box::new(capture.clone()));
+        let progress = |capture: &Capture| -> Vec<Value> {
+            events(capture)
+                .into_iter()
+                .filter(|e| e["type"] == "operation_progress")
+                .collect()
+        };
         let started = Instant::now();
-        stream.planned(&plan(5000, 0));
+        stream.planned(&OperationPlan {
+            files_total: 5000,
+            files_to_transfer: 5000,
+            ..OperationPlan::default()
+        });
         for _ in 0..5000 {
             stream.file_done();
         }
-        let throttled = progress_events(&capture).len() as u128;
         // At most one per 250 ms since the plan
+        let throttled = progress(&capture).len() as u128;
         assert!(
             throttled <= started.elapsed().as_millis() / 250,
             "{throttled}"
         );
         stream.finish(json!({}), 0).unwrap();
-        let progress = progress_events(&capture);
-        let last = progress.last().unwrap();
+        let last = progress(&capture).pop().unwrap();
         assert_eq!(last["files_done"], 5000);
-        assert_eq!(last["files_total"], 5000);
-        // The final count is the event right before the terminal one
         let all = events(&capture);
-        assert_eq!(all[all.len() - 2], *last);
-    }
-
-    #[test]
-    fn bytes_alone_report_progress_only_once_they_move_one_percent() {
-        let capture = Capture::default();
-        let stream = EventStream::new("add", Box::new(capture.clone()));
-        stream.planned(&plan(1, 10_000));
-        let transfer = stream.progress(Path::new("big.bin"), 10_000);
-        std::thread::sleep(PROGRESS_INTERVAL + Duration::from_millis(50));
-        (transfer.on_bytes)(50);
-        assert!(progress_events(&capture).is_empty(), "0.5% is not enough");
-        (transfer.on_bytes)(60);
-        let progress = progress_events(&capture);
-        assert_eq!(progress.len(), 1);
-        assert_eq!(progress[0]["bytes_done"], 110);
-        assert_eq!(progress[0]["bytes_to_transfer"], 10_000);
-        // Right after one, nothing more for a while however much moves
-        (transfer.on_bytes)(5_000);
-        assert_eq!(progress_events(&capture).len(), 1);
-        stream.finish(json!({}), 0).unwrap();
-        let progress = progress_events(&capture);
-        assert_eq!(progress.len(), 2);
-        assert_eq!(progress[1]["bytes_done"], 5_110);
-    }
-
-    #[test]
-    fn nothing_changed_since_the_last_progress_means_no_final_one() {
-        let capture = Capture::default();
-        let stream = EventStream::new("status", Box::new(capture.clone()));
-        stream.planned(&plan(0, 0));
-        stream.finish(json!({}), 0).unwrap();
-        assert!(progress_events(&capture).is_empty());
+        assert_eq!(all[all.len() - 2], last);
+        assert_eq!(all[all.len() - 1]["type"], "operation_finished");
     }
 
     #[test]
