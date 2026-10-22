@@ -1,7 +1,6 @@
 //! Batch, backend-neutral queries for consumers that invoke the CLI.
 use anyhow::Result;
 use dvs::audit::{Action, AuditEntry};
-use dvs::backends::server::{Denied, Unreachable};
 use dvs::{Backend, DvsPaths, Hashes, PathFilter};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -20,12 +19,9 @@ fn invalid(message: impl Into<String>) -> anyhow::Error {
 }
 
 pub(crate) fn reason(error: &anyhow::Error) -> &'static str {
-    if error.downcast_ref::<Denied>().is_some() {
-        "access_denied"
-    } else if error.downcast_ref::<Unreachable>().is_some() {
-        "server_unavailable"
-    } else {
-        "backend_read_failed"
+    match dvs::backend_error_code(error) {
+        Some(code) => code.as_str(),
+        None => "backend_read_failed",
     }
 }
 

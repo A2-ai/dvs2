@@ -102,6 +102,14 @@ impl Backend {
         }
     }
 
+    /// What failures may do to stored credentials. Local storage has none, so
+    /// this only affects the server backend.
+    pub fn set_credential_policy(&mut self, policy: crate::auth::CredentialPolicy) {
+        if let Backend::Server(s) = self {
+            s.set_credential_policy(policy);
+        }
+    }
+
     /// Check that the current user can access the backend.
     /// Called once before batch operations so auth/permission problems fail
     /// fast with a single error instead of once per file.

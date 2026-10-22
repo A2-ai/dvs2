@@ -4,6 +4,7 @@ mod read_cmd;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
@@ -14,16 +15,16 @@ use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
 use url::Url;
 
 use dvs::auth::{
-    delete_token, get_client_approve_url, get_token, initiate_device_approval, poll_for_token,
-    revoke_token, store_token,
+    CredentialPolicy, delete_token, get_client_approve_url, get_token, get_token_with,
+    initiate_device_approval, poll_for_token, revoke_token, store_token,
 };
 use dvs::config::{Config, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, Backend, Compression, FileMetadata, FileProgress, GetOptions, Outcome, PathFilter,
-    add_files, format_size, get_files, set_num_threads,
+    AddDetail, AddResult, Backend, Compression, ErrorCode, FileMetadata, FileProgress, GetOptions,
+    Outcome, PathFilter, add_files, format_size, get_files, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -212,6 +213,54 @@ impl<'a> From<&'a FileMetadata> for StatusRowFull<'a> {
     }
 }
 
+/// An add row as results carry it, and whether it is an error row. Success
+/// and error rows have the same keys (§9 rec 1): the success fields are null
+/// on an error row, `code`/`message`/`hint` null on a success. Built here,
+/// not by changing `AddResult`'s serialization, so R output is unchanged (K8).
+fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
+    let (value, is_error) = match &r.detail {
+        AddDetail::Success {
+            outcome,
+            hash,
+            size,
+            stored_size,
+        } => (
+            json!({
+                "path": r.path,
+                "outcome": outcome,
+                "hash": hash,
+                "size": size,
+                "stored_size": stored_size,
+            }),
+            false,
+        ),
+        AddDetail::Error { error } => (
+            json!({
+                "path": r.path,
+                "outcome": null,
+                "hash": null,
+                "size": null,
+                "stored_size": null,
+                "message": error,
+            }),
+            true,
+        ),
+    };
+    (output::file_result(value, is_error), is_error)
+}
+
+/// A status row as results carry it: the library's `error` text is the row's
+/// `message`, like every other command's rows (§9 rec 1).
+fn status_row(row: &dvs::inspect::StatusFacts) -> serde_json::Value {
+    let mut value = serde_json::to_value(row).expect("status rows serialize");
+    if let Some(object) = value.as_object_mut()
+        && let Some(message) = object.remove("error")
+    {
+        object.insert("message".into(), message);
+    }
+    output::row_error_fields(value)
+}
+
 fn progress_style() -> ProgressStyle {
     ProgressStyle::with_template("{bar:40} {pos_fmt}/{len_fmt} ({percent}%) | {msg}")
         .unwrap()
@@ -281,6 +330,15 @@ fn try_main(cli: Cli) -> Result<()> {
         set_num_threads(n);
     }
     let current_dir = std::env::current_dir()?;
+    // C5: machine mode (--json) never changes stored credentials: a rejected
+    // token or an unparsable store is reported and left in place. People get
+    // them repaired, and are told to run `dvs login`. Only login and logout
+    // change credentials on purpose.
+    let credentials = if cli.json {
+        CredentialPolicy::Preserve
+    } else {
+        CredentialPolicy::Repair
+    };
 
     match cli.command {
         Command::Init(init_cmd) => {
@@ -307,10 +365,11 @@ fn try_main(cli: Cli) -> Result<()> {
                 } => {
                     // Initializing on the server requires authentication, so run the
                     // login flow first if we don't have a token for it yet.
-                    if get_token(&url)?.is_none() {
+                    if get_token_with(&url, credentials)?.is_none() {
                         run_device_login(&url, cli.json)?;
                     }
                     let mut config = Config::new_server(name, url, Some(group));
+                    config.set_credential_policy(credentials);
                     if no_compression {
                         config.set_compression(Some(Compression::None));
                     }
@@ -345,10 +404,11 @@ fn try_main(cli: Cli) -> Result<()> {
 
             // Initializing on the server requires authentication, so run the
             // login flow first if we don't have a token for it yet.
-            if get_token(&url)?.is_none() {
+            if get_token_with(&url, credentials)?.is_none() {
                 run_device_login(&url, cli.json)?;
             }
             let mut config = Config::new_server(name, url, None);
+            config.set_credential_policy(credentials);
             config.set_compression(None);
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
@@ -368,7 +428,7 @@ fn try_main(cli: Cli) -> Result<()> {
             message,
             dry_run,
         } => {
-            let config = find_config(&current_dir)?;
+            let config = find_config(&current_dir, credentials)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
                 .into_iter()
@@ -380,7 +440,7 @@ fn try_main(cli: Cli) -> Result<()> {
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
 
             let on_file_start = make_progress_callback(config.progress_bytes_threshold());
-            let results = add_files(
+            let report = add_files(
                 all_paths,
                 &dvs_paths,
                 config.backend(),
@@ -393,20 +453,17 @@ fn try_main(cli: Cli) -> Result<()> {
                     None
                 },
             )?;
+            let results = &report.files;
             let has_errors = results
                 .iter()
                 .any(|r| matches!(r.detail, AddDetail::Error { .. }));
             if cli.json {
-                let rows = results.iter().map(|r| {
-                    (
-                        serde_json::to_value(r).expect("add results serialize"),
-                        matches!(r.detail, AddDetail::Error { .. }),
-                    )
-                });
-                let (files, failed) = output::file_results(rows);
-                output::emit(output::envelope("add", dry_run, files, failed));
+                let (files, failed) = output::file_results(results.iter().map(add_row));
+                let mut result = output::envelope("add", dry_run, files, failed);
+                result["bytes"] = json!(report.bytes);
+                output::emit(result);
             } else {
-                for result in &results {
+                for result in results {
                     match &result.detail {
                         AddDetail::Error { error: err } => {
                             eprintln!("Error adding {}: {err}", result.path.display());
@@ -451,7 +508,7 @@ fn try_main(cli: Cli) -> Result<()> {
             with_metadata,
             glob,
         } => {
-            let config = find_config(&current_dir)?;
+            let config = find_config(&current_dir, credentials)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !unsynced;
 
@@ -474,10 +531,7 @@ fn try_main(cli: Cli) -> Result<()> {
             }
             let failed = statuses.iter().filter(|row| row.error.is_some()).count();
             if cli.json {
-                let files = statuses
-                    .iter()
-                    .map(serde_json::to_value)
-                    .collect::<serde_json::Result<Vec<_>>>()?;
+                let files = statuses.iter().map(status_row).collect();
                 output::emit(output::envelope("status", false, files, failed));
                 return if failed == 0 {
                     Ok(())
@@ -552,7 +606,7 @@ fn try_main(cli: Cli) -> Result<()> {
             force,
         } => {
             let setup = || -> Result<_> {
-                let config = find_config(&current_dir)?;
+                let config = find_config(&current_dir, credentials)?;
                 let explicit = if force {
                     Some(OnConflict::Overwrite)
                 } else {
@@ -586,13 +640,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 },
             );
             if cli.json {
-                let mut value = get_cmd::to_json(&report);
-                value["error"] = report
-                    .problem
-                    .as_ref()
-                    .map(|message| json!({"code": "operation_failed", "message": message}))
-                    .unwrap_or(json!(null));
-                output::emit(value);
+                output::emit(get_cmd::to_json(&report));
             } else {
                 get_cmd::print_human(&report);
             }
@@ -602,7 +650,7 @@ fn try_main(cli: Cli) -> Result<()> {
             }
         }
         Command::Info => {
-            let config = find_config(&current_dir)?;
+            let config = find_config(&current_dir, credentials)?;
             let compression = config.compression().to_string();
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let info_json = |fields: serde_json::Value| {
@@ -634,16 +682,24 @@ fn try_main(cli: Cli) -> Result<()> {
                     }
                 }
                 Backend::Server(s) => {
-                    // Not logged in is an answer, not an error
+                    // Not logged in is an answer, not an error: no token, or
+                    // nowhere a login could have been stored (`auth_required`)
                     let logged_in = if cli.json {
-                        dvs::auth::get_token_readonly(&s.url)
-                            .map_err(|error| {
-                                output::coded(
-                                    "credentials_unreadable",
+                        match dvs::auth::get_token_readonly(&s.url) {
+                            Ok(token) => token.is_some(),
+                            Err(error)
+                                if dvs::backend_error_code(&error)
+                                    == Some(ErrorCode::AuthRequired) =>
+                            {
+                                false
+                            }
+                            Err(error) => {
+                                return Err(output::coded(
+                                    ErrorCode::CredentialsUnreadable.as_str(),
                                     format!("Cannot read credentials: {error}"),
-                                )
-                            })?
-                            .is_some()
+                                ));
+                            }
+                        }
                     } else {
                         get_token(&s.url)?.is_some()
                     };
@@ -655,14 +711,27 @@ fn try_main(cli: Cli) -> Result<()> {
                         };
                         match access_result {
                             Ok(access) => (access, "available", None),
-                            Err(error)
-                                if cli.json
-                                    && error
-                                        .downcast_ref::<dvs::backends::server::Unreachable>()
-                                        .is_some() =>
-                            {
-                                (None, "unavailable", Some(format!("{error:#}")))
-                            }
+                            // The server cannot answer for this project: a
+                            // connection state, with the shared code (§9
+                            // rec 3). A rejected login stays an error
+                            // envelope (K24); a 403 is an answer, no
+                            // membership, like human mode's "no access" (K26).
+                            Err(error) if cli.json => match dvs::backend_error_code(&error) {
+                                Some(ErrorCode::AccessDenied) => (None, "available", None),
+                                Some(
+                                    code @ (ErrorCode::ServerUnavailable
+                                    | ErrorCode::ProjectNotFound
+                                    | ErrorCode::ServerTooOld),
+                                ) => (
+                                    None,
+                                    "unavailable",
+                                    Some(json!({
+                                        "code": code,
+                                        "message": format!("{error:#}"),
+                                    })),
+                                ),
+                                _ => return Err(error),
+                            },
                             Err(error) => return Err(error),
                         }
                     } else {
@@ -679,7 +748,12 @@ fn try_main(cli: Cli) -> Result<()> {
                             "connection": connection,
                             "connection_error": connection_error,
                             "user": access.as_ref().map(|a| &a.user),
-                            "access": if !logged_in || connection == "available" {
+                            // not_logged_in: no token; none: logged in, but
+                            // no membership in this project; null: the
+                            // server could not say (§9 rec 3)
+                            "access": if !logged_in {
+                                json!("not_logged_in")
+                            } else if connection == "available" {
                                 json!(access.as_ref().map_or("none", |a| a.access.as_str()))
                             } else {
                                 serde_json::Value::Null
@@ -721,7 +795,7 @@ fn try_main(cli: Cli) -> Result<()> {
             }
         }
         Command::Availability { hashes, path } => {
-            let config = find_config(&current_dir)?;
+            let config = find_config(&current_dir, credentials)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let (files, failed) =
                 read_cmd::availability(config.backend(), &dvs_paths, &hashes, path)?;
@@ -763,7 +837,7 @@ fn try_main(cli: Cli) -> Result<()> {
                     })
                 })
                 .collect::<Result<_>>()?;
-            let config = find_config(&current_dir)?;
+            let config = find_config(&current_dir, credentials)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let entries = read_cmd::history(
                 config.backend(),
@@ -793,7 +867,7 @@ fn try_main(cli: Cli) -> Result<()> {
             run_device_login(&url, cli.json)?;
         }
         Command::Login { url: None } => {
-            let config = find_config(&current_dir)?;
+            let config = find_config(&current_dir, credentials)?;
 
             if let Some(url) = config.server_url() {
                 run_device_login(url, cli.json)?;
@@ -802,7 +876,7 @@ fn try_main(cli: Cli) -> Result<()> {
             }
         }
         Command::Logout => {
-            let config = find_config(&current_dir)?;
+            let config = find_config(&current_dir, credentials)?;
 
             if let Some(url) = config.server_url() {
                 let Some(token) = get_token(url)? else {
@@ -871,9 +945,11 @@ impl std::fmt::Display for Exit {
 
 impl std::error::Error for Exit {}
 
-fn find_config(current_dir: &std::path::Path) -> Result<Config> {
-    Config::find(current_dir)
-        .ok_or_else(|| output::coded("not_in_project", "Not in a DVS repository"))?
+fn find_config(current_dir: &std::path::Path, credentials: CredentialPolicy) -> Result<Config> {
+    let mut config = Config::find(current_dir)
+        .ok_or_else(|| output::coded("not_in_project", "Not in a DVS repository"))??;
+    config.set_credential_policy(credentials);
+    Ok(config)
 }
 
 impl Command {
@@ -918,6 +994,8 @@ fn main() {
             error.exit();
         }
     };
+    // Every result is timed from here (C2)
+    output::start_clock(Instant::now(), SystemTime::now());
     let json = cli.json;
     let command = cli.command.name();
     let dry_run = cli.command.dry_run();

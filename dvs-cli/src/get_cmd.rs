@@ -6,8 +6,9 @@ use dvs::config::{OnConflict, SettingSource};
 use dvs::{Action, Before, GetCode, GetOutcome, GetReport, GetRow, StoredCopy, format_size};
 use serde_json::json;
 
-/// Exit codes for `get`. Usage and configuration errors exit 2 (clap and
-/// `main`).
+/// Exit codes. Every command shares one table (`output::exit_code`,
+/// docs/cli-json.md); only `get` uses 3. Usage and configuration errors exit
+/// 2 (clap and `main`).
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAILED: i32 = 1;
 pub const EXIT_USAGE: i32 = 2;
@@ -290,16 +291,29 @@ pub fn print_human(report: &GetReport) {
     }
 }
 
+/// One row as `get --json` reports it.
+pub fn row_json(r: &GetRow) -> serde_json::Value {
+    let mut v = serde_json::to_value(r).expect("rows serialize");
+    v["hint"] = json!(hint(r));
+    v
+}
+
+/// get's detailed counts plus the `total`/`succeeded` every command has
+/// (§9 rec 5). `succeeded` = rows at their target (restored, replaced,
+/// unchanged; would_restore/would_replace in a dry run). `failed` stays the
+/// `failed` action. Skipped and not_run (held back) rows are in neither.
+/// Added here, not in `GetCounts`, so R output is unchanged (K8).
+fn counts_json(report: &GetReport) -> serde_json::Value {
+    let c = &report.counts;
+    let mut counts = serde_json::to_value(c).expect("counts serialize");
+    counts["total"] = json!(report.files.len());
+    counts["succeeded"] =
+        json!(c.restored + c.replaced + c.unchanged + c.would_restore + c.would_replace);
+    counts
+}
+
 pub fn to_json(report: &GetReport) -> serde_json::Value {
-    let files: Vec<_> = report
-        .files
-        .iter()
-        .map(|r| {
-            let mut v = serde_json::to_value(r).expect("rows serialize");
-            v["hint"] = json!(hint(r));
-            v
-        })
-        .collect();
+    let files: Vec<_> = report.files.iter().map(row_json).collect();
     json!({
         "v": 1,
         "command": "get",
@@ -307,14 +321,20 @@ pub fn to_json(report: &GetReport) -> serde_json::Value {
         "dry_run": report.dry_run,
         "on_conflict": report.on_conflict,
         "source": report.source,
-        "counts": report.counts,
-        "problem": report.problem,
+        "counts": counts_json(report),
+        "bytes": report.bytes,
+        // An operation-level problem ("no tracked files matched") keeps its
+        // code (K2); the library's `problem` text is its message
+        "error": report
+            .problem
+            .as_ref()
+            .map(|message| crate::output::error_json("operation_failed", message.as_str())),
         "files": files,
     })
 }
 
 /// The envelope for a get that could not start (not in a project, invalid
-/// configuration): zero rows, the reason in `problem`, and no policy.
+/// configuration): zero rows, the reason in `error`, and no policy.
 pub fn problem_json(problem: &str, dry_run: bool) -> serde_json::Value {
     let report = GetReport::problem(problem, dry_run, OnConflict::Abort, SettingSource::Default);
     let mut v = to_json(&report);
