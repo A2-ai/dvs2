@@ -317,13 +317,14 @@ fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
             }),
             false,
         ),
-        AddDetail::Error { error } => (
+        AddDetail::Error { code, error } => (
             json!({
                 "path": r.path,
                 "outcome": null,
                 "hash": null,
                 "size": null,
                 "stored_size": null,
+                "code": code,
                 "message": error,
             }),
             true,
@@ -569,7 +570,7 @@ fn try_main(cli: Cli) -> Result<()> {
             } else {
                 for result in results {
                     match &result.detail {
-                        AddDetail::Error { error: err } => {
+                        AddDetail::Error { error: err, .. } => {
                             eprintln!("Error adding {}: {err}", result.path.display());
                         }
                         AddDetail::Success {
