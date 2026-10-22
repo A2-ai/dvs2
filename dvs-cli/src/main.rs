@@ -3,6 +3,7 @@ mod output;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
@@ -867,6 +868,8 @@ fn main() {
             error.exit();
         }
     };
+    // Every result is timed from here (C2)
+    output::start_clock(Instant::now(), SystemTime::now());
     let json = cli.json;
     let command = cli.command.name();
     let dry_run = cli.command.dry_run();

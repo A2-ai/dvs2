@@ -1,6 +1,45 @@
 //! Versioned machine output. Messages are for people; codes are the API.
+use std::sync::OnceLock;
+use std::time::{Instant, SystemTime};
+
 use anyhow::Error;
+use dvs::operation::{duration_ms, rfc3339_ms};
 use serde_json::{Value, json};
+
+/// When this run started, for the timing every result carries (C2). One run
+/// is one operation, so this is set once, before anything is emitted.
+#[derive(Clone, Copy)]
+pub struct Clock {
+    pub started: Instant,
+    pub started_at: SystemTime,
+}
+
+static CLOCK: OnceLock<Clock> = OnceLock::new();
+
+pub fn start_clock(started: Instant, started_at: SystemTime) {
+    let _ = CLOCK.set(Clock {
+        started,
+        started_at,
+    });
+}
+
+/// The run's clock; "now" if the run failed before it could start one
+/// (argument errors).
+pub fn clock() -> Clock {
+    *CLOCK.get_or_init(|| Clock {
+        started: Instant::now(),
+        started_at: SystemTime::now(),
+    })
+}
+
+/// Add `started_at`, `finished_at` (RFC 3339 UTC, milliseconds) and
+/// `duration_ms` to a result document, finishing it now.
+pub fn stamp(value: &mut Value) {
+    let clock = clock();
+    value["started_at"] = json!(rfc3339_ms(clock.started_at));
+    value["finished_at"] = json!(rfc3339_ms(SystemTime::now()));
+    value["duration_ms"] = json!(duration_ms(clock.started));
+}
 
 #[derive(Debug)]
 pub struct CodedError {
@@ -94,7 +133,9 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
 }
 
 /// Single rendering seam for JSON and, in future, terminal event results.
-pub fn emit(value: Value) {
+/// Every result leaves through here, which adds its timing.
+pub fn emit(mut value: Value) {
+    stamp(&mut value);
     println!("{value}");
 }
 
@@ -113,4 +154,20 @@ pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value
         })
         .collect();
     (files, failed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stamped_results_have_rfc3339_times_and_a_duration() {
+        let mut result = envelope("info", false, vec![], 0);
+        stamp(&mut result);
+        let started = result["started_at"].as_str().unwrap();
+        let finished = result["finished_at"].as_str().unwrap();
+        assert!(started.ends_with('Z') && started.len() == 24, "{started}");
+        assert!(finished >= started);
+        assert!(result["duration_ms"].is_u64());
+    }
 }

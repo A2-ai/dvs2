@@ -1,5 +1,7 @@
-//! What a running operation (`add`, `get`) reports about itself beyond its
-//! rows.
+//! What a running operation reports about itself beyond its rows: byte
+//! totals, and the clock helpers its timing is reported with.
+
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 
@@ -31,5 +33,37 @@ impl ByteTotals {
         if transferred {
             self.transferred += size;
         }
+    }
+}
+
+/// Whole milliseconds since `since`.
+pub fn duration_ms(since: Instant) -> u64 {
+    millis(since.elapsed())
+}
+
+/// Whole milliseconds in `duration`, for work summed over several steps.
+pub fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// RFC 3339 UTC with milliseconds, for `started_at`/`finished_at`,
+/// e.g. `2025-10-21T14:30:00.123Z`.
+pub fn rfc3339_ms(time: SystemTime) -> String {
+    match jiff::Timestamp::try_from(time) {
+        Ok(ts) => format!("{ts:.3}"),
+        Err(_) => format!("{:.3}", jiff::Timestamp::UNIX_EPOCH),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::UNIX_EPOCH;
+
+    #[test]
+    fn timestamps_are_rfc3339_with_milliseconds() {
+        let time = UNIX_EPOCH + Duration::from_millis(1_761_057_000_123);
+        assert_eq!(rfc3339_ms(time), "2025-10-21T14:30:00.123Z");
+        assert_eq!(rfc3339_ms(UNIX_EPOCH), "1970-01-01T00:00:00.000Z");
     }
 }
