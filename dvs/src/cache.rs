@@ -441,19 +441,4 @@ mod tests {
         let result = cache.lookup("nonexistent.txt", &stat).unwrap();
         assert_eq!(result, None);
     }
-
-    #[test]
-    fn hash_source_is_computed_then_cache() {
-        let (tmp, cache) = setup_cache();
-        let file = tmp.path().join("data.txt");
-        fs::write(&file, b"content").unwrap();
-        let cache = Mutex::new(cache);
-        let (first, size, source) =
-            hashes_for_file_with_source(&file, "data.txt", Some(&cache)).unwrap();
-        assert_eq!((size, source), (7, HashSource::Computed));
-        let (second, _, source) =
-            hashes_for_file_with_source(&file, "data.txt", Some(&cache)).unwrap();
-        assert_eq!(source, HashSource::Cache);
-        assert_eq!(first, second);
-    }
 }

@@ -908,7 +908,6 @@ fn try_main(cli: Cli) -> Result<()> {
                 user_paths.into_iter().map(PathBuf::from).collect(),
             )?;
             if cli.json {
-                // History rows carry every row's error fields too (§9 rec 1)
                 let rows = entries.into_iter().map(output::row_error_fields).collect();
                 output::emit(output::envelope("history", false, rows, 0));
             } else {

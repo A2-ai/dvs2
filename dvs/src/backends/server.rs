@@ -713,6 +713,20 @@ mod tests {
     }
 
     #[test]
+    fn read_failures_never_become_missing_content() {
+        let server = ServerBackend::new("project".into(), None, Url::parse("https://h/").unwrap());
+        for (status, expected) in [
+            (401, ErrorCode::AuthExpired),
+            (404, ErrorCode::ServerTooOld),
+            (429, ErrorCode::ServerUnavailable),
+            (500, ErrorCode::ServerUnavailable),
+        ] {
+            let error = server.read_status(status, "").unwrap_err();
+            assert_eq!(backend_error_code(&error), Some(expected), "{status}");
+        }
+    }
+
+    #[test]
     fn failures_have_the_shared_codes() {
         for (status, body, expected) in [
             (401, "", ErrorCode::AuthExpired),
