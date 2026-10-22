@@ -243,7 +243,7 @@ struct StatusSelection {
     unsynced: bool,
 }
 
-fn status_row_selected(row: &dvs::inspect::StatusFacts, selection: StatusSelection) -> bool {
+fn status_row_selected(row: &dvs::StatusFacts, selection: StatusSelection) -> bool {
     selection.show_all
         || row.error.is_some()
         || (selection.current && row.status == Some(Status::Current))
@@ -291,7 +291,7 @@ fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
 }
 
 /// The library's `error` text is the row's `message`, as on every other row.
-fn status_row(row: &dvs::inspect::StatusFacts) -> (serde_json::Value, bool) {
+fn status_row(row: &dvs::StatusFacts) -> (serde_json::Value, bool) {
     let mut value = serde_json::to_value(row).expect("status rows serialize");
     if let Some(object) = value.as_object_mut()
         && let Some(message) = object.remove("error")
@@ -590,8 +590,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 });
                 ctx = ctx.with_observer(Arc::new(observer));
             }
-            let report =
-                dvs::inspect::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
+            let report = dvs::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
             let mut statuses = report.files;
             if !show_all {
                 statuses.retain(|row| status_row_selected(row, selection));
