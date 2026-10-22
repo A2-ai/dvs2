@@ -2,7 +2,7 @@
 //! byte totals (C8).
 mod common;
 
-use common::{Sandbox, document, stderr};
+use common::{Sandbox, by_path, document, file_results, parse_stream, stderr};
 use serde_json::{Value, json};
 
 fn local_project() -> Sandbox {
@@ -88,6 +88,100 @@ fn every_json_result_carries_its_timing() {
             .output()
             .unwrap(),
     ));
+}
+
+/// C2: every event has `ts` and `elapsed_ms`; transfers and the terminal
+/// event have their durations.
+#[test]
+fn every_event_carries_ts_and_elapsed_ms() {
+    let sandbox = local_project();
+    sandbox.write("a.txt", "a".repeat(10_000));
+    sandbox.write("b.txt", "b".repeat(10_000));
+    let mut kinds = std::collections::BTreeSet::new();
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    for args in [
+        vec!["add", "--dry-run", "a.txt", "b.txt"],
+        vec!["add", "a.txt", "b.txt"],
+        vec!["status"],
+        vec!["hash"],
+    ] {
+        let output = sandbox
+            .dvs()
+            .arg("--emit-events")
+            .args(&args)
+            .output()
+            .unwrap();
+        let events = parse_stream(&output.stdout, 0);
+        let mut last_elapsed = 0;
+        for event in &events {
+            kinds.insert(event["type"].as_str().unwrap().to_string());
+            let ts = event["ts"].as_u64().unwrap_or_else(|| panic!("{event}"));
+            assert!(ts + 5 >= before, "{event}");
+            let elapsed = event["elapsed_ms"].as_u64().unwrap();
+            assert!(elapsed >= last_elapsed, "{event}");
+            last_elapsed = elapsed;
+            if event["type"] == "transfer_finished" {
+                assert!(event["duration_ms"].is_u64(), "{event}");
+            }
+        }
+        let finished = events.last().unwrap();
+        assert_timed(finished);
+        assert_timed(&finished["result"]);
+    }
+    std::fs::remove_file(sandbox.project().join("a.txt")).unwrap();
+    let output = sandbox
+        .dvs()
+        .args(["--emit-events", "get", "a.txt"])
+        .output()
+        .unwrap();
+    for event in parse_stream(&output.stdout, 0) {
+        kinds.insert(event["type"].as_str().unwrap().to_string());
+        assert!(event["ts"].is_u64() && event["elapsed_ms"].is_u64());
+    }
+    for kind in [
+        "operation_started",
+        "transfer_started",
+        "transfer_finished",
+        "file_result",
+        "operation_finished",
+    ] {
+        assert!(kinds.contains(kind), "{kind}: {kinds:?}");
+    }
+}
+
+/// An event stream and its `--json` twin agree apart from timing.
+#[test]
+fn streamed_results_match_json_results_apart_from_timing() {
+    let sandbox = local_project();
+    tracked(&sandbox, &[("one.txt", "one"), ("two.txt", "two")]);
+    sandbox.write("three.txt", "three");
+    // Both runs below then read the hashes from the cache
+    assert!(sandbox.run(&["hash", "three.txt"]).status.success());
+    for args in [
+        vec!["status"],
+        vec!["hash", "one.txt", "two.txt", "three.txt"],
+        vec!["add", "--dry-run", "three.txt", "one.txt"],
+        vec!["get", "--dry-run", "one.txt"],
+    ] {
+        let json_output = sandbox.dvs().arg("--json").args(&args).output().unwrap();
+        let expected = common::without_timing(document(&json_output));
+        let streamed = sandbox
+            .dvs()
+            .arg("--emit-events")
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(streamed.status.code(), json_output.status.code());
+        let events = parse_stream(&streamed.stdout, streamed.status.code().unwrap());
+        let result = common::without_timing(events.last().unwrap()["result"].clone());
+        assert_eq!(result, expected, "{args:?}");
+        // Each row once, as the final result holds it
+        let rows = common::without_timing(json!(by_path(file_results(&events))));
+        assert_eq!(rows, expected["files"], "{args:?}");
+    }
 }
 
 /// C7: hashes for tracked and untracked files, from the cache or computed,

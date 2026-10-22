@@ -2,6 +2,9 @@
 //!
 //! Transfer callbacks describe transfer work only. The terminal command result
 //! remains authoritative: a transfer can finish before installation fails.
+//!
+//! Every event carries `ts` (unix milliseconds) and `elapsed_ms` (since the
+//! operation started).
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -9,6 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use dvs::FileProgress;
+use dvs::operation::{duration_ms, rfc3339_ms, unix_ms};
 use serde_json::{Value, json};
 
 static ACTIVE: OnceLock<EventStream> = OnceLock::new();
@@ -33,6 +37,8 @@ struct State {
     finished: bool,
     error: Option<io::Error>,
     result: Option<Value>,
+    started: Instant,
+    started_at: SystemTime,
 }
 
 impl EventStream {
@@ -45,6 +51,7 @@ impl EventStream {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
+        let clock = crate::output::clock();
         let stream = Self {
             state: Arc::new(Mutex::new(State {
                 writer,
@@ -53,14 +60,22 @@ impl EventStream {
                 finished: false,
                 error: None,
                 result: None,
+                started: clock.started,
+                started_at: clock.started_at,
             })),
         };
         stream.emit("operation_started", json!({"command": command}), false);
         stream
     }
 
-    fn emit(&self, kind: &str, mut fields: Value, terminal: bool) {
+    fn emit(&self, kind: &str, fields: Value, terminal: bool) {
         let mut state = self.state.lock().unwrap();
+        Self::emit_locked(&mut state, kind, fields, terminal);
+    }
+
+    /// Write one event with the state already locked, so a caller can read
+    /// shared state and emit from it atomically.
+    fn emit_locked(state: &mut State, kind: &str, mut fields: Value, terminal: bool) {
         if state.finished || state.error.is_some() {
             return;
         }
@@ -68,6 +83,8 @@ impl EventStream {
         fields["operation_id"] = json!(state.operation_id);
         fields["seq"] = json!(state.seq);
         fields["type"] = json!(kind);
+        fields["ts"] = json!(unix_ms(SystemTime::now()));
+        fields["elapsed_ms"] = json!(duration_ms(state.started));
         // Serialize before writing so parallel callbacks cannot interleave lines.
         let result = serde_json::to_vec(&fields)
             .map_err(io::Error::other)
@@ -120,12 +137,15 @@ impl EventStream {
     /// Write exactly one terminal event. This is the same complete document
     /// emitted by `--json`, including startup errors and per-file failures.
     pub fn finish(&self, result: Value, exit_code: i32) -> io::Result<()> {
-        self.emit(
-            "operation_finished",
-            json!({"result": result, "exit_code": exit_code}),
-            true,
-        );
         let mut state = self.state.lock().unwrap();
+        let fields = json!({
+            "result": result,
+            "exit_code": exit_code,
+            "started_at": rfc3339_ms(state.started_at),
+            "finished_at": rfc3339_ms(SystemTime::now()),
+            "duration_ms": duration_ms(state.started),
+        });
+        Self::emit_locked(&mut state, "operation_finished", fields, true);
         state.finished = true;
         match state.error.as_ref() {
             Some(error) => Err(io::Error::new(error.kind(), error.to_string())),
@@ -142,6 +162,7 @@ impl EventStream {
             json!({"path": path, "total_bytes": total_bytes}),
             false,
         );
+        let started = Instant::now();
         let progress = Arc::new(Mutex::new((0u64, Instant::now())));
         let bytes_progress = progress.clone();
         let bytes_stream = self.clone();
@@ -164,7 +185,13 @@ impl EventStream {
                 let progress = progress.lock().unwrap();
                 done_stream.emit(
                     "transfer_finished",
-                    json!({"path": path, "bytes": progress.0, "total_bytes": total_bytes, "success": success}),
+                    json!({
+                        "path": path,
+                        "bytes": progress.0,
+                        "total_bytes": total_bytes,
+                        "success": success,
+                        "duration_ms": duration_ms(started),
+                    }),
                     false,
                 );
             }),
@@ -195,6 +222,31 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn every_event_has_a_timestamp_and_the_operation_elapsed_time() {
+        let capture = Capture::default();
+        let stream = EventStream::new("add", Box::new(capture.clone()));
+        let transfer = stream.progress(Path::new("a.txt"), 4);
+        (transfer.on_bytes)(4);
+        (transfer.on_done)(true);
+        stream.file_result(json!({"path": "a.txt"}));
+        stream.finish(json!({}), 0).unwrap();
+        let events = events(&capture);
+        for event in &events {
+            assert!(event["ts"].as_u64().unwrap() > 1_700_000_000_000, "{event}");
+            assert!(event["elapsed_ms"].is_u64(), "{event}");
+        }
+        let finished = events.last().unwrap();
+        assert!(finished["duration_ms"].is_u64());
+        assert!(finished["started_at"].as_str().unwrap().ends_with('Z'));
+        assert!(finished["finished_at"].as_str() >= finished["started_at"].as_str());
+        let transfer_finished = events
+            .iter()
+            .find(|e| e["type"] == "transfer_finished")
+            .unwrap();
+        assert!(transfer_finished["duration_ms"].is_u64());
     }
 
     #[test]
