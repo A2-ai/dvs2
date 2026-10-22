@@ -87,7 +87,7 @@ check both the result and the exit status, and tolerate additional fields and un
 them as success. Incompatible semantics need a new protocol version.
 
 Every `--json` result is one envelope, error envelopes included: `v` (`1`), `command` (`cli` for argument
-parsing errors), `outcome` (`complete`, `partial` or `failed`; `get` also `aborted`), `dry_run` (a requested
+parsing errors), `outcome` (`complete`, `partial`, `failed` or `cancelled`; `get` also `aborted`), `dry_run` (a requested
 mutation preview), `counts`, `error`, `files` (the per-file, per-hash or per-entry rows; empty for commands
 without rows), plus the command's own fields (`add`/`get` `bytes`, `get` `on_conflict`/`source`, `init`
 `project_root`, `logout` `revoked`/`warnings`, `info` its discovery fields). It carries its timing:
@@ -114,7 +114,8 @@ Errors have one shape. The envelope's `error` is `null` or `{code, message, hint
 has `code`, `message` and `hint` (all `null` on success; `hint` is `null` where there is none). Rows have fixed
 keys: a field that does not apply is `null`, never missing (an `add` error row has `outcome`, `hash`, `size`,
 `stored_size` as `null`). `counts` always has `total` (the rows), `failed` (rows that failed) and `succeeded`
-(the rest; get adds its detailed counts and defines `succeeded` itself). `error` is a failure of the whole
+(the rest, except `cancelled` rows, see Cancellation; get adds its detailed counts and defines `succeeded`
+itself). `error` is a failure of the whole
 command; per-file failures stay in the rows, so a `partial` result normally has `error: null`. A `hint` is the
 next thing to try, for people (only `get` fills row hints today).
 
