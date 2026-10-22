@@ -522,7 +522,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 result["project_root"] = json!(repo_root);
                 output::emit(result);
             } else {
-                println!("DVS Initialized at {repo_root:?}");
+                println!("DVS Initialized at {}", repo_root.display());
             }
         }
         Command::Attach {

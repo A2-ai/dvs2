@@ -217,20 +217,37 @@ init attempts best-effort cleanup of local artifacts (`dvs.toml` and, if it didn
 
 #### CLI
 
+`dvs init` takes a backend: `local` stores data in a directory (such as a shared drive), `server` on a dvs server.
+The pre-backend form `dvs init <PATH>` exits 2 and suggests `dvs init local <PATH>`.
+
 ```shell
 ❯ dvs init --help
 Starts a new dvs project. This will create a `dvs.toml` file in the current folder of where the user is calling the CLI from
 
-Usage: dvs init [OPTIONS] <PATH>
+Usage: dvs init [OPTIONS] <COMMAND>
+
+Commands:
+  local   Store data in a directory, such as a shared drive
+  server  Store data on a dvs server
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+
+Global Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+
+❯ dvs init local --help
+Store data in a directory, such as a shared drive
+
+Usage: dvs init local [OPTIONS] <PATH>
 
 Arguments:
   <PATH>  Where the data will be stored
 
 Options:
-      --json
-          Output results as JSON
-      --threads <THREADS>
-          Number of threads for parallel operations (0 = auto-detect)
       --root-dir <ROOT_DIR>
           If you want to use a root folder other than the current directory
       --metadata-folder-name <METADATA_FOLDER_NAME>
@@ -241,6 +258,35 @@ Options:
           Disable compression of stored files. Compression defaults to zstd
   -h, --help
           Print help
+
+Global Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+
+❯ dvs init server --help
+Store data on a dvs server
+
+Usage: dvs init server [OPTIONS] --group <GROUP> <NAME> <URL>
+
+Arguments:
+  <NAME>  The project name
+  <URL>   The URL of the dvs server
+
+Options:
+      --metadata-folder-name <METADATA_FOLDER_NAME>
+          If you want to use a folder name other than `.dvs` for storing the metadata files
+      --group <GROUP>
+          Unix group to use for permissions
+      --no-compression
+          Disable compression of stored files. Compression defaults to zstd
+  -h, --help
+          Print help
+
+Global Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
 ```
 
 #### Rust library
