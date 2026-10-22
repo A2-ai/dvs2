@@ -94,8 +94,9 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   otherwise only direct children of the directory. With no explicit `paths`
 #'   the directory is the working directory. Mutually exclusive with `glob`.
 #' @param dry_run If `TRUE`, report what would happen without writing files.
-#' @param on_error What to do when the request is not complete (some file is
-#'   not at its tracked version afterwards): `"return"` (the default) only
+#' @param on_error What to do when get did not do as asked (a file failed, or
+#'   `on_conflict = "abort"` held files back; files left by
+#'   `on_conflict = "skip"` count as done): `"return"` (the default) only
 #'   returns the result, `"warn"` also warns and `"error"` raises an error. The
 #'   condition has class `dvs_get_incomplete` and carries the result as
 #'   `cnd$result`. Pipelines can set `options(dvs.on_error = "error")`.
@@ -106,8 +107,9 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   `"unchanged"`, `"skipped"`, `"not_run"`, `"failed"`, `"would_restore"`,
 #'   `"would_replace"`), `satisfied`, `size`, `target_hash`, `local_hash`,
 #'   `stored_copy`, `code`, `message` and `hint`. [dvs_result_info()] returns
-#'   the outcome and the policy that applied. Configuration errors (for example
-#'   `on_conflict = "overwrite"` in dvs.toml) raise a `dvs_config_error`.
+#'   the outcome and the policy that applied. Outside a dvs project it raises an
+#'   error; configuration errors (for example `on_conflict = "overwrite"` in
+#'   dvs.toml) raise a `dvs_config_error`.
 #'
 #'   In a dry run, `satisfied` is the prediction: `TRUE` when the file would be
 #'   at its tracked version afterwards.
@@ -117,7 +119,7 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   that was not updated.
 #' @examples
 #' \dontrun{
-#' # In a script: stop unless every file is at its tracked version
+#' # In a script: stop unless get did as asked
 #' dvs_get(recursive = TRUE, on_error = "error")
 #'
 #' # Interactively: look at what needs attention
@@ -166,19 +168,12 @@ dvs_get <- function(
     progress_callback = progress_callback
   )
   info <- raw$info
-  if (isTRUE(info$config_error)) {
-    stop(structure(
-      class = c("dvs_config_error", "dvs_error", "error", "condition"),
-      list(message = info$problem, call = sys.call())
-    ))
-  }
-  info$config_error <- NULL
 
   files <- tibble::as_tibble(raw$files)
   files$size <- new_dvs_bytes(files$size)
   result <- structure(files, class = c("dvs_get_result", class(files)), dvs_info = info)
 
-  if (on_error != "return" && info$outcome != "complete") {
+  if (on_error != "return" && !info$did_as_asked) {
     signal_incomplete(result, on_error, sys.call())
   }
   result
@@ -191,9 +186,10 @@ dvs_get <- function(
 #'
 #' @param x A result returned by [dvs_get()].
 #' @return A list: `command`, `outcome` (`"complete"`, `"aborted"`,
-#'   `"partial"` or `"failed"`), `dry_run`, `on_conflict` and its `source`
-#'   (`"argument"`, `"env"`, `"config"` for dvs.toml, or `"default"`; both `NA`
-#'   when the get could not start, e.g. outside a project), `counts` (a named
+#'   `"partial"` or `"failed"`), `did_as_asked` (`TRUE` unless a file failed
+#'   or `on_conflict = "abort"` held files back), `dry_run`, `on_conflict` and
+#'   its `source` (`"argument"`, `"env"`, `"config"` for dvs.toml, or
+#'   `"default"`), `counts` (a named
 #'   list of row counts per action) and `problem` (an operation-level message,
 #'   or `NA` when there is none).
 #' @export
@@ -234,7 +230,11 @@ dvs_get_summary <- function(info, files = NULL) {
         reasons <- sprintf("%d with local changes or no record", n_conflicts)
       }
       if (counts$failed > 0) {
-        reasons <- c(reasons, sprintf("%d cannot be retrieved", counts$failed))
+        reasons <- c(reasons, sprintf(
+          "%d %s cannot be retrieved",
+          counts$failed,
+          if (counts$failed == 1) "file" else "files"
+        ))
       }
     } else {
       reasons <- parts
@@ -249,11 +249,7 @@ dvs_get_summary <- function(info, files = NULL) {
   } else {
     paste(parts, collapse = ", ")
   }
-  policy <- if (is.na(info$on_conflict)) {
-    ""
-  } else {
-    sprintf("; on_conflict = %s (%s)", info$on_conflict, info$source)
-  }
+  policy <- sprintf("; on_conflict = %s (%s)", info$on_conflict, info$source)
   sprintf(
     "dvs get%s: %s, %s%s",
     if (isTRUE(info$dry_run)) " (dry run)" else "",

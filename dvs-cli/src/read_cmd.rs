@@ -42,9 +42,7 @@ impl ReadError {
 
 fn check_backend(backend: &Backend) -> Result<()> {
     match backend {
-        Backend::Server(s) => {
-            s.access_readonly()?;
-        }
+        Backend::Server(s) => s.check_access()?,
         Backend::Local(b) => {
             std::fs::read_dir(&b.path)?;
         }
@@ -67,13 +65,6 @@ fn resolve_paths(paths: &DvsPaths, user_paths: Vec<PathBuf>) -> Result<Vec<PathB
             Ok(relative)
         })
         .collect()
-}
-
-fn read_history(backend: &Backend, paths: &[PathBuf]) -> Result<Vec<AuditEntry>> {
-    match backend {
-        Backend::Server(server) => server.history_readonly(paths),
-        Backend::Local(local) => local.get_audit_entries(paths),
-    }
 }
 
 fn hashes_by_path(entries: Vec<AuditEntry>) -> HashSet<(PathBuf, String)> {
@@ -111,7 +102,8 @@ pub fn availability(
         preflight
             .clone()
             .and_then(|()| {
-                read_history(backend, std::slice::from_ref(path))
+                backend
+                    .get_audit_entries(std::slice::from_ref(path))
                     .map_err(|error| ReadError::new(&error))
             })
             .map(|entries| {
@@ -130,13 +122,10 @@ pub fn availability(
             blake3: normalized.clone(),
             md5: None,
         };
-        let storage = preflight.clone().and_then(|()| match backend {
-            Backend::Server(server) => server
-                .exists_readonly(&value)
-                .map_err(|error| ReadError::new(&error)),
-            Backend::Local(local) => local
-                .exists_checked(&value)
-                .map_err(|error| ReadError::new(&error)),
+        let storage = preflight.clone().and_then(|()| {
+            backend
+                .exists(&value)
+                .map_err(|error| ReadError::new(&error))
         });
         let mut row_failed = false;
         let (state, code, message) = match storage {
@@ -189,7 +178,8 @@ pub fn history(
 ) -> Result<Vec<Value>> {
     let relative = resolve_paths(paths, user_paths)?;
     check_backend(backend)?;
-    read_history(backend, &relative)?
+    backend
+        .get_audit_entries(&relative)?
         .into_iter()
         .map(|e| {
             let timestamp = std::time::SystemTime::from(e.timestamp);

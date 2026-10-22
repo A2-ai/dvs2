@@ -15,7 +15,7 @@ use crate::config::Compression;
 use crate::error::{ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
-use crate::operation::ByteTotals;
+use crate::operation::{ByteTotals, Counts};
 use crate::paths::{DvsPaths, ProjectPath};
 use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
@@ -29,10 +29,11 @@ pub struct AddResult {
     pub detail: AddDetail,
 }
 
-/// The rows of an `add`, sorted by path, plus byte totals.
-#[derive(Debug, Clone)]
+/// The rows of an `add`, sorted by path, plus counts and byte totals.
+#[derive(Debug, Clone, Default)]
 pub struct AddReport {
     pub files: Vec<AddResult>,
+    pub counts: Counts,
     pub bytes: ByteTotals,
 }
 
@@ -46,49 +47,18 @@ pub enum AddDetail {
         stored_size: u64,
     },
     Error {
-        code: AddErrorCode,
+        code: ErrorCode,
         error: String,
     },
 }
 
-/// Stable machine-readable category for a per-file add failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AddErrorCode {
-    AccessDenied,
-    ServerUnavailable,
-    IoError,
-    OperationFailed,
-    AuthRequired,
-    AuthExpired,
-    ServerTooOld,
-    ProjectNotFound,
-    BadMetadata,
-    CredentialsUnreadable,
-}
-
-impl From<ErrorCode> for AddErrorCode {
-    fn from(code: ErrorCode) -> Self {
-        match code {
-            ErrorCode::AuthRequired => AddErrorCode::AuthRequired,
-            ErrorCode::AuthExpired => AddErrorCode::AuthExpired,
-            ErrorCode::AccessDenied => AddErrorCode::AccessDenied,
-            ErrorCode::ServerUnavailable => AddErrorCode::ServerUnavailable,
-            ErrorCode::ServerTooOld => AddErrorCode::ServerTooOld,
-            ErrorCode::ProjectNotFound => AddErrorCode::ProjectNotFound,
-            ErrorCode::BadMetadata => AddErrorCode::BadMetadata,
-            ErrorCode::CredentialsUnreadable => AddErrorCode::CredentialsUnreadable,
-        }
-    }
-}
-
-fn add_error_code(error: &anyhow::Error) -> AddErrorCode {
+fn add_error_code(error: &anyhow::Error) -> ErrorCode {
     if let Some(code) = backend_error_code(error) {
-        code.into()
+        code
     } else if error.downcast_ref::<std::io::Error>().is_some() {
-        AddErrorCode::IoError
+        ErrorCode::IoError
     } else {
-        AddErrorCode::OperationFailed
+        ErrorCode::OperationFailed
     }
 }
 
@@ -167,7 +137,7 @@ fn add_file(
     let (outcome, (stored_size, created)) = match missing {
         // The local backend checks for itself whether it has the content
         None => {
-            let (outcome, res) = pending.metadata.save_reporting(
+            let (outcome, res) = pending.metadata.save(
                 operation_id,
                 &full_path,
                 backend,
@@ -178,7 +148,7 @@ fn add_file(
             (outcome, res.map_or((None, false), stored))
         }
         Some(missing) if missing.contains(&pending.metadata.hashes.blake3) => {
-            let res = pending.metadata.store_and_write_reporting(
+            let res = pending.metadata.store_and_write(
                 operation_id,
                 &full_path,
                 backend,
@@ -217,10 +187,7 @@ pub fn add_files(
 ) -> Result<AddReport> {
     let matched_paths = paths.validate_for_add(&files);
     if matched_paths.is_empty() {
-        return Ok(AddReport {
-            files: Vec::new(),
-            bytes: ByteTotals::default(),
-        });
+        return Ok(AddReport::default());
     }
 
     // If any input is invalid we just bail instead of doing partial execution
@@ -428,7 +395,9 @@ pub fn add_files(
         }
     }
 
+    let failed = results.len() - successful_paths.len();
     Ok(AddReport {
+        counts: Counts::new(results.len(), failed),
         files: results,
         bytes,
     })
@@ -446,12 +415,12 @@ mod tests {
 
     #[test]
     fn row_errors_carry_a_code() {
-        let backend = anyhow::Error::from(crate::BackendError::new(ErrorCode::AccessDenied, "no"));
+        let backend = anyhow::Error::from(crate::Error::new(ErrorCode::AccessDenied, "no"));
         let io = anyhow::Error::from(std::io::Error::other("disk"));
         for (error, expected) in [
-            (backend, AddErrorCode::AccessDenied),
-            (io, AddErrorCode::IoError),
-            (anyhow::anyhow!("other"), AddErrorCode::OperationFailed),
+            (backend, ErrorCode::AccessDenied),
+            (io, ErrorCode::IoError),
+            (anyhow::anyhow!("other"), ErrorCode::OperationFailed),
         ] {
             assert_eq!(add_error_code(&error), expected);
         }
@@ -588,5 +557,33 @@ mod tests {
         );
         assert_eq!(done_calls.load(Ordering::SeqCst), 3);
         assert_eq!(success_calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn counts_include_failed_rows() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let paths = make_paths(&root, &config);
+        create_file(&root, "a.txt", b"a");
+        let b = create_file(&root, "b.txt", b"b");
+        fs::set_permissions(&b, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&b).is_ok() {
+            return; // running as root: permissions are not enforced
+        }
+
+        let report = add_files(
+            vec!["a.txt".into(), "b.txt".into()],
+            &paths,
+            config.backend(),
+            None,
+            Compression::Zstd,
+            false,
+            None,
+        )
+        .unwrap();
+        let c = report.counts;
+        assert_eq!((c.total, c.succeeded, c.failed), (2, 1, 1));
     }
 }

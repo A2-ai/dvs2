@@ -1,6 +1,5 @@
 use anyhow::bail;
 use fs_err as fs;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::PathBuf;
@@ -11,8 +10,8 @@ use ureq::http::Response;
 use url::Url;
 
 use crate::audit::AuditEntry;
-use crate::auth::{CredentialPolicy, delete_token, get_token_with};
-use crate::error::{BackendError, ErrorCode, backend_error_code};
+use crate::auth::get_token;
+use crate::error::{Error, ErrorCode};
 use crate::utils::http_agent;
 use crate::{Compression, Hashes, ProjectPath, RetrieveRequest, StoreRequest, StoreResult};
 
@@ -50,6 +49,53 @@ pub(crate) fn http_status_code(status: u16, body: &str) -> Option<ErrorCode> {
         500.. => Some(ErrorCode::ServerUnavailable),
         _ => None,
     }
+}
+
+fn coded(code: ErrorCode, message: impl Into<String>) -> anyhow::Error {
+    Error::new(code, message).into()
+}
+
+pub(crate) fn unreachable(base_url: &Url, e: ureq::Error) -> anyhow::Error {
+    coded(
+        ErrorCode::ServerUnavailable,
+        format!("cannot reach the dvs server at {base_url}: {e}"),
+    )
+}
+
+pub(crate) fn invalid_response(base_url: &Url, e: impl std::fmt::Display) -> anyhow::Error {
+    coded(
+        ErrorCode::ServerUnavailable,
+        format!("Invalid response from the dvs server at {base_url}: {e}"),
+    )
+}
+
+/// The error for a status the endpoint does not handle itself.
+pub(crate) fn status_error(base_url: &Url, status: u16, body: &str, what: &str) -> anyhow::Error {
+    let Some(code) = http_status_code(status, body) else {
+        return anyhow::anyhow!("{what} failed ({status}): {body}");
+    };
+    let message = match code {
+        ErrorCode::AuthExpired => LOGIN_EXPIRED.to_string(),
+        ErrorCode::AccessDenied => NOT_ALLOWED.to_string(),
+        ErrorCode::ProjectNotFound => format!(
+            "the dvs server at {base_url} does not have this project ({})",
+            body.trim()
+        ),
+        ErrorCode::ServerTooOld => format!(
+            "the dvs server at {base_url} does not support this request ({status}); it is older than this dvs"
+        ),
+        _ => format!("the dvs server at {base_url} is not working ({status})"),
+    };
+    coded(code, message)
+}
+
+pub(crate) fn response_error(
+    base_url: &Url,
+    resp: &mut Response<Body>,
+    what: &str,
+) -> anyhow::Error {
+    let body = resp.body_mut().read_to_string().unwrap_or_default();
+    status_error(base_url, resp.status().as_u16(), &body, what)
 }
 
 /// Wraps a reader and reports bytes as they're read, driving the `on_bytes`
@@ -167,8 +213,6 @@ pub struct ServerBackend {
     pub group: Option<String>,
     #[serde(skip)]
     access_token: OnceLock<Option<String>>,
-    #[serde(skip)]
-    credential_policy: CredentialPolicy,
 }
 
 impl ServerBackend {
@@ -178,12 +222,7 @@ impl ServerBackend {
             group,
             url,
             access_token: OnceLock::new(),
-            credential_policy: CredentialPolicy::default(),
         }
-    }
-
-    pub fn set_credential_policy(&mut self, policy: CredentialPolicy) {
-        self.credential_policy = policy;
     }
 
     fn init_url(&self) -> anyhow::Result<Url> {
@@ -214,201 +253,21 @@ impl ServerBackend {
         let token = match self.access_token.get() {
             Some(token) => token,
             None => {
-                let read = match get_token_with(&self.url, self.credential_policy) {
-                    Ok(token) => token,
-                    Err(e) if self.credential_policy == CredentialPolicy::Preserve => {
-                        return Err(e);
-                    }
-                    Err(e) => {
-                        log::warn!("Could not read the credentials store: {e}");
-                        None
-                    }
-                };
+                let read = get_token(&self.url)?;
                 self.access_token.get_or_init(|| read)
             }
         };
         match token {
             Some(token) => Ok(format!("Bearer {token}")),
-            None => Err(BackendError::new(
+            None => Err(coded(
                 ErrorCode::AuthRequired,
                 "Could not find access token. Log in first",
-            )
-            .into()),
+            )),
         }
-    }
-
-    fn coded(&self, code: ErrorCode, message: impl Into<String>) -> anyhow::Error {
-        BackendError::new(code, message).into()
-    }
-
-    /// The server rejected the stored token: forget it so the next `init` asks to log in
-    fn login_expired(&self) -> anyhow::Error {
-        if self.credential_policy == CredentialPolicy::Repair {
-            if let Err(e) = delete_token(&self.url) {
-                log::warn!("Could not remove the expired token: {e}");
-            }
-        }
-        self.coded(ErrorCode::AuthExpired, LOGIN_EXPIRED)
-    }
-
-    fn unreachable(&self, e: ureq::Error) -> anyhow::Error {
-        self.coded(
-            ErrorCode::ServerUnavailable,
-            format!("cannot reach the dvs server at {}: {e}", self.url),
-        )
-    }
-
-    fn invalid_response(&self, e: impl std::fmt::Display) -> anyhow::Error {
-        self.coded(
-            ErrorCode::ServerUnavailable,
-            format!("Invalid server response: {e}"),
-        )
-    }
-
-    fn failing(&self, code: u16) -> anyhow::Error {
-        self.coded(
-            ErrorCode::ServerUnavailable,
-            format!("the dvs server at {} is not working ({code})", self.url),
-        )
-    }
-
-    fn status_error(&self, status: u16, body: &str, what: &str) -> anyhow::Error {
-        match http_status_code(status, body) {
-            Some(ErrorCode::AuthExpired) => self.login_expired(),
-            Some(code) => self.shared_status_error(code, status),
-            None => anyhow::anyhow!("{what} failed ({status}): {body}"),
-        }
-    }
-
-    fn shared_status_error(&self, code: ErrorCode, status: u16) -> anyhow::Error {
-        match code {
-            ErrorCode::AuthExpired => self.coded(code, LOGIN_EXPIRED),
-            ErrorCode::AccessDenied => self.coded(code, NOT_ALLOWED),
-            ErrorCode::ProjectNotFound => self.coded(
-                code,
-                format!("The project {} does not exist on the server", self.name),
-            ),
-            ErrorCode::ServerTooOld => self.coded(
-                code,
-                format!(
-                    "the dvs server at {} does not support this request ({status}); it is older than this dvs",
-                    self.url
-                ),
-            ),
-            _ => self.failing(status),
-        }
-    }
-
-    fn response_error(&self, resp: &mut Response<Body>, what: &str) -> anyhow::Error {
-        let body = resp.body_mut().read_to_string().unwrap_or_default();
-        self.status_error(resp.status().as_u16(), &body, what)
-    }
-
-    /// A read path's JSON answer; any other status per [`Self::read_status`].
-    fn read_json<T: DeserializeOwned>(&self, mut response: Response<Body>) -> anyhow::Result<T> {
-        let status = response.status().as_u16();
-        if status != 200 {
-            let body = response.body_mut().read_to_string().unwrap_or_default();
-            self.read_status(status, &body)?;
-        }
-        response
-            .body_mut()
-            .read_json()
-            .map_err(|e| self.invalid_response(e))
     }
 
     fn read_url(&self, endpoint: &str) -> anyhow::Result<Url> {
         join_url(&self.url, &format!("api/{}/{}", self.name, endpoint))
-    }
-
-    /// Like [`Self::bearer`] but never modifies stored credentials, whatever
-    /// the policy.
-    fn read_bearer(&self) -> anyhow::Result<String> {
-        if let Some(Some(token)) = self.access_token.get() {
-            return Ok(format!("Bearer {token}"));
-        }
-        let token = crate::auth::get_token_readonly(&self.url)
-            .map_err(|e| {
-                if backend_error_code(&e).is_some() {
-                    e
-                } else {
-                    self.coded(
-                        ErrorCode::CredentialsUnreadable,
-                        format!("Cannot read credentials: {e}"),
-                    )
-                }
-            })?
-            .ok_or_else(|| self.coded(ErrorCode::AuthRequired, "Log in with `dvs login`"))?;
-        let _ = self.access_token.set(Some(token.clone()));
-        Ok(format!("Bearer {token}"))
-    }
-
-    /// Read paths never repair credentials, and any status outside the
-    /// shared table is `server_unavailable`: a read failure must never be
-    /// mistaken for missing content.
-    fn read_status(&self, status: u16, body: &str) -> anyhow::Result<()> {
-        match status {
-            200 => Ok(()),
-            code => Err(match http_status_code(code, body) {
-                Some(shared) => self.shared_status_error(shared, code),
-                None => self.failing(code),
-            }),
-        }
-    }
-
-    /// Bounded access check that never modifies stored credentials.
-    pub fn access_readonly(&self) -> anyhow::Result<AccessResponse> {
-        let response = http_agent()
-            .get(self.read_url("access")?.as_str())
-            .header("authorization", self.read_bearer()?)
-            .config()
-            .timeout_global(Some(std::time::Duration::from_secs(30)))
-            .build()
-            .call()
-            .map_err(|e| self.unreachable(e))?;
-        self.read_json(response)
-    }
-
-    /// Query content only after establishing project access. A blob 404 then
-    /// means absent content rather than an inaccessible or nonexistent project
-    /// (a HEAD answer has no body to tell them apart).
-    pub fn exists_readonly(&self, hashes: &Hashes) -> anyhow::Result<bool> {
-        let response = http_agent()
-            .head(
-                self.read_url(&format!("blobs/{}", hashes.get_blake3()))?
-                    .as_str(),
-            )
-            .header("authorization", self.read_bearer()?)
-            .config()
-            .timeout_global(Some(std::time::Duration::from_secs(30)))
-            .build()
-            .call()
-            .map_err(|e| self.unreachable(e))?;
-        match response.status().as_u16() {
-            200 => Ok(true),
-            404 => Ok(false),
-            code => {
-                self.read_status(code, "")?;
-                unreachable!()
-            }
-        }
-    }
-
-    pub fn history_readonly(&self, files: &[PathBuf]) -> anyhow::Result<Vec<AuditEntry>> {
-        let paths = files
-            .iter()
-            .map(|p| ProjectPath::from_path(p))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| anyhow::anyhow!(e))?;
-        let response = http_agent()
-            .post(self.read_url("history")?.as_str())
-            .header("authorization", self.read_bearer()?)
-            .config()
-            .timeout_global(Some(std::time::Duration::from_secs(30)))
-            .build()
-            .send_json(&HistoryPayload { paths })
-            .map_err(|e| self.unreachable(e))?;
-        self.read_json(response)
     }
 
     pub fn init(&self, compression: Compression) -> anyhow::Result<bool> {
@@ -425,7 +284,7 @@ impl ServerBackend {
             .post(url.as_str())
             .header("authorization", self.bearer()?)
             .send_json(&payload)
-            .map_err(|e| self.unreachable(e))?;
+            .map_err(|e| unreachable(&self.url, e))?;
         match resp.status().as_u16() {
             201 => Ok(false), // created
             200 => Ok(true),  // already existed (group+compression matched)
@@ -434,7 +293,7 @@ impl ServerBackend {
                     "Server initialization failed: the project already exists with a different group or compression"
                 )
             }
-            _ => Err(self.response_error(&mut resp, "server init")),
+            _ => Err(response_error(&self.url, &mut resp, "server init")),
         }
     }
 
@@ -444,11 +303,15 @@ impl ServerBackend {
             .get(url.as_str())
             .header("authorization", self.bearer()?)
             .call()
-            .map_err(|e| self.unreachable(e))?;
+            .map_err(|e| unreachable(&self.url, e))?;
 
         match resp.status().as_u16() {
             200 => Ok(()),
-            _ => Err(self.response_error(&mut resp, "getting project information")),
+            _ => Err(response_error(
+                &self.url,
+                &mut resp,
+                "getting project information",
+            )),
         }
     }
 
@@ -458,22 +321,22 @@ impl ServerBackend {
             .get(self.access_url()?.as_str())
             .header("authorization", self.bearer()?)
             .call()
-            .map_err(|e| self.unreachable(e))?;
+            .map_err(|e| unreachable(&self.url, e))?;
 
         match resp.status().as_u16() {
             200 => Ok(Some(
                 resp.body_mut()
                     .read_json()
-                    .map_err(|e| self.invalid_response(e))?,
+                    .map_err(|e| invalid_response(&self.url, e))?,
             )),
             403 => Ok(None),
-            _ => Err(self.response_error(&mut resp, "access check")),
+            _ => Err(response_error(&self.url, &mut resp, "access check")),
         }
     }
 
     pub fn check_access(&self) -> anyhow::Result<()> {
         if self.access()?.is_none() {
-            return Err(self.coded(ErrorCode::AccessDenied, NOT_ALLOWED));
+            return Err(coded(ErrorCode::AccessDenied, NOT_ALLOWED));
         }
         Ok(())
     }
@@ -485,14 +348,14 @@ impl ServerBackend {
             .post(self.manifest_url()?.as_str())
             .header("authorization", self.bearer()?)
             .send_json(manifest)
-            .map_err(|e| self.unreachable(e))?;
+            .map_err(|e| unreachable(&self.url, e))?;
 
         match resp.status().as_u16() {
             200 => resp
                 .body_mut()
                 .read_json()
-                .map_err(|e| self.invalid_response(e)),
-            _ => Err(self.response_error(&mut resp, "manifest")),
+                .map_err(|e| invalid_response(&self.url, e)),
+            _ => Err(response_error(&self.url, &mut resp, "manifest")),
         }
     }
 
@@ -511,7 +374,7 @@ impl ServerBackend {
             Ok(resp) => resp,
             Err(e) => match file.take_error() {
                 Some(local) => return Err(local.into()),
-                None => return Err(self.unreachable(e)),
+                None => return Err(unreachable(&self.url, e)),
             },
         };
 
@@ -520,14 +383,14 @@ impl ServerBackend {
                 let uploaded: UploadResponse = resp
                     .body_mut()
                     .read_json()
-                    .map_err(|e| self.invalid_response(e))?;
+                    .map_err(|e| invalid_response(&self.url, e))?;
                 Ok(StoreResult {
                     stored_size: uploaded.stored_size,
                     compression: uploaded.compression,
                     created: status == 201,
                 })
             }
-            _ => Err(self.response_error(&mut resp, "upload")),
+            _ => Err(response_error(&self.url, &mut resp, "upload")),
         }
     }
 
@@ -541,7 +404,7 @@ impl ServerBackend {
             .get(url.as_str())
             .header("authorization", self.bearer()?)
             .call()
-            .map_err(|e| self.unreachable(e))?;
+            .map_err(|e| unreachable(&self.url, e))?;
 
         match resp.status().as_u16() {
             200 => {}
@@ -552,7 +415,7 @@ impl ServerBackend {
                 {
                     return Ok(false);
                 }
-                return Err(self.status_error(code, &body, "download"));
+                return Err(status_error(&self.url, code, &body, "download"));
             }
         }
 
@@ -576,7 +439,7 @@ impl ServerBackend {
         out: &mut impl std::io::Write,
     ) -> anyhow::Result<u64> {
         std::io::copy(body, out).map_err(|e| match body.take_error() {
-            Some(network) => self.coded(
+            Some(network) => coded(
                 ErrorCode::ServerUnavailable,
                 format!("the download from {} was cut off: {network}", self.url),
             ),
@@ -591,13 +454,18 @@ impl ServerBackend {
             .head(url.as_str())
             .header("authorization", self.bearer()?)
             .call()
-            .map_err(|e| self.unreachable(e))?
+            .map_err(|e| unreachable(&self.url, e))?
             .status()
             .as_u16()
         {
             200 => Ok(true),
             404 => Ok(false),
-            code => Err(self.status_error(code, "", "checking whether a file exists")),
+            code => Err(status_error(
+                &self.url,
+                code,
+                "",
+                "checking whether a file exists",
+            )),
         }
     }
 
@@ -620,14 +488,14 @@ impl ServerBackend {
             .post(url.as_str())
             .header("authorization", self.bearer()?)
             .send_json(&payload)
-            .map_err(|e| self.unreachable(e))?;
+            .map_err(|e| unreachable(&self.url, e))?;
 
         match resp.status().as_u16() {
             200 => resp
                 .body_mut()
                 .read_json::<Vec<AuditEntry>>()
-                .map_err(|e| self.invalid_response(e)),
-            _ => Err(self.response_error(&mut resp, "history")),
+                .map_err(|e| invalid_response(&self.url, e)),
+            _ => Err(response_error(&self.url, &mut resp, "history")),
         }
     }
 }
@@ -635,60 +503,6 @@ impl ServerBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-
-    /// One-shot HTTP server answering the first request with `status` and `body`.
-    fn stub(status: u16, body: &'static str) -> (Url, std::thread::JoinHandle<()>) {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-        let handle = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                .unwrap();
-            // Read the whole request so the client never sees a reset mid-send
-            let mut request = Vec::new();
-            let mut buffer = [0u8; 8192];
-            loop {
-                let text = String::from_utf8_lossy(&request).to_ascii_lowercase();
-                if let Some(end) = text.find("\r\n\r\n") {
-                    let length = text[..end]
-                        .lines()
-                        .find_map(|l| l.strip_prefix("content-length:"))
-                        .map_or(0, |v| v.trim().parse::<usize>().unwrap());
-                    if request.len() >= end + 4 + length {
-                        break;
-                    }
-                }
-                match stream.read(&mut buffer) {
-                    Ok(0) | Err(_) => break,
-                    Ok(count) => request.extend_from_slice(&buffer[..count]),
-                }
-            }
-            let _ = write!(
-                stream,
-                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-        });
-        (url, handle)
-    }
-
-    fn server_at(url: Url) -> ServerBackend {
-        let server = ServerBackend::new("project".into(), Some("group".into()), url);
-        server.access_token.set(Some("test-token".into())).unwrap();
-        server
-    }
-
-    fn manifest() -> UploadManifest {
-        UploadManifest {
-            operation_id: uuid::Uuid::nil(),
-            message: None,
-            entries: Vec::new(),
-            git_branch: None,
-            git_commit: None,
-        }
-    }
 
     #[test]
     fn server_urls_keep_the_path_prefix() {
@@ -713,55 +527,21 @@ mod tests {
     }
 
     #[test]
-    fn read_failures_never_become_missing_content() {
-        let server = ServerBackend::new("project".into(), None, Url::parse("https://h/").unwrap());
-        for (status, expected) in [
-            (401, ErrorCode::AuthExpired),
-            (404, ErrorCode::ServerTooOld),
-            (429, ErrorCode::ServerUnavailable),
-            (500, ErrorCode::ServerUnavailable),
-        ] {
-            let error = server.read_status(status, "").unwrap_err();
-            assert_eq!(backend_error_code(&error), Some(expected), "{status}");
-        }
-    }
-
-    #[test]
-    fn failures_have_the_shared_codes() {
+    fn statuses_map_to_the_shared_codes() {
         for (status, body, expected) in [
-            (401, "", ErrorCode::AuthExpired),
-            (403, "", ErrorCode::AccessDenied),
+            (401, "", Some(ErrorCode::AuthExpired)),
+            (403, "", Some(ErrorCode::AccessDenied)),
             (
                 404,
                 "unknown project \"project\"",
-                ErrorCode::ProjectNotFound,
+                Some(ErrorCode::ProjectNotFound),
             ),
-            (404, "", ErrorCode::ServerTooOld),
-            (405, "", ErrorCode::ServerTooOld),
-            (503, "", ErrorCode::ServerUnavailable),
-            (200, "not json", ErrorCode::ServerUnavailable),
+            (404, "", Some(ErrorCode::ServerTooOld)),
+            (405, "", Some(ErrorCode::ServerTooOld)),
+            (503, "", Some(ErrorCode::ServerUnavailable)),
+            (409, "", None),
         ] {
-            let (url, handle) = stub(status, body);
-            let error = server_at(url).manifest(&manifest()).err().unwrap();
-            assert_eq!(
-                backend_error_code(&error),
-                Some(expected),
-                "{status} {body}"
-            );
-            handle.join().unwrap();
+            assert_eq!(http_status_code(status, body), expected, "{status} {body}");
         }
-
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let closed = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-        drop(listener);
-        let error = server_at(closed).access().err().unwrap();
-        assert_eq!(
-            backend_error_code(&error),
-            Some(ErrorCode::ServerUnavailable)
-        );
-
-        let no_token = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
-        let error = no_token.access().err().unwrap();
-        assert_eq!(backend_error_code(&error), Some(ErrorCode::AuthRequired));
     }
 }

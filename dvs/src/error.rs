@@ -1,4 +1,4 @@
-//! Stable, machine-readable codes for backend failures, shared by every command.
+//! Stable, machine-readable codes for failures, shared by every command.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,16 @@ pub enum ErrorCode {
     /// An unreadable `.dvs` record, including git conflict markers
     BadMetadata,
     CredentialsUnreadable,
+    NotInProject,
+    InvalidArguments,
+    InvalidConfiguration,
+    NoFilesSelected,
+    IoError,
+    /// The fallback when nothing more specific is known
+    OperationFailed,
+    /// A row that failed without a more specific code
+    FileFailed,
+    RevokeFailed,
 }
 
 impl ErrorCode {
@@ -27,17 +37,26 @@ impl ErrorCode {
             ErrorCode::ProjectNotFound => "project_not_found",
             ErrorCode::BadMetadata => "bad_metadata",
             ErrorCode::CredentialsUnreadable => "credentials_unreadable",
+            ErrorCode::NotInProject => "not_in_project",
+            ErrorCode::InvalidArguments => "invalid_arguments",
+            ErrorCode::InvalidConfiguration => "invalid_configuration",
+            ErrorCode::NoFilesSelected => "no_files_selected",
+            ErrorCode::IoError => "io_error",
+            ErrorCode::OperationFailed => "operation_failed",
+            ErrorCode::FileFailed => "file_failed",
+            ErrorCode::RevokeFailed => "revoke_failed",
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct BackendError {
+/// A failure with its code: backend, records and credentials.
+#[derive(Debug, Clone, Serialize)]
+pub struct Error {
     pub code: ErrorCode,
     pub message: String,
 }
 
-impl BackendError {
+impl Error {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -46,14 +65,14 @@ impl BackendError {
     }
 }
 
-impl std::fmt::Display for BackendError {
+impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for BackendError {}
+impl std::error::Error for Error {}
 
 pub fn backend_error_code(error: &anyhow::Error) -> Option<ErrorCode> {
-    error.downcast_ref::<BackendError>().map(|e| e.code)
+    error.downcast_ref::<Error>().map(|e| e.code)
 }
