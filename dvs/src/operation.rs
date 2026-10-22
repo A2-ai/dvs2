@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::files::add::AddResult;
 use crate::files::get::GetRow;
-use crate::inspect::StatusFacts;
+use crate::files::status::StatusFacts;
 use crate::progress::FileProgress;
 
 /// A shared "stop starting new files" flag. Cloning shares the flag, so a
