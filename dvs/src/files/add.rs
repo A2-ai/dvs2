@@ -12,6 +12,7 @@ use crate::backends::Backend;
 use crate::backends::server::{UploadManifest, UploadManifestEntry};
 use crate::cache::try_open_cache;
 use crate::config::Compression;
+use crate::error::{ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
 use crate::operation::ByteTotals;
@@ -45,8 +46,50 @@ pub enum AddDetail {
         stored_size: u64,
     },
     Error {
+        code: AddErrorCode,
         error: String,
     },
+}
+
+/// Stable machine-readable category for a per-file add failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AddErrorCode {
+    AccessDenied,
+    ServerUnavailable,
+    IoError,
+    OperationFailed,
+    AuthRequired,
+    AuthExpired,
+    ServerTooOld,
+    ProjectNotFound,
+    BadMetadata,
+    CredentialsUnreadable,
+}
+
+impl From<ErrorCode> for AddErrorCode {
+    fn from(code: ErrorCode) -> Self {
+        match code {
+            ErrorCode::AuthRequired => AddErrorCode::AuthRequired,
+            ErrorCode::AuthExpired => AddErrorCode::AuthExpired,
+            ErrorCode::AccessDenied => AddErrorCode::AccessDenied,
+            ErrorCode::ServerUnavailable => AddErrorCode::ServerUnavailable,
+            ErrorCode::ServerTooOld => AddErrorCode::ServerTooOld,
+            ErrorCode::ProjectNotFound => AddErrorCode::ProjectNotFound,
+            ErrorCode::BadMetadata => AddErrorCode::BadMetadata,
+            ErrorCode::CredentialsUnreadable => AddErrorCode::CredentialsUnreadable,
+        }
+    }
+}
+
+fn add_error_code(error: &anyhow::Error) -> AddErrorCode {
+    if let Some(code) = backend_error_code(error) {
+        code.into()
+    } else if error.downcast_ref::<std::io::Error>().is_some() {
+        AddErrorCode::IoError
+    } else {
+        AddErrorCode::OperationFailed
+    }
 }
 
 /// A file to add: the metadata it will get, waiting on the backend.
@@ -227,6 +270,7 @@ pub fn add_files(
                     let row = AddResult {
                         path: relative_path,
                         detail: AddDetail::Error {
+                            code: add_error_code(&e),
                             error: e.to_string(),
                         },
                     };
@@ -281,6 +325,7 @@ pub fn add_files(
                             let row = AddResult {
                                 path: p.relative_path,
                                 detail: AddDetail::Error {
+                                    code: add_error_code(&e),
                                     error: e.to_string(),
                                 },
                             };
@@ -336,6 +381,7 @@ pub fn add_files(
                         let result = AddResult {
                             path: pending.relative_path,
                             detail: AddDetail::Error {
+                                code: add_error_code(&e),
                                 error: e.to_string(),
                             },
                         };
@@ -397,6 +443,19 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn row_errors_carry_a_code() {
+        let backend = anyhow::Error::from(crate::BackendError::new(ErrorCode::AccessDenied, "no"));
+        let io = anyhow::Error::from(std::io::Error::other("disk"));
+        for (error, expected) in [
+            (backend, AddErrorCode::AccessDenied),
+            (io, AddErrorCode::IoError),
+            (anyhow::anyhow!("other"), AddErrorCode::OperationFailed),
+        ] {
+            assert_eq!(add_error_code(&error), expected);
+        }
+    }
 
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
         DvsPaths::new(
