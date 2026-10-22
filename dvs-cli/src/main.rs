@@ -369,6 +369,12 @@ fn add_summary(report: &AddReport, dry_run: bool) -> String {
     .unwrap_or_else(|| "Nothing to add".to_string())
 }
 
+/// One line closing a human status: "Checked 3, 1 failed".
+fn status_summary(counts: &Counts) -> String {
+    let checked = counts.succeeded;
+    summary_line([(checked, format!("Checked {checked}"))], counts).unwrap_or_default()
+}
+
 /// The non-zero parts, then the failed and cancelled counts, as one sentence.
 fn summary_line<const N: usize>(parts: [(usize, String); N], counts: &Counts) -> Option<String> {
     let mut line = parts
@@ -759,9 +765,12 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                         .with(Modify::new(Rows::first()).with(Alignment::left()));
                     println!("{table}");
                 }
-            }
-            if !cli.json && counts.failed > 0 {
-                eprintln!("Error: Some files failed to get status");
+                let line = status_summary(&counts);
+                if outcome == RunOutcome::Complete {
+                    println!("\n{line}");
+                } else {
+                    eprintln!("\n{line}");
+                }
             }
             summary_exit(outcome)?;
         }
@@ -1282,6 +1291,17 @@ mod tests {
             "dvs init needs a backend before the storage path: did you mean `dvs init local ../storage`?"
         );
         assert!(init_backend_error(&["lcoal".into()]).starts_with("unknown backend 'lcoal'"));
+    }
+
+    #[test]
+    fn status_summary_reports_failed_and_cancelled() {
+        let counts = Counts {
+            total: 6,
+            succeeded: 3,
+            failed: 1,
+            cancelled: 2,
+        };
+        assert_eq!(status_summary(&counts), "Checked 3, 1 failed, cancelled 2");
     }
 
     #[test]
