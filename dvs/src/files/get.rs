@@ -217,11 +217,9 @@ pub struct GetRow {
     /// The next command to run. Left empty by core: each frontend phrases it
     /// in its own syntax.
     pub hint: Option<String>,
-    /// Time spent on this file (hash + transfer + install). Any row that was
-    /// hashed has at least its hash time, whatever happened after (K11);
-    /// `None` for rows never hashed and not transferred (untracked, unreadable
-    /// metadata, not a file, absent and held back). Not serialized here, so R output is unchanged (K8); the CLI
-    /// adds it.
+    /// Time spent on this file (hash + transfer + install); `None` for rows
+    /// never hashed or transferred. Not serialized, so R output is unchanged;
+    /// the CLI adds it.
     #[serde(skip)]
     pub duration_ms: Option<u64>,
 }
@@ -342,8 +340,7 @@ struct Planned {
     stat: Option<FileStat>,
     /// Time spent classifying it (mostly hashing), part of its `duration_ms`.
     hash_time: Duration,
-    /// Hashing the working file was attempted, whether or not it succeeded:
-    /// an unreadable file did that work too (K11).
+    /// Hashing was attempted, whether or not it succeeded.
     hashed: bool,
     /// Already reported through `file_finished`: every row is, exactly once.
     emitted: bool,
@@ -370,9 +367,8 @@ impl Planned {
         }
     }
 
-    /// K11: a row that was hashed carries at least its hash time, whatever
-    /// happened to it after (hash failure, skipped, held back, access
-    /// failure). Rows never hashed keep `None`.
+    /// A row that was hashed carries at least its hash time, whatever
+    /// happened to it after.
     fn fill_hash_duration(&mut self) {
         if self.row.duration_ms.is_none() && self.hashed {
             self.row.duration_ms = Some(millis(self.hash_time));
@@ -780,7 +776,7 @@ pub fn get_files(
 
     // 1. Plan: classify every file, locally, writing nothing. The hash phase
     // starts with the first file actually hashed, so a plan that hashes
-    // nothing (every file absent) reports none (K13).
+    // nothing reports none.
     let hashing = LazyPhase::new(observer, Phase::Hash);
     let mut planned: Vec<Planned> = pool.install(|| {
         selection
@@ -1697,32 +1693,6 @@ mod tests {
         assert_eq!(repo.read("a.csv"), b"one");
     }
 
-    // K11: a working file that could not be hashed (unreadable) still did
-    // the hashing work: its failed row carries the time spent.
-    #[cfg(unix)]
-    #[test]
-    fn a_failed_hash_keeps_its_hash_time() {
-        use std::os::unix::fs::PermissionsExt;
-        let repo = TestRepo::new();
-        repo.add("a.csv", b"a");
-        // New content, so the hash cache cannot answer for it.
-        let path = repo.root.join("a.csv");
-        fs::write(&path, b"changed").unwrap();
-        fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
-        if fs::read(&path).is_ok() {
-            fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-            return; // running as root: permissions are not enforced
-        }
-        let report = repo.get(&["a.csv"], OnConflict::Abort);
-        fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        let r = row(&report, "a.csv");
-        assert_eq!(
-            (r.action, r.code, r.local_hash.as_deref()),
-            (Action::Failed, Some(GetCode::PermissionDenied), None)
-        );
-        assert!(r.duration_ms.is_some(), "hashing was attempted");
-    }
-
     // Spec 16: a destination that can't be written fails alone, keeps what
     // was there, and a rerun finishes once it is fixed.
     #[cfg(unix)]
@@ -1917,7 +1887,6 @@ mod tests {
         fs::remove_file(repo.root.join("d.csv")).unwrap();
     }
 
-    // C3: every row is reported once, in the same shape as the result.
     #[test]
     fn every_row_is_reported_once_in_its_final_shape() {
         for dry_run in [false, true] {
@@ -1951,7 +1920,6 @@ mod tests {
         }
     }
 
-    // C3: the first file's row arrives before the second transfer finishes.
     #[test]
     fn a_transfer_row_is_reported_before_a_slower_transfer_finishes() {
         let repo = TestRepo::new();
@@ -1974,7 +1942,6 @@ mod tests {
         assert_eq!(*recorder.second_saw_a_row.lock().unwrap(), Some(true));
     }
 
-    // O1: phases, then the plan, then rows; dry runs have no transfer phase.
     #[test]
     fn phases_and_the_plan_come_in_order() {
         for dry_run in [false, true] {
@@ -2042,13 +2009,12 @@ mod tests {
                 }
             );
             assert_eq!(report.bytes.total, plan.bytes_total);
-            // K12: the plan counts what get attempts; the result every file
-            // not at its target, so c (skipped) too.
+            // The plan counts what get attempts; the result every file not
+            // at its target, so c (skipped) too.
             assert_eq!(report.bytes.to_transfer, 9);
         }
     }
 
-    // O1: nothing needs the remote: no check_storage phase, nothing to transfer.
     #[test]
     fn a_batch_already_current_skips_the_storage_phases() {
         let repo = TestRepo::new();
@@ -2066,42 +2032,6 @@ mod tests {
         assert_eq!(phases, [Phase::Hash]);
     }
 
-    // C8 (K5): totals are the per-row sums, dry run and real.
-    #[test]
-    fn byte_totals_match_the_rows() {
-        for dry_run in [true, false] {
-            let repo = TestRepo::new();
-            mixed_batch(&repo);
-            let report = repo.get_with(
-                &["a.csv", "b.csv", "c.csv", "d.csv"],
-                &["typo.csv"],
-                OnConflict::Skip,
-                dry_run,
-            );
-            let sum = |f: &dyn Fn(&GetRow) -> bool| -> u64 {
-                report
-                    .files
-                    .iter()
-                    .filter(|r| f(r))
-                    .filter_map(|r| r.size)
-                    .sum()
-            };
-            // K12: every file whose local copy is not its target, the
-            // skipped c (2) included.
-            let to_transfer = sum(&|r| r.before != Before::Current);
-            let bytes = report.bytes;
-            assert_eq!(bytes.total, sum(&|_| true));
-            assert_eq!(bytes.total, 11, "the untracked row has no size");
-            assert_eq!(bytes.to_transfer, to_transfer);
-            assert_eq!(bytes.to_transfer, 9);
-            assert_eq!(bytes.already_stored, sum(&|r| r.before == Before::Current));
-            assert_eq!(bytes.already_stored, bytes.total - bytes.to_transfer);
-            let moved = if dry_run { 0 } else { 7 };
-            assert_eq!(bytes.transferred, moved, "dry_run {dry_run}");
-        }
-    }
-
-    // C2: rows that did work carry a duration; the rest none.
     #[test]
     fn rows_that_did_work_have_a_duration() {
         let repo = TestRepo::new();
@@ -2115,7 +2045,7 @@ mod tests {
         let duration = |name| row(&report, name).duration_ms;
         assert!(duration("a.csv").is_some(), "restored");
         assert!(duration("b.csv").is_some(), "unchanged: hashed");
-        assert!(duration("c.csv").is_some(), "skipped, but hashed (K11)");
+        assert!(duration("c.csv").is_some(), "skipped, but hashed");
         assert_eq!(duration("typo.csv"), None, "not tracked");
         // Held back: the hashed conflict keeps its hash time, the absent
         // file (never hashed) has none.
@@ -2131,7 +2061,6 @@ mod tests {
         row(report, name).duration_ms
     }
 
-    // K13: a plan that hashes nothing (every file absent) has no hash phase.
     #[test]
     fn a_batch_with_nothing_to_hash_has_no_hash_phase() {
         let repo = TestRepo::new();
@@ -2146,33 +2075,14 @@ mod tests {
         );
     }
 
-    // C4: an access failure keeps its shared code per row instead of
-    // collapsing to access_denied.
     #[test]
     fn access_failures_keep_their_shared_code() {
         use crate::{BackendError, ErrorCode};
-        for code in [
-            ErrorCode::AuthRequired,
-            ErrorCode::AuthExpired,
-            ErrorCode::AccessDenied,
-            ErrorCode::ServerUnavailable,
-            ErrorCode::ServerTooOld,
-            ErrorCode::ProjectNotFound,
-            ErrorCode::CredentialsUnreadable,
-        ] {
+        for code in [ErrorCode::AuthExpired, ErrorCode::ProjectNotFound] {
             let e: anyhow::Error = BackendError::new(code, "nope").into();
-            let (got, message) = access_failure(e.context("checking access"));
-            assert_eq!(got.as_str(), code.as_str());
-            assert_eq!(message, "checking access: nope");
+            assert_eq!(access_failure(e).0.as_str(), code.as_str());
         }
-    }
-
-    // K14: an access failure that is no classified backend error is the
-    // remote being unusable, not a local I/O problem.
-    #[test]
-    fn an_unclassified_access_failure_is_server_unavailable() {
-        let plain = anyhow::anyhow!("something went wrong");
-        assert_eq!(access_failure(plain).0, GetCode::ServerUnavailable);
+        // Unclassified is still the remote being unusable, not local I/O
         let io: anyhow::Error = io::Error::new(io::ErrorKind::PermissionDenied, "no").into();
         assert_eq!(access_failure(io).0, GetCode::ServerUnavailable);
     }

@@ -4,7 +4,7 @@
 //! remains authoritative: a transfer can finish before installation fails.
 //!
 //! Every event carries `ts` (unix milliseconds) and `elapsed_ms` (since the
-//! operation started). Operation-level progress (O1) is aggregated here from
+//! operation started). Operation-level progress is aggregated here from
 //! the library's facts (plan, transfer byte deltas, finished files) and
 //! throttled, so a large transfer emits a bounded number of lines.
 
@@ -57,7 +57,7 @@ struct Progress {
     files_done: u64,
     files_total: u64,
     bytes_done: u64,
-    /// The plan's `bytes_to_transfer`: what moving bytes count against (K12)
+    /// The plan's `bytes_to_transfer`: what moving bytes count against
     bytes_total: u64,
     /// When the last progress event was emitted, or the plan arrived
     last_at: Option<Instant>,

@@ -144,16 +144,6 @@ pub mod testutil {
             plans[0]
         }
 
-        pub fn transfers(&self) -> Vec<PathBuf> {
-            self.seen()
-                .into_iter()
-                .filter_map(|s| match s {
-                    Seen::TransferStarted(path) => Some(path),
-                    _ => None,
-                })
-                .collect()
-        }
-
         /// Plan and phase calls only, in order.
         pub fn outline(&self) -> Vec<Seen> {
             self.seen()

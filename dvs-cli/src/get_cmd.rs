@@ -294,7 +294,7 @@ pub fn print_human(report: &GetReport) {
 pub fn row_json(r: &GetRow) -> serde_json::Value {
     let mut v = serde_json::to_value(r).expect("rows serialize");
     v["hint"] = json!(hint(r));
-    // Not serialized by the library (K8): the CLI's rows carry it (C2)
+    // Not serialized by the library, so R output is unchanged
     v["duration_ms"] = json!(r.duration_ms);
     v
 }
