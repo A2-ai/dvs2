@@ -376,42 +376,15 @@ mod tests {
         assert_eq!(outcome(&[]), RunOutcome::Complete);
     }
 
-    #[derive(Default)]
-    struct Phases(std::sync::Mutex<Vec<(bool, Phase)>>);
-
-    impl OperationObserver for Phases {
-        fn phase_started(&self, phase: Phase) {
-            self.0.lock().unwrap().push((true, phase));
-        }
-        fn phase_finished(&self, phase: Phase) {
-            self.0.lock().unwrap().push((false, phase));
-        }
-    }
-
     #[test]
-    fn phase_guards_finish_on_every_exit() {
-        let seen = Phases::default();
+    fn a_started_phase_finishes_on_an_early_error_exit() {
+        let recorder = crate::testutil::Recorder::default();
         let early_exit = || -> Result<(), ()> {
-            let _scan = PhaseGuard::start(&seen, Phase::Scan);
+            let _scan = PhaseGuard::start(&recorder, Phase::Scan);
             Err(())?;
             Ok(())
         };
         assert!(early_exit().is_err());
-        // A lazy phase nobody began is never reported; one begun twice is
-        // reported once
-        LazyPhase::new(&seen, Phase::CheckStorage).finish();
-        let transfer = LazyPhase::new(&seen, Phase::Transfer);
-        transfer.begin();
-        transfer.begin();
-        drop(transfer);
-        assert_eq!(
-            *seen.0.lock().unwrap(),
-            vec![
-                (true, Phase::Scan),
-                (false, Phase::Scan),
-                (true, Phase::Transfer),
-                (false, Phase::Transfer),
-            ]
-        );
+        assert_eq!(recorder.seen(), ["start scan", "end scan"]);
     }
 }

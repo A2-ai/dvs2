@@ -586,25 +586,21 @@ mod tests {
     }
 
     #[test]
-    fn status_reports_a_hash_phase_when_a_file_is_hashed() {
-        use crate::testutil::{Recorder, Seen};
+    fn observed_status_plans_the_bytes_to_hash() {
         let (_temp, paths) = fixture();
-        let recorder = std::sync::Arc::new(Recorder::default());
+        let recorder = std::sync::Arc::new(crate::testutil::Recorder::default());
         let ctx = OperationContext::new().with_observer(recorder.clone());
         inspect_status(&paths, None, None, &ctx).unwrap();
+        // The extra stat pass, done only when observed, sizes the plan
         assert_eq!(
-            recorder.outline(),
-            vec![
-                Seen::PhaseStarted(Phase::Scan),
-                Seen::PhaseFinished(Phase::Scan),
-                Seen::Planned(OperationPlan {
-                    files_total: 1,
-                    bytes_total: 8,
-                    files_to_transfer: 0,
-                    bytes_to_transfer: 0,
-                }),
-                Seen::PhaseStarted(Phase::Hash),
-                Seen::PhaseFinished(Phase::Hash),
+            recorder.seen(),
+            [
+                "start scan",
+                "end scan",
+                "plan 1 8 0 0",
+                "start hash",
+                "row data.txt",
+                "end hash"
             ]
         );
     }
