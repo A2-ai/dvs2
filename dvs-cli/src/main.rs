@@ -96,13 +96,18 @@ pub enum Command {
         metadata_folder_name: Option<String>,
     },
     /// Adds the given files to dvs. You can use a glob or paths.
+    /// A directory adds the files directly in it; add -r for everything beneath it.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
     /// At least one path or --glob must be provided
     #[command(next_display_order = 100)]
     Add {
-        /// Files to add, or directories to search with --glob
+        /// Files or directories to add
         #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
+        /// Recursively include files in subdirectories for directory inputs.
+        /// Without this flag, directories add only their direct children.
+        #[clap(long, short, conflicts_with = "glob")]
+        recursive: bool,
         /// Add the files matching this glob, e.g. '*.csv'
         #[clap(long)]
         glob: Option<String>,
@@ -404,28 +409,6 @@ fn add_summary(results: &[AddResult], dry_run: bool) -> String {
     )
 }
 
-/// Adds the exact `--glob` to use when add refused a directory.
-fn add_directory_hint(error: anyhow::Error, dirs: &[PathBuf]) -> anyhow::Error {
-    let refused_dir = dvs::AddPathStatus::IsDirectory
-        .reason()
-        .is_some_and(|reason| error.to_string().contains(reason));
-    if dirs.is_empty() || !refused_dir {
-        return error;
-    }
-    let mut message = format!("{error}\nTo add the files in a directory, use a glob:");
-    for dir in dirs {
-        let dir = dir.to_string_lossy();
-        let dir = dir.trim_end_matches(['/', '\\']);
-        let quote = |glob: String| format!("'{}'", glob.replace('\'', r"'\''"));
-        message.push_str(&format!(
-            "\n  dvs add --glob {}   (files directly in {dir})\n  dvs add --glob {}   (including subdirectories)",
-            quote(format!("{dir}/*")),
-            quote(format!("{dir}/**/*")),
-        ));
-    }
-    anyhow!(message)
-}
-
 /// 130 if cancelled, over everything else, then 1 if any row failed.
 fn summary_exit(summary: &RunSummary) -> Result<()> {
     if summary.outcome == RunOutcome::Cancelled {
@@ -618,22 +601,21 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
         }
         Command::Add {
             paths,
+            recursive,
             glob,
             message,
             dry_run,
         } => {
             let config = find_config(&current_dir, credentials)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            // Without a glob a directory is refused; suggest the glob that adds it
-            let dirs: Vec<PathBuf> = if glob.is_none() {
+            // A directory without a glob adds its files, as get, status and hash
+            // select them; explicit files ignore the glob
+            let glob = glob.or_else(|| {
                 paths
                     .iter()
-                    .filter(|p| current_dir.join(p).is_dir())
-                    .cloned()
-                    .collect()
-            } else {
-                Vec::new()
-            };
+                    .any(|p| current_dir.join(p).is_dir())
+                    .then(|| if recursive { "**/*" } else { "*" }.to_string())
+            });
             let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
                 .into_iter()
                 .collect();
@@ -659,8 +641,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 config.compression(),
                 dry_run,
                 &ctx,
-            )
-            .map_err(|error| add_directory_hint(error, &dirs))?;
+            )?;
             let summary = report.summary();
             let results = &report.files;
             if cli.json {
