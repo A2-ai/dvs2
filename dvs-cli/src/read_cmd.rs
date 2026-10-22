@@ -1,7 +1,6 @@
 //! Batch, backend-neutral queries for consumers that invoke the CLI.
 use anyhow::Result;
 use dvs::audit::{Action, AuditEntry};
-use dvs::backends::server::{Denied, Unreachable};
 use dvs::{Backend, DvsPaths, Hashes, PathFilter};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -20,12 +19,9 @@ fn invalid(message: impl Into<String>) -> anyhow::Error {
 }
 
 pub(crate) fn reason(error: &anyhow::Error) -> &'static str {
-    if error.downcast_ref::<Denied>().is_some() {
-        "access_denied"
-    } else if error.downcast_ref::<Unreachable>().is_some() {
-        "server_unavailable"
-    } else {
-        "backend_read_failed"
+    match dvs::backend_error_code(error) {
+        Some(code) => code.as_str(),
+        None => "backend_read_failed",
     }
 }
 
@@ -154,13 +150,25 @@ pub fn availability(
                 ("unknown", json!(error.code), json!(error.message))
             }
         };
-        let mut row = json!({"hash":normalized,"state":state,"code":code,"message":message});
+        // Fixed keys (§9 rec 1): the history fields are null when no `--path`
+        // was given or the history lookup succeeded. They stay a second
+        // `code`/`message` pair: the storage check and the history lookup are
+        // separate requests that fail separately, and one row can carry both.
+        let mut row = json!({
+            "hash": normalized,
+            "state": state,
+            "in_history": null,
+            "code": code,
+            "message": message,
+            "hint": null,
+            "history_code": null,
+            "history_message": null,
+        });
         if let Some(history) = &history {
             match history {
                 Ok(hashes) => row["in_history"] = json!(hashes.contains(&normalized)),
                 Err(error) => {
                     row_failed = true;
-                    row["in_history"] = Value::Null;
                     row["history_code"] = json!(error.code);
                     row["history_message"] = json!(error.message.clone());
                 }
@@ -174,6 +182,7 @@ pub fn availability(
     Ok((rows, failed))
 }
 /// Resolve query paths lexically; the files need not exist in this checkout.
+/// Each entry is the audit entry with `timestamp` as RFC 3339 UTC.
 /// Reject escaping paths rather than silently broadening an invalid query to all history.
 pub fn history(
     backend: &Backend,
@@ -184,6 +193,13 @@ pub fn history(
     check_backend(backend)?;
     read_history(backend, &relative)?
         .into_iter()
-        .map(|e| Ok(serde_json::to_value(e)?))
+        .map(|e| {
+            let timestamp = std::time::SystemTime::from(e.timestamp);
+            let mut value = serde_json::to_value(e)?;
+            // RFC 3339 UTC like every other time in JSON output (§9 rec 2);
+            // the audit log on disk keeps unix seconds
+            value["timestamp"] = json!(dvs::operation::rfc3339_ms(timestamp));
+            Ok(value)
+        })
         .collect()
 }

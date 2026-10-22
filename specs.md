@@ -12,8 +12,8 @@ All configuration is handled in a `dvs.toml` config file.
 
 All CLI commands take a `--json` flag if you want to get JSON output.
 
-The CLI JSON protocol specifies machine-readable envelopes, errors, exit statuses,
-and discovery. Client read queries specify rich status facts, content availability,
+The CLI JSON protocol ([docs/cli-json.md](docs/cli-json.md)) specifies machine-readable envelopes,
+errors, exit statuses, events and discovery. Client read queries specify rich status facts, content availability,
 and history.
 
 The Rust library must not contain anything specific to the CLI or the R package: no `miniextendr-*` dependency, no `println!`/`eprintln!`/`dbg!`. It may depend on the `log` facade but must not pull in a `log` implementer. Logger setup belongs in `dvs-cli` and `dvs-rpkg`.
@@ -76,6 +76,51 @@ All input must be evaluated, and errors as well as successes must be collected a
 
 Error handling in CLI must be designed around the use case of being a part
 of pipelines, or non-interactive workflows. Returning error codes is necessary.
+
+##### Machine output (`--json`, `--emit-events`)
+
+Every `--json` result is one envelope (`v`, `command`, `outcome`, `dry_run`, `counts`, `error`, `files`, ...),
+error envelopes included, and carries its timing: `started_at` and `finished_at` (RFC 3339 UTC
+with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and `duration_ms`. `add` and `get` results have
+`bytes: {total, to_transfer, already_stored, transferred}` (dry runs too; `transferred` is what actually moved,
+so `0` in a dry run; `to_transfer + already_stored = total`). Every time in JSON output is RFC 3339 UTC:
+`started_at`/`finished_at` and history's `timestamp` with milliseconds (the audit log on disk keeps unix
+seconds), a record's `add_time` as the record stores it. The only exception is event `ts` (unix milliseconds).
+
+Errors have one shape. The envelope's `error` is `null` or `{code, message, hint}`; every row of every command
+has `code`, `message` and `hint` (all `null` on success; `hint` is `null` where there is none). Rows have fixed
+keys: a field that does not apply is `null`, never missing (an `add` error row has `outcome`, `hash`, `size`,
+`stored_size` as `null`). `counts` always has `total`, `succeeded` and `failed` (get adds its detailed counts).
+
+Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row
+(`code`), in every command: `auth_required` (no token, not logged in), `auth_expired` (the server said 401),
+`access_denied` (403), `server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint
+that should exist answered 404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs`
+record, e.g. git conflict markers, in every command) and `credentials_unreadable`. Command-specific codes (`no_files_selected`,
+`invalid_configuration`, `invalid_arguments`, `io_error`, get's codes, ...) stay. `info --json` reports
+`connection_error` as `{code, message}` (`server_unavailable`, `project_not_found` or `server_too_old`) when
+`connection` is `unavailable`, else `null`; `access` is `not_logged_in` without a token, and `none` on a 403
+(no membership: `connection` is `available`, exit `0`, like human mode's "no access"); a rejected login (401,
+`auth_expired`) is an error envelope.
+
+Exit codes, for every command: `0` complete; `1` failure, or some rows failed; `2` usage or configuration
+(`invalid_arguments`, `invalid_configuration`); `3` `get` only, local conflicts held files back and nothing
+else failed.
+
+Machine mode never changes stored credentials: a 401 is `auth_expired` and the token stays; an unparsable
+credentials store is `credentials_unreadable` and stays. Human mode still forgets a rejected token and deletes
+an unparsable store, and says to run `dvs login`. Only `dvs login` and `dvs logout` change credentials on
+purpose.
+
+A server URL may carry a path prefix (a proxy, `https://host/dvs`, with or without the trailing slash): every
+request, login included, goes under it.
+
+`--emit-events` writes NDJSON: `operation_started`, `waiting_for_auth` (device login), `transfer_started`,
+`transfer_progress`, `transfer_finished` (with `duration_ms`), `file_result` (`status` streams each row as its
+local check completes, in completion order; other commands emit one per result row just before the end; the
+same shape as in the result), and `operation_finished` (`result`, `exit_code`, `started_at`, `finished_at`,
+`duration_ms`). Every event has `v`, `operation_id`, `seq`, `type`, `ts` (unix milliseconds) and `elapsed_ms`
+(since the operation started).
 
 #### R package
 
@@ -295,14 +340,14 @@ Human output lists each file that changed or needs attention, then a summary nam
 from, then the commands to keep or discard local changes.
 
 `--json` prints one envelope (this replaced the earlier bare array), also when `get` cannot start (not in a project,
-invalid configuration): then `files` is empty, `outcome` is `failed`, `problem` says why, and `on_conflict`/`source`
+invalid configuration): then `files` is empty, `outcome` is `failed`, `error` says why, and `on_conflict`/`source`
 are null.
 
 ```json
 {"v": 1, "command": "get", "outcome": "aborted", "dry_run": false,
  "on_conflict": "abort", "source": "default",
- "counts": {"restored": 0, "replaced": 0, "unchanged": 1, "skipped": 0, "not_run": 2, "failed": 0, "would_restore": 0, "would_replace": 0},
- "problem": null,
+ "counts": {"total": 3, "succeeded": 1, "restored": 0, "replaced": 0, "unchanged": 1, "skipped": 0, "not_run": 2, "failed": 0, "would_restore": 0, "would_replace": 0},
+ "error": null,
  "files": [{"path": "data/b.csv", "local_path": "data/b.csv", "before": "modified", "action": "not_run",
             "satisfied": false, "size": 7, "target_hash": "…", "local_hash": "…", "stored_copy": "absent",
             "code": "local_changes", "message": "…", "hint": "keep your version: dvs add data/b.csv; …"}]}
@@ -314,7 +359,13 @@ are null.
 - `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run`, `failed`, `would_restore`, `would_replace`.
 - `code`: `local_changes`, `unknown_local`, `batch_aborted`, `not_tracked`, `not_a_file`, `unsafe_path`,
   `source_missing`, `hash_mismatch`, `access_denied`, `server_unavailable`, `destination_changed`, `permission_denied`, `file_in_use`,
-  `io_error`, `bad_metadata`.
+  `io_error`, `bad_metadata`, and the other shared codes (`auth_required`, `auth_expired`, `server_too_old`,
+  `project_not_found`, `credentials_unreadable`).
+- `counts`: `total` (every row) and `succeeded` (rows at their target: restored, replaced, unchanged, and
+  would_restore/would_replace in a dry run) next to the per-action counts; `failed` is the `failed` action.
+  Skipped and `not_run` rows (held back) are in neither `succeeded` nor `failed`.
+- `bytes`: `to_transfer` is the size of every row whose local copy does not match its target (held back,
+  skipped and failed rows included), `already_stored` of the rows that match.
 
 Exit codes: `0` complete; `1` any failure or operation problem (takes priority); `3` only conflicts held files
 back; `2` usage or configuration errors.
@@ -407,6 +458,45 @@ dvs_status(
 
 Returns a data frame with one row per tracked file.
 
+### hash
+
+`hash` reports the hashes of working files, tracked or not, without needing a record: for example to check
+whether a working file is identical to some recorded version. It uses and fills the hash cache, and never
+writes the baseline or any `.dvs` record.
+
+#### CLI
+
+```shell
+❯ dvs hash --help
+Prints the hashes of files, tracked or not, using and filling the hash cache. Never changes a record or the baseline. With no paths, hashes the tracked files, like status
+
+Usage: dvs hash [OPTIONS] [PATHS]...
+
+Arguments:
+  [PATHS]...  Paths (files or directories) to hash
+
+Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+  -r, --recursive          Recursively include files in subdirectories for given directories Without this flag, directories return only their direct children
+  -g, --glob <GLOB>        
+  -h, --help               Print help
+```
+
+Selection follows `status`, plus untracked files that a path or glob names: no paths and no glob selects the
+tracked files `status` would show; a directory selects its direct children (`-r`: everything under it). A
+named path that is missing, a tracked file absent from disk, a symlink and an unreadable directory each get an
+error row; nothing selected is dropped silently. It exits `1` if any file could not be hashed.
+
+```json
+{"v": 1, "command": "hash", "outcome": "complete", "dry_run": false, "counts": {"total": 1, "succeeded": 1, "failed": 0},
+ "files": [{"path": "data/a.csv", "hashes": {"blake3": "…"}, "size": 1048576, "hash_source": "cache", "duration_ms": 0, "code": null, "message": null, "hint": null}]}
+```
+
+`hash_source` is `cache` or `computed`; `hashes`, `size` and `hash_source` match status's `working` object.
+`duration_ms` is the time spent hashing that file, `null` for a row that did no work.
+
 ## Internals
 
 ### Metadata file format
@@ -465,7 +555,7 @@ Every `add` and `init` operation is logged to an append-only audit file (`audit.
 Each entry records:
 
 - `operation_id`: a UUID grouping all files from one operation
-- `timestamp`: unix seconds
+- `timestamp`: unix seconds (`dvs history --json` reports it as RFC 3339 UTC)
 - `user`: the system username of whoever ran the command
 - `action`: either `add` or `init`
 
@@ -516,7 +606,7 @@ each path. Unlike the hash cache, `status` never writes it. Deleting it is safe;
 
 ### Parallelism
 
-`add`, `get`, and `status` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
+`add`, `get`, `status` and `hash` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
 variable to control the thread count, if the CLI and R package have not set the number
 of threads directly. If it is unset, the default is `min(available_parallelism * 4, 16)`.
 If it is set to a positive integer, the override is capped at 32. In both cases the final thread count is

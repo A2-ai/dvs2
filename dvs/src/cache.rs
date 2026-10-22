@@ -230,6 +230,17 @@ pub(crate) fn record_baseline(
     }
 }
 
+/// Where a file's hashes came from. Serialized as status's
+/// `working.hash_source` and `dvs hash`'s `hash_source`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HashSource {
+    /// The cache had them for this exact stat
+    Cache,
+    /// The file was read and hashed (and the cache filled)
+    Computed,
+}
+
 /// Compute hashes for a file, using the cache when possible.
 ///
 /// Returns `(Hashes, file_size)`.
@@ -238,6 +249,18 @@ pub fn hashes_for_file(
     relative_path: &str,
     cache: Option<&Mutex<HashCache>>,
 ) -> Result<(Hashes, u64)> {
+    hashes_for_file_with_source(full_path, relative_path, cache)
+        .map(|(hashes, size, _)| (hashes, size))
+}
+
+/// [`hashes_for_file`], also saying whether the cache answered.
+///
+/// Returns `(Hashes, file_size, source)`.
+pub fn hashes_for_file_with_source(
+    full_path: &Path,
+    relative_path: &str,
+    cache: Option<&Mutex<HashCache>>,
+) -> Result<(Hashes, u64, HashSource)> {
     let stat = FileStat::from_path(full_path)?;
 
     // Try cache lookup (brief lock)
@@ -245,7 +268,7 @@ pub fn hashes_for_file(
         match mtx.lock().unwrap().lookup(relative_path, &stat) {
             Ok(Some(hashes)) => {
                 log::debug!("Cache hit for {relative_path}");
-                return Ok((hashes, stat.size));
+                return Ok((hashes, stat.size, HashSource::Cache));
             }
             Ok(None) => {
                 log::debug!("Cache miss for {relative_path}");
@@ -266,7 +289,7 @@ pub fn hashes_for_file(
         }
     }
 
-    Ok((hashes, size))
+    Ok((hashes, size, HashSource::Computed))
 }
 
 /// Try to open the hash cache, handling corruption gracefully.
@@ -417,5 +440,20 @@ mod tests {
 
         let result = cache.lookup("nonexistent.txt", &stat).unwrap();
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn hash_source_is_computed_then_cache() {
+        let (tmp, cache) = setup_cache();
+        let file = tmp.path().join("data.txt");
+        fs::write(&file, b"content").unwrap();
+        let cache = Mutex::new(cache);
+        let (first, size, source) =
+            hashes_for_file_with_source(&file, "data.txt", Some(&cache)).unwrap();
+        assert_eq!((size, source), (7, HashSource::Computed));
+        let (second, _, source) =
+            hashes_for_file_with_source(&file, "data.txt", Some(&cache)).unwrap();
+        assert_eq!(source, HashSource::Cache);
+        assert_eq!(first, second);
     }
 }

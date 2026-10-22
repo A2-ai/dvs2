@@ -1,3 +1,7 @@
+mod common;
+
+use common::parse_stream;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
@@ -10,29 +14,6 @@ fn cli(cwd: &std::path::Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_dvs"));
     command.current_dir(cwd).env_remove("DVS_GET_ON_CONFLICT");
     command
-}
-
-fn parse_stream(bytes: &[u8], expected_exit: i32) -> Vec<Value> {
-    let events: Vec<Value> = String::from_utf8_lossy(bytes)
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("every stdout line must be JSON"))
-        .collect();
-    assert_eq!(events.first().unwrap()["type"], "operation_started");
-    assert_eq!(events.last().unwrap()["type"], "operation_finished");
-    assert_eq!(events.last().unwrap()["exit_code"], expected_exit);
-    for (seq, event) in events.iter().enumerate() {
-        assert_eq!(event["seq"], seq);
-        assert_eq!(event["v"], 1);
-        assert_eq!(event["operation_id"], events[0]["operation_id"]);
-    }
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event["type"] == "operation_finished")
-            .count(),
-        1
-    );
-    events
 }
 
 #[test]
@@ -81,7 +62,8 @@ fn terminal_result_matches_json_for_status_and_dry_run() {
         vec!["get", "--dry-run", "file with space.txt"],
     ] {
         let json_output = cli(&project).arg("--json").args(&args).output().unwrap();
-        let expected: Value = serde_json::from_slice(&json_output.stdout).unwrap();
+        // Two runs agree on everything but their timing (C2)
+        let expected = common::without_timing(serde_json::from_slice(&json_output.stdout).unwrap());
         let streamed = cli(&project)
             .arg("--emit-events")
             .args(&args)
@@ -89,11 +71,14 @@ fn terminal_result_matches_json_for_status_and_dry_run() {
             .unwrap();
         assert_eq!(streamed.status.code(), json_output.status.code());
         let events = parse_stream(&streamed.stdout, streamed.status.code().unwrap());
-        assert_eq!(events.last().unwrap()["result"], expected);
+        assert_eq!(
+            common::without_timing(events.last().unwrap()["result"].clone()),
+            expected
+        );
         let rows: Vec<_> = events
             .iter()
             .filter(|event| event["type"] == "file_result")
-            .map(|event| event["result"].clone())
+            .map(|event| common::without_timing(event["result"].clone()))
             .collect();
         assert_eq!(rows, expected["files"].as_array().unwrap().clone());
         assert!(
@@ -316,6 +301,12 @@ fn partial_add_conflicts_and_read_commands_preserve_authoritative_results() {
         let events = parse_stream(&output.stdout, 0);
         assert_eq!(events.last().unwrap()["result"]["command"], args[0]);
         assert!(events.iter().any(|event| event["type"] == "file_result"));
+        // Streamed rows carry every row's error fields, history's too (§9 rec 1)
+        for event in events.iter().filter(|event| event["type"] == "file_result") {
+            for field in ["code", "message", "hint"] {
+                assert_eq!(event["result"].get(field), Some(&Value::Null), "{event}");
+            }
+        }
     }
     std::fs::write(project.join("preview.txt"), "preview").unwrap();
     let preview = cli(&project)

@@ -236,6 +236,7 @@ pub(crate) fn dvs_add(
                 dry_run,
                 Some(&on_file_start),
             )
+            .map(|report| report.files)
         })?
     } else {
         add_files(
@@ -247,6 +248,7 @@ pub(crate) fn dvs_add(
             dry_run,
             None,
         )?
+        .files
     };
 
     Ok(miniextendr_api::serde::vec_to_dataframe(&results)?)
