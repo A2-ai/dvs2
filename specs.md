@@ -122,8 +122,8 @@ conflict markers) and `credentials_unreadable` (the store exists but cannot be r
 `not_in_project`, `invalid_configuration`, `invalid_arguments`, `no_files_selected`, `authentication_required`
 (device login needs an interactive `dvs login`), `io_error`, and `operation_failed`, the honest fallback when
 nothing more specific is known (`get` also uses it when no tracked file matched). Row codes besides the shared
-ones: `add` and `status` `file_failed` (the reason is in `message`), get's codes (see get), and `logout`
-`warnings` `revoke_failed`.
+ones: `add` `io_error` and `operation_failed` (`file_failed` if a failure has no code), `status` `file_failed`
+(the reason is in `message`), get's codes (see get), and `logout` `warnings` `revoke_failed`.
 
 `dvs info --json` finds the project from the working directory. `project_root` and `metadata_directory` are
 absolute native paths; `protocol.versions` lists the supported result versions and `protocol.capabilities`
