@@ -11,6 +11,9 @@ Codes are the API; messages are display text and may change. Clients must tolera
 additional fields and unknown codes without treating them as success. New incompatible
 semantics require a new protocol version.
 
+`--emit-events` (instead of `--json`) streams NDJSON events while the command runs and
+ends with the same result document; see [Events](#events).
+
 ## Envelope
 
 Every command result, error results included, is one object:
@@ -92,7 +95,7 @@ missing. Every row carries the same error fields:
 
 All times are RFC 3339 UTC: `started_at`/`finished_at` and history `timestamp` with
 milliseconds (the audit log on disk keeps unix seconds), a record's `add_time` as the
-record stores it.
+record stores it. The only exception is event `ts`, in unix milliseconds.
 
 `path` values are relative to the project root (`info`'s `project_root`); `get` also
 gives `local_path`, relative to the current directory.
@@ -143,12 +146,35 @@ One table for every command:
 A result written before a nonzero exit is authoritative. No result after the process
 was killed means the operation was interrupted: rescan before retrying.
 
+## Events
+
+`--emit-events` writes one JSON object per line. Every event has `v`, `operation_id`
+(`"<pid>-<nanos>"`), `seq` (0, 1, 2, ...), `type`, `ts` (unix milliseconds) and
+`elapsed_ms` (since the operation started).
+
+| type | fields |
+| --- | --- |
+| `operation_started` | `command` |
+| `waiting_for_auth` | `user_code`, `approval_url` (device login) |
+| `transfer_started` | `path`, `total_bytes` |
+| `transfer_progress` | `path`, `bytes`, `total_bytes`; at most 10 per second per transfer |
+| `transfer_finished` | `path`, `bytes`, `total_bytes`, `success`, `duration_ms` |
+| `file_result` | `result`: one row, the same shape as in the result's `files` |
+| `operation_finished` | `result` (the full result document), `exit_code`, `started_at`, `finished_at`, `duration_ms`; always last |
+
+`status` streams each `file_result` as that file's local check completes, in completion
+order; the final result's `files` keeps its own order. Other commands emit one
+`file_result` per row of their result just before `operation_finished`. Transfer events
+describe transfer work only: the result is authoritative (a transfer can succeed and the
+install still fail).
+
 ## Discovery
 
 `dvs info --json` finds the project from the working directory. `project_root` and
 `metadata_directory` are absolute native paths. `protocol.versions` lists the supported
 result versions; `protocol.capabilities` names features (`json_results`,
-`get_conflict_policy`, `connectivity_status`, `status_facts`, `availability`, `history`).
+`get_conflict_policy`, `connectivity_status`, `status_facts`, `availability`, `history`,
+`event_stream`, `device_login_events`).
 
 For a server project, `info` reports `logged_in`, `connection` (`available`,
 `unavailable`, or `unknown` when not logged in), `connection_error` (`null`, or
@@ -174,8 +200,8 @@ reports `connection: "not_applicable"`.
 Machine mode never changes stored credentials: a 401 is `auth_expired` and the token
 stays; an unparsable store is `credentials_unreadable` and stays. Only `dvs login` and
 `dvs logout` change credentials. `login --json` reports `authentication_required`
-instead of starting device login. Credentials and device secrets are never written to
-results.
+before starting device login; with `--emit-events` it emits `waiting_for_auth` instead.
+Credentials and device secrets are never written to results or events.
 
 `logout --json` deletes the local credential even if remote revocation fails. `revoked`
 is `true` for a confirmed revocation, `false` for a failed revoke call, or `null` when

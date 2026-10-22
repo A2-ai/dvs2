@@ -13,7 +13,7 @@ All configuration is handled in a `dvs.toml` config file.
 All CLI commands take a `--json` flag if you want to get JSON output.
 
 The CLI JSON protocol ([docs/cli-json.md](docs/cli-json.md)) specifies machine-readable envelopes,
-errors, exit statuses and discovery. Client read queries specify rich status facts, content availability,
+errors, exit statuses, events and discovery. Client read queries specify rich status facts, content availability,
 and history.
 
 The Rust library must not contain anything specific to the CLI or the R package: no `miniextendr-*` dependency, no `println!`/`eprintln!`/`dbg!`. It may depend on the `log` facade but must not pull in a `log` implementer. Logger setup belongs in `dvs-cli` and `dvs-rpkg`.
@@ -74,7 +74,7 @@ All input must be evaluated, and errors as well as successes must be collected a
 Error handling in CLI must be designed around the use case of being a part
 of pipelines, or non-interactive workflows. Returning error codes is necessary.
 
-##### Machine output (`--json`)
+##### Machine output (`--json`, `--emit-events`)
 
 Every `--json` result is one envelope (`v`, `command`, `outcome`, `dry_run`, `counts`, `error`, `files`, ...),
 error envelopes included, and carries its timing: `started_at` and `finished_at` (RFC 3339 UTC
@@ -82,7 +82,7 @@ with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and `duration_ms`. `add` and
 `bytes: {total, to_transfer, already_stored, transferred}` (dry runs too; `transferred` is what actually moved,
 so `0` in a dry run; `to_transfer + already_stored = total`). Every time in JSON output is RFC 3339 UTC:
 `started_at`/`finished_at` and history's `timestamp` with milliseconds (the audit log on disk keeps unix
-seconds), a record's `add_time` as the record stores it.
+seconds), a record's `add_time` as the record stores it. The only exception is event `ts` (unix milliseconds).
 
 Errors have one shape. The envelope's `error` is `null` or `{code, message, hint}`; every row of every command
 has `code`, `message` and `hint` (all `null` on success; `hint` is `null` where there is none). Rows have fixed
@@ -111,6 +111,13 @@ purpose.
 
 A server URL may carry a path prefix (a proxy, `https://host/dvs`, with or without the trailing slash): every
 request, login included, goes under it.
+
+`--emit-events` writes NDJSON: `operation_started`, `waiting_for_auth` (device login), `transfer_started`,
+`transfer_progress`, `transfer_finished` (with `duration_ms`), `file_result` (`status` streams each row as its
+local check completes, in completion order; other commands emit one per result row just before the end; the
+same shape as in the result), and `operation_finished` (`result`, `exit_code`, `started_at`, `finished_at`,
+`duration_ms`). Every event has `v`, `operation_id`, `seq`, `type`, `ts` (unix milliseconds) and `elapsed_ms`
+(since the operation started).
 
 #### R package
 
@@ -464,6 +471,7 @@ Arguments:
 
 Options:
       --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
       --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
   -r, --recursive          Recursively include files in subdirectories for given directories Without this flag, directories return only their direct children
   -g, --glob <GLOB>        
