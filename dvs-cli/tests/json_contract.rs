@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::path::Path;
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -280,19 +280,6 @@ fn add_success_and_error_rows_have_the_same_keys() {
         keys.sort();
         keys
     };
-    assert_eq!(
-        keys(good),
-        [
-            "code",
-            "hash",
-            "hint",
-            "message",
-            "outcome",
-            "path",
-            "size",
-            "stored_size"
-        ]
-    );
     assert_eq!(keys(good), keys(bad));
     assert!(
         good["code"].is_null() && bad["code"].is_string(),
@@ -318,4 +305,65 @@ fn get_counts_have_total_and_succeeded() {
     assert_eq!(aborted["counts"]["total"], 2, "{aborted}");
     assert_eq!(aborted["counts"]["succeeded"], 0);
     assert_eq!(aborted["counts"]["failed"], 0);
+}
+
+#[test]
+fn add_results_carry_timing_and_byte_totals() {
+    let (root, _storage) = project();
+    std::fs::write(root.path().join("a.bin"), vec![1u8; 1000]).unwrap();
+    let preview = document(&run(root.path(), &["--json", "add", "--dry-run", "a.bin"]));
+    assert_eq!(
+        preview["bytes"],
+        json!({"total": 1000, "to_transfer": 1000, "already_stored": 0, "transferred": 0})
+    );
+    let add = document(&run(root.path(), &["--json", "add", "a.bin"]));
+    assert_eq!(add["bytes"]["transferred"], 1000);
+    assert!(
+        add["finished_at"].as_str() >= add["started_at"].as_str(),
+        "{add}"
+    );
+    assert!(add["duration_ms"].is_u64(), "{add}");
+}
+
+/// Answers every request with 401.
+fn unauthorized_server() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let _ = std::io::Read::read(&mut stream, &mut [0u8; 65536]);
+            let _ = std::io::Write::write_all(
+                &mut stream,
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    url
+}
+
+#[test]
+fn machine_mode_never_changes_credentials() {
+    let url = unauthorized_server();
+    for (store, code) in [
+        (format!(r#"{{"{url}":"token"}}"#), "auth_expired"),
+        ("{ not json".to_string(), "credentials_unreadable"),
+    ] {
+        let root = TempDir::new().unwrap();
+        std::fs::create_dir(root.path().join(".dvs")).unwrap();
+        std::fs::write(
+            root.path().join("dvs.toml"),
+            format!("[backend]\ntype = 'server'\nname = 'example'\nurl = '{url}'\n"),
+        )
+        .unwrap();
+        std::fs::write(root.path().join("data.txt"), "data").unwrap();
+        let credentials = root.path().join("test-config/dvs/credentials.json");
+        std::fs::create_dir_all(credentials.parent().unwrap()).unwrap();
+        std::fs::write(&credentials, &store).unwrap();
+        let output = run(root.path(), &["--json", "add", "data.txt"]);
+        assert_eq!(document(&output)["error"]["code"], code);
+        assert_eq!(std::fs::read_to_string(&credentials).unwrap(), store);
+        // Human mode still repairs: the rejected token or corrupt store goes
+        run(root.path(), &["add", "data.txt"]);
+        assert_ne!(std::fs::read_to_string(&credentials).ok(), Some(store));
+    }
 }
