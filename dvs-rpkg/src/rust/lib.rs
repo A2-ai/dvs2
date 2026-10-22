@@ -334,7 +334,7 @@ pub(crate) fn dvs_status(
             &dvs_paths,
         ))
     };
-    let mut statuses = dvs::inspect::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
+    let mut statuses = dvs::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
     if !show_all {
         statuses.retain(|row| {
             row.error.is_some() || status.iter().any(|c| row.status == Some(Status::from(*c)))
@@ -424,8 +424,8 @@ struct FileMetadataView<'a> {
     message: Option<&'a str>,
 }
 
-impl<'a> From<&'a dvs::inspect::StatusFacts> for FileStatusView<'a> {
-    fn from(row: &'a dvs::inspect::StatusFacts) -> Self {
+impl<'a> From<&'a dvs::StatusFacts> for FileStatusView<'a> {
+    fn from(row: &'a dvs::StatusFacts) -> Self {
         FileStatusView {
             path: row.path.as_path(),
             status: row.status_name(),

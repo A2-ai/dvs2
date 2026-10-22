@@ -10,7 +10,6 @@ mod gitignore;
 pub mod globbing;
 mod hashes;
 pub mod init;
-pub mod inspect;
 pub mod operation;
 pub mod paths;
 pub mod progress;
@@ -25,6 +24,7 @@ pub use files::get::{
     StoredCopy, get_files, shell_path,
 };
 pub use files::metadata::FileMetadata;
+pub use files::status::{StatusFacts, WorkingCopy, inspect_status, inspect_status_with_callback};
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use operation::{ByteTotals, Counts};
