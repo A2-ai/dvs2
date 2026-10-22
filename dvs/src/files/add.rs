@@ -54,7 +54,6 @@ impl OperationRow for AddResult {
 pub struct AddReport {
     pub files: Vec<AddResult>,
     pub bytes: ByteTotals,
-    /// The cancel flag was set when the add finished
     pub cancelled: bool,
 }
 
@@ -77,7 +76,6 @@ pub enum AddDetail {
         code: AddErrorCode,
         error: String,
     },
-    /// Not started because the operation was cancelled: no upload, no record
     Cancelled {
         message: String,
     },
