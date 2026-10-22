@@ -786,7 +786,18 @@ fn try_main(cli: Cli) -> Result<()> {
             let config = find_config(&current_dir)?;
 
             if let Some(url) = config.server_url() {
-                let Some(token) = get_token(url)? else {
+                let token = match get_token(url) {
+                    // Nothing to revoke: reset the unreadable store
+                    Err(e)
+                        if dvs::backend_error_code(&e)
+                            == Some(ErrorCode::CredentialsUnreadable) =>
+                    {
+                        delete_token(url)?;
+                        None
+                    }
+                    token => token?,
+                };
+                let Some(token) = token else {
                     if cli.json {
                         let mut result = output::envelope("logout", false);
                         result["revoked"] = json!(null);

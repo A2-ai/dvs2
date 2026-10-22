@@ -65,15 +65,12 @@ fn write_store(path: &Path, contents: &str) -> Result<()> {
 }
 
 /// Reads the token store from `path`; none yet is an empty store. An
-/// unreadable store is an error, never deleted: the user fixes or removes it.
+/// unreadable store is an error: only `dvs login` and `dvs logout` replace it.
 fn read_store(path: &Path) -> Result<TokenStore> {
     let unreadable = |reason: String| {
         Error::new(
             ErrorCode::CredentialsUnreadable,
-            format!(
-                "{} {reason}; fix or remove it, then run `dvs login`",
-                path.display()
-            ),
+            format!("{} {reason}; run `dvs login` to replace it", path.display()),
         )
     };
     let file = match fs::File::open(path) {
@@ -87,7 +84,8 @@ fn read_store(path: &Path) -> Result<TokenStore> {
 
 pub fn store_token(url: &Url, token: &str) -> Result<()> {
     let path = get_token_store_path()?;
-    let mut store = read_store(&path)?;
+    // Logging in is the user's way to replace an unreadable store
+    let mut store = read_store(&path).unwrap_or_default();
     store.insert(url.to_string(), token.to_string());
     let json = serde_json::to_string_pretty(&store)?;
     write_store(&path, &json)?;
@@ -108,7 +106,8 @@ pub fn get_token(url: &Url) -> Result<Option<String>> {
 pub fn delete_token(url: &Url) -> Result<bool> {
     let path = get_token_store_path()?;
     if path.exists() {
-        let mut store = read_store(&path)?;
+        // Logging out resets an unreadable store
+        let mut store = read_store(&path).unwrap_or_default();
         let old = store.remove(url.as_str());
         let json = serde_json::to_string_pretty(&store)?;
         fs::write(path, json)?;
@@ -230,5 +229,16 @@ mod tests {
             Some(ErrorCode::CredentialsUnreadable)
         );
         assert!(path.exists());
+    }
+
+    #[test]
+    fn login_replaces_an_unparsable_store() {
+        let path = get_token_store_path().unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "not json").unwrap();
+        let url = Url::parse("https://h/").unwrap();
+        store_token(&url, "t").unwrap();
+        assert_eq!(get_token(&url).unwrap().as_deref(), Some("t"));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

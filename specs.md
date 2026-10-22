@@ -142,8 +142,9 @@ else failed. A result written before a nonzero exit is authoritative. No result 
 means the operation was interrupted: rescan before retrying.
 
 dvs never deletes or changes stored credentials on its own, in any mode: a 401 is `auth_expired` and the token
-stays (run `dvs login`); an unreadable credentials store is `credentials_unreadable` and stays (fix or remove
-it, then run `dvs login`). Only `dvs login` and `dvs logout` change credentials. `login --json` reports
+stays (run `dvs login`); an unreadable credentials store is `credentials_unreadable` and stays. Only `dvs login`
+and `dvs logout` change credentials: login replaces an unreadable store with a fresh one, and logout treats it
+as nothing to revoke and resets it. `login --json` reports
 `auth_required` instead of starting device login. Credentials and device secrets are never written to results.
 `logout --json` deletes the local credential even if remote revocation fails: `revoked` is `true` for a
 confirmed revocation, `false` for a failed revoke call, `null` when there was no token; `warnings` is always an
