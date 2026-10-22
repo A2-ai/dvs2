@@ -232,6 +232,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rows_get_a_code_and_every_error_field() {
+        let (files, failed) = file_results([
+            (json!({"path": "ok"}), false),
+            (json!({"path": "bad", "message": "broken"}), true),
+            (json!({"path": "coded", "code": "io_error"}), true),
+        ]);
+        assert_eq!(failed, 2);
+        assert_eq!(
+            files[0],
+            json!({"path": "ok", "code": null, "message": null, "hint": null})
+        );
+        assert_eq!(files[1]["code"], "file_failed");
+        assert_eq!(files[1]["message"], "broken");
+        assert_eq!(files[2]["code"], "io_error");
+        let result = envelope("add", false, files, failed);
+        assert_eq!(
+            result["counts"],
+            json!({"total": 3, "succeeded": 1, "failed": 2})
+        );
+        assert!(result.get("problem").is_none());
+    }
+
+    #[test]
     fn cancelled_rows_count_in_total_only() {
         let (files, failed) = file_results([
             (json!({"path": "ok"}), false),

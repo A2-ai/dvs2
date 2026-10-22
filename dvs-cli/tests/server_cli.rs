@@ -541,26 +541,33 @@ fn conflicted_records_keep_bad_metadata_in_get_and_status() {
 /// C5: machine mode leaves a rejected token in place and reports it.
 #[test]
 fn machine_mode_keeps_a_rejected_token() {
-    let stub = Stub::start();
-    let sandbox = server_project(&stub);
-    added(&sandbox, &["tracked.txt"]);
-    access_fails(&stub, 401, "");
-    sandbox.write("data.txt", "data");
-    let before = sandbox.credentials().unwrap();
-    for args in [
-        vec!["--json", "add", "data.txt"],
-        vec!["--json", "add", "--dry-run", "data.txt"],
-        vec!["--json", "get", "tracked.txt"],
-        vec!["--json", "info"],
-    ] {
-        let output = sandbox.run(&args);
-        assert_eq!(output.status.code(), Some(1), "{args:?}");
-        let result = document(&output);
-        let code = result["error"]["code"]
-            .as_str()
-            .or(result["files"][0]["code"].as_str());
-        assert_eq!(code, Some("auth_expired"), "{result}");
-        assert_eq!(sandbox.credentials().unwrap(), before, "{args:?}");
+    // --emit-events is machine mode too
+    for flag in ["--json", "--emit-events"] {
+        let stub = Stub::start();
+        let sandbox = server_project(&stub);
+        added(&sandbox, &["tracked.txt"]);
+        access_fails(&stub, 401, "");
+        sandbox.write("data.txt", "data");
+        let before = sandbox.credentials().unwrap();
+        for args in [
+            vec![flag, "add", "data.txt"],
+            vec![flag, "add", "--dry-run", "data.txt"],
+            vec![flag, "get", "tracked.txt"],
+            vec![flag, "info"],
+        ] {
+            let output = sandbox.run(&args);
+            assert_eq!(output.status.code(), Some(1), "{args:?}");
+            let result = if flag == "--json" {
+                document(&output)
+            } else {
+                parse_stream(&output.stdout, 1).last().unwrap()["result"].clone()
+            };
+            let code = result["error"]["code"]
+                .as_str()
+                .or(result["files"][0]["code"].as_str());
+            assert_eq!(code, Some("auth_expired"), "{args:?}: {result}");
+            assert_eq!(sandbox.credentials().unwrap(), before, "{args:?}");
+        }
     }
     // A 401 on a file's upload too
     let stub = Stub::start();
@@ -570,7 +577,9 @@ fn machine_mode_keeps_a_rejected_token() {
     let before = sandbox.credentials().unwrap();
     let output = sandbox.run(&["--json", "add", "data.txt"]);
     assert_eq!(output.status.code(), Some(1));
-    assert_eq!(document(&output)["outcome"], "failed");
+    let result = document(&output);
+    assert_eq!(result["outcome"], "failed");
+    assert_eq!(result["files"][0]["code"], "auth_expired", "{result}");
     assert_eq!(sandbox.credentials().unwrap(), before);
 }
 
