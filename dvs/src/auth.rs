@@ -12,6 +12,7 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::backends::server::join_url;
 use crate::utils::http_agent;
 
 type TokenStore = HashMap<String, String>;
@@ -108,13 +109,13 @@ pub struct DeviceAuthorizationResponse {
 }
 
 pub fn get_client_approve_url(base_url: &Url, user_code: &str) -> Result<Url> {
-    let mut u = base_url.join("/device/approve")?;
+    let mut u = join_url(base_url, "device/approve")?;
     u.set_query(Some(&format!("user_code={user_code}")));
     Ok(u)
 }
 
 pub fn initiate_device_approval(base_url: &Url) -> Result<DeviceAuthorizationResponse> {
-    let url = base_url.join("/api/oauth/device/authorize")?;
+    let url = join_url(base_url, "api/oauth/device/authorize")?;
     let mut resp = http_agent().post(url.as_str()).send_empty()?;
     if !resp.status().is_success() {
         bail!("Server error: {}", resp.status());
@@ -134,7 +135,7 @@ pub struct TokenResponse {
 }
 
 pub fn query_for_token(base_url: &Url, device_code: &str) -> Result<Option<TokenResponse>> {
-    let url = base_url.join("/api/oauth/token")?;
+    let url = join_url(base_url, "api/oauth/token")?;
     let mut resp = http_agent().post(url.as_str()).send_json(TokenPayload {
         device_code: device_code.to_string(),
     })?;
@@ -173,7 +174,7 @@ pub fn poll_for_token(base_url: &Url, device_code: &str) -> Result<TokenResponse
 
 /// Ask the server to revoke `token` so it stops working everywhere, not just on this machine.
 pub fn revoke_token(base_url: &Url, token: &str) -> Result<()> {
-    let url = base_url.join("/api/oauth/token")?;
+    let url = join_url(base_url, "api/oauth/token")?;
     let resp = http_agent()
         .delete(url.as_str())
         .header("authorization", format!("Bearer {token}"))
@@ -182,4 +183,61 @@ pub fn revoke_token(base_url: &Url, token: &str) -> Result<()> {
         bail!("Server error: {}", resp.status());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod readonly_tests {
+    use super::*;
+    use crate::backends::server::test_http::stub;
+
+    #[test]
+    fn the_approve_url_keeps_the_proxy_prefix() {
+        for base in ["https://h/dvs", "https://h/dvs/"] {
+            let url = get_client_approve_url(&Url::parse(base).unwrap(), "ABCD").unwrap();
+            assert_eq!(url.as_str(), "https://h/dvs/device/approve?user_code=ABCD");
+        }
+    }
+
+    #[test]
+    fn login_and_logout_requests_keep_the_proxy_prefix() {
+        for prefix in ["/dvs", "/dvs/"] {
+            let (base, handle) = stub(prefix, 200, r#"{"device_code":"d","user_code":"u"}"#);
+            initiate_device_approval(&base).unwrap();
+            assert!(
+                handle
+                    .join()
+                    .unwrap()
+                    .starts_with("POST /dvs/api/oauth/device/authorize ")
+            );
+
+            let (base, handle) = stub(prefix, 200, r#"{"access_token":"t"}"#);
+            assert!(query_for_token(&base, "d").unwrap().is_some());
+            assert!(
+                handle
+                    .join()
+                    .unwrap()
+                    .starts_with("POST /dvs/api/oauth/token ")
+            );
+
+            let (base, handle) = stub(prefix, 204, "");
+            revoke_token(&base, "t").unwrap();
+            assert!(
+                handle
+                    .join()
+                    .unwrap()
+                    .starts_with("DELETE /dvs/api/oauth/token ")
+            );
+        }
+    }
+
+    #[test]
+    fn a_non_base_server_url_is_an_error_not_a_panic() {
+        for base in ["foo:bar", "mailto:x@y"] {
+            let url = Url::parse(base).unwrap();
+            assert!(get_client_approve_url(&url, "ABCD").is_err(), "{base}");
+            assert!(initiate_device_approval(&url).is_err(), "{base}");
+            assert!(query_for_token(&url, "d").is_err(), "{base}");
+            assert!(revoke_token(&url, "t").is_err(), "{base}");
+        }
+    }
 }

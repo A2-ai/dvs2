@@ -39,6 +39,28 @@ use crate::auth::{delete_token, get_token};
 use crate::utils::http_agent;
 use crate::{Compression, Hashes, ProjectPath, RetrieveRequest, StoreRequest, StoreResult};
 
+/// Join `relative` (no leading slash, e.g. `api/init`) onto the server URL
+/// as a path *under* it. Every server and auth URL goes through here so a
+/// proxy prefix survives: `https://h/dvs` and `https://h/dvs/` both give
+/// `https://h/dvs/api/init`. `Url::join` alone drops the prefix for a
+/// leading-slash path, and drops the last segment when the base has no
+/// trailing slash.
+///
+/// A URL that cannot be a base (`mailto:x@y`, `foo:bar`) has no path to put
+/// anything under: that is an error for the caller to report, never a panic.
+pub(crate) fn join_url(base: &Url, relative: &str) -> anyhow::Result<Url> {
+    debug_assert!(!relative.starts_with('/'), "{relative} must be relative");
+    if base.cannot_be_a_base() {
+        bail!("{base} cannot be used as a dvs server URL");
+    }
+    let mut base = base.clone();
+    if !base.path().ends_with('/') {
+        base.set_path(&format!("{}/", base.path()));
+    }
+    base.join(relative)
+        .map_err(|e| anyhow::anyhow!("{base} cannot be used as a dvs server URL: {e}"))
+}
+
 /// Wraps a reader and reports bytes as they're read, driving the `on_bytes`
 /// progress callback. Used to stream an upload body while updating a progress bar.
 struct CountingReader<'a, R> {
@@ -146,38 +168,32 @@ impl ServerBackend {
         }
     }
 
-    fn init_url(&self) -> Url {
-        self.url.join("/api/init").unwrap()
+    fn init_url(&self) -> anyhow::Result<Url> {
+        join_url(&self.url, "api/init")
     }
 
-    fn project_url(&self) -> Url {
-        self.url
-            .join(&format!("api/project/{}", self.name,))
-            .unwrap()
+    fn project_url(&self) -> anyhow::Result<Url> {
+        join_url(&self.url, &format!("api/project/{}", self.name))
     }
 
-    fn blob_url(&self, hash: &str) -> Url {
-        self.url
-            .join(&format!("api/{}/blobs/{hash}", self.name))
-            .unwrap()
+    fn blob_url(&self, hash: &str) -> anyhow::Result<Url> {
+        self.read_url(&format!("blobs/{hash}"))
     }
 
-    fn manifest_url(&self) -> Url {
-        self.url
-            .join(&format!("api/{}/manifest", self.name))
-            .unwrap()
+    fn manifest_url(&self) -> anyhow::Result<Url> {
+        self.read_url("manifest")
     }
 
-    fn access_url(&self) -> Url {
-        self.url
-            .join(&format!("/api/{}/access", self.name))
-            .unwrap()
+    fn access_url(&self) -> anyhow::Result<Url> {
+        self.read_url("access")
     }
 
-    fn history_url(&self) -> Url {
-        self.url
-            .join(&format!("/api/{}/history", self.name))
-            .unwrap()
+    fn history_url(&self) -> anyhow::Result<Url> {
+        self.read_url("history")
+    }
+
+    fn read_url(&self, endpoint: &str) -> anyhow::Result<Url> {
+        join_url(&self.url, &format!("api/{}/{}", self.name, endpoint))
     }
 
     fn bearer(&self) -> anyhow::Result<String> {
@@ -219,7 +235,7 @@ impl ServerBackend {
         let Some(group) = self.group.clone() else {
             bail!("A group is required to create a project on the server");
         };
-        let url = self.init_url();
+        let url = self.init_url()?;
         let payload = InitPayload {
             name: self.name.clone(),
             group,
@@ -246,7 +262,7 @@ impl ServerBackend {
     }
 
     pub fn attach(&self) -> anyhow::Result<()> {
-        let url = self.project_url();
+        let url = self.project_url()?;
         let mut resp = http_agent()
             .get(url.as_str())
             .header("authorization", self.bearer()?)
@@ -268,7 +284,7 @@ impl ServerBackend {
     /// What the current user can do on the project. `None` when they are not a member.
     pub fn access(&self) -> anyhow::Result<Option<AccessResponse>> {
         let mut resp = http_agent()
-            .get(self.access_url().as_str())
+            .get(self.access_url()?.as_str())
             .header("authorization", self.bearer()?)
             .call()
             .map_err(|e| self.unreachable(e))?;
@@ -297,7 +313,7 @@ impl ServerBackend {
     /// answers with the hashes it does not have, which are the only ones to `store`.
     pub fn manifest(&self, manifest: &UploadManifest) -> anyhow::Result<UploadManifestResponse> {
         let mut resp = http_agent()
-            .post(self.manifest_url().as_str())
+            .post(self.manifest_url()?.as_str())
             .header("authorization", self.bearer()?)
             .send_json(manifest)?;
 
@@ -317,7 +333,7 @@ impl ServerBackend {
     pub fn store(&self, req: StoreRequest<'_>) -> anyhow::Result<StoreResult> {
         let mut file = CountingReader::new(fs::File::open(req.source)?, req.on_bytes);
 
-        let mut url = self.blob_url(req.hashes.get_blake3());
+        let mut url = self.blob_url(req.hashes.get_blake3())?;
         url.query_pairs_mut()
             .append_pair("operation_id", &req.operation_id.to_string());
         let mut resp = http_agent()
@@ -347,7 +363,7 @@ impl ServerBackend {
     }
 
     pub fn retrieve(&self, req: RetrieveRequest<'_>) -> anyhow::Result<bool> {
-        let mut url = self.blob_url(req.hashes.get_blake3());
+        let mut url = self.blob_url(req.hashes.get_blake3())?;
         url.query_pairs_mut()
             .append_pair("path", req.path.as_str())
             .append_pair("operation_id", &req.operation_id.to_string());
@@ -385,7 +401,7 @@ impl ServerBackend {
     }
 
     pub fn exists(&self, hashes: &Hashes) -> anyhow::Result<bool> {
-        let url = self.blob_url(hashes.get_blake3());
+        let url = self.blob_url(hashes.get_blake3())?;
 
         match http_agent()
             .head(url.as_str())
@@ -410,7 +426,7 @@ impl ServerBackend {
     }
 
     pub fn get_audit_entries(&self, files: &[PathBuf]) -> anyhow::Result<Vec<AuditEntry>> {
-        let url = self.history_url();
+        let url = self.history_url()?;
 
         let mut paths = Vec::with_capacity(files.len());
         for p in files {
@@ -434,6 +450,223 @@ impl ServerBackend {
                 "history failed ({code}): {}",
                 resp.body_mut().read_to_string().unwrap_or_default()
             ),
+        }
+    }
+}
+
+/// HTTP stubs for unit tests that talk to a server (here and in `auth`).
+#[cfg(test)]
+pub(crate) mod test_http {
+    use std::io::{Read, Write};
+    use url::Url;
+
+    /// One-shot HTTP stub at `http://addr<prefix>`: answers the first
+    /// request with `status` and `body`, and hands back the request line
+    /// (`METHOD /path ...`).
+    pub(crate) fn stub(
+        prefix: &str,
+        status: u16,
+        body: &'static str,
+    ) -> (Url, std::thread::JoinHandle<String>) {
+        respond(
+            prefix,
+            format!(
+                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    }
+
+    /// One-shot stub that answers the first request with the raw bytes of
+    /// `response`, for answers `stub` cannot express (a truncated body).
+    pub(crate) fn respond(
+        prefix: &str,
+        response: String,
+    ) -> (Url, std::thread::JoinHandle<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            // Read the whole request so the client never sees a reset
+            // mid-send: up to the end of a Content-Length or chunked body.
+            // A client that gives up mid-request (a failing upload source)
+            // ends the request early; that is not the stub's failure.
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 8192];
+            loop {
+                let text = String::from_utf8_lossy(&request).to_string();
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let head = text[..end].to_ascii_lowercase();
+                    let length = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .map(|v| v.trim().parse::<usize>().unwrap());
+                    let done = match length {
+                        Some(length) => request.len() >= end + 4 + length,
+                        None if head.contains("transfer-encoding: chunked") => {
+                            text.ends_with("0\r\n\r\n")
+                        }
+                        None => true,
+                    };
+                    if done {
+                        break;
+                    }
+                }
+                match stream.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => request.extend_from_slice(&buffer[..count]),
+                }
+            }
+            let _ = stream.write_all(response.as_bytes());
+            String::from_utf8_lossy(&request)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        });
+        (
+            Url::parse(&format!("http://{address}{prefix}")).unwrap(),
+            handle,
+        )
+    }
+}
+
+#[cfg(test)]
+mod readonly_tests {
+    use super::*;
+
+    /// One-shot HTTP stub under the `/proxy` prefix, see [`test_http::stub`].
+    fn stub(status: u16, body: &'static str) -> (Url, std::thread::JoinHandle<String>) {
+        test_http::stub("/proxy", status, body)
+    }
+
+    fn server_at(url: Url) -> ServerBackend {
+        let server = ServerBackend::new("project".into(), Some("group".into()), url);
+        server.access_token.set(Some("test-token".into())).unwrap();
+        server
+    }
+
+    fn hashes() -> Hashes {
+        Hashes {
+            blake3: "a".repeat(64),
+            md5: None,
+        }
+    }
+
+    /// `s.store` of `source` as the project file `a`.
+    fn store_from(s: &ServerBackend, source: &std::path::Path) -> anyhow::Result<StoreResult> {
+        let hashes = hashes();
+        let path = ProjectPath::from_path(std::path::Path::new("a")).unwrap();
+        s.store(StoreRequest::new_local(
+            &hashes,
+            source,
+            path,
+            Compression::Zstd,
+        ))
+    }
+
+    /// `s.retrieve` of the project file `a` into `target`.
+    fn retrieve_to(s: &ServerBackend, target: &std::path::Path) -> anyhow::Result<bool> {
+        let hashes = hashes();
+        let path = ProjectPath::from_path(std::path::Path::new("a")).unwrap();
+        s.retrieve(RetrieveRequest::new_local(
+            &hashes,
+            target,
+            path,
+            Compression::Zstd,
+        ))
+    }
+
+    fn manifest() -> UploadManifest {
+        UploadManifest {
+            operation_id: uuid::Uuid::nil(),
+            message: None,
+            entries: Vec::new(),
+            git_branch: None,
+            git_commit: None,
+        }
+    }
+
+    #[test]
+    fn every_server_url_keeps_the_proxy_prefix_with_or_without_trailing_slash() {
+        for base in ["https://h/dvs", "https://h/dvs/"] {
+            let server = ServerBackend::new("project".into(), None, Url::parse(base).unwrap());
+            let hash = "a".repeat(64);
+            for (url, expected) in [
+                (
+                    server.init_url().unwrap(),
+                    "https://h/dvs/api/init".to_string(),
+                ),
+                (
+                    server.project_url().unwrap(),
+                    "https://h/dvs/api/project/project".into(),
+                ),
+                (
+                    server.blob_url(&hash).unwrap(),
+                    format!("https://h/dvs/api/project/blobs/{hash}"),
+                ),
+                (
+                    server.manifest_url().unwrap(),
+                    "https://h/dvs/api/project/manifest".into(),
+                ),
+                (
+                    server.access_url().unwrap(),
+                    "https://h/dvs/api/project/access".into(),
+                ),
+                (
+                    server.history_url().unwrap(),
+                    "https://h/dvs/api/project/history".into(),
+                ),
+                (
+                    server.read_url("history").unwrap(),
+                    "https://h/dvs/api/project/history".into(),
+                ),
+            ] {
+                assert_eq!(url.as_str(), expected, "base {base}");
+            }
+        }
+        // And a bare host still lands at the root
+        let server = ServerBackend::new("p".into(), None, Url::parse("https://h").unwrap());
+        assert_eq!(server.init_url().unwrap().as_str(), "https://h/api/init");
+    }
+
+    #[test]
+    fn requests_go_under_the_proxy_prefix() {
+        let (url, handle) = stub(200, "{\"missing\":[],\"compression\":\"zstd\"}");
+        server_at(url).manifest(&manifest()).unwrap();
+        assert!(
+            handle
+                .join()
+                .unwrap()
+                .starts_with("POST /proxy/api/project/manifest ")
+        );
+        let (url, handle) = stub(201, "");
+        assert!(!server_at(url).init(Compression::Zstd).unwrap());
+        assert!(handle.join().unwrap().starts_with("POST /proxy/api/init "));
+    }
+
+    #[test]
+    fn a_non_base_server_url_is_an_error_not_a_panic() {
+        for base in ["foo:bar", "mailto:x@y"] {
+            let url = Url::parse(base).unwrap();
+            assert!(join_url(&url, "api/init").is_err(), "{base}");
+            let server = server_at(url);
+            let hashes = hashes();
+            assert!(server.init(Compression::Zstd).is_err(), "{base}");
+            assert!(server.attach().is_err(), "{base}");
+            assert!(server.access().is_err(), "{base}");
+            assert!(server.manifest(&manifest()).is_err(), "{base}");
+            assert!(server.exists(&hashes).is_err(), "{base}");
+            assert!(server.get_audit_entries(&[]).is_err(), "{base}");
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source");
+            fs::write(&source, b"content").unwrap();
+            assert!(store_from(&server, &source).is_err(), "{base}");
+            let target = temp.path().join("out");
+            assert!(retrieve_to(&server, &target).is_err(), "{base}");
         }
     }
 }
