@@ -254,6 +254,16 @@ struct HashTableRow {
 }
 
 #[derive(Tabled)]
+struct HistoryRow {
+    #[tabled(rename = "time (UTC)")]
+    time: String,
+    user: String,
+    path: String,
+    blake3: String,
+    message: String,
+}
+
+#[derive(Tabled)]
 struct StatusRow {
     path: String,
     status: String,
@@ -1106,21 +1116,37 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
             if cli.json {
                 let rows = entries.into_iter().map(output::row_error_fields).collect();
                 output::emit(output::envelope("history", false, rows, 0));
+            } else if entries.is_empty() {
+                println!("No history");
             } else {
-                for entry in entries {
-                    let action = &entry["action"]["add"];
-                    println!(
-                        "{} {} {} {}",
-                        entry["timestamp"].as_str().unwrap_or_default(),
-                        entry["user"].as_str().unwrap_or_default(),
-                        action["file"]["path"]
-                            .as_str()
-                            .unwrap_or("(project initialized)"),
-                        action["file"]["hashes"]["blake3"]
-                            .as_str()
-                            .unwrap_or_default()
-                    );
-                }
+                // Newest first; the audit log keeps whole seconds, in UTC
+                let rows: Vec<HistoryRow> = entries
+                    .iter()
+                    .rev()
+                    .map(|entry| {
+                        let add = &entry["action"]["add"];
+                        let text =
+                            |v: &serde_json::Value| v.as_str().unwrap_or_default().to_string();
+                        HistoryRow {
+                            time: text(&entry["timestamp"])
+                                .replacen('T', " ", 1)
+                                .trim_end_matches('Z')
+                                .trim_end_matches(".000")
+                                .to_string(),
+                            user: text(&entry["user"]),
+                            path: add["file"]["path"]
+                                .as_str()
+                                .unwrap_or("(project initialized)")
+                                .to_string(),
+                            blake3: text(&add["file"]["hashes"]["blake3"])
+                                .chars()
+                                .take(12)
+                                .collect(),
+                            message: text(&add["message"]),
+                        }
+                    })
+                    .collect();
+                print_table(rows);
             }
         }
         Command::Login { url: Some(url) } => {
