@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::error::{BackendError, ErrorCode};
 use crate::paths::ProjectPath;
-use crate::{Backend, Compression, DvsPaths, Hashes, Outcome, StoreRequest};
+use crate::{Backend, Compression, DvsPaths, Hashes, Outcome, StoreRequest, StoreResult};
 
 /// The dvs metadata for a given file
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -93,6 +93,28 @@ impl FileMetadata {
         relative_path: impl AsRef<Path>,
         on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
     ) -> Result<(Outcome, Option<u64>)> {
+        let (outcome, stored) = self.save_reporting(
+            operation_id,
+            source_file,
+            backend,
+            paths,
+            relative_path,
+            on_bytes,
+        )?;
+        Ok((outcome, stored.map(|res| res.stored_size)))
+    }
+
+    /// [`Self::save`], also reporting what the backend did when it stored the
+    /// file (`None` when it was already in sync and nothing was stored).
+    pub(crate) fn save_reporting(
+        &mut self,
+        operation_id: Uuid,
+        source_file: impl AsRef<Path>,
+        backend: &Backend,
+        paths: &DvsPaths,
+        relative_path: impl AsRef<Path>,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<(Outcome, Option<StoreResult>)> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
         let dvs_file_exists = dvs_file_path.is_file();
         // Only check if file exists on the server if it exists locally
@@ -126,7 +148,7 @@ impl FileMetadata {
             }
         }
 
-        let stored_size = self.store_and_write(
+        let stored = self.store_and_write_reporting(
             operation_id,
             source_file,
             backend,
@@ -134,7 +156,7 @@ impl FileMetadata {
             relative_path,
             on_bytes,
         )?;
-        Ok((Outcome::Copied, Some(stored_size)))
+        Ok((Outcome::Copied, Some(stored)))
     }
 
     /// Stores the file then writes the metadata, atomically: either both succeed or
@@ -148,6 +170,29 @@ impl FileMetadata {
         relative_path: impl AsRef<Path>,
         on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
     ) -> Result<u64> {
+        self.store_and_write_reporting(
+            operation_id,
+            source_file,
+            backend,
+            paths,
+            relative_path,
+            on_bytes,
+        )
+        .map(|res| res.stored_size)
+    }
+
+    /// [`Self::store_and_write`], returning everything the backend reported,
+    /// including whether this call created the blob (bytes actually moved) or
+    /// found it already stored.
+    pub(crate) fn store_and_write_reporting(
+        &mut self,
+        operation_id: Uuid,
+        source_file: impl AsRef<Path>,
+        backend: &Backend,
+        paths: &DvsPaths,
+        relative_path: impl AsRef<Path>,
+        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+    ) -> Result<StoreResult> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
 
         // 1. Store file to backend. The backend records the add in its audit log
@@ -174,7 +219,7 @@ impl FileMetadata {
         let metadata_res = self.write(paths, relative_path.as_ref());
 
         match (store_res, metadata_res) {
-            (Ok(res), Ok(_)) => Ok(res.stored_size),
+            (Ok(res), Ok(_)) => Ok(res),
             (Err(e), Ok(_)) => {
                 log::warn!(
                     "Storage failed, rolling back metadata for {}",

@@ -260,3 +260,51 @@ fn attach_reports_shared_codes_and_keeps_credentials_in_machine_mode() {
         assert!(!sandbox.project().join("dvs.toml").exists());
     }
 }
+
+/// C8 with a server: what is already stored is not to transfer, and only
+/// what moved is transferred.
+#[test]
+fn add_bytes_split_stored_from_uploaded_content() {
+    let stub = Stub::start();
+    let sandbox = server_project(&stub);
+    sandbox.write("old.txt", "already stored");
+    assert!(sandbox.run(&["--json", "add", "old.txt"]).status.success());
+    sandbox.write("copy.txt", "already stored");
+    sandbox.write("new.txt", "brand new");
+    for dry_run in [true, false] {
+        let mut args = vec!["--json", "add", "copy.txt", "new.txt"];
+        if dry_run {
+            args.insert(2, "--dry-run");
+        }
+        let result = document(&sandbox.run(&args));
+        assert_eq!(
+            result["bytes"],
+            serde_json::json!({
+                "total": 23,
+                "to_transfer": 9,
+                "already_stored": 14,
+                "transferred": if dry_run { 0 } else { 9 },
+            }),
+            "{result}"
+        );
+    }
+    // get: what is already in place is not to transfer
+    std::fs::remove_file(sandbox.project().join("new.txt")).unwrap();
+    for dry_run in [true, false] {
+        let mut args = vec!["--json", "get", "copy.txt", "new.txt"];
+        if dry_run {
+            args.insert(2, "--dry-run");
+        }
+        let result = document(&sandbox.run(&args));
+        assert_eq!(
+            result["bytes"],
+            serde_json::json!({
+                "total": 23,
+                "to_transfer": 9,
+                "already_stored": 14,
+                "transferred": if dry_run { 0 } else { 9 },
+            }),
+            "{result}"
+        );
+    }
+}

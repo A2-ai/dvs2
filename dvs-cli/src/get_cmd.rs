@@ -308,6 +308,7 @@ pub fn to_json(report: &GetReport) -> serde_json::Value {
         "on_conflict": report.on_conflict,
         "source": report.source,
         "counts": report.counts,
+        "bytes": report.bytes,
         "problem": report.problem,
         "files": files,
     })

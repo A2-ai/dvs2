@@ -10,6 +10,7 @@ mod gitignore;
 pub mod globbing;
 mod hashes;
 pub mod init;
+pub mod operation;
 pub mod paths;
 pub mod progress;
 pub(crate) mod utils;
@@ -17,7 +18,7 @@ pub(crate) mod utils;
 pub use backends::{Backend, RetrieveRequest, StoreRequest, StoreResult};
 pub use config::Compression;
 pub use error::{BackendError, ErrorCode, backend_error_code};
-pub use files::add::{AddDetail, AddResult, add_files};
+pub use files::add::{AddDetail, AddReport, AddResult, add_files};
 pub use files::get::{
     Action, Before, GetCode, GetCounts, GetOptions, GetOutcome, GetReport, GetRow, StoredCopy,
     get_files,
@@ -26,6 +27,7 @@ pub use files::metadata::FileMetadata;
 pub use files::status::{FileStatus, StatusDetail, get_status};
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
+pub use operation::ByteTotals;
 pub use paths::{AddPathStatus, DvsPaths, PathFilter, ProjectPath, find_repo_root};
 pub use progress::FileProgress;
 pub use utils::{format_size, set_num_threads};

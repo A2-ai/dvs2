@@ -80,6 +80,10 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
     } else {
         envelope(command, dry_run, vec![], 0)
     };
+    if command == "add" {
+        // C8: add results always carry byte totals, nothing moved here
+        value["bytes"] = json!(dvs::ByteTotals::default());
+    }
     value["outcome"] = json!("failed");
     value["problem"] = json!(format!("{error:#}"));
     value["error"] = json!({

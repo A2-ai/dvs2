@@ -382,7 +382,7 @@ fn try_main(cli: Cli) -> Result<()> {
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
 
             let on_file_start = make_progress_callback(config.progress_bytes_threshold());
-            let results = add_files(
+            let report = add_files(
                 all_paths,
                 &dvs_paths,
                 config.backend(),
@@ -395,6 +395,7 @@ fn try_main(cli: Cli) -> Result<()> {
                     None
                 },
             )?;
+            let results = &report.files;
             let has_errors = results
                 .iter()
                 .any(|r| matches!(r.detail, AddDetail::Error { .. }));
@@ -406,9 +407,11 @@ fn try_main(cli: Cli) -> Result<()> {
                     )
                 });
                 let (files, failed) = output::file_results(rows);
-                output::emit(output::envelope("add", dry_run, files, failed));
+                let mut result = output::envelope("add", dry_run, files, failed);
+                result["bytes"] = json!(report.bytes);
+                output::emit(result);
             } else {
-                for result in &results {
+                for result in results {
                     match &result.detail {
                         AddDetail::Error { error: err } => {
                             eprintln!("Error adding {}: {err}", result.path.display());

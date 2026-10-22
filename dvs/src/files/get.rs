@@ -16,6 +16,7 @@ use crate::config::{OnConflict, SettingSource};
 use crate::error::{ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::globbing::GetSelection;
+use crate::operation::ByteTotals;
 use crate::paths::ProjectPath;
 use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
@@ -260,6 +261,10 @@ pub struct GetReport {
     pub on_conflict: OnConflict,
     pub source: SettingSource,
     pub counts: GetCounts,
+    /// Byte totals (C8, K5). Not serialized here, so R output is unchanged
+    /// (K8); the CLI adds it.
+    #[serde(skip)]
+    pub bytes: ByteTotals,
     /// An operation-level problem, such as nothing matching the request
     pub problem: Option<String>,
     pub files: Vec<GetRow>,
@@ -279,6 +284,7 @@ impl GetReport {
             on_conflict,
             source,
             counts: GetCounts::default(),
+            bytes: ByteTotals::default(),
             problem: Some(problem.into()),
             files: Vec::new(),
         }
@@ -959,6 +965,19 @@ fn finish(
         };
         *slot += 1;
     }
+    // K5, K12: from the rows, the same in every ending (aborted included).
+    // `to_transfer` is every row whose local copy does not match its target,
+    // whatever then happened to it (held back, skipped, failed);
+    // `already_stored` the ones that match. It does not depend on the
+    // policy. `transferred` is the size of what was installed, so 0 in a dry
+    // run. Rows of unknown size count in none.
+    let mut bytes = ByteTotals::default();
+    for r in &files {
+        if let Some(size) = r.size {
+            let installed = matches!(r.action, Action::Restored | Action::Replaced);
+            bytes.count(size, r.before == Before::Current, installed);
+        }
+    }
     let satisfied = files.iter().filter(|r| r.satisfied).count();
     let outcome = if aborted {
         GetOutcome::Aborted
@@ -975,6 +994,7 @@ fn finish(
         on_conflict,
         source,
         counts,
+        bytes,
         problem: None,
         files,
     }
@@ -1026,7 +1046,8 @@ mod tests {
                 false,
                 None,
             )
-            .unwrap();
+            .unwrap()
+            .files;
             assert!(matches!(
                 results[0].detail,
                 crate::AddDetail::Success { .. }
@@ -1572,5 +1593,51 @@ mod tests {
         assert_eq!(access_failure(plain).0, GetCode::ServerUnavailable);
         let io: anyhow::Error = io::Error::new(io::ErrorKind::PermissionDenied, "no").into();
         assert_eq!(access_failure(io).0, GetCode::ServerUnavailable);
+    }
+
+    /// A mixed batch: restored, unchanged, skipped and untracked rows.
+    fn mixed_batch(repo: &TestRepo) {
+        repo.add("a.csv", b"aaa");
+        fs::remove_file(repo.root.join("a.csv")).unwrap();
+        repo.add("b.csv", b"bb");
+        repo.switched_branch("c.csv", b"c1", b"c2");
+        fs::write(repo.root.join("c.csv"), b"edited").unwrap();
+        repo.add("d.csv", b"dddd");
+        fs::remove_file(repo.root.join("d.csv")).unwrap();
+    }
+
+    // C8 (K5): totals are the per-row sums, dry run and real.
+    #[test]
+    fn byte_totals_match_the_rows() {
+        for dry_run in [true, false] {
+            let repo = TestRepo::new();
+            mixed_batch(&repo);
+            let report = repo.get_with(
+                &["a.csv", "b.csv", "c.csv", "d.csv"],
+                &["typo.csv"],
+                OnConflict::Skip,
+                dry_run,
+            );
+            let sum = |f: &dyn Fn(&GetRow) -> bool| -> u64 {
+                report
+                    .files
+                    .iter()
+                    .filter(|r| f(r))
+                    .filter_map(|r| r.size)
+                    .sum()
+            };
+            // K12: every file whose local copy is not its target, the
+            // skipped c (2) included.
+            let to_transfer = sum(&|r| r.before != Before::Current);
+            let bytes = report.bytes;
+            assert_eq!(bytes.total, sum(&|_| true));
+            assert_eq!(bytes.total, 11, "the untracked row has no size");
+            assert_eq!(bytes.to_transfer, to_transfer);
+            assert_eq!(bytes.to_transfer, 9);
+            assert_eq!(bytes.already_stored, sum(&|r| r.before == Before::Current));
+            assert_eq!(bytes.already_stored, bytes.total - bytes.to_transfer);
+            let moved = if dry_run { 0 } else { 7 };
+            assert_eq!(bytes.transferred, moved, "dry_run {dry_run}");
+        }
     }
 }
