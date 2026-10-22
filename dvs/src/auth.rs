@@ -17,6 +17,22 @@ use crate::utils::http_agent;
 
 type TokenStore = HashMap<String, String>;
 
+/// What dvs may do to stored credentials that turn out to be unusable.
+///
+/// Only `dvs login` and `dvs logout` change credentials on purpose; this
+/// governs every other path (server calls, `info`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CredentialPolicy {
+    /// Human mode: forget a token the server rejects (401) and delete a
+    /// credentials store that cannot be parsed, so `dvs login` starts clean.
+    #[default]
+    Repair,
+    /// Machine mode (`--json`, `--emit-events`): never modify credentials.
+    /// A 401 is reported as `auth_expired` and an unparsable store as
+    /// `credentials_unreadable`, both left in place.
+    Preserve,
+}
+
 #[cfg(not(test))]
 fn get_token_store_path() -> Result<PathBuf> {
     use etcetera::BaseStrategy;
@@ -39,14 +55,25 @@ pub(crate) mod test_store {
 
     thread_local! {
         static PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+        static NO_CONFIG_DIR: RefCell<bool> = const { RefCell::new(false) };
     }
 
     /// Point this thread's credentials store at `path`.
     pub(crate) fn set(path: &Path) {
         PATH.with(|p| *p.borrow_mut() = Some(path.to_path_buf()));
+        NO_CONFIG_DIR.with(|n| *n.borrow_mut() = false);
+    }
+
+    /// Make this thread behave as if there were no config directory, as
+    /// when etcetera cannot find a home directory.
+    pub(crate) fn no_config_dir() {
+        NO_CONFIG_DIR.with(|n| *n.borrow_mut() = true);
     }
 
     pub(crate) fn path() -> anyhow::Result<PathBuf> {
+        if NO_CONFIG_DIR.with(|n| *n.borrow()) {
+            anyhow::bail!("could not determine the home directory");
+        }
         Ok(PATH.with(|p| p.borrow().clone()).unwrap_or_else(|| {
             std::env::temp_dir()
                 .join(format!(
@@ -85,29 +112,57 @@ fn write_store(path: &Path, contents: &str) -> Result<()> {
     Ok(())
 }
 
-/// Reads the token store from `path`. If the file is corrupted, it is deleted
-/// and an empty store is returned so users can log in again.
-fn read_store(path: &Path) -> Result<TokenStore> {
-    match serde_json::from_reader(fs::File::open(path)?) {
-        Ok(store) => Ok(store),
-        Err(e) => {
-            log::warn!(
-                "Credentials store at {} is corrupted ({e}), deleting it",
-                path.display()
-            );
-            fs::remove_file(path)?;
-            Ok(TokenStore::new())
+/// Reads the token store at `path`; a missing file is an empty store.
+///
+/// A store that cannot be parsed is deleted under `Repair`, and an empty
+/// store returned so users can log in again. Under `Preserve` it is left in
+/// place and reported as `credentials_unreadable`, as is one that cannot be
+/// opened at all.
+///
+/// Under `Repair` a store whose path cannot even be looked at (a parent
+/// that is unreadable, or is a file) is an empty store too, as it was when
+/// every reader checked `path.exists()` first.
+fn read_store(path: &Path, policy: CredentialPolicy) -> Result<TokenStore> {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(TokenStore::new()),
+        Err(_) if policy == CredentialPolicy::Repair && !path.exists() => {
+            return Ok(TokenStore::new());
         }
+        Err(e) => {
+            return Err(match policy {
+                CredentialPolicy::Repair => e.into(),
+                CredentialPolicy::Preserve => BackendError::new(
+                    ErrorCode::CredentialsUnreadable,
+                    format!("{} could not be read ({e})", path.display()),
+                )
+                .into(),
+            });
+        }
+    };
+    match serde_json::from_reader(file) {
+        Ok(store) => Ok(store),
+        Err(e) => match policy {
+            CredentialPolicy::Repair => {
+                log::warn!(
+                    "Credentials store at {} is corrupted ({e}), deleting it",
+                    path.display()
+                );
+                fs::remove_file(path)?;
+                Ok(TokenStore::new())
+            }
+            CredentialPolicy::Preserve => Err(BackendError::new(
+                ErrorCode::CredentialsUnreadable,
+                format!("{} is not a valid credentials store ({e})", path.display()),
+            )
+            .into()),
+        },
     }
 }
 
 pub fn store_token(url: &Url, token: &str) -> Result<()> {
     let path = get_token_store_path()?;
-    let mut store = if path.exists() {
-        read_store(&path)?
-    } else {
-        TokenStore::new()
-    };
+    let mut store = read_store(&path, CredentialPolicy::Repair)?;
     store.insert(url.to_string(), token.to_string());
     let json = serde_json::to_string_pretty(&store)?;
     write_store(&path, &json)?;
@@ -115,20 +170,41 @@ pub fn store_token(url: &Url, token: &str) -> Result<()> {
     Ok(())
 }
 
+/// Read the token for `url`, deleting a corrupt store (`Repair`).
 pub fn get_token(url: &Url) -> Result<Option<String>> {
-    let path = get_token_store_path()?;
-    if path.exists() {
-        let store = read_store(&path)?;
-        Ok(store.get(url.as_str()).cloned())
-    } else {
-        Ok(None)
-    }
+    get_token_with(url, CredentialPolicy::Repair)
+}
+
+/// Read the token for `url` as `policy` allows: under `Repair` a corrupt
+/// store is deleted (and reads as no token), under `Preserve` it is an error
+/// coded `credentials_unreadable` and the file is left alone.
+///
+/// With no config directory there is nowhere a login could have been
+/// stored: under `Preserve` that is `auth_required`, so machine mode always
+/// gets a code; `Repair` keeps the plain error it always returned.
+pub fn get_token_with(url: &Url, policy: CredentialPolicy) -> Result<Option<String>> {
+    let path = match get_token_store_path() {
+        Ok(path) => path,
+        Err(e) if policy == CredentialPolicy::Preserve => {
+            return Err(BackendError::new(
+                ErrorCode::AuthRequired,
+                format!("Could not find the credentials store ({e}). Log in first"),
+            )
+            .into());
+        }
+        Err(e) => return Err(e),
+    };
+    token_from_store(&path, url, policy)
+}
+
+fn token_from_store(path: &Path, url: &Url, policy: CredentialPolicy) -> Result<Option<String>> {
+    Ok(read_store(path, policy)?.get(url.as_str()).cloned())
 }
 
 pub fn delete_token(url: &Url) -> Result<bool> {
     let path = get_token_store_path()?;
     if path.exists() {
-        let mut store = read_store(&path)?;
+        let mut store = read_store(&path, CredentialPolicy::Repair)?;
         let old = store.remove(url.as_str());
         let json = serde_json::to_string_pretty(&store)?;
         fs::write(path, json)?;
@@ -283,6 +359,56 @@ mod readonly_tests {
     }
 
     #[test]
+    fn corrupt_credentials_are_reported_and_preserved() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("credentials.json");
+        let original = b"corrupt credentials must remain available for diagnosis";
+        fs::write(&path, original).unwrap();
+        let error = token_from_store(&path, &url(), CredentialPolicy::Preserve).unwrap_err();
+        assert_eq!(
+            backend_error_code(&error),
+            Some(ErrorCode::CredentialsUnreadable)
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn corrupt_credentials_are_deleted_under_repair() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("credentials.json");
+        fs::write(&path, b"{ not json").unwrap();
+        assert_eq!(
+            token_from_store(&path, &url(), CredentialPolicy::Repair).unwrap(),
+            None
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn get_token_with_preserve_keeps_a_corrupt_store() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("credentials.json");
+        test_store::set(&path);
+        fs::write(&path, b"{ not json").unwrap();
+        let read = get_token_with(&url(), CredentialPolicy::Preserve);
+        assert_eq!(
+            backend_error_code(&read.unwrap_err()),
+            Some(ErrorCode::CredentialsUnreadable)
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"{ not json");
+    }
+
+    #[test]
+    fn missing_credentials_are_not_created() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("missing").join("credentials.json");
+        for policy in [CredentialPolicy::Preserve, CredentialPolicy::Repair] {
+            assert_eq!(token_from_store(&path, &url(), policy).unwrap(), None);
+        }
+        assert!(!path.parent().unwrap().exists());
+    }
+
+    #[test]
     fn login_and_logout_still_write_the_store() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("dvs").join("credentials.json");
@@ -334,17 +460,6 @@ mod readonly_tests {
     }
 
     #[test]
-    fn a_non_base_server_url_is_an_error_not_a_panic() {
-        for base in ["foo:bar", "mailto:x@y"] {
-            let url = Url::parse(base).unwrap();
-            assert!(get_client_approve_url(&url, "ABCD").is_err(), "{base}");
-            assert!(initiate_device_approval(&url).is_err(), "{base}");
-            assert!(query_for_token(&url, "d").is_err(), "{base}");
-            assert!(revoke_token(&url, "t").is_err(), "{base}");
-        }
-    }
-
-    #[test]
     fn auth_endpoint_failures_are_coded() {
         for (status, expected) in [
             (404, ErrorCode::ServerTooOld),
@@ -373,6 +488,17 @@ mod readonly_tests {
     }
 
     #[test]
+    fn a_non_base_server_url_is_an_error_not_a_panic() {
+        for base in ["foo:bar", "mailto:x@y"] {
+            let url = Url::parse(base).unwrap();
+            assert!(get_client_approve_url(&url, "ABCD").is_err(), "{base}");
+            assert!(initiate_device_approval(&url).is_err(), "{base}");
+            assert!(query_for_token(&url, "d").is_err(), "{base}");
+            assert!(revoke_token(&url, "t").is_err(), "{base}");
+        }
+    }
+
+    #[test]
     fn an_invalid_body_on_a_2xx_is_server_unavailable() {
         let (base, handle) = stub("/", 200, "this is not json");
         let error = initiate_device_approval(&base).err().unwrap();
@@ -388,5 +514,55 @@ mod readonly_tests {
             Some(ErrorCode::ServerUnavailable)
         );
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn a_store_under_a_file_reads_as_no_token_under_repair() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("not-a-directory");
+        fs::write(&file, b"").unwrap();
+        // Opening it fails with ENOTDIR, not NotFound
+        let path = file.join("credentials.json");
+        assert_eq!(
+            token_from_store(&path, &url(), CredentialPolicy::Repair).unwrap(),
+            None
+        );
+        test_store::set(&path);
+        assert_eq!(get_token(&url()).unwrap(), None);
+        // Machine mode still says something is wrong with the store
+        let error = token_from_store(&path, &url(), CredentialPolicy::Preserve).unwrap_err();
+        assert_eq!(
+            backend_error_code(&error),
+            Some(ErrorCode::CredentialsUnreadable)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_store_in_an_unreadable_directory_reads_as_no_token_under_repair() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("locked");
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("credentials.json");
+        fs::write(&path, br#"{"https://example.test/":"token"}"#).unwrap();
+        fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let read = token_from_store(&path, &url(), CredentialPolicy::Repair);
+        fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // EACCES on the directory; as root it is simply readable
+        assert!(matches!(read.unwrap().as_deref(), None | Some("token")));
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn no_config_dir_is_auth_required_under_preserve() {
+        test_store::no_config_dir();
+        let read = get_token_with(&url(), CredentialPolicy::Preserve);
+        assert_eq!(
+            backend_error_code(&read.unwrap_err()),
+            Some(ErrorCode::AuthRequired)
+        );
+        // Repair keeps the plain error it always had
+        assert_eq!(backend_error_code(&get_token(&url()).unwrap_err()), None);
     }
 }

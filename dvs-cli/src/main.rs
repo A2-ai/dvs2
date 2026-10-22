@@ -13,8 +13,8 @@ use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
 use url::Url;
 
 use dvs::auth::{
-    delete_token, get_client_approve_url, get_token, initiate_device_approval, poll_for_token,
-    revoke_token, store_token,
+    CredentialPolicy, delete_token, get_client_approve_url, get_token, get_token_with,
+    initiate_device_approval, poll_for_token, revoke_token, store_token,
 };
 use dvs::config::{Config, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
@@ -272,6 +272,15 @@ fn try_main(cli: Cli) -> Result<()> {
         set_num_threads(n);
     }
     let current_dir = std::env::current_dir()?;
+    // C5: machine mode (--json) never changes stored credentials: a rejected
+    // token or an unparsable store is reported and left in place. People get
+    // them repaired, and are told to run `dvs login`. Only login and logout
+    // change credentials on purpose.
+    let credentials = if cli.json {
+        CredentialPolicy::Preserve
+    } else {
+        CredentialPolicy::Repair
+    };
 
     match cli.command {
         Command::Init(init_cmd) => {
@@ -298,10 +307,11 @@ fn try_main(cli: Cli) -> Result<()> {
                 } => {
                     // Initializing on the server requires authentication, so run the
                     // login flow first if we don't have a token for it yet.
-                    if get_token(&url)?.is_none() {
+                    if get_token_with(&url, credentials)?.is_none() {
                         run_device_login(&url, cli.json)?;
                     }
                     let mut config = Config::new_server(name, url, Some(group));
+                    config.set_credential_policy(credentials);
                     if no_compression {
                         config.set_compression(Some(Compression::None));
                     }
@@ -336,10 +346,11 @@ fn try_main(cli: Cli) -> Result<()> {
 
             // Initializing on the server requires authentication, so run the
             // login flow first if we don't have a token for it yet.
-            if get_token(&url)?.is_none() {
+            if get_token_with(&url, credentials)?.is_none() {
                 run_device_login(&url, cli.json)?;
             }
             let mut config = Config::new_server(name, url, None);
+            config.set_credential_policy(credentials);
             config.set_compression(None);
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
@@ -359,7 +370,7 @@ fn try_main(cli: Cli) -> Result<()> {
             message,
             dry_run,
         } => {
-            let config = find_config(&current_dir)?;
+            let config = find_config(&current_dir, credentials)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
                 .into_iter()
@@ -442,7 +453,7 @@ fn try_main(cli: Cli) -> Result<()> {
             with_metadata,
             glob,
         } => {
-            let config = find_config(&current_dir)?;
+            let config = find_config(&current_dir, credentials)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !unsynced;
 
@@ -554,7 +565,7 @@ fn try_main(cli: Cli) -> Result<()> {
             force,
         } => {
             let setup = || -> Result<_> {
-                let config = find_config(&current_dir)?;
+                let config = find_config(&current_dir, credentials)?;
                 let explicit = if force {
                     Some(OnConflict::Overwrite)
                 } else {
@@ -604,7 +615,7 @@ fn try_main(cli: Cli) -> Result<()> {
             }
         }
         Command::Info => {
-            let config = find_config(&current_dir)?;
+            let config = find_config(&current_dir, credentials)?;
             let compression = config.compression().to_string();
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let info_json = |fields: serde_json::Value| {
@@ -636,8 +647,27 @@ fn try_main(cli: Cli) -> Result<()> {
                     }
                 }
                 Backend::Server(s) => {
-                    // Not logged in is an answer, not an error
-                    let logged_in = get_token(&s.url)?.is_some();
+                    // Not logged in is an answer, not an error: no token, or
+                    // nowhere a login could have been stored (`auth_required`)
+                    let logged_in = if cli.json {
+                        match get_token_with(&s.url, credentials) {
+                            Ok(token) => token.is_some(),
+                            Err(error)
+                                if dvs::backend_error_code(&error)
+                                    == Some(ErrorCode::AuthRequired) =>
+                            {
+                                false
+                            }
+                            Err(error) => {
+                                return Err(output::coded(
+                                    ErrorCode::CredentialsUnreadable.as_str(),
+                                    format!("Cannot read credentials: {error}"),
+                                ));
+                            }
+                        }
+                    } else {
+                        get_token(&s.url)?.is_some()
+                    };
                     let (access, connection, connection_error) = if logged_in {
                         match s.access() {
                             Ok(access) => (access, "available", None),
@@ -709,7 +739,7 @@ fn try_main(cli: Cli) -> Result<()> {
             run_device_login(&url, cli.json)?;
         }
         Command::Login { url: None } => {
-            let config = find_config(&current_dir)?;
+            let config = find_config(&current_dir, credentials)?;
 
             if let Some(url) = config.server_url() {
                 run_device_login(url, cli.json)?;
@@ -718,7 +748,7 @@ fn try_main(cli: Cli) -> Result<()> {
             }
         }
         Command::Logout => {
-            let config = find_config(&current_dir)?;
+            let config = find_config(&current_dir, credentials)?;
 
             if let Some(url) = config.server_url() {
                 let Some(token) = get_token(url)? else {
@@ -787,9 +817,11 @@ impl std::fmt::Display for Exit {
 
 impl std::error::Error for Exit {}
 
-fn find_config(current_dir: &std::path::Path) -> Result<Config> {
-    Config::find(current_dir)
-        .ok_or_else(|| output::coded("not_in_project", "Not in a DVS repository"))?
+fn find_config(current_dir: &std::path::Path, credentials: CredentialPolicy) -> Result<Config> {
+    let mut config = Config::find(current_dir)
+        .ok_or_else(|| output::coded("not_in_project", "Not in a DVS repository"))??;
+    config.set_credential_policy(credentials);
+    Ok(config)
 }
 
 impl Command {

@@ -10,7 +10,7 @@ use ureq::http::Response;
 use url::Url;
 
 use crate::audit::AuditEntry;
-use crate::auth::{delete_token, get_token};
+use crate::auth::{CredentialPolicy, delete_token, get_token_with};
 use crate::error::{BackendError, ErrorCode};
 use crate::utils::http_agent;
 use crate::{Compression, Hashes, ProjectPath, RetrieveRequest, StoreRequest, StoreResult};
@@ -184,6 +184,10 @@ pub struct ServerBackend {
     pub group: Option<String>,
     #[serde(skip)]
     access_token: OnceLock<Option<String>>,
+    /// Whether failures may repair stored credentials. Set by the frontend,
+    /// never read from `dvs.toml`.
+    #[serde(skip)]
+    credential_policy: CredentialPolicy,
 }
 
 impl ServerBackend {
@@ -193,7 +197,12 @@ impl ServerBackend {
             group,
             url,
             access_token: OnceLock::new(),
+            credential_policy: CredentialPolicy::default(),
         }
+    }
+
+    pub fn set_credential_policy(&mut self, policy: CredentialPolicy) {
+        self.credential_policy = policy;
     }
 
     fn init_url(&self) -> anyhow::Result<Url> {
@@ -220,15 +229,28 @@ impl ServerBackend {
         self.read_url("history")
     }
 
-    /// The stored token. No token is `auth_required`. A credentials store
-    /// that cannot be read is treated as no token.
+    /// The stored token, read as the credential policy allows. No token is
+    /// `auth_required`. Under `Preserve` an unreadable store is
+    /// `credentials_unreadable` and is left alone; under `Repair` it is
+    /// repaired (deleted) by the read, or, if even that fails, treated as
+    /// no token as before.
     fn bearer(&self) -> anyhow::Result<String> {
-        let token = self.access_token.get_or_init(|| {
-            get_token(&self.url).unwrap_or_else(|e| {
-                log::warn!("Could not read the credentials store: {e}");
-                None
-            })
-        });
+        let token = match self.access_token.get() {
+            Some(token) => token,
+            None => {
+                let read = match get_token_with(&self.url, self.credential_policy) {
+                    Ok(token) => token,
+                    Err(e) if self.credential_policy == CredentialPolicy::Preserve => {
+                        return Err(e);
+                    }
+                    Err(e) => {
+                        log::warn!("Could not read the credentials store: {e}");
+                        None
+                    }
+                };
+                self.access_token.get_or_init(|| read)
+            }
+        };
         match token {
             Some(token) => Ok(format!("Bearer {token}")),
             None => Err(BackendError::new(
@@ -244,10 +266,12 @@ impl ServerBackend {
     }
 
     /// The server rejected the stored token: forget it so the next `init` asks
-    /// to log in
+    /// to log in, unless the credential policy says to leave it alone
     fn login_expired(&self) -> anyhow::Error {
-        if let Err(e) = delete_token(&self.url) {
-            log::warn!("Could not remove the expired token: {e}");
+        if self.credential_policy == CredentialPolicy::Repair {
+            if let Err(e) = delete_token(&self.url) {
+                log::warn!("Could not remove the expired token: {e}");
+            }
         }
         self.coded(ErrorCode::AuthExpired, LOGIN_EXPIRED)
     }
@@ -814,6 +838,18 @@ mod readonly_tests {
     }
 
     #[test]
+    fn a_401_under_preserve_is_auth_expired_and_keeps_the_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let (url, handle) = stub(401, "invalid or expired token");
+        let (mut server, path) = server_with_store(url, temp.path());
+        server.set_credential_policy(CredentialPolicy::Preserve);
+        let before = fs::read(&path).unwrap();
+        assert_eq!(code(server.access()), ErrorCode::AuthExpired);
+        assert_eq!(fs::read(&path).unwrap(), before);
+        handle.join().unwrap();
+    }
+
+    #[test]
     fn a_401_under_repair_is_auth_expired_and_forgets_the_token() {
         let temp = tempfile::tempdir().unwrap();
         let (url, handle) = stub(401, "invalid or expired token");
@@ -821,6 +857,19 @@ mod readonly_tests {
         assert_eq!(code(server.access()), ErrorCode::AuthExpired);
         assert_eq!(crate::auth::get_token(&url).unwrap(), None);
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn a_corrupt_store_under_preserve_is_credentials_unreadable_and_kept() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("credentials.json");
+        test_store::set(&path);
+        let original = b"{ not json";
+        fs::write(&path, original).unwrap();
+        let mut server = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
+        server.set_credential_policy(CredentialPolicy::Preserve);
+        assert_eq!(code(server.access()), ErrorCode::CredentialsUnreadable);
+        assert_eq!(fs::read(&path).unwrap(), original);
     }
 
     #[test]
@@ -1043,5 +1092,16 @@ mod readonly_tests {
             error.downcast_ref::<std::io::Error>().is_some(),
             "{error:#}"
         );
+    }
+
+    #[test]
+    fn no_config_dir_under_preserve_is_auth_required() {
+        test_store::no_config_dir();
+        let mut server = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
+        server.set_credential_policy(CredentialPolicy::Preserve);
+        assert_eq!(code(server.access()), ErrorCode::AuthRequired);
+        // Human mode reads it as no token, as before
+        let server = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
+        assert_eq!(code(server.access()), ErrorCode::AuthRequired);
     }
 }

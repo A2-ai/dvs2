@@ -2,7 +2,8 @@
 //! machine mode (C5), URL path prefixes (C6) and byte totals (C8).
 mod common;
 
-use common::{PROJECT, Sandbox, Stub, document, route};
+use common::{PROJECT, Sandbox, Stub, document, route, stderr};
+use serde_json::Value;
 
 /// A logged-in server project.
 fn server_project(stub: &Stub) -> Sandbox {
@@ -156,4 +157,106 @@ fn conflicted_records_keep_bad_metadata_in_get() {
     );
     let get = document(&sandbox.run(&["--json", "get", "merged.txt"]));
     assert_eq!(get["files"][0]["code"], "bad_metadata");
+}
+
+/// C5: machine mode leaves a rejected token in place and reports it.
+#[test]
+fn machine_mode_keeps_a_rejected_token() {
+    let stub = Stub::start();
+    let sandbox = server_project(&stub);
+    added(&sandbox, &["tracked.txt"]);
+    access_fails(&stub, 401, "");
+    sandbox.write("data.txt", "data");
+    let before = sandbox.credentials().unwrap();
+    for args in [
+        vec!["--json", "add", "data.txt"],
+        vec!["--json", "add", "--dry-run", "data.txt"],
+        vec!["--json", "get", "tracked.txt"],
+        vec!["--json", "info"],
+    ] {
+        let output = sandbox.run(&args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        let result = document(&output);
+        let code = result["error"]["code"]
+            .as_str()
+            .or(result["files"][0]["code"].as_str());
+        assert_eq!(code, Some("auth_expired"), "{result}");
+        assert_eq!(sandbox.credentials().unwrap(), before, "{args:?}");
+    }
+    // A 401 on a file's upload too
+    let stub = Stub::start();
+    let sandbox = server_project(&stub);
+    stub.fail(route("PUT", "blobs/"), 401, "");
+    sandbox.write("data.txt", "data");
+    let before = sandbox.credentials().unwrap();
+    let output = sandbox.run(&["--json", "add", "data.txt"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(document(&output)["outcome"], "failed");
+    assert_eq!(sandbox.credentials().unwrap(), before);
+}
+
+/// C5: human mode still forgets a rejected token and says to log in.
+#[test]
+fn human_mode_still_forgets_a_rejected_token() {
+    let stub = Stub::start();
+    let sandbox = server_project(&stub);
+    access_fails(&stub, 401, "");
+    sandbox.write("data.txt", "data");
+    let output = sandbox.run(&["add", "data.txt"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("dvs login"), "{}", stderr(&output));
+    let store: Value = serde_json::from_slice(&sandbox.credentials().unwrap()).unwrap();
+    assert!(store.get(&stub.url).is_none(), "{store}");
+}
+
+/// C5: an unparsable credentials store is reported and kept in machine
+/// mode, and deleted (as before) in human mode.
+#[test]
+fn machine_mode_keeps_an_unreadable_credentials_store() {
+    let stub = Stub::start();
+    let sandbox = Sandbox::new();
+    sandbox.init_server(&stub.url);
+    sandbox.write_credentials("{ not json");
+    sandbox.write("data.txt", "data");
+    for args in [
+        vec!["--json", "add", "data.txt"],
+        vec!["--json", "add", "--dry-run", "data.txt"],
+        vec!["--json", "info"],
+    ] {
+        let output = sandbox.run(&args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        let result = document(&output);
+        assert_eq!(
+            result["error"]["code"], "credentials_unreadable",
+            "{result}"
+        );
+        assert_eq!(sandbox.credentials().unwrap(), b"{ not json");
+    }
+    let output = sandbox.run(&["add", "data.txt"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(sandbox.credentials().is_none());
+}
+
+/// C4, C5: attach goes through the same codes and credential policy.
+#[test]
+fn attach_reports_shared_codes_and_keeps_credentials_in_machine_mode() {
+    for (status, body, code) in [
+        (401, "", "auth_expired"),
+        (404, "unknown project \"proj\"", "project_not_found"),
+    ] {
+        let stub = Stub::start();
+        let sandbox = Sandbox::new();
+        sandbox.login(&stub.url, "good-token");
+        stub.fail(
+            move |request| request.path.ends_with(&format!("/api/project/{PROJECT}")),
+            status,
+            body,
+        );
+        let before = sandbox.credentials().unwrap();
+        let output = sandbox.run(&["--json", "attach", PROJECT, &stub.url]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(document(&output)["error"]["code"], code);
+        assert_eq!(sandbox.credentials().unwrap(), before);
+        assert!(!sandbox.project().join("dvs.toml").exists());
+    }
 }
