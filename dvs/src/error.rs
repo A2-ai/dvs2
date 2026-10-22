@@ -13,8 +13,6 @@ pub enum ErrorCode {
     ProjectNotFound,
     /// An unreadable `.dvs` record, including git conflict markers
     BadMetadata,
-    /// The operation was cancelled before this work started
-    Cancelled,
     CredentialsUnreadable,
 }
 
@@ -28,7 +26,6 @@ impl ErrorCode {
             ErrorCode::ServerTooOld => "server_too_old",
             ErrorCode::ProjectNotFound => "project_not_found",
             ErrorCode::BadMetadata => "bad_metadata",
-            ErrorCode::Cancelled => "cancelled",
             ErrorCode::CredentialsUnreadable => "credentials_unreadable",
         }
     }

@@ -15,7 +15,9 @@ pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_CONFLICTS: i32 = 3;
 
 pub fn exit_code(report: &GetReport) -> i32 {
-    if report.has_failures() {
+    if report.outcome == GetOutcome::Cancelled {
+        crate::cancel::EXIT_CANCELLED
+    } else if report.has_failures() {
         EXIT_FAILED
     } else if report.has_conflicts() {
         EXIT_CONFLICTS

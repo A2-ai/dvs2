@@ -131,8 +131,9 @@ Backend and credentials failures share one set of codes, at the top level (`erro
 (`code`), in every command: `auth_required` (no token, not logged in), `auth_expired` (the server said 401),
 `access_denied` (403), `server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint
 that should exist answered 404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs`
-record, e.g. git conflict markers, in every command), `cancelled` (the file never started, see below) and
-`credentials_unreadable` (the store exists but cannot be read). Command-level codes: `not_in_project`, `invalid_configuration`, `invalid_arguments`,
+record, e.g. git conflict markers, in every command) and `credentials_unreadable` (the store exists but
+cannot be read). A row can also have `code: "cancelled"` (the file never started, see Cancellation), which is
+not a failure. Command-level codes: `not_in_project`, `invalid_configuration`, `invalid_arguments`,
 `no_files_selected`, `authentication_required` (device login needs an interactive `dvs login`), `io_error`,
 and `operation_failed`, the honest fallback when nothing more specific is known (`get` also uses it when no
 tracked file matched). Row codes besides the shared ones: `add` `io_error`, `operation_failed`, and `file_failed`
@@ -191,7 +192,8 @@ when stdin, if it is a pipe or socket, reaches end of file (the client went away
 Ctrl-C/Ctrl-Break). A signal that was already
 ignored when `dvs` started (for example SIGHUP under `nohup`) stays ignored. They stop *starting* files: a
 file in flight finishes atomically (a verified temp file and rename for `get`, the complete upload and record
-for `add`). Files that never started get `code: "cancelled"` (also `action: "cancelled"` in `get`); they count in
+for `add`). Files that never started get `code: "cancelled"` (also `action: "cancelled"` in `get` and
+`status: "cancelled"` in `status`); they count in
 `counts.total` and `counts.cancelled`, in neither `succeeded` nor `failed`. The outcome is `cancelled` whenever the request came
 before the operation finished, the full result is still written, and the exit code is `130`, over every
 other exit code. A second signal exits `130` at once, without a result.

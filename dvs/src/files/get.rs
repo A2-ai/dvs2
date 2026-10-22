@@ -158,7 +158,6 @@ impl From<ErrorCode> for GetCode {
             ErrorCode::ServerTooOld => GetCode::ServerTooOld,
             ErrorCode::ProjectNotFound => GetCode::ProjectNotFound,
             ErrorCode::BadMetadata => GetCode::BadMetadata,
-            ErrorCode::Cancelled => GetCode::Cancelled,
             ErrorCode::CredentialsUnreadable => GetCode::CredentialsUnreadable,
         }
     }
@@ -306,14 +305,15 @@ impl GetReport {
         }
     }
 
-    /// Some file failed for a reason other than a local conflict, or the
-    /// operation itself had a problem.
+    /// Some file failed for a reason other than a local conflict or a
+    /// cancel, or the operation itself had a problem.
     pub fn has_failures(&self) -> bool {
         self.problem.is_some()
-            || self
-                .files
-                .iter()
-                .any(|r| !r.satisfied && r.code.is_some_and(|c| !c.is_conflict()))
+            || self.files.iter().any(|r| {
+                !r.satisfied
+                    && r.action != Action::Cancelled
+                    && r.code.is_some_and(|c| !c.is_conflict())
+            })
     }
 
     /// Some file was held back or skipped because of a local conflict.
@@ -779,13 +779,21 @@ pub fn get_files(
         on_conflict,
         source,
     } = options;
+    // A run that stops before planning is still cancelled if a cancel came first
+    let problem = |message: String| {
+        let mut report = GetReport::problem(message, dry_run, on_conflict, source);
+        if ctx.is_cancelled() {
+            report.outcome = GetOutcome::Cancelled;
+        }
+        report
+    };
     if selection.tracked.is_empty() && selection.unmatched.is_empty() {
-        return GetReport::problem("no tracked files matched", dry_run, on_conflict, source);
+        return problem("no tracked files matched".to_string());
     }
 
     let pool = match get_threadpool(selection.tracked.len().max(1)) {
         Ok(p) => p,
-        Err(e) => return GetReport::problem(e.to_string(), dry_run, on_conflict, source),
+        Err(e) => return problem(e.to_string()),
     };
     let cache = try_open_cache(paths);
     let cache = cache.as_ref();
@@ -2215,6 +2223,7 @@ mod tests {
         assert_eq!(report.counts.cancelled, cancelled);
         assert_eq!(report.counts.not_run, 0);
         assert_eq!(report.counts.restored, started.len());
+        assert!(!report.has_failures(), "cancelled files are not failures");
         assert!(!repo.temp_files_left());
         // Cancelled rows are reported too, once each.
         assert_eq!(recorder.rows().len(), names.len());

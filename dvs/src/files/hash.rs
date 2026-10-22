@@ -15,11 +15,11 @@ use serde::Serialize;
 use walkdir::WalkDir;
 
 use crate::cache::{self, HashSource};
-use crate::error::ErrorCode;
 use crate::globbing::build_glob_matcher;
 use crate::hashes::Hashes;
 use crate::operation::{
-    FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard, duration_ms,
+    CANCELLED_CODE, FileRow, LazyPhase, OperationContext, OperationPlan, OperationRow, Phase,
+    PhaseGuard, RowState, RunSummary, duration_ms,
 };
 use crate::paths::{DvsPaths, PathFilter};
 
@@ -38,6 +38,30 @@ pub struct HashRow {
     pub message: Option<String>,
 }
 
+impl OperationRow for HashRow {
+    fn state(&self) -> RowState {
+        match self.code {
+            None => RowState::Succeeded,
+            Some(CANCELLED_CODE) => RowState::Cancelled,
+            Some(_) => RowState::Failed,
+        }
+    }
+}
+
+/// The rows of a hash run, sorted by path.
+#[derive(Debug, Clone)]
+pub struct HashReport {
+    pub files: Vec<HashRow>,
+    /// The cancel flag was set when the run finished
+    pub cancelled: bool,
+}
+
+impl HashReport {
+    pub fn summary(&self) -> RunSummary {
+        RunSummary::of(&self.files, self.cancelled)
+    }
+}
+
 /// Status's code and message for a working path that is or goes through a
 /// symlink, which is never followed or hashed.
 const SYMLINK_CODE: &str = "local_read_failed";
@@ -54,7 +78,7 @@ pub fn hash_files(
     filter: Option<&PathFilter>,
     glob_pattern: Option<&str>,
     ctx: &OperationContext,
-) -> Result<Vec<HashRow>> {
+) -> Result<HashReport> {
     let observer = ctx.observer();
     let scan = PhaseGuard::start(observer, Phase::Scan);
     let selected = select_working_files(paths, filter, glob_pattern)?;
@@ -94,7 +118,7 @@ pub fn hash_files(
             .map(|path| {
                 let row = if ctx.is_cancelled() {
                     let message = "cancelled before this file was hashed".to_string();
-                    error_row(path, ErrorCode::Cancelled.as_str(), message, None)
+                    error_row(path, CANCELLED_CODE, message, None)
                 } else {
                     hash_one(path, paths, cache.as_ref(), &hashing)
                 };
@@ -105,7 +129,10 @@ pub fn hash_files(
     }));
     hashing.finish();
     rows.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(rows)
+    Ok(HashReport {
+        files: rows,
+        cancelled: ctx.is_cancelled(),
+    })
 }
 
 fn error_row(
@@ -333,6 +360,16 @@ fn crosses_symlink(root: &Path, path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rows only, which is all most tests need.
+    fn hash_files(
+        paths: &DvsPaths,
+        filter: Option<&PathFilter>,
+        glob_pattern: Option<&str>,
+        ctx: &OperationContext,
+    ) -> Result<Vec<HashRow>> {
+        super::hash_files(paths, filter, glob_pattern, ctx).map(|report| report.files)
+    }
     use crate::testutil::{Recorder, Seen, create_file, create_temp_git_repo, init_dvs_repo};
     use crate::{Compression, FileMetadata};
     use fs_err as fs;
@@ -356,6 +393,25 @@ mod tests {
 
     fn selected(rows: &[HashRow]) -> Vec<&str> {
         rows.iter().map(|r| r.path.to_str().unwrap()).collect()
+    }
+
+    #[test]
+    fn a_cancel_before_the_run_hashes_nothing() {
+        let (_tmp, paths) = fixture();
+        let token = crate::CancelToken::new();
+        token.cancel();
+        let ctx = OperationContext::new().with_cancel(token);
+        let report = super::hash_files(&paths, None, None, &ctx).unwrap();
+        assert!(!report.files.is_empty());
+        assert!(
+            report
+                .files
+                .iter()
+                .all(|r| r.state() == RowState::Cancelled && r.hashes.is_none())
+        );
+        let summary = report.summary();
+        assert_eq!(summary.outcome, crate::RunOutcome::Cancelled);
+        assert_eq!(summary.counts.cancelled, report.files.len());
     }
 
     fn filter(paths: &DvsPaths, user: &[&str], recursive: bool) -> PathFilter {

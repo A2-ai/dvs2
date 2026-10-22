@@ -25,14 +25,15 @@ pub use files::get::{
     Action, Before, GetCode, GetCounts, GetOptions, GetOutcome, GetReport, GetRow, StoredCopy,
     get_files,
 };
-pub use files::hash::{HashRow, hash_files};
+pub use files::hash::{HashReport, HashRow, hash_files};
 pub use files::metadata::FileMetadata;
 pub use files::status::{FileStatus, StatusDetail, get_status};
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use operation::{
-    ByteTotals, CancelToken, FileRow, NoopObserver, OperationContext, OperationObserver,
-    OperationPlan, Phase, TransferObserver,
+    ByteTotals, CANCELLED_CODE, CancelToken, FileRow, NoopObserver, OperationContext,
+    OperationObserver, OperationPlan, OperationRow, Phase, RowCounts, RowState, RunOutcome,
+    RunSummary, TransferObserver,
 };
 pub use paths::{AddPathStatus, DvsPaths, PathFilter, ProjectPath, find_repo_root};
 pub use progress::FileProgress;
@@ -222,6 +223,7 @@ pub mod testutil {
                                 .unwrap()
                                 .to_string(),
                         ),
+                        crate::AddDetail::Cancelled { .. } => Some(crate::CANCELLED_CODE.into()),
                     },
                     r.duration_ms,
                 ),

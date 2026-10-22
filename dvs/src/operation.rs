@@ -36,6 +36,83 @@ impl CancelToken {
     }
 }
 
+/// The `code` of a row a cancel stopped before it started. Cancelled is a row
+/// state, not a failure: such rows count in neither `succeeded` nor `failed`.
+pub const CANCELLED_CODE: &str = "cancelled";
+
+/// How one file of an add, status or hash run ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowState {
+    Succeeded,
+    Failed,
+    /// A cancel stopped it before it started
+    Cancelled,
+}
+
+/// A result row that can be counted into a [`RunSummary`].
+pub trait OperationRow {
+    fn state(&self) -> RowState;
+}
+
+/// How an add, status or hash run ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunOutcome {
+    Complete,
+    Partial,
+    Failed,
+    /// A cancel came before the run finished, even if every file had started
+    Cancelled,
+}
+
+/// Rows by state; `total = succeeded + failed + cancelled`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct RowCounts {
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub cancelled: usize,
+}
+
+/// The outcome and counts of a run, from its rows and whether it was cancelled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct RunSummary {
+    pub outcome: RunOutcome,
+    pub counts: RowCounts,
+}
+
+impl RunSummary {
+    /// `cancelled`: the cancel flag was set when the run finished.
+    pub fn of<'a, R: OperationRow + 'a>(
+        rows: impl IntoIterator<Item = &'a R>,
+        cancelled: bool,
+    ) -> Self {
+        let mut counts = RowCounts::default();
+        for row in rows {
+            counts.total += 1;
+            match row.state() {
+                RowState::Succeeded => counts.succeeded += 1,
+                RowState::Failed => counts.failed += 1,
+                RowState::Cancelled => counts.cancelled += 1,
+            }
+        }
+        Self::from_counts(counts, cancelled)
+    }
+
+    pub fn from_counts(counts: RowCounts, cancelled: bool) -> Self {
+        let outcome = if cancelled {
+            RunOutcome::Cancelled
+        } else if counts.failed == 0 {
+            RunOutcome::Complete
+        } else if counts.failed == counts.total {
+            RunOutcome::Failed
+        } else {
+            RunOutcome::Partial
+        };
+        Self { outcome, counts }
+    }
+}
+
 /// A stage of an operation. A phase that does not occur is not reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -297,6 +374,44 @@ pub fn rfc3339_ms(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Row(RowState);
+    impl OperationRow for Row {
+        fn state(&self) -> RowState {
+            self.0
+        }
+    }
+
+    #[test]
+    fn a_summary_counts_states_and_a_cancel_decides_the_outcome() {
+        use RowState::*;
+        let rows = [Row(Succeeded), Row(Failed), Row(Cancelled)];
+        let summary = RunSummary::of(&rows, true);
+        assert_eq!(summary.outcome, RunOutcome::Cancelled);
+        assert_eq!(
+            summary.counts,
+            RowCounts {
+                total: 3,
+                succeeded: 1,
+                failed: 1,
+                cancelled: 1
+            }
+        );
+        // Cancelled even when every file had already started
+        let started = [Row(Succeeded)];
+        assert_eq!(
+            RunSummary::of(&started, true).outcome,
+            RunOutcome::Cancelled
+        );
+        assert_eq!(
+            RunSummary::of(&started, false).outcome,
+            RunOutcome::Complete
+        );
+        let outcome = |rows: &[Row]| RunSummary::of(rows, false).outcome;
+        assert_eq!(outcome(&[Row(Failed)]), RunOutcome::Failed);
+        assert_eq!(outcome(&[Row(Succeeded), Row(Failed)]), RunOutcome::Partial);
+        assert_eq!(outcome(&[]), RunOutcome::Complete);
+    }
 
     #[derive(Default)]
     struct Phases(std::sync::Mutex<Vec<(bool, Phase)>>);

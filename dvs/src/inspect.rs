@@ -1,7 +1,9 @@
 //! Local facts for machine-readable status, using cached hashes when available.
 use crate::cache::{self, FileStat};
-use crate::error::ErrorCode;
-use crate::operation::{FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard};
+use crate::operation::{
+    CANCELLED_CODE, FileRow, LazyPhase, OperationContext, OperationPlan, OperationRow, Phase,
+    PhaseGuard, RowState, RunSummary,
+};
 use crate::{DvsPaths, FileMetadata, Hashes, PathFilter, Status};
 use anyhow::Result;
 use fs_err as fs;
@@ -30,7 +32,31 @@ pub struct StatusFacts {
     pub working: WorkingCopy,
     pub baseline: Option<Baseline>,
     pub code: Option<&'static str>,
-    pub error: Option<String>,
+    pub message: Option<String>,
+}
+
+impl OperationRow for StatusFacts {
+    fn state(&self) -> RowState {
+        match self.status {
+            Status::Error => RowState::Failed,
+            Status::Cancelled => RowState::Cancelled,
+            _ => RowState::Succeeded,
+        }
+    }
+}
+
+/// The rows of a status run, sorted by path.
+#[derive(Clone, Debug)]
+pub struct StatusReport {
+    pub files: Vec<StatusFacts>,
+    /// The cancel flag was set when the run finished
+    pub cancelled: bool,
+}
+
+impl StatusReport {
+    pub fn summary(&self) -> RunSummary {
+        RunSummary::of(&self.files, self.cancelled)
+    }
 }
 
 /// Inspect tracked files in parallel. Each row goes to `ctx`'s observer as
@@ -44,7 +70,7 @@ pub fn inspect_status(
     filter: Option<&PathFilter>,
     glob_pattern: Option<&str>,
     ctx: &OperationContext,
-) -> Result<Vec<StatusFacts>> {
+) -> Result<StatusReport> {
     let observer = ctx.observer();
     let scan = PhaseGuard::start(observer, Phase::Scan);
     let (entries, cache, pool) = status_scan_inputs(paths, filter, glob_pattern)?;
@@ -81,14 +107,17 @@ pub fn inspect_status(
     });
     hashing.finish();
     results.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(results)
+    Ok(StatusReport {
+        files: results,
+        cancelled: ctx.is_cancelled(),
+    })
 }
 
 /// A file the cancelled operation never looked at.
 fn cancelled_row(path: PathBuf) -> StatusFacts {
     StatusFacts {
         path,
-        status: Status::Error,
+        status: Status::Cancelled,
         metadata: None,
         working: WorkingCopy {
             state: "unknown",
@@ -97,8 +126,8 @@ fn cancelled_row(path: PathBuf) -> StatusFacts {
             hash_source: None,
         },
         baseline: None,
-        code: Some(ErrorCode::Cancelled.as_str()),
-        error: Some("cancelled before this file was checked".to_string()),
+        code: Some(CANCELLED_CODE),
+        message: Some("cancelled before this file was checked".to_string()),
     }
 }
 
@@ -146,7 +175,7 @@ fn inspect_path(
         },
         baseline: None,
         code: None,
-        error: None,
+        message: None,
     };
     let facts = (|| -> Result<()> {
         row.code = Some("bad_metadata");
@@ -227,7 +256,7 @@ fn inspect_path(
         Ok(()) => row.code = None,
         Err(e) => {
             row.status = Status::Error;
-            row.error = Some(format!("{e:#}"));
+            row.message = Some(format!("{e:#}"));
         }
     }
     row
@@ -259,20 +288,41 @@ mod tests {
         (temp, paths)
     }
     #[test]
+    fn a_cancel_before_the_run_leaves_every_file_unchecked() {
+        let (_temp, paths) = fixture();
+        let token = crate::CancelToken::new();
+        token.cancel();
+        let ctx = OperationContext::new().with_cancel(token);
+        let report = inspect_status(&paths, None, None, &ctx).unwrap();
+        assert_eq!(report.files[0].status, Status::Cancelled);
+        assert_eq!(report.files[0].code, Some(CANCELLED_CODE));
+        let summary = report.summary();
+        assert_eq!(summary.outcome, crate::RunOutcome::Cancelled);
+        assert_eq!((summary.counts.cancelled, summary.counts.failed), (1, 0));
+    }
+
+    #[test]
     fn cache_miss_computes_status_facts() {
         let (_temp, paths) = fixture();
-        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(rows[0].status, Status::Current);
         assert_eq!(rows[0].working.hash_source, Some("computed"));
         #[cfg(feature = "cache")]
         {
-            let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+            let rows = inspect_status(&paths, None, None, &OperationContext::new())
+                .unwrap()
+                .files;
             assert_eq!(rows[0].status, Status::Current);
             assert_eq!(rows[0].working.hash_source, Some("cache"));
             // A changed stat invalidates the cache without reading new file content.
             fs::write(paths.repo_root().join("data.txt"), b"changed content").unwrap();
             assert_eq!(
-                inspect_status(&paths, None, None, &OperationContext::new()).unwrap()[0].status,
+                inspect_status(&paths, None, None, &OperationContext::new())
+                    .unwrap()
+                    .files[0]
+                    .status,
                 Status::Unsynced
             );
         }
@@ -281,15 +331,19 @@ mod tests {
     fn missing_and_bad_metadata_are_distinct() {
         let (_temp, paths) = fixture();
         fs::remove_file(paths.repo_root().join("data.txt")).unwrap();
-        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(rows[0].status, Status::Absent);
-        assert!(rows[0].error.is_none());
+        assert!(rows[0].message.is_none());
         fs::write(
             paths.metadata_path(std::path::Path::new("data.txt")),
             b"broken",
         )
         .unwrap();
-        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(rows[0].status, Status::Error);
         assert_eq!(rows[0].code, Some("bad_metadata"));
     }
@@ -334,7 +388,9 @@ mod tests {
     fn baseline_distinguishes_clean_old_version_from_edits() {
         let (_temp, paths) = fixture();
         let cache = cache::open_cache(&paths).unwrap();
-        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         let original = rows[0].working.hashes.as_ref().unwrap();
         cache
             .set_baseline(
@@ -350,10 +406,14 @@ mod tests {
             serde_json::to_vec(&target).unwrap(),
         )
         .unwrap();
-        let stale = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let stale = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(stale[0].status, Status::Stale);
         fs::write(paths.repo_root().join("data.txt"), b"user edits").unwrap();
-        let modified = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let modified = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(modified[0].status, Status::Modified);
     }
 

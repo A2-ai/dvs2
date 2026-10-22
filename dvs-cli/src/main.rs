@@ -26,9 +26,10 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, AddErrorCode, AddResult, Backend, Compression, ErrorCode, FileMetadata,
-    FileProgress, FileRow, GetOptions, GetOutcome, OperationContext, Outcome, PathFilter, Status,
-    add_files, format_size, get_files, hash_files, set_num_threads,
+    AddDetail, AddResult, Backend, CANCELLED_CODE, Compression, ErrorCode, FileMetadata,
+    FileProgress, FileRow, GetOptions, OperationContext, OperationRow, Outcome, PathFilter,
+    RowState, RunOutcome, RunSummary, Status, add_files, format_size, get_files, hash_files,
+    set_num_threads,
 };
 
 use crate::cancel::EXIT_CANCELLED;
@@ -263,7 +264,7 @@ struct StatusSelection {
 
 fn status_row_selected(row: &dvs::inspect::StatusFacts, selection: StatusSelection) -> bool {
     selection.show_all
-        || row.error.is_some()
+        || row.state() != RowState::Succeeded
         || (selection.current && row.status == Status::Current)
         || (selection.absent && row.status == Status::Absent)
         || (selection.stale && row.status == Status::Stale)
@@ -271,71 +272,47 @@ fn status_row_selected(row: &dvs::inspect::StatusFacts, selection: StatusSelecti
         || (selection.unsynced && row.status == Status::Unsynced)
 }
 
-/// An add row and whether it failed. Built here, not by changing
-/// `AddResult`'s serialization, so R output is unchanged.
-fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
-    let (value, is_error) = match &r.detail {
+/// An add row. Built here, not by changing `AddResult`'s serialization, so R
+/// output is unchanged.
+fn add_row(r: &AddResult) -> serde_json::Value {
+    let not_added = |code: serde_json::Value, message: &str| {
+        json!({
+            "path": r.path,
+            "outcome": null,
+            "hash": null,
+            "size": null,
+            "stored_size": null,
+            "code": code,
+            "message": message,
+        })
+    };
+    let mut value = match &r.detail {
         AddDetail::Success {
             outcome,
             hash,
             size,
             stored_size,
-        } => (
-            json!({
-                "path": r.path,
-                "outcome": outcome,
-                "hash": hash,
-                "size": size,
-                "stored_size": stored_size,
-            }),
-            false,
-        ),
-        AddDetail::Error { code, error } => (
-            json!({
-                "path": r.path,
-                "outcome": null,
-                "hash": null,
-                "size": null,
-                "stored_size": null,
-                "code": code,
-                "message": error,
-            }),
-            true,
-        ),
+        } => json!({
+            "path": r.path,
+            "outcome": outcome,
+            "hash": hash,
+            "size": size,
+            "stored_size": stored_size,
+        }),
+        AddDetail::Error { code, error } => not_added(json!(code), error),
+        AddDetail::Cancelled { message } => not_added(json!(CANCELLED_CODE), message),
     };
-    let mut value = output::file_result(value, is_error);
     // Not serialized by the library, so R output is unchanged
     value["duration_ms"] = json!(r.duration_ms);
-    (value, is_error)
+    output::row_error_fields(value)
 }
 
-/// The library's `error` text is the row's `message`, as on every other row.
 fn status_row(row: &dvs::inspect::StatusFacts) -> serde_json::Value {
-    let mut value = serde_json::to_value(row).expect("status rows serialize");
-    if let Some(object) = value.as_object_mut()
-        && let Some(message) = object.remove("error")
-    {
-        object.insert("message".into(), message);
-    }
-    output::row_error_fields(value)
+    output::row_error_fields(serde_json::to_value(row).expect("status rows serialize"))
 }
 
 fn hash_row(row: &dvs::HashRow) -> serde_json::Value {
     output::row_error_fields(serde_json::to_value(row).expect("hash rows serialize"))
-}
-
-fn is_cancelled_add(r: &AddResult) -> bool {
-    matches!(
-        r.detail,
-        AddDetail::Error {
-            code: AddErrorCode::Cancelled,
-            ..
-        }
-    )
-}
-
-fn is_cancelled_code(code: Option<&str>) -> bool {
-    code == Some(ErrorCode::Cancelled.as_str())
 }
 
 /// Human output's closing line for a cancelled run; nothing when every
@@ -355,10 +332,10 @@ fn report_cancelled(not_started: usize, what: &str) {
 }
 
 /// 130 if cancelled, over everything else, then 1 if any row failed.
-fn rows_exit(cancelled: bool, failed: bool) -> Result<()> {
-    if cancelled {
+fn summary_exit(summary: &RunSummary) -> Result<()> {
+    if summary.outcome == RunOutcome::Cancelled {
         Err(Exit(EXIT_CANCELLED).into())
-    } else if failed {
+    } else if summary.counts.failed > 0 {
         Err(Exit(1).into())
     } else {
         Ok(())
@@ -555,7 +532,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
-                FileRow::Add(r) => Some(add_row(r).0),
+                FileRow::Add(r) => Some(add_row(r)),
                 _ => None,
             });
             if show_progress {
@@ -572,24 +549,17 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 dry_run,
                 &ctx,
             )?;
-            // Cancelled iff the flag was set before the operation finished
-            let cancelled = ctx.is_cancelled();
+            let summary = report.summary();
             let results = &report.files;
-            let has_errors = results
-                .iter()
-                .any(|r| matches!(r.detail, AddDetail::Error { .. }) && !is_cancelled_add(r));
             if cli.json {
-                let (files, failed) = output::file_results(results.iter().map(add_row));
-                let mut result = output::envelope("add", dry_run, files, failed);
+                let files = results.iter().map(add_row).collect();
+                let mut result = output::run_envelope("add", dry_run, files, summary);
                 result["bytes"] = json!(report.bytes);
-                if cancelled {
-                    output::cancelled(&mut result);
-                }
                 output::emit_streamed(result);
             } else {
                 for result in results {
                     match &result.detail {
-                        AddDetail::Error { .. } if is_cancelled_add(result) => {}
+                        AddDetail::Cancelled { .. } => {}
                         AddDetail::Error { error: err, .. } => {
                             eprintln!("Error adding {}: {err}", result.path.display());
                         }
@@ -616,17 +586,12 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                         },
                     }
                 }
-                if has_errors {
+                if summary.counts.failed > 0 {
                     eprintln!("Error: Some files failed to add");
                 }
-                if cancelled {
-                    report_cancelled(
-                        results.iter().filter(|r| is_cancelled_add(r)).count(),
-                        "added",
-                    );
-                }
+                report_cancelled(summary.counts.cancelled, "added");
             }
-            rows_exit(cancelled, has_errors)?;
+            summary_exit(&summary)?;
         }
         Command::Status {
             paths: user_paths,
@@ -661,28 +626,18 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 _ => None,
             });
             let ctx = ctx.clone().with_observer(Arc::new(observer));
-            let mut statuses =
+            let report =
                 dvs::inspect::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
-            let cancelled = ctx.is_cancelled();
+            let mut statuses = report.files;
             if !show_all {
                 statuses.retain(|row| status_row_selected(row, selection));
             }
-            let not_checked = statuses
-                .iter()
-                .filter(|row| is_cancelled_code(row.code))
-                .count();
-            let failed = statuses
-                .iter()
-                .filter(|row| row.error.is_some() && !is_cancelled_code(row.code))
-                .count();
+            // Over the rows shown
+            let summary = RunSummary::of(&statuses, report.cancelled);
             if cli.json {
                 let files = statuses.iter().map(status_row).collect();
-                let mut result = output::envelope("status", false, files, failed);
-                if cancelled {
-                    output::cancelled(&mut result);
-                }
-                output::emit_streamed(result);
-                return rows_exit(cancelled, failed > 0);
+                output::emit_streamed(output::run_envelope("status", false, files, summary));
+                return summary_exit(&summary);
             }
             if statuses.is_empty() {
                 if show_all {
@@ -691,12 +646,9 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                     println!("No tracked files matching the filter")
                 }
             } else {
-                for row in &statuses {
-                    if is_cancelled_code(row.code) {
-                        continue;
-                    }
-                    if let Some(error) = &row.error {
-                        eprintln!("Error getting status for {}: {error}", row.path.display());
+                for row in statuses.iter().filter(|r| r.state() == RowState::Failed) {
+                    if let Some(message) = &row.message {
+                        eprintln!("Error getting status for {}: {message}", row.path.display());
                     }
                 }
 
@@ -716,7 +668,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 } else {
                     let rows: Vec<StatusRow> = statuses
                         .iter()
-                        .filter(|row| row.error.is_none())
+                        .filter(|row| row.state() == RowState::Succeeded)
                         .map(|row| StatusRow {
                             path: row.path.display().to_string(),
                             status: row.status.to_string(),
@@ -730,13 +682,11 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                     print_table(rows);
                 }
             }
-            if failed > 0 {
+            if summary.counts.failed > 0 {
                 eprintln!("Error: Some files failed to get status");
             }
-            if cancelled {
-                report_cancelled(not_checked, "checked");
-            }
-            rows_exit(cancelled, failed > 0)?;
+            report_cancelled(summary.counts.cancelled, "checked");
+            summary_exit(&summary)?;
         }
         Command::Hash {
             paths: user_paths,
@@ -752,25 +702,14 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 _ => None,
             });
             let ctx = ctx.clone().with_observer(Arc::new(observer));
-            let rows = hash_files(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
-            let cancelled = ctx.is_cancelled();
-            let not_hashed = rows.iter().filter(|r| is_cancelled_code(r.code)).count();
-            let failed = rows
-                .iter()
-                .filter(|r| r.code.is_some() && !is_cancelled_code(r.code))
-                .count();
+            let report = hash_files(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
+            let summary = report.summary();
+            let rows = &report.files;
             if cli.json {
                 let files = rows.iter().map(hash_row).collect();
-                let mut result = output::envelope("hash", false, files, failed);
-                if cancelled {
-                    output::cancelled(&mut result);
-                }
-                output::emit_streamed(result);
+                output::emit_streamed(output::run_envelope("hash", false, files, summary));
             } else {
-                for row in &rows {
-                    if row.code.is_none() || is_cancelled_code(row.code) {
-                        continue;
-                    }
+                for row in rows.iter().filter(|r| r.state() == RowState::Failed) {
                     if let Some(message) = &row.message {
                         eprintln!("Error hashing {}: {message}", row.path.display());
                     }
@@ -791,14 +730,12 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 } else if !hashed.is_empty() {
                     print_table(hashed);
                 }
-                if failed > 0 {
+                if summary.counts.failed > 0 {
                     eprintln!("Error: Some files failed to hash");
                 }
-                if cancelled {
-                    report_cancelled(not_hashed, "hashed");
-                }
+                report_cancelled(summary.counts.cancelled, "hashed");
             }
-            rows_exit(cancelled, failed > 0)?;
+            summary_exit(&summary)?;
         }
         Command::Get {
             paths,
@@ -835,7 +772,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                     observer.with_bars(make_progress_callback(config.progress_bytes_threshold()));
             }
             let ctx = ctx.clone().with_observer(Arc::new(observer));
-            let mut report = get_files(
+            let report = get_files(
                 selection,
                 &dvs_paths,
                 config.backend(),
@@ -846,23 +783,11 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 },
                 &ctx,
             );
-            // The library decides this for the runs it plans; the CLI
-            // also covers the ones that stop before planning ("no tracked
-            // files matched")
-            if ctx.is_cancelled() {
-                report.outcome = GetOutcome::Cancelled;
-            }
             if cli.json {
-                let value = get_cmd::to_json(&report);
-                output::emit_streamed(value);
+                output::emit_streamed(get_cmd::to_json(&report));
             } else {
                 get_cmd::print_human(&report);
-                if report.outcome == GetOutcome::Cancelled {
-                    report_cancelled(report.counts.cancelled, "retrieved");
-                }
-            }
-            if report.outcome == GetOutcome::Cancelled {
-                return Err(Exit(EXIT_CANCELLED).into());
+                report_cancelled(report.counts.cancelled, "retrieved");
             }
             let code = get_cmd::exit_code(&report);
             if code != get_cmd::EXIT_OK {
@@ -1244,7 +1169,7 @@ fn main() {
                 if json {
                     let mut result = output::problem(command, dry_run, &error);
                     if cancelled {
-                        output::cancelled(&mut result);
+                        result["outcome"] = json!("cancelled");
                     }
                     output::emit(result);
                 } else {

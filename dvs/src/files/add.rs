@@ -18,8 +18,8 @@ use crate::error::{ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
 use crate::operation::{
-    ByteTotals, FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard,
-    duration_ms, millis,
+    ByteTotals, FileRow, LazyPhase, OperationContext, OperationPlan, OperationRow, Phase,
+    PhaseGuard, RowState, RunSummary, duration_ms, millis,
 };
 use crate::paths::{DvsPaths, ProjectPath};
 use crate::utils::get_threadpool;
@@ -39,11 +39,29 @@ pub struct AddResult {
     pub duration_ms: Option<u64>,
 }
 
+impl OperationRow for AddResult {
+    fn state(&self) -> RowState {
+        match self.detail {
+            AddDetail::Success { .. } => RowState::Succeeded,
+            AddDetail::Error { .. } => RowState::Failed,
+            AddDetail::Cancelled { .. } => RowState::Cancelled,
+        }
+    }
+}
+
 /// The rows of an `add`, sorted by path, plus byte totals.
 #[derive(Debug, Clone)]
 pub struct AddReport {
     pub files: Vec<AddResult>,
     pub bytes: ByteTotals,
+    /// The cancel flag was set when the add finished
+    pub cancelled: bool,
+}
+
+impl AddReport {
+    pub fn summary(&self) -> RunSummary {
+        RunSummary::of(&self.files, self.cancelled)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +76,10 @@ pub enum AddDetail {
     Error {
         code: AddErrorCode,
         error: String,
+    },
+    /// Not started because the operation was cancelled: no upload, no record
+    Cancelled {
+        message: String,
     },
 }
 
@@ -74,7 +96,6 @@ pub enum AddErrorCode {
     ServerTooOld,
     ProjectNotFound,
     BadMetadata,
-    Cancelled,
     CredentialsUnreadable,
 }
 
@@ -88,7 +109,6 @@ impl From<ErrorCode> for AddErrorCode {
             ErrorCode::ServerTooOld => AddErrorCode::ServerTooOld,
             ErrorCode::ProjectNotFound => AddErrorCode::ProjectNotFound,
             ErrorCode::BadMetadata => AddErrorCode::BadMetadata,
-            ErrorCode::Cancelled => AddErrorCode::Cancelled,
             ErrorCode::CredentialsUnreadable => AddErrorCode::CredentialsUnreadable,
         }
     }
@@ -122,9 +142,8 @@ fn error_row(path: PathBuf, error: &anyhow::Error, duration_ms: Option<u64>) -> 
 fn cancelled_row(path: PathBuf, work: Option<Duration>) -> AddResult {
     AddResult {
         path,
-        detail: AddDetail::Error {
-            code: AddErrorCode::Cancelled,
-            error: "cancelled before this file was added".to_string(),
+        detail: AddDetail::Cancelled {
+            message: "cancelled before this file was added".to_string(),
         },
         duration_ms: work.map(millis),
     }
@@ -342,6 +361,7 @@ pub fn add_files(
         return Ok(AddReport {
             files: Vec::new(),
             bytes: ByteTotals::default(),
+            cancelled: ctx.is_cancelled(),
         });
     }
 
@@ -621,6 +641,7 @@ pub fn add_files(
     Ok(AddReport {
         files: results,
         bytes,
+        cancelled: ctx.is_cancelled(),
     })
 }
 
@@ -795,8 +816,8 @@ mod tests {
 
     fn code(row: &AddResult) -> Option<AddErrorCode> {
         match row.detail {
-            AddDetail::Success { .. } => None,
             AddDetail::Error { code, .. } => Some(code),
+            AddDetail::Success { .. } | AddDetail::Cancelled { .. } => None,
         }
     }
 
@@ -825,12 +846,18 @@ mod tests {
         let report = add(&names, &paths, backend, false, &ctx);
 
         let transfers = recorder.transfers();
-        let added: Vec<_> = report.files.iter().filter(|r| code(r).is_none()).collect();
+        let added: Vec<_> = report
+            .files
+            .iter()
+            .filter(|r| r.state() == RowState::Succeeded)
+            .collect();
         let cancelled: Vec<_> = report
             .files
             .iter()
-            .filter(|r| code(r) == Some(AddErrorCode::Cancelled))
+            .filter(|r| r.state() == RowState::Cancelled)
             .collect();
+        assert_eq!(report.summary().counts.cancelled, cancelled.len());
+        assert_eq!(report.summary().outcome, crate::RunOutcome::Cancelled);
         assert_eq!(report.files.len(), 48);
         assert_eq!(added.len() + cancelled.len(), 48, "{:?}", report.files);
         // Exactly the files in flight when the cancel came finished
@@ -865,7 +892,7 @@ mod tests {
             .iter()
             .map(|r| match r.detail {
                 AddDetail::Success { size, .. } => size,
-                AddDetail::Error { .. } => unreachable!(),
+                _ => unreachable!(),
             })
             .sum();
         let all_bytes: u64 = names.iter().map(|n| n.len() as u64).sum();
@@ -893,7 +920,12 @@ mod tests {
             false,
             &OperationContext::new(),
         );
-        assert!(report.files.iter().all(|r| code(r).is_none()));
+        assert!(
+            report
+                .files
+                .iter()
+                .all(|r| r.state() == RowState::Succeeded)
+        );
         assert!(paths.metadata_path(Path::new("b.txt")).is_file());
         // Both needed uploading, but the bytes moved once
         assert_eq!(
@@ -924,7 +956,10 @@ mod tests {
 
         assert!(ctx.is_cancelled());
         assert!(
-            report.files.iter().all(|r| code(r).is_none()),
+            report
+                .files
+                .iter()
+                .all(|r| r.state() == RowState::Succeeded),
             "{:?}",
             report.files
         );

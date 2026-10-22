@@ -29,6 +29,8 @@ pub enum Status {
     Unsynced,
     /// Local status inspection failed.
     Error,
+    /// Not checked: a cancel came before this file was started.
+    Cancelled,
 }
 
 impl fmt::Display for Status {
@@ -40,6 +42,7 @@ impl fmt::Display for Status {
             Status::Modified => write!(f, "modified"),
             Status::Unsynced => write!(f, "unsynced"),
             Status::Error => write!(f, "error"),
+            Status::Cancelled => write!(f, "cancelled"),
             Status::Untracked => write!(f, "untracked"),
         }
     }

@@ -4,6 +4,7 @@ use std::time::{Instant, SystemTime};
 
 use anyhow::Error;
 use dvs::operation::{duration_ms, rfc3339_ms};
+use dvs::{RowCounts, RunSummary};
 use serde_json::{Value, json};
 
 /// When this run's operation started, for the timing every result carries.
@@ -97,28 +98,31 @@ pub fn error_json(code: &str, message: impl Into<String>) -> Value {
     json!({"code": code, "message": message.into(), "hint": null})
 }
 
-/// `failed` counts failed rows and `cancelled` the rows a cancel stopped, so
-/// `total = succeeded + failed + cancelled`. A cancelled run's `outcome` is set by the caller ([`cancelled`]).
+/// The result of a command that cannot be cancelled: `failed` of `files` failed.
 pub fn envelope(command: &str, dry_run: bool, files: Vec<Value>, failed: usize) -> Value {
     let total = files.len();
-    let cancelled = files.iter().filter(|row| is_cancelled_row(row)).count();
+    let counts = RowCounts {
+        total,
+        succeeded: total - failed,
+        failed,
+        cancelled: 0,
+    };
+    run_envelope(
+        command,
+        dry_run,
+        files,
+        RunSummary::from_counts(counts, false),
+    )
+}
+
+/// The result of an add, status or hash run, from the library's summary.
+pub fn run_envelope(command: &str, dry_run: bool, files: Vec<Value>, summary: RunSummary) -> Value {
     json!({
         "v": 1,
         "command": command,
-        "outcome": if failed == 0 {
-            "complete"
-        } else if failed == total {
-            "failed"
-        } else {
-            "partial"
-        },
+        "outcome": summary.outcome,
         "dry_run": dry_run,
-        "counts": {
-            "total": total,
-            "succeeded": total - failed - cancelled,
-            "failed": failed,
-            "cancelled": cancelled,
-        },
+        "counts": summary.counts,
         "error": null,
         "files": files,
     })
@@ -136,15 +140,6 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
     value["outcome"] = json!("failed");
     value["error"] = error_json(error_code(error), format!("{error:#}"));
     value
-}
-
-pub fn is_cancelled_row(row: &Value) -> bool {
-    row["code"] == "cancelled"
-}
-
-/// The cancel flag was set before the operation finished, whatever its rows say.
-pub fn cancelled(value: &mut Value) {
-    value["outcome"] = json!("cancelled");
 }
 
 /// Single rendering seam for JSON and terminal event results. Adds the
@@ -170,30 +165,6 @@ pub fn emit_streamed(mut value: Value) {
     }
 }
 
-/// Cancelled rows are errors to the library but not failures here.
-pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value>, usize) {
-    let mut failed = 0;
-    let files = rows
-        .into_iter()
-        .map(|(value, is_error)| {
-            let value = file_result(value, is_error);
-            failed += usize::from(is_error && !is_cancelled_row(&value));
-            value
-        })
-        .collect();
-    (files, failed)
-}
-
-/// Streamed rows go through here too, so they match the result's rows.
-pub fn file_result(mut value: Value, is_error: bool) -> Value {
-    if !is_error {
-        value["code"] = Value::Null;
-    } else if value.get("code").is_none_or(Value::is_null) {
-        value["code"] = json!("file_failed");
-    }
-    row_error_fields(value)
-}
-
 /// A row's keys never depend on whether it failed.
 pub fn row_error_fields(mut value: Value) -> Value {
     for key in ["code", "message", "hint"] {
@@ -209,21 +180,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cancelled_rows_are_counted_apart() {
-        let (files, failed) = file_results([
-            (json!({"path": "ok"}), false),
-            (json!({"path": "bad", "code": "io_error"}), true),
-            (json!({"path": "later", "code": "cancelled"}), true),
-        ]);
-        assert_eq!(failed, 1);
-        let mut result = envelope("add", false, files, failed);
+    fn counts_and_outcome_come_from_the_summary() {
+        let counts = RowCounts {
+            total: 3,
+            succeeded: 1,
+            failed: 1,
+            cancelled: 1,
+        };
+        let result = run_envelope("add", false, vec![], RunSummary::from_counts(counts, true));
         assert_eq!(
             result["counts"],
             json!({"total": 3, "succeeded": 1, "failed": 1, "cancelled": 1})
         );
-        assert_eq!(result["files"][0]["code"], Value::Null);
-        assert_eq!(result["files"][2]["code"], "cancelled");
-        cancelled(&mut result);
         assert_eq!(result["outcome"], "cancelled");
+        let result = envelope("history", false, vec![json!({}), json!({})], 1);
+        assert_eq!(result["outcome"], "partial");
+        assert_eq!(result["counts"]["cancelled"], 0);
     }
 }
