@@ -250,7 +250,7 @@ fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
 }
 
 /// The library's `error` text is the row's `message`, as on every other row.
-fn status_row(row: &dvs::inspect::StatusFacts) -> (serde_json::Value, bool) {
+fn status_row(row: &dvs::StatusFacts) -> (serde_json::Value, bool) {
     let mut value = serde_json::to_value(row).expect("status rows serialize");
     if let Some(object) = value.as_object_mut()
         && let Some(message) = object.remove("error")
@@ -513,8 +513,7 @@ fn try_main(cli: Cli) -> Result<()> {
                     user_paths, recursive, &dvs_paths,
                 ))
             };
-            let mut statuses =
-                dvs::inspect::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
+            let mut statuses = dvs::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
             if !show_all {
                 statuses.retain(|row| {
                     row.error.is_some()
