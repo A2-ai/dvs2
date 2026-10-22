@@ -8,6 +8,7 @@ mod read_cmd;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
@@ -18,21 +19,19 @@ use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
 use url::Url;
 
 use dvs::auth::{
-    CredentialPolicy, delete_token, get_client_approve_url, get_token, get_token_with,
-    initiate_device_approval, poll_for_token, revoke_token, store_token,
+    delete_token, get_client_approve_url, get_token, initiate_device_approval, poll_for_token,
+    revoke_token, store_token,
 };
 use dvs::config::{Config, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, AddResult, Backend, CANCELLED_CODE, Compression, ErrorCode, FileMetadata,
-    FileProgress, FileRow, GetOptions, OperationContext, OperationRow, Outcome, PathFilter,
-    RowState, RunOutcome, RunSummary, Status, add_files, format_size, get_files, hash_files,
-    set_num_threads,
+    AddDetail, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode, FileMetadata,
+    FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow, Outcome,
+    PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files, set_num_threads,
 };
 
-use crate::cancel::EXIT_CANCELLED;
 use crate::observer::CliObserver;
 
 #[derive(Debug, Subcommand)]
@@ -144,28 +143,14 @@ pub enum Command {
         #[clap(long)]
         with_metadata: bool,
     },
-    /// Prints the hashes of files, tracked or not, using and filling the hash cache.
-    /// Never changes a record or the baseline. With no paths, hashes the tracked files,
-    /// like status
-    #[command(next_display_order = 100)]
-    Hash {
-        /// Paths (files or directories) to hash
-        paths: Vec<PathBuf>,
-        /// Recursively include files in subdirectories for given directories
-        /// Without this flag, directories return only their direct children.
-        #[clap(long, short, conflicts_with = "glob")]
-        recursive: bool,
-        /// Only hash the files matching this glob, e.g. '*.csv'
-        #[clap(long, short, conflicts_with = "recursive")]
-        glob: Option<String>,
-    },
     /// Retrieves the given files from dvs storage. You can use a glob or paths.
     /// If you pass a directory and a glob, the glob will be ran from that directory.
-    /// With no paths, gets the tracked files directly in the current directory;
-    /// add -r for everything beneath it.
+    /// At least one path or --glob must be provided; to restore every tracked file,
+    /// pass `--glob '**/*'`.
     #[command(next_display_order = 100)]
     Get {
         /// Tracked files or directories to retrieve
+        #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
         /// Only retrieve the tracked files matching this glob, e.g. '*.csv'
         #[clap(long, short, conflicts_with = "recursive")]
@@ -192,12 +177,10 @@ pub enum Command {
     /// Check whether explicitly named BLAKE3 content is stored, without downloading it
     Availability {
         /// BLAKE3 hashes to look up
+        #[clap(required = true)]
         hashes: Vec<String>,
-        /// Also report whether these hashes appear in this file's history
-        #[clap(long, value_name = "FILE")]
-        path: Option<PathBuf>,
     },
-    /// Show the stored upload history of the given files
+    /// Show the stored upload history of files
     History {
         /// Files to show the history of (not folders)
         #[clap(required = true)]
@@ -245,13 +228,6 @@ pub struct Cli {
 
     #[clap(subcommand)]
     pub command: Command,
-}
-
-#[derive(Tabled)]
-struct HashTableRow {
-    path: String,
-    size: String,
-    blake3: String,
 }
 
 #[derive(Tabled)]
@@ -309,18 +285,17 @@ struct StatusSelection {
 
 fn status_row_selected(row: &dvs::inspect::StatusFacts, selection: StatusSelection) -> bool {
     selection.show_all
-        || row.state() != RowState::Succeeded
-        || (selection.current && row.status == Status::Current)
-        || (selection.absent && row.status == Status::Absent)
-        || (selection.stale && row.status == Status::Stale)
-        || (selection.modified && row.status == Status::Modified)
-        || (selection.unsynced && row.status == Status::Unsynced)
+        || row.error.is_some()
+        || (selection.current && row.status == Some(Status::Current))
+        || (selection.absent && row.status == Some(Status::Absent))
+        || (selection.stale && row.status == Some(Status::Stale))
+        || (selection.modified && row.status == Some(Status::Modified))
+        || (selection.unsynced && row.status == Some(Status::Unsynced))
 }
 
-/// An add row. Built here, not by changing `AddResult`'s serialization, so R
-/// output is unchanged.
-fn add_row(r: &AddResult) -> serde_json::Value {
-    let not_added = |code: serde_json::Value, message: &str| {
+/// An add row and whether it has a code (failed or cancelled).
+fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
+    let not_added = |code: ErrorCode, message: &str| {
         json!({
             "path": r.path,
             "outcome": null,
@@ -329,51 +304,41 @@ fn add_row(r: &AddResult) -> serde_json::Value {
             "stored_size": null,
             "code": code,
             "message": message,
+            "duration_ms": r.duration_ms,
         })
     };
-    let mut value = match &r.detail {
+    let (value, is_error) = match &r.detail {
         AddDetail::Success {
             outcome,
             hash,
             size,
             stored_size,
-        } => json!({
-            "path": r.path,
-            "outcome": outcome,
-            "hash": hash,
-            "size": size,
-            "stored_size": stored_size,
-        }),
-        AddDetail::Error { code, error } => not_added(json!(code), error),
-        AddDetail::Cancelled { message } => not_added(json!(CANCELLED_CODE), message),
+        } => (
+            json!({
+                "path": r.path,
+                "outcome": outcome,
+                "hash": hash,
+                "size": size,
+                "stored_size": stored_size,
+                "duration_ms": r.duration_ms,
+            }),
+            false,
+        ),
+        AddDetail::Error { code, error } => (not_added(*code, error), true),
+        AddDetail::Cancelled { message } => (not_added(ErrorCode::Cancelled, message), true),
     };
-    // Not serialized by the library, so R output is unchanged
-    value["duration_ms"] = json!(r.duration_ms);
-    output::row_error_fields(value)
+    (value, is_error)
 }
 
-fn status_row(row: &dvs::inspect::StatusFacts) -> serde_json::Value {
-    output::row_error_fields(serde_json::to_value(row).expect("status rows serialize"))
-}
-
-fn hash_row(row: &dvs::HashRow) -> serde_json::Value {
-    output::row_error_fields(serde_json::to_value(row).expect("hash rows serialize"))
-}
-
-/// Human output's closing line for a cancelled run; nothing when every
-/// file had already started.
-fn report_cancelled(not_started: usize, what: &str) {
-    if not_started == 0 {
-        return;
+/// The library's `error` text is the row's `message`, as on every other row.
+fn status_row(row: &dvs::inspect::StatusFacts) -> (serde_json::Value, bool) {
+    let mut value = serde_json::to_value(row).expect("status rows serialize");
+    if let Some(object) = value.as_object_mut()
+        && let Some(message) = object.remove("error")
+    {
+        object.insert("message".into(), message);
     }
-    eprintln!(
-        "Cancelled: {} not {what}",
-        if not_started == 1 {
-            "1 file was".to_string()
-        } else {
-            format!("{not_started} files were")
-        }
-    );
+    (value, row.error.is_some())
 }
 
 /// One line closing a human add: "Added 2, 1 unchanged, 1 failed".
@@ -415,24 +380,12 @@ fn add_summary(results: &[AddResult], dry_run: bool) -> String {
     line
 }
 
-/// 130 if cancelled, over everything else, then 1 if any row failed.
-fn summary_exit(summary: &RunSummary) -> Result<()> {
-    if summary.outcome == RunOutcome::Cancelled {
-        Err(Exit(EXIT_CANCELLED).into())
-    } else if summary.counts.failed > 0 {
-        Err(Exit(1).into())
-    } else {
-        Ok(())
+/// Ends a run that reported rows with the exit status of how it ended.
+fn summary_exit(verdict: impl Into<GetVerdict>) -> Result<()> {
+    match output::run_exit_code(verdict) {
+        output::EXIT_OK => Ok(()),
+        code => Err(Exit(code).into()),
     }
-}
-
-/// A table with right-aligned sizes, as status and hash print them.
-fn print_table<T: Tabled>(rows: Vec<T>) {
-    let mut table = tabled::Table::new(rows);
-    table
-        .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
-        .with(Modify::new(Rows::first()).with(Alignment::left()));
-    println!("{table}");
 }
 
 fn progress_style() -> ProgressStyle {
@@ -483,7 +436,7 @@ fn make_progress_callback(threshold: u64) -> impl Fn(&std::path::Path, u64) -> F
 fn run_device_login(url: &Url, machine: bool) -> Result<()> {
     if machine && events::active().is_none() {
         return Err(output::coded(
-            "authentication_required",
+            ErrorCode::AuthRequired,
             "Device authorization requires interactive login; run dvs login without --json",
         ));
     }
@@ -505,17 +458,11 @@ fn run_device_login(url: &Url, machine: bool) -> Result<()> {
     Ok(())
 }
 
-fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
+fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
     if let Some(n) = cli.threads {
         set_num_threads(n);
     }
     let current_dir = std::env::current_dir()?;
-    // Machine mode (--json, implied by --emit-events) never changes stored credentials
-    let credentials = if cli.json {
-        CredentialPolicy::Preserve
-    } else {
-        CredentialPolicy::Repair
-    };
 
     match cli.command {
         Command::Init(init_cmd) => {
@@ -535,7 +482,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 }
                 Init::Other(args) => {
                     return Err(output::coded(
-                        "invalid_arguments",
+                        ErrorCode::InvalidArguments,
                         init_backend_error(&args),
                     ));
                 }
@@ -548,11 +495,10 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 } => {
                     // Initializing on the server requires authentication, so run the
                     // login flow first if we don't have a token for it yet.
-                    if get_token_with(&url, credentials)?.is_none() {
+                    if get_token(&url)?.is_none() {
                         run_device_login(&url, cli.json)?;
                     }
                     let mut config = Config::new_server(name, url, Some(group));
-                    config.set_credential_policy(credentials);
                     if no_compression {
                         config.set_compression(Some(Compression::None));
                     }
@@ -568,7 +514,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
 
             let repo_root = init(&root, config)?;
             if cli.json {
-                let mut result = output::envelope("init", false, vec![], 0);
+                let mut result = output::envelope("init", false);
                 result["project_root"] = json!(repo_root);
                 output::emit(result);
             } else {
@@ -587,11 +533,10 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
 
             // Initializing on the server requires authentication, so run the
             // login flow first if we don't have a token for it yet.
-            if get_token_with(&url, credentials)?.is_none() {
+            if get_token(&url)?.is_none() {
                 run_device_login(&url, cli.json)?;
             }
             let mut config = Config::new_server(name, url, None);
-            config.set_credential_policy(credentials);
             config.set_compression(None);
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
@@ -601,7 +546,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 s.attach()?;
                 config.save(current_dir)?;
                 if cli.json {
-                    output::emit(output::envelope("attach", false, vec![], 0));
+                    output::emit(output::envelope("attach", false));
                 }
             }
         }
@@ -611,25 +556,30 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
             message,
             dry_run,
         } => {
-            let config = find_config(&current_dir, credentials)?;
+            let config = find_config(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
                 .into_iter()
                 .collect();
             if all_paths.is_empty() {
-                return Err(output::coded("no_files_selected", "No files to add"));
+                return Err(output::coded(ErrorCode::NoFilesSelected, "No files to add"));
             }
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
-                FileRow::Add(r) => Some(add_row(r)),
+                FileRow::Add(r) => {
+                    let (value, is_error) = add_row(r);
+                    Some(output::file_result(value, is_error))
+                }
                 _ => None,
             });
             if show_progress {
                 observer =
                     observer.with_bars(make_progress_callback(config.progress_bytes_threshold()));
             }
-            let ctx = ctx.clone().with_observer(Arc::new(observer));
+            let ctx = OperationContext::new()
+                .with_cancel(cancel.clone())
+                .with_observer(Arc::new(observer));
             let report = add_files(
                 all_paths,
                 &dvs_paths,
@@ -639,11 +589,17 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 dry_run,
                 &ctx,
             )?;
-            let summary = report.summary();
             let results = &report.files;
             if cli.json {
-                let files = results.iter().map(add_row).collect();
-                let mut result = output::run_envelope("add", dry_run, files, summary);
+                let files = results
+                    .iter()
+                    .map(|r| {
+                        let (value, is_error) = add_row(r);
+                        output::file_result(value, is_error)
+                    })
+                    .collect();
+                let mut result =
+                    output::rows_envelope("add", dry_run, files, report.counts, report.outcome);
                 result["bytes"] = json!(report.bytes);
                 output::emit_streamed(result);
             } else {
@@ -681,14 +637,13 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                     }
                 }
                 let line = add_summary(results, dry_run);
-                if summary.outcome == RunOutcome::Complete {
+                if report.outcome == RunOutcome::Complete {
                     println!("\n{line}");
                 } else {
                     eprintln!("\n{line}");
                 }
-                report_cancelled(summary.counts.cancelled, "added");
             }
-            summary_exit(&summary)?;
+            summary_exit(report.outcome)?;
         }
         Command::Status {
             paths: user_paths,
@@ -701,7 +656,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
             with_metadata,
             glob,
         } => {
-            let config = find_config(&current_dir, credentials)?;
+            let config = find_config(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !stale && !modified && !unsynced;
             let selection = StatusSelection {
@@ -716,13 +671,17 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
             let filter = (!user_paths.is_empty())
                 .then(|| PathFilter::from_user_paths(user_paths, recursive, &dvs_paths));
             // Rows stream as soon as their local check completes
-            let observer = CliObserver::new(false).with_rows(move |row| match row {
-                FileRow::Status(row) if status_row_selected(row, selection) => {
-                    Some(status_row(row))
-                }
-                _ => None,
-            });
-            let ctx = ctx.clone().with_observer(Arc::new(observer));
+            let mut ctx = OperationContext::new().with_cancel(cancel.clone());
+            if events::active().is_some() {
+                let observer = CliObserver::new(false).with_rows(move |row| match row {
+                    FileRow::Status(row) if status_row_selected(row, selection) => {
+                        let (value, is_error) = status_row(row);
+                        Some(output::file_result(value, is_error))
+                    }
+                    _ => None,
+                });
+                ctx = ctx.with_observer(Arc::new(observer));
+            }
             let report =
                 dvs::inspect::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
             let mut statuses = report.files;
@@ -730,13 +689,20 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 statuses.retain(|row| status_row_selected(row, selection));
             }
             // Over the rows shown
-            let summary = RunSummary::of(&statuses, report.cancelled);
+            let counts = Counts::of(&statuses);
+            let outcome = RunOutcome::of(&counts, report.cancelled);
             if cli.json {
-                let files = statuses.iter().map(status_row).collect();
-                output::emit_streamed(output::run_envelope("status", false, files, summary));
-                return summary_exit(&summary);
-            }
-            if statuses.is_empty() {
+                let files = statuses
+                    .iter()
+                    .map(|row| {
+                        let (value, has_code) = status_row(row);
+                        output::file_result(value, has_code)
+                    })
+                    .collect();
+                output::emit_streamed(output::rows_envelope(
+                    "status", false, files, counts, outcome,
+                ));
+            } else if statuses.is_empty() {
                 if show_all {
                     println!("No tracked files");
                 } else {
@@ -744,8 +710,8 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 }
             } else {
                 for row in statuses.iter().filter(|r| r.state() == RowState::Failed) {
-                    if let Some(message) = &row.message {
-                        eprintln!("Error getting status for {}: {message}", row.path.display());
+                    if let Some(error) = &row.error {
+                        eprintln!("Error getting status for {}: {error}", row.path.display());
                     }
                 }
 
@@ -756,19 +722,23 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                             row.metadata.as_ref().map(|metadata| {
                                 let mut formatted = StatusRowFull::from(metadata);
                                 formatted.path = row.path.display().to_string();
-                                formatted.status = row.status.to_string();
+                                formatted.status = row.status_name();
                                 formatted
                             })
                         })
                         .collect();
-                    print_table(rows);
+                    let mut table = tabled::Table::new(rows);
+                    table
+                        .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
+                        .with(Modify::new(Rows::first()).with(Alignment::left()));
+                    println!("{table}");
                 } else {
                     let rows: Vec<StatusRow> = statuses
                         .iter()
-                        .filter(|row| row.state() == RowState::Succeeded)
+                        .filter(|row| row.error.is_none())
                         .map(|row| StatusRow {
                             path: row.path.display().to_string(),
-                            status: row.status.to_string(),
+                            status: row.status_name(),
                             size: row
                                 .metadata
                                 .as_ref()
@@ -776,63 +746,17 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                                 .unwrap_or_default(),
                         })
                         .collect();
-                    print_table(rows);
+                    let mut table = tabled::Table::new(rows);
+                    table
+                        .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
+                        .with(Modify::new(Rows::first()).with(Alignment::left()));
+                    println!("{table}");
                 }
             }
-            if summary.counts.failed > 0 {
+            if !cli.json && counts.failed > 0 {
                 eprintln!("Error: Some files failed to get status");
             }
-            report_cancelled(summary.counts.cancelled, "checked");
-            summary_exit(&summary)?;
-        }
-        Command::Hash {
-            paths: user_paths,
-            recursive,
-            glob,
-        } => {
-            let config = find_config(&current_dir, credentials)?;
-            let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let filter = (!user_paths.is_empty())
-                .then(|| PathFilter::from_user_paths(user_paths, recursive, &dvs_paths));
-            let observer = CliObserver::new(false).with_rows(|row| match row {
-                FileRow::Hash(row) => Some(hash_row(row)),
-                _ => None,
-            });
-            let ctx = ctx.clone().with_observer(Arc::new(observer));
-            let report = hash_files(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
-            let summary = report.summary();
-            let rows = &report.files;
-            if cli.json {
-                let files = rows.iter().map(hash_row).collect();
-                output::emit_streamed(output::run_envelope("hash", false, files, summary));
-            } else {
-                for row in rows.iter().filter(|r| r.state() == RowState::Failed) {
-                    if let Some(message) = &row.message {
-                        eprintln!("Error hashing {}: {message}", row.path.display());
-                    }
-                }
-                let hashed: Vec<HashTableRow> = rows
-                    .iter()
-                    .filter_map(|row| {
-                        let hashes = row.hashes.as_ref()?;
-                        Some(HashTableRow {
-                            path: row.path.display().to_string(),
-                            size: row.size.map(format_size).unwrap_or_default(),
-                            blake3: hashes.blake3.clone(),
-                        })
-                    })
-                    .collect();
-                if rows.is_empty() {
-                    println!("No files to hash");
-                } else if !hashed.is_empty() {
-                    print_table(hashed);
-                }
-                if summary.counts.failed > 0 {
-                    eprintln!("Error: Some files failed to hash");
-                }
-                report_cancelled(summary.counts.cancelled, "hashed");
-            }
-            summary_exit(&summary)?;
+            summary_exit(outcome)?;
         }
         Command::Get {
             paths,
@@ -842,23 +766,18 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
             on_conflict,
             force,
         } => {
-            let bare = paths.is_empty() && glob.is_none() && !recursive;
-            let setup = || -> Result<_> {
-                let config = find_config(&current_dir, credentials)?;
-                let explicit = if force {
-                    Some(OnConflict::Overwrite)
-                } else {
-                    on_conflict
-                        .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
-                        .transpose()?
-                };
-                let (on_conflict, source) = config.get_on_conflict(explicit)?;
-                let dvs_paths = DvsPaths::from_cwd(&config)?;
-                let selection =
-                    select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
-                Ok((config, on_conflict, source, dvs_paths, selection))
+            let config = find_config(&current_dir)?;
+            let explicit = if force {
+                Some(OnConflict::Overwrite)
+            } else {
+                on_conflict
+                    .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
+                    .transpose()?
             };
-            let (config, on_conflict, source, dvs_paths, selection) = setup()?;
+            let (on_conflict, source) = config.get_on_conflict(explicit)?;
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
+            let bare = paths.is_empty() && glob.is_none() && !recursive;
+            let selection = select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
             // A bare get at the project root with nothing directly in it: the
             // data is in subdirectories, which -r reaches
             let at_root = dvs_paths.cwd() == dvs_paths.repo_root();
@@ -878,14 +797,16 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
-                FileRow::Get(r) => Some(get_cmd::row_json(r)),
+                FileRow::Get(r) => Some(serde_json::to_value(r).expect("rows serialize")),
                 _ => None,
             });
             if show_progress {
                 observer =
                     observer.with_bars(make_progress_callback(config.progress_bytes_threshold()));
             }
-            let ctx = ctx.clone().with_observer(Arc::new(observer));
+            let ctx = OperationContext::new()
+                .with_cancel(cancel.clone())
+                .with_observer(Arc::new(observer));
             let report = get_files(
                 selection,
                 &dvs_paths,
@@ -908,15 +829,11 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 if let Some(hint) = &recursive_hint {
                     eprintln!("  {hint}");
                 }
-                report_cancelled(report.counts.cancelled, "retrieved");
             }
-            let code = get_cmd::exit_code(&report);
-            if code != get_cmd::EXIT_OK {
-                return Err(Exit(code).into());
-            }
+            summary_exit(report.verdict())?;
         }
         Command::Info => {
-            let config = find_config(&current_dir, credentials)?;
+            let config = find_config(&current_dir)?;
             let compression = config.compression().to_string();
             // What get does with local changes, and where that was set. An
             // invalid setting is shown, not an error: only get refuses to run
@@ -927,7 +844,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
             };
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let info_json = |fields: serde_json::Value| {
-                let mut result = output::envelope("info", false, vec![], 0);
+                let mut result = output::envelope("info", false);
                 for (key, value) in fields.as_object().expect("info fields are an object") {
                     result[key] = value.clone();
                 }
@@ -936,7 +853,6 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                     json!(on_conflict.as_ref().ok().map(|(_, s)| s.as_str()));
                 result["project_root"] = json!(dvs_paths.repo_root());
                 result["metadata_directory"] = json!(dvs_paths.metadata_folder());
-                result["protocol"] = json!({"versions": [1], "capabilities": ["json_results", "get_conflict_policy", "connectivity_status", "status_facts", "availability", "history", "event_stream", "device_login_events"]});
                 output::emit(result);
             };
 
@@ -961,7 +877,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 Backend::Server(s) => {
                     // Not logged in is an answer, not an error
                     let logged_in = if cli.json {
-                        match dvs::auth::get_token_readonly(&s.url) {
+                        match get_token(&s.url) {
                             Ok(token) => token.is_some(),
                             Err(error)
                                 if dvs::backend_error_code(&error)
@@ -971,7 +887,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                             }
                             Err(error) => {
                                 return Err(output::coded(
-                                    ErrorCode::CredentialsUnreadable.as_str(),
+                                    ErrorCode::CredentialsUnreadable,
                                     format!("Cannot read credentials: {error}"),
                                 ));
                             }
@@ -980,12 +896,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                         get_token(&s.url)?.is_some()
                     };
                     let (access, connection, connection_error) = if logged_in {
-                        let access_result = if cli.json {
-                            s.access_readonly().map(Some)
-                        } else {
-                            s.access()
-                        };
-                        match access_result {
+                        match s.access() {
                             Ok(access) => (access, "available", None),
                             // A 403 is an answer (no membership); a rejected login stays an error
                             Err(error) if cli.json => match dvs::backend_error_code(&error) {
@@ -1064,32 +975,27 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 }
             }
         }
-        Command::Availability { hashes, path } => {
-            let config = find_config(&current_dir, credentials)?;
-            let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let (files, failed) =
-                read_cmd::availability(config.backend(), &dvs_paths, &hashes, path)?;
+        Command::Availability { hashes } => {
+            let config = find_config(&current_dir)?;
+            let (files, failed) = read_cmd::availability(config.backend(), &hashes)?;
             if cli.json {
-                output::emit(output::envelope("availability", false, files, failed));
+                let counts = Counts::new(files.len(), failed);
+                let outcome = RunOutcome::of(&counts, false);
+                output::emit(output::rows_envelope(
+                    "availability",
+                    false,
+                    files,
+                    counts,
+                    outcome,
+                ));
             } else {
                 for row in files {
-                    let line = format!(
+                    println!(
                         "{} {}",
                         row["state"].as_str().unwrap_or("unknown"),
                         row["hash"].as_str().unwrap_or_default()
                     );
-                    if let Some(in_history) = row["in_history"].as_bool() {
-                        println!(
-                            "{line} {} in the specified file's history",
-                            if in_history { "is" } else { "is not" }
-                        );
-                    } else {
-                        println!("{line}");
-                    }
                     if let Some(message) = row["message"].as_str() {
-                        eprintln!("{message}");
-                    }
-                    if let Some(message) = row["history_message"].as_str() {
                         eprintln!("{message}");
                     }
                 }
@@ -1103,11 +1009,11 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 .into_iter()
                 .map(|path| {
                     path.into_os_string().into_string().map_err(|_| {
-                        output::coded("invalid_arguments", "history paths must be UTF-8")
+                        output::coded(ErrorCode::InvalidArguments, "history paths must be UTF-8")
                     })
                 })
                 .collect::<Result<_>>()?;
-            let config = find_config(&current_dir, credentials)?;
+            let config = find_config(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let entries = read_cmd::history(
                 config.backend(),
@@ -1115,8 +1021,12 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 user_paths.into_iter().map(PathBuf::from).collect(),
             )?;
             if cli.json {
-                let rows = entries.into_iter().map(output::row_error_fields).collect();
-                output::emit(output::envelope("history", false, rows, 0));
+                let rows: Vec<_> = entries.into_iter().map(output::row_error_fields).collect();
+                let counts = Counts::new(rows.len(), 0);
+                let outcome = RunOutcome::of(&counts, false);
+                output::emit(output::rows_envelope(
+                    "history", false, rows, counts, outcome,
+                ));
             } else if entries.is_empty() {
                 println!("No history");
             } else {
@@ -1147,34 +1057,45 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                         }
                     })
                     .collect();
-                print_table(rows);
+                println!("{}", tabled::Table::new(rows));
             }
         }
         Command::Login { url: Some(url) } => {
             run_device_login(&url, cli.json)?;
             if cli.json {
-                output::emit(output::envelope("login", false, vec![], 0));
+                output::emit(output::envelope("login", false));
             }
         }
         Command::Login { url: None } => {
-            let config = find_config(&current_dir, credentials)?;
+            let config = find_config(&current_dir)?;
 
             if let Some(url) = config.server_url() {
                 run_device_login(url, cli.json)?;
                 if cli.json {
-                    output::emit(output::envelope("login", false, vec![], 0));
+                    output::emit(output::envelope("login", false));
                 }
             } else {
                 bail!("This project is not using a dvs server");
             }
         }
         Command::Logout => {
-            let config = find_config(&current_dir, credentials)?;
+            let config = find_config(&current_dir)?;
 
             if let Some(url) = config.server_url() {
-                let Some(token) = get_token(url)? else {
+                let token = match get_token(url) {
+                    // Nothing to revoke: reset the unreadable store
+                    Err(e)
+                        if dvs::backend_error_code(&e)
+                            == Some(ErrorCode::CredentialsUnreadable) =>
+                    {
+                        delete_token(url)?;
+                        None
+                    }
+                    token => token?,
+                };
+                let Some(token) = token else {
                     if cli.json {
-                        let mut result = output::envelope("logout", false, vec![], 0);
+                        let mut result = output::envelope("logout", false);
                         result["revoked"] = json!(null);
                         result["warnings"] = json!([]);
                         output::emit(result);
@@ -1190,13 +1111,13 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                     let deleted = delete_token(url);
                     let mut result = match &deleted {
                         Err(delete_error) => output::problem("logout", false, delete_error),
-                        Ok(_) => output::envelope("logout", false, vec![], 0),
+                        Ok(_) => output::envelope("logout", false),
                     };
                     result["revoked"] = json!(revoke_error.is_none());
                     result["warnings"] = json!(
                         revoke_error
                             .as_ref()
-                            .map(|e| json!({"code": "revoke_failed", "message": e.to_string()}))
+                            .map(|e| json!({"code": ErrorCode::RevokeFailed, "message": e.to_string()}))
                             .into_iter()
                             .collect::<Vec<_>>()
                     );
@@ -1249,11 +1170,9 @@ impl std::fmt::Display for Exit {
 
 impl std::error::Error for Exit {}
 
-fn find_config(current_dir: &std::path::Path, credentials: CredentialPolicy) -> Result<Config> {
-    let mut config = Config::find(current_dir)
-        .ok_or_else(|| output::coded("not_in_project", "Not in a DVS repository"))??;
-    config.set_credential_policy(credentials);
-    Ok(config)
+fn find_config(current_dir: &std::path::Path) -> Result<Config> {
+    Config::find(current_dir)
+        .ok_or_else(|| output::coded(ErrorCode::NotInProject, "Not in a DVS repository"))?
 }
 
 impl Command {
@@ -1263,7 +1182,6 @@ impl Command {
             Self::Attach { .. } => "attach",
             Self::Add { .. } => "add",
             Self::Status { .. } => "status",
-            Self::Hash { .. } => "hash",
             Self::Get { .. } => "get",
             Self::Info => "info",
             Self::Availability { .. } => "availability",
@@ -1277,7 +1195,7 @@ impl Command {
     fn cancellable(&self) -> bool {
         matches!(
             self,
-            Self::Add { .. } | Self::Get { .. } | Self::Status { .. } | Self::Hash { .. }
+            Self::Add { .. } | Self::Get { .. } | Self::Status { .. }
         )
     }
 
@@ -1301,22 +1219,20 @@ fn main() {
                 if emit_events {
                     events::activate("cli");
                 }
-                let error = output::coded("invalid_arguments", error.to_string());
+                let error = output::coded(ErrorCode::InvalidArguments, error.to_string());
                 output::emit(output::problem("cli", false, &error));
                 std::process::exit(finish_events("cli", false, 2));
             }
             error.exit();
         }
     };
-    // One operation per run: its start time and cancel flag are shared by every
-    // library call the command makes
-    let ctx = OperationContext::new();
-    output::start_clock(ctx.started(), ctx.started_at());
+    output::start_clock(Instant::now(), SystemTime::now());
     let command = cli.command.name();
     let dry_run = cli.command.dry_run();
-    let cancellable = cli.command.cancellable();
-    if cancellable {
-        cancel::install(ctx.cancel_token(), cli.emit_events);
+    // One cancel flag per run, shared by every library call the command makes
+    let cancel = CancelToken::new();
+    if cli.command.cancellable() {
+        cancel::install(&cancel, cli.emit_events);
     }
     if cli.emit_events {
         events::activate(command);
@@ -1324,28 +1240,18 @@ fn main() {
         cli.json = true;
     }
     let json = cli.json;
-    let code = match try_main(cli, &ctx) {
+    let code = match try_main(cli, &cancel) {
         Ok(()) => 0,
         Err(error) => {
             if let Some(Exit(code)) = error.downcast_ref::<Exit>() {
                 *code
             } else {
-                // A run cancelled before it failed is still cancelled
-                let cancelled = cancellable && ctx.is_cancelled();
                 if json {
-                    let mut result = output::problem(command, dry_run, &error);
-                    if cancelled {
-                        result["outcome"] = json!("cancelled");
-                    }
-                    output::emit(result);
+                    output::emit(output::problem(command, dry_run, &error));
                 } else {
                     eprintln!("Error: {error}");
                 }
-                if cancelled {
-                    EXIT_CANCELLED
-                } else {
-                    output::exit_code(&error)
-                }
+                output::exit_code(&error)
             }
         }
     };
@@ -1362,7 +1268,10 @@ fn finish_events(command: &str, dry_run: bool, mut code: i32) -> i32 {
             let mut result = output::problem(
                 command,
                 dry_run,
-                &output::coded("operation_failed", "Command did not produce a result"),
+                &output::coded(
+                    ErrorCode::OperationFailed,
+                    "Command did not produce a result",
+                ),
             );
             output::stamp(&mut result);
             result

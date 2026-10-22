@@ -1,14 +1,14 @@
 //! Local facts for machine-readable status, using cached hashes when available.
 use crate::cache::{self, FileStat};
 use crate::operation::{
-    CANCELLED_CODE, FileRow, LazyPhase, OperationContext, OperationPlan, OperationRow, Phase,
-    PhaseGuard, RowState, RunSummary,
+    FileRow, LazyPhase, OperationContext, OperationPlan, OperationRow, Phase, PhaseGuard, RowState,
 };
-use crate::{DvsPaths, FileMetadata, Hashes, PathFilter, Status};
+use crate::{DvsPaths, ErrorCode, FileMetadata, Hashes, PathFilter, Status};
 use anyhow::Result;
 use fs_err as fs;
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::ser::SerializeStruct;
+use serde::{Serialize, Serializer};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -19,50 +19,91 @@ pub struct Baseline {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct WorkingCopy {
+    /// Whether the working file is present and available for inspection.
     pub state: &'static str,
     pub hashes: Option<Hashes>,
     pub size: Option<u64>,
     pub hash_source: Option<&'static str>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct StatusFacts {
     pub path: PathBuf,
-    pub status: Status,
+    /// `None` on an error or cancelled row, which `code` and `error` describe.
+    pub status: Option<Status>,
     pub metadata: Option<FileMetadata>,
     pub working: WorkingCopy,
     pub baseline: Option<Baseline>,
-    pub code: Option<&'static str>,
-    pub message: Option<String>,
+    pub code: Option<ErrorCode>,
+    pub error: Option<String>,
+}
+
+impl StatusFacts {
+    /// The row's status as shown to people and in results: `error` on an
+    /// error row, `cancelled` on a row a cancel stopped.
+    pub fn status_name(&self) -> String {
+        match (self.status, self.code) {
+            (Some(status), _) => status.to_string(),
+            (None, Some(ErrorCode::Cancelled)) => "cancelled".to_string(),
+            (None, _) => "error".to_string(),
+        }
+    }
+}
+
+impl Serialize for StatusFacts {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut row = s.serialize_struct("StatusFacts", 7)?;
+        row.serialize_field("path", &self.path)?;
+        row.serialize_field("status", &self.status_name())?;
+        row.serialize_field("metadata", &self.metadata)?;
+        row.serialize_field("working", &self.working)?;
+        row.serialize_field("baseline", &self.baseline)?;
+        row.serialize_field("code", &self.code)?;
+        row.serialize_field("error", &self.error)?;
+        row.end()
+    }
 }
 
 impl OperationRow for StatusFacts {
     fn state(&self) -> RowState {
-        match self.status {
-            Status::Error => RowState::Failed,
-            Status::Cancelled => RowState::Cancelled,
-            _ => RowState::Succeeded,
+        match (self.status, self.code) {
+            (Some(_), _) => RowState::Succeeded,
+            (None, Some(ErrorCode::Cancelled)) => RowState::Cancelled,
+            (None, _) => RowState::Failed,
         }
     }
 }
 
 /// The rows of a status run, sorted by path.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct StatusReport {
     pub files: Vec<StatusFacts>,
     /// The cancel flag was set when the run finished
     pub cancelled: bool,
 }
 
-impl StatusReport {
-    pub fn summary(&self) -> RunSummary {
-        RunSummary::of(&self.files, self.cancelled)
+/// How a present working file relates to its record and to the local baseline.
+fn classify(
+    hashes: &Hashes,
+    size: u64,
+    metadata: &FileMetadata,
+    baseline: Option<&Baseline>,
+) -> Status {
+    if *hashes == metadata.hashes && size == metadata.size {
+        Status::Current
+    } else {
+        match baseline {
+            Some(b) if b.blake3 == hashes.blake3 && b.size == size => Status::Stale,
+            Some(_) => Status::Modified,
+            None => Status::Unsynced,
+        }
     }
 }
 
 /// Inspect tracked files in parallel. Each row goes to `ctx`'s observer as
 /// soon as it completes, so callers can stream rows; the returned rows are
 /// sorted by path. `hash` is reported only once a file is actually hashed.
-/// Once `ctx` is cancelled, files not yet started get a `cancelled` row.
+/// Once `ctx` is cancelled, files not yet started get a `cancelled` row, and a
+/// run that fails after a cancel still returns its (empty) cancelled report.
 ///
 /// Paths in the result are relative to `paths.repo_root()`, independent of cwd.
 pub fn inspect_status(
@@ -71,18 +112,42 @@ pub fn inspect_status(
     glob_pattern: Option<&str>,
     ctx: &OperationContext,
 ) -> Result<StatusReport> {
+    match inspect_all(paths, filter, glob_pattern, ctx) {
+        Ok(files) => Ok(StatusReport {
+            files,
+            cancelled: ctx.is_cancelled(),
+        }),
+        Err(_) if ctx.is_cancelled() => Ok(StatusReport {
+            files: Vec::new(),
+            cancelled: true,
+        }),
+        Err(e) => Err(e),
+    }
+}
+
+fn inspect_all(
+    paths: &DvsPaths,
+    filter: Option<&PathFilter>,
+    glob_pattern: Option<&str>,
+    ctx: &OperationContext,
+) -> Result<Vec<StatusFacts>> {
     let observer = ctx.observer();
     let scan = PhaseGuard::start(observer, Phase::Scan);
     let (entries, cache, pool) = status_scan_inputs(paths, filter, glob_pattern)?;
-    // What hashing will read: the working files that are regular files
-    let bytes_total = pool.install(|| {
-        entries
-            .par_iter()
-            .filter_map(|path| fs::symlink_metadata(paths.file_path(path)).ok())
-            .filter(|meta| meta.is_file())
-            .map(|meta| meta.len())
-            .sum()
-    });
+    // What hashing will read: the working files that are regular files. An
+    // extra stat per file, so only when someone hears the plan.
+    let bytes_total = if ctx.is_observed() {
+        pool.install(|| {
+            entries
+                .par_iter()
+                .filter_map(|path| fs::symlink_metadata(paths.file_path(path)).ok())
+                .filter(|meta| meta.is_file())
+                .map(|meta| meta.len())
+                .sum()
+        })
+    } else {
+        0
+    };
     scan.finish();
     observer.planned(&OperationPlan {
         files_total: entries.len() as u64,
@@ -107,17 +172,14 @@ pub fn inspect_status(
     });
     hashing.finish();
     results.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(StatusReport {
-        files: results,
-        cancelled: ctx.is_cancelled(),
-    })
+    Ok(results)
 }
 
 /// A file the cancelled operation never looked at.
 fn cancelled_row(path: PathBuf) -> StatusFacts {
     StatusFacts {
         path,
-        status: Status::Cancelled,
+        status: None,
         metadata: None,
         working: WorkingCopy {
             state: "unknown",
@@ -126,8 +188,8 @@ fn cancelled_row(path: PathBuf) -> StatusFacts {
             hash_source: None,
         },
         baseline: None,
-        code: Some(CANCELLED_CODE),
-        message: Some("cancelled before this file was checked".to_string()),
+        code: Some(ErrorCode::Cancelled),
+        error: Some("cancelled before this file was checked".to_string()),
     }
 }
 
@@ -165,7 +227,7 @@ fn inspect_path(
 ) -> StatusFacts {
     let mut row = StatusFacts {
         path: path.clone(),
-        status: Status::Error,
+        status: None,
         metadata: None,
         working: WorkingCopy {
             state: "unknown",
@@ -175,14 +237,14 @@ fn inspect_path(
         },
         baseline: None,
         code: None,
-        message: None,
+        error: None,
     };
     let facts = (|| -> Result<()> {
-        row.code = Some("bad_metadata");
+        row.code = Some(ErrorCode::BadMetadata);
         row.metadata = Some(serde_json::from_reader(fs::File::open(
             paths.metadata_path(&path),
         )?)?);
-        row.code = Some("local_read_failed");
+        row.code = Some(ErrorCode::IoError);
         let key = path.to_string_lossy();
         row.baseline = cache
             .as_ref()
@@ -208,7 +270,7 @@ fn inspect_path(
                 if e.downcast_ref::<std::io::Error>()
                     .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
             {
-                row.status = Status::Absent;
+                row.status = Some(Status::Absent);
                 row.working.state = "absent";
                 return Ok(());
             }
@@ -216,8 +278,8 @@ fn inspect_path(
         };
         anyhow::ensure!(full.is_file(), "working path is not a regular file");
         row.working.size = Some(stat.size);
-        // Hashing starts here, as in `hash`: a cache lookup counts, while
-        // cancelled, absent and failed rows never open the phase.
+        // Hashing starts here: a cache lookup counts, while
+        // absent and failed rows never open the phase.
         hashing.begin();
         let hit = cache
             .as_ref()
@@ -229,21 +291,12 @@ fn inspect_path(
                 (hashes, size, "computed")
             }
         };
-        let target = row.metadata.as_ref().unwrap();
-        let matches_metadata = hashes == target.hashes && size == target.size;
-        let matches_baseline = row
-            .baseline
-            .as_ref()
-            .is_some_and(|baseline| baseline.blake3 == hashes.blake3 && baseline.size == size);
-        row.status = if matches_metadata {
-            Status::Current
-        } else if matches_baseline {
-            Status::Stale
-        } else if row.baseline.is_some() {
-            Status::Modified
-        } else {
-            Status::Unsynced
-        };
+        row.status = Some(classify(
+            &hashes,
+            size,
+            row.metadata.as_ref().unwrap(),
+            row.baseline.as_ref(),
+        ));
         row.working = WorkingCopy {
             state: "present",
             hashes: Some(hashes),
@@ -255,8 +308,8 @@ fn inspect_path(
     match facts {
         Ok(()) => row.code = None,
         Err(e) => {
-            row.status = Status::Error;
-            row.message = Some(format!("{e:#}"));
+            row.status = None;
+            row.error = Some(format!("{e:#}"));
         }
     }
     row
@@ -265,10 +318,11 @@ fn inspect_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Compression;
     use crate::operation::OperationObserver;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
-    use std::sync::Mutex;
     use std::sync::mpsc;
+    use uuid::Uuid;
     fn fixture() -> (tempfile::TempDir, DvsPaths) {
         let (temp, root) = create_temp_git_repo();
         let (config, _) = init_dvs_repo(&root);
@@ -294,11 +348,14 @@ mod tests {
         token.cancel();
         let ctx = OperationContext::new().with_cancel(token);
         let report = inspect_status(&paths, None, None, &ctx).unwrap();
-        assert_eq!(report.files[0].status, Status::Cancelled);
-        assert_eq!(report.files[0].code, Some(CANCELLED_CODE));
-        let summary = report.summary();
-        assert_eq!(summary.outcome, crate::RunOutcome::Cancelled);
-        assert_eq!((summary.counts.cancelled, summary.counts.failed), (1, 0));
+        assert!(report.cancelled);
+        let row = &report.files[0];
+        assert_eq!((row.status, row.code), (None, Some(ErrorCode::Cancelled)));
+        assert_eq!(row.state(), RowState::Cancelled);
+        assert_eq!(serde_json::to_value(row).unwrap()["status"], "cancelled");
+        // A run that fails after a cancel (here an invalid glob) is still cancelled
+        let report = inspect_status(&paths, None, Some("["), &ctx).unwrap();
+        assert!(report.cancelled && report.files.is_empty());
     }
 
     #[test]
@@ -307,14 +364,14 @@ mod tests {
         let rows = inspect_status(&paths, None, None, &OperationContext::new())
             .unwrap()
             .files;
-        assert_eq!(rows[0].status, Status::Current);
+        assert_eq!(rows[0].status, Some(Status::Current));
         assert_eq!(rows[0].working.hash_source, Some("computed"));
         #[cfg(feature = "cache")]
         {
             let rows = inspect_status(&paths, None, None, &OperationContext::new())
                 .unwrap()
                 .files;
-            assert_eq!(rows[0].status, Status::Current);
+            assert_eq!(rows[0].status, Some(Status::Current));
             assert_eq!(rows[0].working.hash_source, Some("cache"));
             // A changed stat invalidates the cache without reading new file content.
             fs::write(paths.repo_root().join("data.txt"), b"changed content").unwrap();
@@ -323,7 +380,7 @@ mod tests {
                     .unwrap()
                     .files[0]
                     .status,
-                Status::Unsynced
+                Some(Status::Unsynced)
             );
         }
     }
@@ -334,8 +391,8 @@ mod tests {
         let rows = inspect_status(&paths, None, None, &OperationContext::new())
             .unwrap()
             .files;
-        assert_eq!(rows[0].status, Status::Absent);
-        assert!(rows[0].message.is_none());
+        assert_eq!(rows[0].status, Some(Status::Absent));
+        assert!(rows[0].error.is_none());
         fs::write(
             paths.metadata_path(std::path::Path::new("data.txt")),
             b"broken",
@@ -344,8 +401,9 @@ mod tests {
         let rows = inspect_status(&paths, None, None, &OperationContext::new())
             .unwrap()
             .files;
-        assert_eq!(rows[0].status, Status::Error);
-        assert_eq!(rows[0].code, Some("bad_metadata"));
+        assert_eq!(rows[0].status, None);
+        assert_eq!(serde_json::to_value(&rows[0]).unwrap()["status"], "error");
+        assert_eq!(rows[0].code, Some(ErrorCode::BadMetadata));
     }
 
     #[test]
@@ -376,7 +434,7 @@ mod tests {
             let row = row_receiver
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
-            assert_eq!(row.status, Status::Current);
+            assert_eq!(row.status, Some(Status::Current));
             assert!(!scan.is_finished());
             continue_sender.send(()).unwrap();
             scan.join().unwrap().unwrap();
@@ -385,7 +443,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "cache")]
-    fn baseline_distinguishes_clean_old_version_from_edits() {
+    fn baseline_distinguishes_stale_from_modified() {
         let (_temp, paths) = fixture();
         let cache = cache::open_cache(&paths).unwrap();
         let rows = inspect_status(&paths, None, None, &OperationContext::new())
@@ -409,12 +467,122 @@ mod tests {
         let stale = inspect_status(&paths, None, None, &OperationContext::new())
             .unwrap()
             .files;
-        assert_eq!(stale[0].status, Status::Stale);
+        assert_eq!(stale[0].status, Some(Status::Stale));
         fs::write(paths.repo_root().join("data.txt"), b"user edits").unwrap();
         let modified = inspect_status(&paths, None, None, &OperationContext::new())
             .unwrap()
             .files;
-        assert_eq!(modified[0].status, Status::Modified);
+        assert_eq!(modified[0].status, Some(Status::Modified));
+    }
+
+    #[test]
+    fn status_returns_empty_vec_for_repo_with_no_tracked_files() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let paths =
+            DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name()).unwrap();
+
+        let statuses = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
+        assert!(statuses.is_empty());
+    }
+
+    /// Helper to set up a repo with files at various directory depths.
+    /// Returns (TempDir, DvsPaths) with tracked files:
+    ///   "a.txt", "dir1/b.txt", "dir1/sub/c.txt", "dir2/d.txt"
+    fn setup_filtered_repo() -> (tempfile::TempDir, DvsPaths) {
+        let (tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths =
+            DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name()).unwrap();
+
+        for name in ["a.txt", "dir1/b.txt", "dir1/sub/c.txt", "dir2/d.txt"] {
+            let file_path = create_file(&root, name, name.as_bytes());
+            let mut metadata =
+                FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+            metadata
+                .save(Uuid::new_v4(), &file_path, backend, &paths, name, None)
+                .unwrap();
+        }
+        (tmp, paths)
+    }
+
+    #[test]
+    fn status_with_filter() {
+        let (_tmp, paths) = setup_filtered_repo();
+
+        // Relative path filter
+        let filter = PathFilter {
+            paths: vec![PathBuf::from("dir1")],
+            recursive: false,
+        };
+        let statuses = inspect_status(&paths, Some(&filter), None, &OperationContext::new())
+            .unwrap()
+            .files;
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
+
+        // Absolute path filter via from_user_paths
+        let abs_path = paths.repo_root().join("dir1/b.txt");
+        let filter = PathFilter::from_user_paths(vec![abs_path], false, &paths);
+        let statuses = inspect_status(&paths, Some(&filter), None, &OperationContext::new())
+            .unwrap()
+            .files;
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
+    }
+
+    #[test]
+    fn status_whole_repo_applies_glob() {
+        let (_tmp, paths) = setup_filtered_repo();
+
+        // No filter (whole repo) + glob: the glob still applies, matched against
+        // the full repo-relative path. `*.txt` (literal separator) hits only
+        // root-level files.
+        let statuses = inspect_status(&paths, None, Some("*.txt"), &OperationContext::new())
+            .unwrap()
+            .files;
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].path, PathBuf::from("a.txt"));
+
+        // `**/*.txt` reaches every tracked file.
+        let statuses = inspect_status(&paths, None, Some("**/*.txt"), &OperationContext::new())
+            .unwrap()
+            .files;
+        assert_eq!(statuses.len(), 4);
+    }
+
+    #[test]
+    fn status_bare_glob_anchors_to_cwd_subdir() {
+        let (_tmp, paths) = setup_filtered_repo();
+        let root = paths.repo_root().to_path_buf();
+        // cwd = dir1: a bare glob must scope to the cwd (like add/get), not the
+        // repo root. Pre-fix it globbed the whole repo from any directory.
+        let sub =
+            DvsPaths::new(fs::canonicalize(root.join("dir1")).unwrap(), root, ".dvs").unwrap();
+
+        // Literal separator: only the direct child dir1/b.txt, not a.txt/dir2.
+        let got: Vec<_> = inspect_status(&sub, None, Some("*.txt"), &OperationContext::new())
+            .unwrap()
+            .files
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert_eq!(got, vec![PathBuf::from("dir1/b.txt")]);
+
+        // Recursive glob reaches dir1/sub/c.txt, still scoped under dir1.
+        let got: Vec<_> = inspect_status(&sub, None, Some("**/*.txt"), &OperationContext::new())
+            .unwrap()
+            .files
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert_eq!(
+            got,
+            vec![PathBuf::from("dir1/b.txt"), PathBuf::from("dir1/sub/c.txt")]
+        );
     }
 
     #[test]

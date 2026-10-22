@@ -88,13 +88,14 @@ them as success. Incompatible semantics need a new protocol version.
 
 Every `--json` result is one envelope, error envelopes included: `v` (`1`), `command` (`cli` for argument
 parsing errors), `outcome` (`complete`, `partial`, `failed` or `cancelled`; `get` also `aborted`), `dry_run` (a requested
-mutation preview), `counts`, `error`, `files` (the per-file, per-hash or per-entry rows; empty for commands
-without rows), plus the command's own fields (`add`/`get` `bytes`, `get` `on_conflict`/`source`, `init`
-`project_root`, `logout` `revoked`/`warnings`, `info` its discovery fields). It carries its timing:
-`started_at` and `finished_at` (RFC 3339 UTC with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and
-`duration_ms` (integer milliseconds). `add`, `get` and `hash` rows have a `duration_ms` for that file's work
-(hash, transfer, record), `null` for a row that did no work. Every time in JSON output is RFC 3339 UTC: `started_at`/`finished_at`
-and history's `timestamp` with milliseconds (the audit log on disk keeps unix seconds), a record's `add_time`
+mutation preview), `error`, and for commands with rows (`add`, `get`, `status`, `availability`, `history`)
+`counts` and `files` (the per-file, per-hash or per-entry rows; empty in an error envelope), plus the command's
+own fields (`add`/`get` `bytes`, `get` `on_conflict`/`source`, `init` `project_root`, `logout`
+`revoked`/`warnings`, `info` its discovery fields). It carries its timing: `started_at` and `finished_at`
+(RFC 3339 UTC with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and `duration_ms` (integer milliseconds).
+`add` and `get` rows have a `duration_ms` for that file's work (hash, transfer, record), `null` for a row that
+did no work. Every time in JSON output is RFC 3339 UTC: `started_at`/`finished_at` and history's `timestamp` with
+milliseconds (the audit log on disk keeps unix seconds), a record's `add_time` is given
 as the record stores it. The only exception is event `ts` (unix milliseconds).
 
 ```json
@@ -113,81 +114,86 @@ as the record stores it. The only exception is event `ts` (unix milliseconds).
 Errors have one shape. The envelope's `error` is `null` or `{code, message, hint}`; every row of every command
 has `code`, `message` and `hint` (all `null` on success; `hint` is `null` where there is none). Rows have fixed
 keys: a field that does not apply is `null`, never missing (an `add` error row has `outcome`, `hash`, `size`,
-`stored_size` as `null`). `counts` always has `total` (the rows), `failed` (rows that failed), `cancelled` (rows a
+`stored_size` as `null`). `counts` has `total` (the rows), `failed` (rows that failed), `cancelled` (rows a
 cancel stopped, see Cancellation) and `succeeded` (the rest), so `total = succeeded + failed + cancelled`; get
-adds its detailed counts and defines `succeeded` itself. `error` is a failure of the whole
-command; per-file failures stay in the rows, so a `partial` result normally has `error: null`. A `hint` is the
-next thing to try, for people (only `get` fills row hints today).
+adds its detailed counts and defines `succeeded` itself. All are computed by the library. `error` is a
+failure of the whole command; per-file failures stay in the rows, so a `partial` result normally has
+`error: null`. A `hint` is the next thing to try, for people (only `get` fills row hints today).
 
 Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; `get` see get;
-`status` `path`, `status`, `metadata`, `working`, `baseline`; `hash` see hash; `availability` `hash`,
-`state` (`present`, `absent`, `unknown`), `in_history`, and a second error pair `history_code`/`history_message`
-for the history lookup, a separate request that fails on its own (`in_history` and the history pair are `null`
-without `--path`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action` (history never
-fails per row; it requires one or more file paths, and a folder is `invalid_arguments`). `path` is relative to the project root (`info`'s `project_root`); get's `local_path` is relative
-to the current directory.
+`status` `path`, `status` (`error` on an error row, `cancelled` on a cancelled one), `metadata`, `working` (`state` `present`, `absent` or
+`unknown`, `hashes`, `size`, `hash_source` `cache` or `computed`), `baseline` (`blake3`, `size` of what dvs
+last wrote or added at the path; `null` without one); `availability` `hash`, `state` (`present`,
+`absent`, `unknown`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action` (history never
+fails per row). `path` is relative to the project root (`info`'s `project_root`); get's `local_path` is
+relative to the current directory.
 
-Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row
-(`code`), in every command: `auth_required` (no token, not logged in), `auth_expired` (the server said 401),
-`access_denied` (403), `server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint
-that should exist answered 404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs`
-record, e.g. git conflict markers, in every command) and `credentials_unreadable` (the store exists but
-cannot be read). A row can also have `code: "cancelled"` (the file never started, see Cancellation), which is
-not a failure. Command-level codes: `not_in_project`, `invalid_configuration`, `invalid_arguments`,
-`no_files_selected`, `authentication_required` (device login needs an interactive `dvs login`), `io_error`,
-and `operation_failed`, the honest fallback when nothing more specific is known (`get` also uses it when no
-tracked file matched). Row codes besides the shared ones: `add` `io_error`, `operation_failed`, and `file_failed`
-if a failure has no code, get's codes (see get), `status` `local_read_failed`, `hash` `local_read_failed` (symlinks) and `io_error`,
-`availability` `backend_read_failed` (an unclassified backend failure), and `logout` `warnings`
+`dvs availability <HASHES>...` takes one or more BLAKE3 hashes (an invalid one is `invalid_arguments`) and
+reports, per hash and in input order, whether storage has that content, without downloading it.
+`dvs history <PATHS>...` takes one or more file paths and reports their stored upload history; the files need
+not exist in this checkout. It takes files, not folders: a path that is a folder is refused with
+`invalid_arguments` (exit `2`), as is a path outside the project.
+
+Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row (`code`):
+`auth_required` (no token, not logged in), `auth_expired` (the server said 401), `access_denied` (403),
+`server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint that should exist answered
+404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs` record, e.g. git conflict
+markers) and `credentials_unreadable` (the store exists but cannot be read). A row can also have
+`code: "cancelled"` (the file never started, see Cancellation), which is not a failure. Command-level codes:
+`not_in_project`, `invalid_configuration`, `invalid_arguments`, `no_files_selected` (also `get` when no tracked
+file matched), `io_error`, and `operation_failed`, the honest fallback when nothing more specific is known.
+`auth_required` is also what `login`, `init` and `attach` report in machine mode when device login would be
+needed. Row codes besides the shared ones: `add`, `status` and `availability` `io_error` and
+`operation_failed` (`file_failed` if a failure has no code), get's codes (see get), and `logout` `warnings`
 `revoke_failed`.
 
 `dvs info --json` finds the project from the working directory. `project_root` and `metadata_directory` are
-absolute native paths; `protocol.versions` lists the supported result versions and `protocol.capabilities`
-names features (`json_results`, `get_conflict_policy`, `connectivity_status`, `status_facts`, `availability`,
-`history`, `event_stream`, `device_login_events`). For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
+absolute native paths. For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
 `unknown` when not logged in), `connection_error`, `user`, `access` and `groups`; a local project reports
 `connection: "not_applicable"`. `connection_error` is `{code, message}` (`server_unavailable`,
 `project_not_found` or `server_too_old`) when `connection` is `unavailable`, else `null`. `access` is the
 server's level (`read`, `write`, `admin`), `not_logged_in` without a token, `none` on a 403 (no membership:
-`connection` is `available`, exit `0`, like human mode's "no access"), or `null` when the server could not
-say; a rejected login (401, `auth_expired`) is an error envelope.
+`connection` is `available`, exit `0`, like human mode's "no access"), or `null` when the server could not say;
+a rejected login (401, `auth_expired`) is an error envelope.
 
 Exit codes, for every command: `0` complete; `1` failure, or some rows failed; `2` usage or configuration
 (`invalid_arguments`, `invalid_configuration`); `3` `get` only, local conflicts held files back and nothing
 else failed; `130` cancelled, over every other code. A result written before a nonzero exit is authoritative.
 No result after the process was killed means the operation was interrupted: rescan before retrying.
 
-Machine mode never changes stored credentials: a 401 is `auth_expired` and the token stays; an unparsable
-credentials store is `credentials_unreadable` and stays. Human mode still forgets a rejected token and deletes
-an unparsable store, and says to run `dvs login`. Only `dvs login` and `dvs logout` change credentials on
-purpose. `login --json` reports `authentication_required` before starting device login; with `--emit-events`
-it emits `waiting_for_auth` instead. Credentials and device secrets are never written to results or events. `logout --json` deletes the local credential even if remote
-revocation fails: `revoked` is `true` for a confirmed revocation, `false` for a failed revoke call, `null` when
-there was no token; `warnings` is always an array of `{code, message}`.
+dvs never deletes or changes stored credentials on its own, in any mode: a 401 is `auth_expired` and the token
+stays (run `dvs login`); an unreadable credentials store is `credentials_unreadable` and stays. Only `dvs login`
+and `dvs logout` change credentials: login replaces an unreadable store with a fresh one, and logout treats it
+as nothing to revoke and resets it. `login --json` reports
+`auth_required` instead of starting device login; `login --emit-events` starts it and emits `waiting_for_auth`.
+Credentials and device secrets are never written to results or events.
+`logout --json` deletes the local credential even if remote revocation fails: `revoked` is `true` for a
+confirmed revocation, `false` for a failed revoke call, `null` when there was no token; `warnings` is always an
+array of `{code, message}`.
 
 A server URL may carry a path prefix (a proxy, `https://host/dvs`, with or without the trailing slash): every
 request, login included, goes under it.
 
 `--emit-events` (instead of `--json`) writes NDJSON, one event per line, while the command runs and ends
-with the same result document: `operation_started` (`command`), `waiting_for_auth` (`user_code`,
+with the result document: `operation_started` (`command`), `waiting_for_auth` (`user_code`,
 `approval_url`; device login), `operation_planned` (`files_total`, `bytes_total`, `files_to_transfer`,
 `bytes_to_transfer`; once, before any row), `phase_started`/`phase_finished` (`phase`: `scan`, `hash`,
 `check_storage`, `transfer`, `record`; only phases where work happens), `transfer_started` (`path`,
 `total_bytes`), `transfer_progress` (`path`, `bytes`, `total_bytes`; at most 10 per second per transfer),
 `transfer_finished` (`path`, `bytes`, `total_bytes`, `success`, `duration_ms`), `file_result` (`result`: one
-row, the same shape as in the result's `files`, as soon as it is final, in completion order; the final
-result's `files` keeps its own order), `operation_progress` (`files_done`, `files_total`, `bytes_done`,
-`bytes_total`: files against the plan's `files_total`, moved bytes against its `bytes_to_transfer`; at most
-every 250 ms and only once a file finished or 1% of the bytes moved since the last one; the final count is
-always reported before the end), and `operation_finished` (`result`, the full result document, `exit_code`,
-`started_at`, `finished_at`, `duration_ms`; always last). Every event has `v`, `operation_id`
+row, the same shape as a `--json` `files` row, sent once, as soon as it is final, in completion order),
+`operation_progress` (`files_done`, `files_total`, `bytes_done`, `bytes_to_transfer`: files against the
+plan's `files_total`, moved bytes against its `bytes_to_transfer`; at most every 250 ms and only once a file
+finished or 1% of the bytes moved since the last one; the final count is always reported before the end), and
+`operation_finished` (`result`, the `--json` document without `files`, so the envelope and `counts`;
+`exit_code`, `started_at`, `finished_at`, `duration_ms`; always last). Every event has `v`, `operation_id`
 (`"<pid>-<nanos>"`), `seq` (0, 1, 2, ...), `type`, `ts` (unix milliseconds) and `elapsed_ms` (since the
 operation started). Transfer events describe transfer work only: the result is authoritative (a transfer can
 succeed and the install still fail).
 
 ##### Cancellation
 
-`add`, `get`, `status` and `hash` stop on SIGINT (Ctrl-C), SIGTERM or SIGHUP, and with `--emit-events` also
+`add`, `get` and `status` stop on SIGINT (Ctrl-C), SIGTERM or SIGHUP, and with `--emit-events` also
 when stdin, if it is a pipe or socket, reaches end of file (the client went away; Unix only, on Windows use
 Ctrl-C/Ctrl-Break). A signal that was already
 ignored when `dvs` started (for example SIGHUP under `nohup`) stays ignored. They stop *starting* files: a
@@ -364,7 +370,7 @@ A batch refused for an invalid input path exits with `1` and adds nothing. A bat
 #### Rust library
 
 The library validates every input path first and returns an error, refusing the whole batch, if any path is invalid. It also returns an error if it cannot set up the threadpool.
-Otherwise it returns a list of results sorted alphabetically by path, letting users decide what to do with each per-file runtime failure.
+Otherwise it returns an `AddReport`: the results sorted alphabetically by path, their counts and byte totals, letting users decide what to do with each per-file runtime failure.
 
 #### R package
 
@@ -379,7 +385,7 @@ dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 
 Returns a data frame with one row per file. Glob resolution uses the same rules as the CLI. See the Globbing section.
 
-It raises an error if no files match, or if any input path is invalid (the whole batch is refused and nothing is written). A file that fails after a valid batch starts (for example a permission error during the copy) does not raise. That file is one row with its `error` column set and the success columns `NA`, next to the rows that succeeded.
+It raises an error if no files match, or if any input path is invalid (the whole batch is refused and nothing is written). A file that fails after a valid batch starts (for example a permission error during the copy) does not raise. That file is one row with its `code` and `error` columns set and the success columns `NA`, next to the rows that succeeded.
 
 ### get
 
@@ -435,7 +441,7 @@ be able to discard someone's local changes. Use the flag or the environment vari
 
 ```shell
 ❯ dvs get --help
-Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. With no paths, gets the tracked files directly in the current directory; add -r for everything beneath it
+Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided; to restore every tracked file, pass `--glob '**/*'`
 
 Usage: dvs get [OPTIONS] [PATHS]...
 
@@ -453,17 +459,16 @@ Options:
   -h, --help                  Print help
 ```
 
-Passing `-r, --recursive` with an explicit directory walks its subdirectories. When no explicit paths are given,
-`get` is scoped to the current directory (relative to the repo root): without `-r` it restores the tracked files
+Passing `-r, --recursive` with an explicit directory walks its subdirectories. The CLI requires a path or `--glob`.
+When no explicit paths are given (R's `dvs_get()`), `get` is scoped to the current directory (relative to the repo root): without `-r` it restores the tracked files
 directly under it, and with `-r` it restores every tracked file beneath it. (At the repo root, `-r` therefore
 restores every tracked file in the project.)
 
 Human output lists each file that changed or needs attention, then a summary naming the policy and where it came
 from, then the commands to keep or discard local changes.
 
-`--json` prints one envelope (this replaced the earlier bare array), also when `get` cannot start (not in a project,
-invalid configuration): then `files` is empty, `outcome` is `failed`, `error` says why, and `on_conflict`/`source`
-are null.
+`--json` prints one envelope (this replaced the earlier bare array). When `get` cannot start (not in a project,
+invalid configuration) it is the shared error envelope, without `on_conflict`/`source`.
 
 ```json
 {"v": 1, "command": "get", "outcome": "aborted", "dry_run": false,
@@ -475,7 +480,9 @@ are null.
             "code": "local_changes", "message": "…", "hint": "keep your version: dvs add data/b.csv; …"}]}
 ```
 
-- `outcome`: `complete`, `aborted` (nothing written), `partial`, `failed` or `cancelled`.
+- `outcome`: `complete`, `aborted` (nothing written), `partial` (also when every file was skipped as
+  `on_conflict = skip` asked), `failed` or `cancelled`.
+- `hint`: the next step, in CLI syntax, filled in by the library.
 - `satisfied`: the file is at its tracked version afterwards; in a dry run, that it would be.
 - A shared cause (`access_denied`, `server_unavailable`) is printed once in human output, not per file.
 - `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run` (held back), `cancelled`, `failed`, `would_restore`,
@@ -490,16 +497,20 @@ are null.
 - `bytes`: `to_transfer` is the size of every row whose local copy does not match its target (held back,
   skipped and failed rows included), `already_stored` of the rows that match.
 
-Exit codes: `0` complete; `1` any failure or operation problem (takes priority); `3` only conflicts held files
-back; `2` usage or configuration errors; `130` cancelled (over all of these).
+Exit codes: `0` did as asked, including files left as they are because `on_conflict = skip` asked for it; `1` any
+failure or operation problem (takes priority); `3` `on_conflict = abort` held files back because of conflicts
+(nothing was written); `2` usage or configuration errors; `130` cancelled (over all of these).
 
 #### Rust library
 
 `select_paths_for_get` resolves the request and returns the tracked paths plus the unmatched ones, which become
 `not_tracked` rows rather than an error. `get_files(selection, paths, backend, GetOptions { dry_run, on_conflict,
-source }, on_file_start)` returns a `GetReport` with the outcome, counts, an optional operation-level `problem`,
-and one `GetRow` per file sorted by path. `Config::get_on_conflict` applies the precedence and returns a
-`ConfigError` for a project-sourced `overwrite`.
+source }, on_file_start)` returns a `GetReport` with the outcome, counts (`total` and `succeeded` included),
+byte totals, an optional operation-level `problem` (`{code, message}`, e.g. `no_files_selected`),
+and one `GetRow` per file sorted by path. `GetReport::verdict()` decides whether get did as asked (a skip the
+policy asked for counts as done), failed, or was held back by `abort`; the CLI exit code and R's `on_error` both
+read it. `Config::get_on_conflict` applies the precedence and returns a `ConfigError` for a project-sourced
+`overwrite`.
 
 #### R package
 
@@ -509,14 +520,15 @@ dvs_get(paths = character(0), glob = NULL, recursive = FALSE, dry_run = FALSE,
 ```
 
 - `on_conflict`: `NULL` inherits (env, then dvs.toml, then `"abort"`), or `"abort"`, `"skip"`, `"overwrite"`.
-- `on_error`: `"return"` (default) only returns the result; `"warn"` also warns; `"error"` raises. The condition
-  has class `dvs_get_incomplete` and carries the result as `cnd$result`. No warning by default, so
+- `on_error`: when get did not do as asked (the CLI's exit `1` or `3`), `"return"` (default) only returns the
+  result; `"warn"` also warns; `"error"` raises. The condition has class `dvs_get_incomplete` and carries the
+  result as `cnd$result`. No warning by default, so
   `options(warn = 2)` cannot prevent `res <- dvs_get()` from assigning.
 
-It always returns a tibble of class `dvs_get_result` with the same columns as the JSON rows, also with zero rows
-(for example outside a project). `dvs_result_info(res)` returns the operation information (outcome, policy and
-its source, counts, problem), and printing shows it as a header. Invalid arguments and configuration errors
-(`dvs_config_error`) are the only immediate errors.
+It returns a tibble of class `dvs_get_result` with the same columns as the JSON rows. `dvs_result_info(res)`
+returns the operation information (outcome, `did_as_asked`, policy and its source, counts, problem), and printing
+shows it as a header. Invalid arguments, not being in a dvs project, and configuration errors (`dvs_config_error`)
+are the only immediate errors.
 
 ### status
 
@@ -541,7 +553,7 @@ Options:
   -g, --glob <GLOB>        
       --current            Include the files that are current
       --absent             Include the files that are absent
-      --stale              Include files unchanged since the last successful get when metadata has advanced
+      --stale              Include files unchanged since the last successful get, when metadata has advanced
       --modified           Include files changed since the last successful get
       --unsynced           Include differing files whose local baseline is unavailable
       --with-metadata      Show all metadata columns in the table output
@@ -580,44 +592,6 @@ dvs_status(
   Without a baseline, DVS reports `unsynced` because it cannot determine why the file differs from metadata. When omitted, all statuses are returned.
 
 Returns a data frame with one row per tracked file.
-
-### hash
-
-`hash` reports the hashes of working files, tracked or not, without needing a record: for example to check
-whether a working file is identical to some recorded version. It uses and fills the hash cache, and never
-writes the baseline or any `.dvs` record.
-
-#### CLI
-
-```shell
-❯ dvs hash --help
-Prints the hashes of files, tracked or not, using and filling the hash cache. Never changes a record or the baseline. With no paths, hashes the tracked files, like status
-
-Usage: dvs hash [OPTIONS] [PATHS]...
-
-Arguments:
-  [PATHS]...  Paths (files or directories) to hash
-
-Options:
-      --json               Output results as JSON
-      --emit-events        Stream operation results and transfer progress as NDJSON
-      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
-  -r, --recursive          Recursively include files in subdirectories for given directories Without this flag, directories return only their direct children
-  -g, --glob <GLOB>        
-  -h, --help               Print help
-```
-
-Selection follows `status`, plus untracked files that a path or glob names: no paths and no glob selects the
-tracked files `status` would show; a directory selects its direct children (`-r`: everything under it). A
-named path that is missing, a tracked file absent from disk, a symlink and an unreadable directory each get an
-error row; nothing selected is dropped silently. It exits `1` if any file could not be hashed.
-
-```json
-{"v": 1, "command": "hash", "outcome": "complete", "dry_run": false, "counts": {"total": 1, "succeeded": 1, "failed": 0, "cancelled": 0},
- "files": [{"path": "data/a.csv", "hashes": {"blake3": "…"}, "size": 1048576, "hash_source": "cache", "duration_ms": 0, "code": null, "message": null, "hint": null}]}
-```
-
-`hash_source` is `cache` or `computed`; `hashes`, `size` and `hash_source` match status's `working` object.
 
 ## Internals
 
@@ -728,7 +702,7 @@ each path. Unlike the hash cache, `status` never writes it. Deleting it is safe;
 
 ### Parallelism
 
-`add`, `get`, `status` and `hash` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
+`add`, `get` and `status` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
 variable to control the thread count, if the CLI and R package have not set the number
 of threads directly. If it is unset, the default is `min(available_parallelism * 4, 16)`.
 If it is set to a positive integer, the override is capped at 32. In both cases the final thread count is

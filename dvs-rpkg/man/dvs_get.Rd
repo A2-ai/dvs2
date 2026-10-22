@@ -32,8 +32,9 @@ in dvs.toml, then \code{"abort"}), or one of \code{"abort"} (change no files if 
 requested file has local changes or another problem), \code{"skip"} (leave those
 files and get the rest) or \code{"overwrite"} (replace them; local changes are lost).}
 
-\item{on_error}{What to do when the request is not complete (some file is
-not at its tracked version afterwards): \code{"return"} (the default) only
+\item{on_error}{What to do when get did not do as asked (a file failed, or
+\code{on_conflict = "abort"} held files back; files left by
+\code{on_conflict = "skip"} count as done): \code{"return"} (the default) only
 returns the result, \code{"warn"} also warns and \code{"error"} raises an error. The
 condition has class \code{dvs_get_incomplete} and carries the result as
 \code{cnd$result}. Pipelines can set \code{options(dvs.on_error = "error")}.}
@@ -43,11 +44,12 @@ A tibble of class \code{dvs_get_result} with one row per requested file
 and always the same columns: \code{path}, \code{local_path}, \code{before} (\code{"absent"},
 \code{"current"}, \code{"clean"}, \code{"modified"}, \code{"unknown"}, \code{"not_tracked"},
 \code{"not_a_file"}, \code{"unsafe_path"}), \code{action} (\code{"restored"}, \code{"replaced"},
-\code{"unchanged"}, \code{"skipped"}, \code{"not_run"}, \code{"cancelled"}, \code{"failed"}, \code{"would_restore"},
+\code{"unchanged"}, \code{"skipped"}, \code{"not_run"}, \code{"failed"}, \code{"would_restore"},
 \code{"would_replace"}), \code{satisfied}, \code{size}, \code{target_hash}, \code{local_hash},
 \code{stored_copy}, \code{code}, \code{message} and \code{hint}. \code{\link[=dvs_result_info]{dvs_result_info()}} returns
-the outcome and the policy that applied. Configuration errors (for example
-\code{on_conflict = "overwrite"} in dvs.toml) raise a \code{dvs_config_error}.
+the outcome and the policy that applied. Outside a dvs project it raises an
+error; configuration errors (for example \code{on_conflict = "overwrite"} in
+dvs.toml) raise a \code{dvs_config_error}.
 
 In a dry run, \code{satisfied} is the prediction: \code{TRUE} when the file would be
 at its tracked version afterwards.
@@ -61,7 +63,7 @@ Fetches the specified files from DVS storage and writes them to their original p
 }
 \examples{
 \dontrun{
-# In a script: stop unless every file is at its tracked version
+# In a script: stop unless get did as asked
 dvs_get(recursive = TRUE, on_error = "error")
 
 # Interactively: look at what needs attention

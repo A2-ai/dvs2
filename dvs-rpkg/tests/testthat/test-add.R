@@ -8,7 +8,7 @@ test_that("dvs_add on a single Theoph CSV returns a tibble with bytes columns", 
   expect_equal(nrow(result), 1L)
   expect_setequal(
     names(result),
-    c("path", "outcome", "hash", "size", "stored_size")
+    c("path", "outcome", "hash", "size", "stored_size", "duration_ms")
   )
   expect_s3_class(result$size, "dvs_bytes")
   expect_s3_class(result$stored_size, "dvs_bytes")

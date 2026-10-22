@@ -1,56 +1,25 @@
 //! Batch, backend-neutral queries for consumers that invoke the CLI.
 use anyhow::Result;
-use dvs::audit::{Action, AuditEntry};
-use dvs::{Backend, DvsPaths, Hashes, PathFilter};
+use dvs::{Backend, DvsPaths, ErrorCode, Hashes, PathFilter};
 use serde_json::{Value, json};
-use std::collections::HashSet;
 use std::path::PathBuf;
 
-#[derive(Debug)]
-pub struct QueryInputError(pub String);
-impl std::fmt::Display for QueryInputError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl std::error::Error for QueryInputError {}
+use crate::output;
+
 fn invalid(message: impl Into<String>) -> anyhow::Error {
-    QueryInputError(message.into()).into()
-}
-
-pub(crate) fn reason(error: &anyhow::Error) -> &'static str {
-    match dvs::backend_error_code(error) {
-        Some(code) => code.as_str(),
-        None => "backend_read_failed",
-    }
-}
-
-#[derive(Clone)]
-struct ReadError {
-    code: &'static str,
-    message: String,
-}
-
-impl ReadError {
-    fn new(error: &anyhow::Error) -> Self {
-        Self {
-            code: reason(error),
-            message: format!("{error:#}"),
-        }
-    }
+    output::coded(ErrorCode::InvalidArguments, message)
 }
 
 fn check_backend(backend: &Backend) -> Result<()> {
     match backend {
-        Backend::Server(s) => {
-            s.access_readonly()?;
-        }
+        Backend::Server(s) => s.check_access()?,
         Backend::Local(b) => {
             std::fs::read_dir(&b.path)?;
         }
     }
     Ok(())
 }
+
 fn resolve_paths(paths: &DvsPaths, user_paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
     user_paths
         .into_iter()
@@ -59,7 +28,7 @@ fn resolve_paths(paths: &DvsPaths, user_paths: Vec<PathBuf>) -> Result<Vec<PathB
             // thousands of entries: name the files
             if paths.cwd().join(&path).is_dir() {
                 return Err(invalid(format!(
-                    "history takes files, not folders: {}",
+                    "takes files, not folders: {}",
                     path.display()
                 )));
             }
@@ -77,58 +46,19 @@ fn resolve_paths(paths: &DvsPaths, user_paths: Vec<PathBuf>) -> Result<Vec<PathB
         .collect()
 }
 
-fn read_history(backend: &Backend, paths: &[PathBuf]) -> Result<Vec<AuditEntry>> {
-    match backend {
-        Backend::Server(server) => server.history_readonly(paths),
-        Backend::Local(local) => local.get_audit_entries(paths),
-    }
-}
-
-fn hashes_by_path(entries: Vec<AuditEntry>) -> HashSet<(PathBuf, String)> {
-    entries
-        .into_iter()
-        .filter_map(|entry| match entry.action {
-            Action::Add { file, .. } => Some((file.path, file.hashes.blake3.to_ascii_lowercase())),
-            Action::Init { .. } => None,
-        })
-        .collect()
+fn coded_message(error: &anyhow::Error) -> (ErrorCode, String) {
+    (output::error_code(error), format!("{error:#}"))
 }
 
 /// Validate hashes before I/O and preserve input order and duplicates.
-/// `state` describes blob storage; `in_history` is added when a file is supplied.
-pub fn availability(
-    backend: &Backend,
-    paths: &DvsPaths,
-    hashes: &[String],
-    user_path: Option<PathBuf>,
-) -> Result<(Vec<Value>, usize)> {
-    if hashes.is_empty() {
-        return Err(invalid("provide at least one BLAKE3 hash"));
-    }
+/// `state` describes blob storage.
+pub fn availability(backend: &Backend, hashes: &[String]) -> Result<(Vec<Value>, usize)> {
     for hash in hashes {
         if hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
             return Err(invalid(format!("invalid BLAKE3 hash: {hash}")));
         }
     }
-    let relative_path = user_path
-        .map(|path| resolve_paths(paths, vec![path]))
-        .transpose()?
-        .and_then(|mut paths| paths.pop());
-    let preflight = check_backend(backend).map_err(|error| ReadError::new(&error));
-    let history = relative_path.as_ref().map(|path| {
-        preflight
-            .clone()
-            .and_then(|()| {
-                read_history(backend, std::slice::from_ref(path))
-                    .map_err(|error| ReadError::new(&error))
-            })
-            .map(|entries| {
-                hashes_by_path(entries)
-                    .into_iter()
-                    .map(|(_, hash)| hash)
-                    .collect::<HashSet<_>>()
-            })
-    });
+    let preflight = check_backend(backend).map_err(|error| coded_message(&error));
 
     let mut rows = Vec::with_capacity(hashes.len());
     let mut failed = 0;
@@ -138,55 +68,29 @@ pub fn availability(
             blake3: normalized.clone(),
             md5: None,
         };
-        let storage = preflight.clone().and_then(|()| match backend {
-            Backend::Server(server) => server
-                .exists_readonly(&value)
-                .map_err(|error| ReadError::new(&error)),
-            Backend::Local(local) => local
-                .exists_checked(&value)
-                .map_err(|error| ReadError::new(&error)),
+        let storage = preflight.clone().and_then(|()| {
+            backend
+                .exists(&value)
+                .map_err(|error| coded_message(&error))
         });
-        let mut row_failed = false;
         let (state, code, message) = match storage {
-            Ok(present) => (
-                if present { "present" } else { "absent" },
-                Value::Null,
-                Value::Null,
-            ),
-            Err(error) => {
-                row_failed = true;
-                ("unknown", json!(error.code), json!(error.message))
+            Ok(present) => (if present { "present" } else { "absent" }, None, None),
+            Err((code, message)) => {
+                failed += 1;
+                ("unknown", Some(code), Some(message))
             }
         };
-        // The storage check and the history lookup fail separately, so one
-        // row can carry both errors
-        let mut row = json!({
+        rows.push(json!({
             "hash": normalized,
             "state": state,
-            "in_history": null,
             "code": code,
             "message": message,
             "hint": null,
-            "history_code": null,
-            "history_message": null,
-        });
-        if let Some(history) = &history {
-            match history {
-                Ok(hashes) => row["in_history"] = json!(hashes.contains(&normalized)),
-                Err(error) => {
-                    row_failed = true;
-                    row["history_code"] = json!(error.code);
-                    row["history_message"] = json!(error.message.clone());
-                }
-            }
-        }
-        if row_failed {
-            failed += 1;
-        }
-        rows.push(row);
+        }));
     }
     Ok((rows, failed))
 }
+
 /// Resolve query paths lexically; the files need not exist in this checkout.
 /// Each entry is the audit entry with `timestamp` as RFC 3339 UTC.
 /// Reject escaping paths rather than silently broadening an invalid query to all history.
@@ -197,7 +101,8 @@ pub fn history(
 ) -> Result<Vec<Value>> {
     let relative = resolve_paths(paths, user_paths)?;
     check_backend(backend)?;
-    read_history(backend, &relative)?
+    backend
+        .get_audit_entries(&relative)?
         .into_iter()
         .map(|e| {
             let timestamp = std::time::SystemTime::from(e.timestamp);
@@ -207,4 +112,21 @@ pub fn history(
             Ok(value)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_refuses_folders() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("data")).unwrap();
+        let paths =
+            DvsPaths::new(root.path().to_path_buf(), root.path().to_path_buf(), ".dvs").unwrap();
+        let error = resolve_paths(&paths, vec![PathBuf::from("data")]).unwrap_err();
+        assert_eq!(output::error_code(&error), ErrorCode::InvalidArguments);
+        assert_eq!(output::exit_code(&error), output::EXIT_USAGE);
+        assert_eq!(error.to_string(), "takes files, not folders: data");
+    }
 }

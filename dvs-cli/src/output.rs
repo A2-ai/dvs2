@@ -4,11 +4,18 @@ use std::time::{Instant, SystemTime};
 
 use anyhow::Error;
 use dvs::operation::{duration_ms, rfc3339_ms};
-use dvs::{RowCounts, RunSummary};
+use dvs::{ByteTotals, Counts, ErrorCode, GetVerdict, RunOutcome};
 use serde_json::{Value, json};
 
-/// When this run's operation started, for the timing every result carries.
-/// Set once, from the operation context, before anything is emitted.
+/// Exit codes, shared by every command; only `get` uses 3.
+pub const EXIT_OK: i32 = 0;
+pub const EXIT_FAILED: i32 = 1;
+pub const EXIT_USAGE: i32 = 2;
+pub const EXIT_CONFLICTS: i32 = 3;
+/// A cancelled run, conventional for SIGINT (128 + 2).
+pub const EXIT_CANCELLED: i32 = 130;
+
+/// When this run started, for the timing every result carries.
 #[derive(Clone, Copy)]
 pub struct Clock {
     pub started: Instant,
@@ -41,7 +48,7 @@ pub fn stamp(value: &mut Value) {
 
 #[derive(Debug)]
 pub struct CodedError {
-    pub code: &'static str,
+    pub code: ErrorCode,
     pub message: String,
 }
 
@@ -53,7 +60,7 @@ impl std::fmt::Display for CodedError {
 
 impl std::error::Error for CodedError {}
 
-pub fn coded(code: &'static str, message: impl Into<String>) -> Error {
+pub fn coded(code: ErrorCode, message: impl Into<String>) -> Error {
     CodedError {
         code,
         message: message.into(),
@@ -61,81 +68,86 @@ pub fn coded(code: &'static str, message: impl Into<String>) -> Error {
     .into()
 }
 
-pub fn error_code(error: &Error) -> &'static str {
+pub fn error_code(error: &Error) -> ErrorCode {
     if let Some(error) = error.downcast_ref::<CodedError>() {
         error.code
     } else if error
         .downcast_ref::<dvs::globbing::NoFilesSelected>()
         .is_some()
     {
-        "no_files_selected"
+        ErrorCode::NoFilesSelected
     } else if error.downcast_ref::<dvs::config::ConfigError>().is_some() {
-        "invalid_configuration"
-    } else if error
-        .downcast_ref::<crate::read_cmd::QueryInputError>()
-        .is_some()
-    {
-        "invalid_arguments"
+        ErrorCode::InvalidConfiguration
     } else if let Some(code) = dvs::backend_error_code(error) {
-        code.as_str()
+        code
     } else if error.downcast_ref::<std::io::Error>().is_some() {
-        "io_error"
+        ErrorCode::IoError
     } else {
-        "operation_failed"
+        ErrorCode::OperationFailed
+    }
+}
+
+/// The exit status of a run that reported rows: get passes its verdict, add
+/// and status their outcome.
+pub fn run_exit_code(verdict: impl Into<GetVerdict>) -> i32 {
+    match verdict.into() {
+        GetVerdict::Done => EXIT_OK,
+        GetVerdict::Failed => EXIT_FAILED,
+        GetVerdict::HeldBack => EXIT_CONFLICTS,
+        GetVerdict::Cancelled => EXIT_CANCELLED,
     }
 }
 
 /// The exit status of a run that failed before it could report rows.
-/// Cancelled (130) wins over every other status.
 pub fn exit_code(error: &Error) -> i32 {
     match error_code(error) {
-        "invalid_arguments" | "invalid_configuration" => crate::get_cmd::EXIT_USAGE,
-        _ => crate::get_cmd::EXIT_FAILED,
+        ErrorCode::InvalidArguments | ErrorCode::InvalidConfiguration => EXIT_USAGE,
+        _ => EXIT_FAILED,
     }
 }
 
-pub fn error_json(code: &str, message: impl Into<String>) -> Value {
+pub fn error_json(code: ErrorCode, message: impl Into<String>) -> Value {
     json!({"code": code, "message": message.into(), "hint": null})
 }
 
-/// The result of a command that cannot be cancelled: `failed` of `files` failed.
-pub fn envelope(command: &str, dry_run: bool, files: Vec<Value>, failed: usize) -> Value {
-    let total = files.len();
-    let counts = RowCounts {
-        total,
-        succeeded: total - failed,
-        failed,
-        cancelled: 0,
-    };
-    run_envelope(
-        command,
-        dry_run,
-        files,
-        RunSummary::from_counts(counts, false),
-    )
-}
-
-/// The result of an add, status or hash run, from the library's summary.
-pub fn run_envelope(command: &str, dry_run: bool, files: Vec<Value>, summary: RunSummary) -> Value {
+/// The envelope of a command without rows.
+pub fn envelope(command: &str, dry_run: bool) -> Value {
     json!({
         "v": 1,
         "command": command,
-        "outcome": summary.outcome,
+        "outcome": "complete",
         "dry_run": dry_run,
-        "counts": summary.counts,
         "error": null,
-        "files": files,
     })
 }
 
+pub fn rows_envelope(
+    command: &str,
+    dry_run: bool,
+    files: Vec<Value>,
+    counts: Counts,
+    outcome: RunOutcome,
+) -> Value {
+    let mut value = envelope(command, dry_run);
+    value["outcome"] = json!(outcome);
+    value["counts"] = json!(counts);
+    value["files"] = json!(files);
+    value
+}
+
 pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
-    let mut value = if command == "get" {
-        crate::get_cmd::problem_json(&format!("{error:#}"), dry_run)
-    } else {
-        envelope(command, dry_run, vec![], 0)
+    let mut value = match command {
+        "add" | "get" | "status" | "availability" | "history" => rows_envelope(
+            command,
+            dry_run,
+            vec![],
+            Counts::default(),
+            RunOutcome::Failed,
+        ),
+        _ => envelope(command, dry_run),
     };
-    if command == "add" {
-        value["bytes"] = json!(dvs::ByteTotals::default());
+    if matches!(command, "add" | "get") {
+        value["bytes"] = json!(ByteTotals::default());
     }
     value["outcome"] = json!("failed");
     value["error"] = error_json(error_code(error), format!("{error:#}"));
@@ -165,6 +177,17 @@ pub fn emit_streamed(mut value: Value) {
     }
 }
 
+/// Streamed rows go through here too, so they match the result's rows.
+/// `has_code`: the row failed or was cancelled.
+pub fn file_result(mut value: Value, has_code: bool) -> Value {
+    if !has_code {
+        value["code"] = Value::Null;
+    } else if value.get("code").is_none_or(Value::is_null) {
+        value["code"] = json!(ErrorCode::FileFailed);
+    }
+    row_error_fields(value)
+}
+
 /// A row's keys never depend on whether it failed.
 pub fn row_error_fields(mut value: Value) -> Value {
     for key in ["code", "message", "hint"] {
@@ -180,21 +203,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn counts_and_outcome_come_from_the_summary() {
-        let counts = RowCounts {
-            total: 3,
-            succeeded: 1,
-            failed: 1,
-            cancelled: 1,
-        };
-        let result = run_envelope("add", false, vec![], RunSummary::from_counts(counts, true));
-        assert_eq!(
-            result["counts"],
-            json!({"total": 3, "succeeded": 1, "failed": 1, "cancelled": 1})
-        );
-        assert_eq!(result["outcome"], "cancelled");
-        let result = envelope("history", false, vec![json!({}), json!({})], 1);
-        assert_eq!(result["outcome"], "partial");
-        assert_eq!(result["counts"]["cancelled"], 0);
+    fn a_cancel_exits_130_whatever_the_command() {
+        assert_eq!(run_exit_code(RunOutcome::Cancelled), EXIT_CANCELLED);
+        assert_eq!(run_exit_code(GetVerdict::Cancelled), EXIT_CANCELLED);
+        assert_eq!(run_exit_code(RunOutcome::Partial), EXIT_FAILED);
+        assert_eq!(run_exit_code(RunOutcome::Complete), EXIT_OK);
+        assert_eq!(run_exit_code(GetVerdict::HeldBack), EXIT_CONFLICTS);
     }
 }

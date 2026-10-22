@@ -48,6 +48,7 @@ impl<'a> StoreRequest<'a> {
 }
 
 /// What the backend actually did with the file.
+#[derive(Debug)]
 pub struct StoreResult {
     /// Size of the stored blob, after compression.
     pub stored_size: u64,
@@ -99,12 +100,6 @@ impl Backend {
         match self {
             Backend::Local(b) => b.init(compression),
             Backend::Server(s) => s.init(compression),
-        }
-    }
-
-    pub fn set_credential_policy(&mut self, policy: crate::auth::CredentialPolicy) {
-        if let Backend::Server(s) = self {
-            s.set_credential_policy(policy);
         }
     }
 

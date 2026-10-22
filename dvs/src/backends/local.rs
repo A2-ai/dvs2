@@ -309,16 +309,6 @@ impl LocalBackend {
         Ok(self.hash_to_path(hash)?.is_file())
     }
 
-    /// Like exists, but preserve filesystem failures for client read queries.
-    pub fn exists_checked(&self, hash: &Hashes) -> Result<bool> {
-        match fs::metadata(self.hash_to_path(hash)?) {
-            Ok(metadata) if metadata.is_file() => Ok(true),
-            Ok(_) => anyhow::bail!("stored blob is not a regular file"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(e) => Err(e.into()),
-        }
-    }
-
     pub fn remove(&self, hash: &Hashes) -> Result<()> {
         let path = self.hash_to_path(hash)?;
         if path.is_file() {
