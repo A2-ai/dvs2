@@ -129,7 +129,7 @@ pub fn rows_envelope(command: &str, dry_run: bool, files: Vec<Value>, counts: Co
 
 pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
     let mut value = match command {
-        "add" | "get" | "status" | "hash" | "availability" | "history" => {
+        "add" | "get" | "status" | "availability" | "history" => {
             rows_envelope(command, dry_run, vec![], Counts::default())
         }
         _ => envelope(command, dry_run),
