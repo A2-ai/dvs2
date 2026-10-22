@@ -7,7 +7,8 @@ version each one runs.
 ## When this applies
 
 - Adds a DB migration.
-- Writes, chmods or chowns anything under `/data`.
+- Changes anything on the shared data filesystem (`/data`, or the cluster's configured
+  data directory): creating, writing, deleting, moving, chmodding or chowning files.
 
 ## What to do
 

@@ -37,6 +37,6 @@ The R package scaffolding needs to be updated too. The `minirextendr` R package 
 
 ## Shared state
 
-If a change adds a DB migration or writes, chmods or chowns anything under `/data`, read
-[docs/shared-state.md](docs/shared-state.md) before opening the PR. It needs the
-`shared-state` label and a #2-tech-devops post before it deploys anywhere.
+If a change adds a DB migration or changes anything on the shared data filesystem (`/data`
+by default), read [docs/shared-state.md](docs/shared-state.md) before opening the PR. It
+needs the `shared-state` label and a #2-tech-devops post before it deploys anywhere.
