@@ -11,21 +11,13 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::backends::server::{http_status_code, join_url};
-use crate::error::{BackendError, ErrorCode};
+use crate::backends::server::{
+    invalid_response, join_url, response_error, status_error, unreachable,
+};
+use crate::error::{Error, ErrorCode};
 use crate::utils::http_agent;
 
 type TokenStore = HashMap<String, String>;
-
-/// What dvs may do to stored credentials that turn out to be unusable.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum CredentialPolicy {
-    /// Forget a rejected token and delete an unparsable store
-    #[default]
-    Repair,
-    /// Never modify credentials
-    Preserve,
-}
 
 #[cfg(not(test))]
 fn get_token_store_path() -> Result<PathBuf> {
@@ -72,51 +64,30 @@ fn write_store(path: &Path, contents: &str) -> Result<()> {
     Ok(())
 }
 
-/// Reads the token store from `path`. If the file is corrupted, it is deleted
-/// and an empty store is returned so users can log in again. Under `Preserve`
-/// it is kept and reported as `credentials_unreadable`.
-fn read_store(path: &Path, policy: CredentialPolicy) -> Result<TokenStore> {
+/// Reads the token store from `path`; none yet is an empty store. An
+/// unreadable store is an error, never deleted: the user fixes or removes it.
+fn read_store(path: &Path) -> Result<TokenStore> {
+    let unreadable = |reason: String| {
+        Error::new(
+            ErrorCode::CredentialsUnreadable,
+            format!(
+                "{} {reason}; fix or remove it, then run `dvs login`",
+                path.display()
+            ),
+        )
+    };
     let file = match fs::File::open(path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(TokenStore::new()),
-        // An unlookable path (parent unreadable or a file) read as no store before
-        Err(_) if policy == CredentialPolicy::Repair && !path.exists() => {
-            return Ok(TokenStore::new());
-        }
-        Err(e) => {
-            return Err(match policy {
-                CredentialPolicy::Repair => e.into(),
-                CredentialPolicy::Preserve => BackendError::new(
-                    ErrorCode::CredentialsUnreadable,
-                    format!("{} could not be read ({e})", path.display()),
-                )
-                .into(),
-            });
-        }
+        Err(e) => return Err(unreadable(format!("could not be read ({e})")).into()),
     };
-    match serde_json::from_reader(file) {
-        Ok(store) => Ok(store),
-        Err(e) => match policy {
-            CredentialPolicy::Repair => {
-                log::warn!(
-                    "Credentials store at {} is corrupted ({e}), deleting it",
-                    path.display()
-                );
-                fs::remove_file(path)?;
-                Ok(TokenStore::new())
-            }
-            CredentialPolicy::Preserve => Err(BackendError::new(
-                ErrorCode::CredentialsUnreadable,
-                format!("{} is not a valid credentials store ({e})", path.display()),
-            )
-            .into()),
-        },
-    }
+    serde_json::from_reader(file)
+        .map_err(|e| unreadable(format!("is not a valid credentials store ({e})")).into())
 }
 
 pub fn store_token(url: &Url, token: &str) -> Result<()> {
     let path = get_token_store_path()?;
-    let mut store = read_store(&path, CredentialPolicy::Repair)?;
+    let mut store = read_store(&path)?;
     store.insert(url.to_string(), token.to_string());
     let json = serde_json::to_string_pretty(&store)?;
     write_store(&path, &json)?;
@@ -125,28 +96,19 @@ pub fn store_token(url: &Url, token: &str) -> Result<()> {
 }
 
 pub fn get_token(url: &Url) -> Result<Option<String>> {
-    get_token_with(url, CredentialPolicy::Repair)
-}
-
-pub fn get_token_with(url: &Url, policy: CredentialPolicy) -> Result<Option<String>> {
-    let path = match get_token_store_path() {
-        Ok(path) => path,
-        Err(e) if policy == CredentialPolicy::Preserve => {
-            return Err(BackendError::new(
-                ErrorCode::AuthRequired,
-                format!("Could not find the credentials store ({e}). Log in first"),
-            )
-            .into());
-        }
-        Err(e) => return Err(e),
-    };
-    Ok(read_store(&path, policy)?.get(url.as_str()).cloned())
+    let path = get_token_store_path().map_err(|e| {
+        Error::new(
+            ErrorCode::AuthRequired,
+            format!("Could not find the credentials store ({e}). Log in first"),
+        )
+    })?;
+    Ok(read_store(&path)?.get(url.as_str()).cloned())
 }
 
 pub fn delete_token(url: &Url) -> Result<bool> {
     let path = get_token_store_path()?;
     if path.exists() {
-        let mut store = read_store(&path, CredentialPolicy::Repair)?;
+        let mut store = read_store(&path)?;
         let old = store.remove(url.as_str());
         let json = serde_json::to_string_pretty(&store)?;
         fs::write(path, json)?;
@@ -154,38 +116,6 @@ pub fn delete_token(url: &Url) -> Result<bool> {
     } else {
         Ok(false)
     }
-}
-
-fn unreachable(base_url: &Url, e: ureq::Error) -> anyhow::Error {
-    BackendError::new(
-        ErrorCode::ServerUnavailable,
-        format!("cannot reach the dvs server at {base_url}: {e}"),
-    )
-    .into()
-}
-
-fn invalid_response(base_url: &Url, e: ureq::Error) -> anyhow::Error {
-    BackendError::new(
-        ErrorCode::ServerUnavailable,
-        format!("Invalid response from the dvs server at {base_url}: {e}"),
-    )
-    .into()
-}
-
-fn status_error(base_url: &Url, status: u16) -> anyhow::Error {
-    let Some(code) = http_status_code(status, "") else {
-        return anyhow::anyhow!("Server error: {status}");
-    };
-    let message = match code {
-        ErrorCode::ServerTooOld => format!(
-            "the dvs server at {base_url} does not support this request ({status}); it is older than this dvs"
-        ),
-        ErrorCode::ServerUnavailable => {
-            format!("the dvs server at {base_url} is not working ({status})")
-        }
-        _ => format!("Server error: {status}"),
-    };
-    BackendError::new(code, message).into()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -207,7 +137,7 @@ pub fn initiate_device_approval(base_url: &Url) -> Result<DeviceAuthorizationRes
         .send_empty()
         .map_err(|e| unreachable(base_url, e))?;
     if !resp.status().is_success() {
-        return Err(status_error(base_url, resp.status().as_u16()));
+        return Err(response_error(base_url, &mut resp, "device login"));
     }
     let r = resp
         .body_mut()
@@ -245,7 +175,7 @@ pub fn query_for_token(base_url: &Url, device_code: &str) -> Result<Option<Token
         400 => bail!("User code expired"),
         401 => Ok(None),
         404 => bail!("Unknown device code"),
-        code @ (405 | 500..) => Err(status_error(base_url, code)),
+        code @ (405 | 500..) => Err(status_error(base_url, code, "", "device login")),
         _ => bail!("Unknown server error: {}", resp.status()),
     }
 }
@@ -274,13 +204,31 @@ pub fn poll_for_token(base_url: &Url, device_code: &str) -> Result<TokenResponse
 /// Ask the server to revoke `token` so it stops working everywhere, not just on this machine.
 pub fn revoke_token(base_url: &Url, token: &str) -> Result<()> {
     let url = join_url(base_url, "api/oauth/token")?;
-    let resp = http_agent()
+    let mut resp = http_agent()
         .delete(url.as_str())
         .header("authorization", format!("Bearer {token}"))
         .call()
         .map_err(|e| unreachable(base_url, e))?;
     if !resp.status().is_success() {
-        return Err(status_error(base_url, resp.status().as_u16()));
+        return Err(response_error(base_url, &mut resp, "revoking the token"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unparsable_store_is_an_error_and_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        fs::write(&path, "not json").unwrap();
+        let error = read_store(&path).unwrap_err();
+        assert_eq!(
+            crate::backend_error_code(&error),
+            Some(ErrorCode::CredentialsUnreadable)
+        );
+        assert!(path.exists());
+    }
 }

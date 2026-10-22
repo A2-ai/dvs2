@@ -22,7 +22,7 @@ use miniextendr_api::{DataFrame, MatchArg, SEXP, miniextendr};
 use anyhow::{Result, anyhow};
 use serde::Serialize;
 
-use dvs::config::{Config, ConfigError, OnConflict, SettingSource};
+use dvs::config::{Config, ConfigError, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
@@ -512,12 +512,12 @@ pub(crate) fn dvs_get(
     let current_dir = std::env::current_dir()?;
     let config =
         match Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))? {
-            Err(e) => return Ok(setup_failed_list(&e.to_string(), dry_run)),
+            Err(e) => config_error(&e.to_string()),
             Ok(c) => c,
         };
     let (policy, source) = match config.get_on_conflict(explicit) {
         Ok(p) => p,
-        Err(ConfigError(message)) => return Ok(setup_failed_list(&message, dry_run)),
+        Err(ConfigError(message)) => config_error(&message),
     };
     let dvs_paths = DvsPaths::from_cwd(&config)?;
     let selection = select_paths_for_get(
@@ -546,19 +546,16 @@ pub(crate) fn dvs_get(
     } else {
         get_files(selection, &dvs_paths, config.backend(), options, None)
     };
-    Ok(get_result_list(&report, false))
+    Ok(get_result_list(&report))
 }
 
-/// A get whose configuration is invalid: zero rows, no policy (NA, like null
-/// in the CLI JSON), flagged so the R wrapper can raise a `dvs_config_error`.
-fn setup_failed_list(message: &str, dry_run: bool) -> List {
-    let report = GetReport::problem(message, dry_run, OnConflict::Abort, SettingSource::Default);
-    get_result_list(&report, true)
+/// Raises the classed `dvs_config_error`.
+fn config_error(message: &str) -> ! {
+    miniextendr_api::error!(class = "dvs_config_error", "{message}")
 }
 
 /// `list(files = <data.frame with a fixed schema>, info = <list>)`.
-/// `config_error` is set when the get could not start.
-fn get_result_list(report: &GetReport, config_error: bool) -> List {
+fn get_result_list(report: &GetReport) -> List {
     fn strs<'a>(
         rows: &'a [GetRow],
         f: impl Fn(&'a GetRow) -> Option<String>,
@@ -652,22 +649,20 @@ fn get_result_list(report: &GetReport, config_error: bool) -> List {
         (report.verdict() == GetVerdict::Done).into_sexp(),
     );
     field("dry_run", report.dry_run.into_sexp());
-    let policy = !config_error;
     field(
         "on_conflict",
-        policy
-            .then(|| report.on_conflict.as_str().to_string())
-            .into_sexp(),
+        report.on_conflict.as_str().to_string().into_sexp(),
     );
-    field(
-        "source",
-        policy
-            .then(|| report.source.as_str().to_string())
-            .into_sexp(),
-    );
+    field("source", report.source.as_str().to_string().into_sexp());
     field("counts", counts);
-    field("problem", report.problem.clone().into_sexp());
-    field("config_error", config_error.into_sexp());
+    field(
+        "problem",
+        report
+            .problem
+            .as_ref()
+            .map(|p| p.message.clone())
+            .into_sexp(),
+    );
     let info = named(info);
 
     let mut result: Vec<(&'static str, SEXP)> = Vec::with_capacity(2);

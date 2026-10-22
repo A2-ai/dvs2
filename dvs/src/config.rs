@@ -331,10 +331,6 @@ impl Config {
         &self.backend
     }
 
-    pub fn set_credential_policy(&mut self, policy: crate::auth::CredentialPolicy) {
-        self.backend.set_credential_policy(policy);
-    }
-
     pub fn server_url(&self) -> Option<&Url> {
         match &self.backend {
             Backend::Local(_) => None,

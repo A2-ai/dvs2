@@ -5,7 +5,7 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::error::{BackendError, ErrorCode};
+use crate::error::{Error, ErrorCode};
 use crate::paths::ProjectPath;
 use crate::{Backend, Compression, DvsPaths, Hashes, Outcome, StoreRequest, StoreResult};
 
@@ -82,29 +82,9 @@ impl FileMetadata {
     }
 
     /// Returns whether the file already existed in the dvs folder and therefore is an update
-    /// and the compressed size if applicable.
+    /// and what storage reported, if it stored anything.
     /// Copies the source file to storage and saves metadata atomically (both succeed or neither).
     pub fn save(
-        &mut self,
-        operation_id: Uuid,
-        source_file: impl AsRef<Path>,
-        backend: &Backend,
-        paths: &DvsPaths,
-        relative_path: impl AsRef<Path>,
-        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-    ) -> Result<(Outcome, Option<u64>)> {
-        let (outcome, stored) = self.save_reporting(
-            operation_id,
-            source_file,
-            backend,
-            paths,
-            relative_path,
-            on_bytes,
-        )?;
-        Ok((outcome, stored.map(|res| res.stored_size)))
-    }
-
-    pub(crate) fn save_reporting(
         &mut self,
         operation_id: Uuid,
         source_file: impl AsRef<Path>,
@@ -130,7 +110,7 @@ impl FileMetadata {
             // we read the file anyway to make sure it's not 2 files having the same hash
             let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)
                 .map_err(|e| {
-                BackendError::new(
+                Error::new(
                     ErrorCode::BadMetadata,
                     format!("cannot read {}: {e}", dvs_file_path.display()),
                 )
@@ -144,7 +124,7 @@ impl FileMetadata {
             }
         }
 
-        let stored = self.store_and_write_reporting(
+        let stored = self.store_and_write(
             operation_id,
             source_file,
             backend,
@@ -156,28 +136,8 @@ impl FileMetadata {
     }
 
     /// Stores the file then writes the metadata, atomically: either both succeed or
-    /// neither is left behind. Returns the compressed size.
+    /// neither is left behind. Returns what storage reported.
     pub fn store_and_write(
-        &mut self,
-        operation_id: Uuid,
-        source_file: impl AsRef<Path>,
-        backend: &Backend,
-        paths: &DvsPaths,
-        relative_path: impl AsRef<Path>,
-        on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-    ) -> Result<u64> {
-        self.store_and_write_reporting(
-            operation_id,
-            source_file,
-            backend,
-            paths,
-            relative_path,
-            on_bytes,
-        )
-        .map(|res| res.stored_size)
-    }
-
-    pub(crate) fn store_and_write_reporting(
         &mut self,
         operation_id: Uuid,
         source_file: impl AsRef<Path>,

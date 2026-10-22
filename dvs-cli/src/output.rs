@@ -4,7 +4,14 @@ use std::time::{Instant, SystemTime};
 
 use anyhow::Error;
 use dvs::operation::{duration_ms, rfc3339_ms};
+use dvs::{ByteTotals, Counts, ErrorCode};
 use serde_json::{Value, json};
+
+/// Exit codes, shared by every command; only `get` uses 3.
+pub const EXIT_OK: i32 = 0;
+pub const EXIT_FAILED: i32 = 1;
+pub const EXIT_USAGE: i32 = 2;
+pub const EXIT_CONFLICTS: i32 = 3;
 
 /// When this run started, for the timing every result carries.
 #[derive(Clone, Copy)]
@@ -39,7 +46,7 @@ pub fn stamp(value: &mut Value) {
 
 #[derive(Debug)]
 pub struct CodedError {
-    pub code: &'static str,
+    pub code: ErrorCode,
     pub message: String,
 }
 
@@ -51,7 +58,7 @@ impl std::fmt::Display for CodedError {
 
 impl std::error::Error for CodedError {}
 
-pub fn coded(code: &'static str, message: impl Into<String>) -> Error {
+pub fn coded(code: ErrorCode, message: impl Into<String>) -> Error {
     CodedError {
         code,
         message: message.into(),
@@ -59,68 +66,69 @@ pub fn coded(code: &'static str, message: impl Into<String>) -> Error {
     .into()
 }
 
-pub fn error_code(error: &Error) -> &'static str {
+pub fn error_code(error: &Error) -> ErrorCode {
     if let Some(error) = error.downcast_ref::<CodedError>() {
         error.code
     } else if error
         .downcast_ref::<dvs::globbing::NoFilesSelected>()
         .is_some()
     {
-        "no_files_selected"
+        ErrorCode::NoFilesSelected
     } else if error.downcast_ref::<dvs::config::ConfigError>().is_some() {
-        "invalid_configuration"
+        ErrorCode::InvalidConfiguration
     } else if let Some(code) = dvs::backend_error_code(error) {
-        code.as_str()
+        code
     } else if error.downcast_ref::<std::io::Error>().is_some() {
-        "io_error"
+        ErrorCode::IoError
     } else {
-        "operation_failed"
+        ErrorCode::OperationFailed
     }
 }
 
 /// The exit status of a run that failed before it could report rows.
 pub fn exit_code(error: &Error) -> i32 {
     match error_code(error) {
-        "invalid_arguments" | "invalid_configuration" => crate::get_cmd::EXIT_USAGE,
-        _ => crate::get_cmd::EXIT_FAILED,
+        ErrorCode::InvalidArguments | ErrorCode::InvalidConfiguration => EXIT_USAGE,
+        _ => EXIT_FAILED,
     }
 }
 
-pub fn error_json(code: &str, message: impl Into<String>) -> Value {
+pub fn error_json(code: ErrorCode, message: impl Into<String>) -> Value {
     json!({"code": code, "message": message.into(), "hint": null})
 }
 
-pub fn envelope(command: &str, dry_run: bool, files: Vec<Value>, failed: usize) -> Value {
-    let total = files.len();
+/// The envelope of a command without rows.
+pub fn envelope(command: &str, dry_run: bool) -> Value {
     json!({
         "v": 1,
         "command": command,
-        "outcome": if failed == 0 {
-            "complete"
-        } else if failed == total {
-            "failed"
-        } else {
-            "partial"
-        },
+        "outcome": "complete",
         "dry_run": dry_run,
-        "counts": {
-            "total": total,
-            "succeeded": total - failed,
-            "failed": failed,
-        },
         "error": null,
-        "files": files,
     })
 }
 
-pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
-    let mut value = if command == "get" {
-        crate::get_cmd::problem_json(&format!("{error:#}"), dry_run)
+pub fn rows_envelope(command: &str, dry_run: bool, files: Vec<Value>, counts: Counts) -> Value {
+    let mut value = envelope(command, dry_run);
+    value["outcome"] = json!(if counts.failed == 0 {
+        "complete"
+    } else if counts.failed == counts.total {
+        "failed"
     } else {
-        envelope(command, dry_run, vec![], 0)
+        "partial"
+    });
+    value["counts"] = json!(counts);
+    value["files"] = json!(files);
+    value
+}
+
+pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
+    let mut value = match command {
+        "add" | "get" | "status" => rows_envelope(command, dry_run, vec![], Counts::default()),
+        _ => envelope(command, dry_run),
     };
-    if command == "add" {
-        value["bytes"] = json!(dvs::ByteTotals::default());
+    if matches!(command, "add" | "get") {
+        value["bytes"] = json!(ByteTotals::default());
     }
     value["outcome"] = json!("failed");
     value["error"] = error_json(error_code(error), format!("{error:#}"));
@@ -150,7 +158,7 @@ pub fn file_result(mut value: Value, is_error: bool) -> Value {
     if !is_error {
         value["code"] = Value::Null;
     } else if value.get("code").is_none_or(Value::is_null) {
-        value["code"] = json!("file_failed");
+        value["code"] = json!(ErrorCode::FileFailed);
     }
     row_error_fields(value)
 }

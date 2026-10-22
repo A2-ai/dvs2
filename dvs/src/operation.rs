@@ -1,4 +1,4 @@
-//! Byte totals and timing helpers for operation results.
+//! Counts, byte totals and timing helpers for operation results.
 
 use std::time::{Duration, Instant, SystemTime};
 
@@ -25,6 +25,24 @@ impl ByteTotals {
         }
         if transferred {
             self.transferred += size;
+        }
+    }
+}
+
+/// Row counts for a result: `succeeded + failed == total`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct Counts {
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+}
+
+impl Counts {
+    pub fn new(total: usize, failed: usize) -> Self {
+        Counts {
+            total,
+            succeeded: total - failed,
+            failed,
         }
     }
 }

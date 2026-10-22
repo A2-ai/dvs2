@@ -14,17 +14,17 @@ use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
 use url::Url;
 
 use dvs::auth::{
-    CredentialPolicy, delete_token, get_client_approve_url, get_token, get_token_with,
-    initiate_device_approval, poll_for_token, revoke_token, store_token,
+    delete_token, get_client_approve_url, get_token, initiate_device_approval, poll_for_token,
+    revoke_token, store_token,
 };
 use dvs::config::{Config, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, AddResult, Backend, Compression, ErrorCode, FileMetadata, FileProgress, FileStatus,
-    GetOptions, Outcome, PathFilter, Status, StatusDetail, add_files, format_size, get_files,
-    get_status, set_num_threads,
+    AddDetail, AddResult, Backend, Compression, Counts, ErrorCode, FileMetadata, FileProgress,
+    FileStatus, GetOptions, Outcome, PathFilter, Status, StatusDetail, add_files, format_size,
+    get_files, get_status, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -205,8 +205,6 @@ impl<'a> From<&'a FileMetadata> for StatusRowFull<'a> {
     }
 }
 
-/// An add row and whether it failed. Built here, not by changing
-/// `AddResult`'s serialization, so R output is unchanged.
 fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
     let (value, is_error) = match &r.detail {
         AddDetail::Success {
@@ -302,7 +300,7 @@ fn make_progress_callback(threshold: u64) -> impl Fn(&std::path::Path, u64) -> F
 fn run_device_login(url: &Url, machine: bool) -> Result<()> {
     if machine {
         return Err(output::coded(
-            "authentication_required",
+            ErrorCode::AuthRequired,
             "Device authorization requires interactive login; run dvs login without --json",
         ));
     }
@@ -323,12 +321,6 @@ fn try_main(cli: Cli) -> Result<()> {
         set_num_threads(n);
     }
     let current_dir = std::env::current_dir()?;
-    // Machine mode never changes stored credentials
-    let credentials = if cli.json {
-        CredentialPolicy::Preserve
-    } else {
-        CredentialPolicy::Repair
-    };
 
     match cli.command {
         Command::Init(init_cmd) => {
@@ -355,11 +347,10 @@ fn try_main(cli: Cli) -> Result<()> {
                 } => {
                     // Initializing on the server requires authentication, so run the
                     // login flow first if we don't have a token for it yet.
-                    if get_token_with(&url, credentials)?.is_none() {
+                    if get_token(&url)?.is_none() {
                         run_device_login(&url, cli.json)?;
                     }
                     let mut config = Config::new_server(name, url, Some(group));
-                    config.set_credential_policy(credentials);
                     if no_compression {
                         config.set_compression(Some(Compression::None));
                     }
@@ -375,7 +366,7 @@ fn try_main(cli: Cli) -> Result<()> {
 
             let repo_root = init(&root, config)?;
             if cli.json {
-                let mut result = output::envelope("init", false, vec![], 0);
+                let mut result = output::envelope("init", false);
                 result["project_root"] = json!(repo_root);
                 output::emit(result);
             } else {
@@ -394,11 +385,10 @@ fn try_main(cli: Cli) -> Result<()> {
 
             // Initializing on the server requires authentication, so run the
             // login flow first if we don't have a token for it yet.
-            if get_token_with(&url, credentials)?.is_none() {
+            if get_token(&url)?.is_none() {
                 run_device_login(&url, cli.json)?;
             }
             let mut config = Config::new_server(name, url, None);
-            config.set_credential_policy(credentials);
             config.set_compression(None);
             if let Some(m) = metadata_folder_name {
                 config.set_metadata_folder_name(m);
@@ -408,7 +398,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 s.attach()?;
                 config.save(current_dir)?;
                 if cli.json {
-                    output::emit(output::envelope("attach", false, vec![], 0));
+                    output::emit(output::envelope("attach", false));
                 }
             }
         }
@@ -418,13 +408,13 @@ fn try_main(cli: Cli) -> Result<()> {
             message,
             dry_run,
         } => {
-            let config = find_config(&current_dir, credentials)?;
+            let config = find_config(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
                 .into_iter()
                 .collect();
             if all_paths.is_empty() {
-                return Err(output::coded("no_files_selected", "No files to add"));
+                return Err(output::coded(ErrorCode::NoFilesSelected, "No files to add"));
             }
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
@@ -448,8 +438,14 @@ fn try_main(cli: Cli) -> Result<()> {
                 .iter()
                 .any(|r| matches!(r.detail, AddDetail::Error { .. }));
             if cli.json {
-                let (files, failed) = output::file_results(results.iter().map(add_row));
-                let mut result = output::envelope("add", dry_run, files, failed);
+                let files = results
+                    .iter()
+                    .map(|r| {
+                        let (value, is_error) = add_row(r);
+                        output::file_result(value, is_error)
+                    })
+                    .collect();
+                let mut result = output::rows_envelope("add", dry_run, files, report.counts);
                 result["bytes"] = json!(report.bytes);
                 output::emit(result);
             } else {
@@ -498,7 +494,7 @@ fn try_main(cli: Cli) -> Result<()> {
             with_metadata,
             glob,
         } => {
-            let config = find_config(&current_dir, credentials)?;
+            let config = find_config(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let show_all = !current && !absent && !unsynced;
 
@@ -525,7 +521,8 @@ fn try_main(cli: Cli) -> Result<()> {
                 .any(|s| matches!(s.detail, StatusDetail::Error { .. }));
             if cli.json {
                 let (files, failed) = output::file_results(statuses.iter().map(status_row));
-                output::emit(output::envelope("status", false, files, failed));
+                let counts = Counts::new(statuses.len(), failed);
+                output::emit(output::rows_envelope("status", false, files, counts));
             } else if statuses.is_empty() {
                 if show_all {
                     println!("No tracked files");
@@ -603,22 +600,17 @@ fn try_main(cli: Cli) -> Result<()> {
             on_conflict,
             force,
         } => {
-            let setup = || -> Result<_> {
-                let config = find_config(&current_dir, credentials)?;
-                let explicit = if force {
-                    Some(OnConflict::Overwrite)
-                } else {
-                    on_conflict
-                        .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
-                        .transpose()?
-                };
-                let (on_conflict, source) = config.get_on_conflict(explicit)?;
-                let dvs_paths = DvsPaths::from_cwd(&config)?;
-                let selection =
-                    select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
-                Ok((config, on_conflict, source, dvs_paths, selection))
+            let config = find_config(&current_dir)?;
+            let explicit = if force {
+                Some(OnConflict::Overwrite)
+            } else {
+                on_conflict
+                    .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
+                    .transpose()?
             };
-            let (config, on_conflict, source, dvs_paths, selection) = setup()?;
+            let (on_conflict, source) = config.get_on_conflict(explicit)?;
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
+            let selection = select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let on_file_start = make_progress_callback(config.progress_bytes_threshold());
@@ -643,22 +635,21 @@ fn try_main(cli: Cli) -> Result<()> {
                 get_cmd::print_human(&report);
             }
             let code = get_cmd::exit_code(&report);
-            if code != get_cmd::EXIT_OK {
+            if code != output::EXIT_OK {
                 return Err(Exit(code).into());
             }
         }
         Command::Info => {
-            let config = find_config(&current_dir, credentials)?;
+            let config = find_config(&current_dir)?;
             let compression = config.compression().to_string();
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let info_json = |fields: serde_json::Value| {
-                let mut result = output::envelope("info", false, vec![], 0);
+                let mut result = output::envelope("info", false);
                 for (key, value) in fields.as_object().expect("info fields are an object") {
                     result[key] = value.clone();
                 }
                 result["project_root"] = json!(dvs_paths.repo_root());
                 result["metadata_directory"] = json!(dvs_paths.metadata_folder());
-                result["protocol"] = json!({"versions": [1], "capabilities": ["json_results", "get_conflict_policy", "connectivity_status"]});
                 output::emit(result);
             };
 
@@ -682,7 +673,7 @@ fn try_main(cli: Cli) -> Result<()> {
                 Backend::Server(s) => {
                     // Not logged in is an answer, not an error
                     let logged_in = if cli.json {
-                        match get_token_with(&s.url, credentials) {
+                        match get_token(&s.url) {
                             Ok(token) => token.is_some(),
                             Err(error)
                                 if dvs::backend_error_code(&error)
@@ -692,7 +683,7 @@ fn try_main(cli: Cli) -> Result<()> {
                             }
                             Err(error) => {
                                 return Err(output::coded(
-                                    ErrorCode::CredentialsUnreadable.as_str(),
+                                    ErrorCode::CredentialsUnreadable,
                                     format!("Cannot read credentials: {error}"),
                                 ));
                             }
@@ -783,7 +774,7 @@ fn try_main(cli: Cli) -> Result<()> {
             run_device_login(&url, cli.json)?;
         }
         Command::Login { url: None } => {
-            let config = find_config(&current_dir, credentials)?;
+            let config = find_config(&current_dir)?;
 
             if let Some(url) = config.server_url() {
                 run_device_login(url, cli.json)?;
@@ -792,12 +783,12 @@ fn try_main(cli: Cli) -> Result<()> {
             }
         }
         Command::Logout => {
-            let config = find_config(&current_dir, credentials)?;
+            let config = find_config(&current_dir)?;
 
             if let Some(url) = config.server_url() {
                 let Some(token) = get_token(url)? else {
                     if cli.json {
-                        let mut result = output::envelope("logout", false, vec![], 0);
+                        let mut result = output::envelope("logout", false);
                         result["revoked"] = json!(null);
                         result["warnings"] = json!([]);
                         output::emit(result);
@@ -813,13 +804,13 @@ fn try_main(cli: Cli) -> Result<()> {
                     let deleted = delete_token(url);
                     let mut result = match &deleted {
                         Err(delete_error) => output::problem("logout", false, delete_error),
-                        Ok(_) => output::envelope("logout", false, vec![], 0),
+                        Ok(_) => output::envelope("logout", false),
                     };
                     result["revoked"] = json!(revoke_error.is_none());
                     result["warnings"] = json!(
                         revoke_error
                             .as_ref()
-                            .map(|e| json!({"code": "revoke_failed", "message": e.to_string()}))
+                            .map(|e| json!({"code": ErrorCode::RevokeFailed, "message": e.to_string()}))
                             .into_iter()
                             .collect::<Vec<_>>()
                     );
@@ -855,11 +846,9 @@ impl std::fmt::Display for Exit {
 
 impl std::error::Error for Exit {}
 
-fn find_config(current_dir: &std::path::Path, credentials: CredentialPolicy) -> Result<Config> {
-    let mut config = Config::find(current_dir)
-        .ok_or_else(|| output::coded("not_in_project", "Not in a DVS repository"))??;
-    config.set_credential_policy(credentials);
-    Ok(config)
+fn find_config(current_dir: &std::path::Path) -> Result<Config> {
+    Config::find(current_dir)
+        .ok_or_else(|| output::coded(ErrorCode::NotInProject, "Not in a DVS repository"))?
 }
 
 impl Command {
@@ -895,7 +884,7 @@ fn main() {
                     .take_while(|arg| arg != "--")
                     .any(|arg| arg == "--json")
             {
-                let error = output::coded("invalid_arguments", error.to_string());
+                let error = output::coded(ErrorCode::InvalidArguments, error.to_string());
                 output::emit(output::problem("cli", false, &error));
                 std::process::exit(2);
             }
