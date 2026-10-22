@@ -193,16 +193,7 @@ pub enum Command {
 }
 
 #[derive(Parser)]
-#[clap(
-    version,
-    author,
-    about,
-    subcommand_negates_reqs = true,
-    after_help = "Interrupting add, get, status or hash (Ctrl-C, SIGINT, SIGTERM, SIGHUP, or on Unix \
-                  closing stdin with --emit-events) stops starting new files, lets the ones in flight \
-                  finish, reports the result and exits 130. A second interrupt exits 130 at once. \
-                  A signal that was ignored when dvs started (e.g. under nohup) stays ignored."
-)]
+#[clap(version, author, about, subcommand_negates_reqs = true)]
 pub struct Cli {
     /// Output results as JSON
     #[clap(long, global = true, display_order = 0)]
