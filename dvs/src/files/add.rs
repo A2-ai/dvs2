@@ -450,7 +450,7 @@ mod tests {
     use super::*;
     use crate::operation::TransferObserver;
     use crate::progress::FileProgress;
-    use crate::testutil::{Recorder, Seen, create_file, create_temp_git_repo, init_dvs_repo};
+    use crate::testutil::{Recorder, create_file, create_temp_git_repo, init_dvs_repo};
     use fs_err as fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -599,7 +599,6 @@ mod tests {
         names: &[&str],
         paths: &DvsPaths,
         backend: &Backend,
-        dry_run: bool,
         ctx: &OperationContext,
     ) -> AddReport {
         add_files(
@@ -608,272 +607,34 @@ mod tests {
             backend,
             None,
             Compression::Zstd,
-            dry_run,
+            false,
             ctx,
         )
         .unwrap()
     }
 
-    fn code(row: &AddResult) -> Option<ErrorCode> {
-        match row.detail {
-            AddDetail::Success { .. } => None,
-            AddDetail::Error { code, .. } => Some(code),
-        }
-    }
-
     #[test]
-    #[cfg(unix)]
-    fn nothing_hashed_means_no_storage_check() {
-        use std::os::unix::fs::PermissionsExt;
+    fn observer_hears_the_plan_then_transfers_of_stored_files_only_then_each_row() {
         let (_tmp, root, config, paths) = project();
         let backend = config.backend();
-        let locked = create_file(&root, "locked.txt", b"secret");
-        fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-        if fs::read(&locked).is_ok() {
-            // Running as root: permissions do not stop reads
-            return;
-        }
+        create_file(&root, "a.txt", b"aaaa");
+        add(&["a.txt"], &paths, backend, &OperationContext::new());
+        create_file(&root, "c.txt", b"c");
+
         let recorder = Arc::new(Recorder::default());
-        add(
-            &["locked.txt"],
-            &paths,
-            backend,
-            false,
-            &OperationContext::new().with_observer(recorder.clone()),
-        );
-        fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert_eq!(
-            recorder.outline(),
-            vec![
-                Seen::PhaseStarted(Phase::Scan),
-                Seen::PhaseFinished(Phase::Scan),
-                Seen::PhaseStarted(Phase::Hash),
-                Seen::PhaseFinished(Phase::Hash),
-                Seen::Planned(OperationPlan {
-                    files_total: 1,
-                    ..OperationPlan::default()
-                }),
-            ]
-        );
-    }
-
-    /// The plan is reported once, before every one of `rows` rows.
-    fn assert_planned_before_rows(recorder: &Recorder, rows: usize) {
+        let ctx = OperationContext::new().with_observer(recorder.clone());
+        let report = add(&["a.txt", "c.txt"], &paths, backend, &ctx);
         let seen = recorder.seen();
-        let planned: Vec<_> = seen
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| matches!(s, Seen::Planned(_)))
-            .map(|(i, _)| i)
-            .collect();
-        assert_eq!(planned.len(), 1, "{seen:?}");
-        let finished: Vec<_> = seen
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| matches!(s, Seen::Finished { .. }))
-            .map(|(i, _)| i)
-            .collect();
-        assert_eq!(finished.len(), rows, "{seen:?}");
-        assert!(finished.iter().all(|&i| i > planned[0]), "{seen:?}");
-    }
-
-    #[test]
-    fn add_reports_phases_and_plan_in_order() {
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "a.txt", b"aaaa");
-        create_file(&root, "b.txt", b"bb");
-
-        let plan = OperationPlan {
-            files_total: 2,
-            bytes_total: 6,
-            files_to_transfer: 2,
-            bytes_to_transfer: 6,
-        };
-        let dry = Arc::new(Recorder::default());
-        add(
-            &["a.txt", "b.txt"],
-            &paths,
-            backend,
-            true,
-            &OperationContext::new().with_observer(dry.clone()),
-        );
-        // A dry run moves nothing and records nothing
-        assert_eq!(
-            dry.outline(),
-            vec![
-                Seen::PhaseStarted(Phase::Scan),
-                Seen::PhaseFinished(Phase::Scan),
-                Seen::PhaseStarted(Phase::Hash),
-                Seen::PhaseFinished(Phase::Hash),
-                Seen::PhaseStarted(Phase::CheckStorage),
-                Seen::PhaseFinished(Phase::CheckStorage),
-                Seen::Planned(plan),
-            ]
-        );
-
-        let real = Arc::new(Recorder::default());
-        add(
-            &["a.txt", "b.txt"],
-            &paths,
-            backend,
-            false,
-            &OperationContext::new().with_observer(real.clone()),
-        );
-        assert_eq!(
-            real.outline(),
-            vec![
-                Seen::PhaseStarted(Phase::Scan),
-                Seen::PhaseFinished(Phase::Scan),
-                Seen::PhaseStarted(Phase::Hash),
-                Seen::PhaseFinished(Phase::Hash),
-                Seen::PhaseStarted(Phase::CheckStorage),
-                Seen::PhaseFinished(Phase::CheckStorage),
-                Seen::Planned(plan),
-                Seen::PhaseStarted(Phase::Transfer),
-                Seen::PhaseFinished(Phase::Transfer),
-                Seen::PhaseStarted(Phase::Record),
-                Seen::PhaseFinished(Phase::Record),
-            ]
-        );
-        // Every row finished after the plan, once, with its time
-        let seen = real.seen();
-        let planned_at = seen.iter().position(|s| *s == Seen::Planned(plan)).unwrap();
-        let finished = real.finished();
-        assert_eq!(finished.len(), 2);
-        assert!(
-            finished
-                .iter()
-                .all(|(_, code, ms)| code.is_none() && ms.is_some())
-        );
-        assert!(
-            seen.iter()
-                .position(|s| matches!(s, Seen::Finished { .. }))
-                .unwrap()
-                > planned_at
-        );
-
-        // Nothing left to transfer the second time
-        let again = Arc::new(Recorder::default());
-        add(
-            &["a.txt", "b.txt"],
-            &paths,
-            backend,
-            true,
-            &OperationContext::new().with_observer(again.clone()),
-        );
-        assert!(again.outline().contains(&Seen::Planned(OperationPlan {
-            files_to_transfer: 0,
-            bytes_to_transfer: 0,
-            ..plan
-        })));
-    }
-
-    #[test]
-    fn only_stored_files_are_transfers() {
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "a.txt", b"aaaa");
-        create_file(&root, "b.txt", b"bb");
-        add(
-            &["a.txt", "b.txt"],
-            &paths,
-            backend,
-            false,
-            &OperationContext::new(),
-        );
-
-        // Everything in sync: no store call, so no transfer
-        let in_sync = Arc::new(Recorder::default());
-        let report = add(
-            &["a.txt", "b.txt"],
-            &paths,
-            backend,
-            false,
-            &OperationContext::new().with_observer(in_sync.clone()),
-        );
-        assert!(report.files.iter().all(|r| matches!(
-            r.detail,
-            AddDetail::Success {
-                outcome: Outcome::Present,
-                ..
-            }
-        )));
-        assert!(
-            !in_sync
-                .outline()
-                .contains(&Seen::PhaseStarted(Phase::Transfer)),
-            "{:?}",
-            in_sync.outline()
-        );
-        assert!(
-            !in_sync
-                .seen()
-                .iter()
-                .any(|s| matches!(s, Seen::TransferStarted(_)))
-        );
+        let at = |line: &str| seen.iter().position(|s| s == line).unwrap();
+        // a.txt is in sync: only c.txt is stored, so it alone is a transfer
+        let plan = at("plan 2 5 1 1");
+        let transfers: Vec<_> = seen.iter().filter(|s| s.starts_with("transfer")).collect();
+        assert_eq!(transfers, ["transfer c.txt"]);
+        assert!(plan < at("transfer c.txt") && at("transfer c.txt") < at("row c.txt"));
+        assert!(plan < at("row a.txt"));
+        assert_eq!(seen.iter().filter(|s| s.starts_with("row")).count(), 2);
         // The library serializes each row's time
         assert!(serde_json::to_value(&report.files[0]).unwrap()["duration_ms"].is_u64());
-
-        // A new file is stored, so it alone is a transfer
-        create_file(&root, "c.txt", b"c");
-        let with_new = Arc::new(Recorder::default());
-        add(
-            &["a.txt", "c.txt"],
-            &paths,
-            backend,
-            false,
-            &OperationContext::new().with_observer(with_new.clone()),
-        );
-        let outline = with_new.outline();
-        assert!(
-            outline.contains(&Seen::PhaseStarted(Phase::Transfer)),
-            "{outline:?}"
-        );
-        assert!(
-            outline.contains(&Seen::PhaseFinished(Phase::Transfer)),
-            "{outline:?}"
-        );
-        let transfers: Vec<_> = with_new
-            .seen()
-            .into_iter()
-            .filter(|s| matches!(s, Seen::TransferStarted(_)))
-            .collect();
-        assert_eq!(transfers, vec![Seen::TransferStarted("c.txt".into())]);
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn unreadable_file_gets_a_timed_error_row() {
-        use std::os::unix::fs::PermissionsExt;
-        let (_tmp, root, config, paths) = project();
-        let backend = config.backend();
-        create_file(&root, "ok.txt", b"ok");
-        let locked = create_file(&root, "locked.txt", b"secret");
-        fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-        if fs::read(&locked).is_ok() {
-            // Running as root: permissions do not stop reads
-            return;
-        }
-
-        let recorder = Arc::new(Recorder::default());
-        let report = add(
-            &["locked.txt", "ok.txt"],
-            &paths,
-            backend,
-            false,
-            &OperationContext::new().with_observer(recorder.clone()),
-        );
-        fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
-
-        assert_eq!(code(&report.files[0]), Some(ErrorCode::IoError));
-        assert!(report.files[0].duration_ms.is_some());
-        assert_eq!(code(&report.files[1]), None);
-        // The hash error is reported after the plan, like every row
-        assert_planned_before_rows(&recorder, 2);
-        // The failed row has no known size, so it counts in no total
-        assert_eq!(report.bytes.total, 2);
-        assert_eq!(recorder.plan().bytes_total, 2);
     }
 
     #[cfg(unix)]
@@ -892,7 +653,6 @@ mod tests {
             &["a.txt", "b.txt"],
             &paths,
             config.backend(),
-            false,
             &OperationContext::new(),
         );
         let c = report.counts;

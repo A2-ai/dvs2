@@ -86,122 +86,52 @@ pub mod testutil {
         (config, dvs_dir)
     }
 
-    /// One observer call, as [`Recorder`] saw it.
-    #[derive(Debug, Clone, PartialEq)]
-    pub enum Seen {
-        Planned(crate::OperationPlan),
-        PhaseStarted(crate::Phase),
-        PhaseFinished(crate::Phase),
-        TransferStarted(PathBuf),
-        /// A finished row: its path, row code (None on success) and duration
-        Finished {
-            path: PathBuf,
-            code: Option<String>,
-            duration_ms: Option<u64>,
-        },
-    }
-
-    /// An observer that records every call in order.
+    /// An observer that records each call as a short line, in order, plus
+    /// every finished row as JSON.
     #[derive(Default)]
     pub struct Recorder {
-        pub seen: std::sync::Mutex<Vec<Seen>>,
+        pub seen: std::sync::Mutex<Vec<String>>,
+        pub rows: std::sync::Mutex<Vec<serde_json::Value>>,
     }
 
     impl Recorder {
-        pub fn seen(&self) -> Vec<Seen> {
+        pub fn seen(&self) -> Vec<String> {
             self.seen.lock().unwrap().clone()
         }
 
-        /// The finished rows, in completion order.
-        pub fn finished(&self) -> Vec<(PathBuf, Option<String>, Option<u64>)> {
-            self.seen()
-                .into_iter()
-                .filter_map(|s| match s {
-                    Seen::Finished {
-                        path,
-                        code,
-                        duration_ms,
-                    } => Some((path, code, duration_ms)),
-                    _ => None,
-                })
-                .collect()
-        }
-
-        /// The one plan reported.
-        pub fn plan(&self) -> crate::OperationPlan {
-            let plans: Vec<_> = self
-                .seen()
-                .into_iter()
-                .filter_map(|s| match s {
-                    Seen::Planned(plan) => Some(plan),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(plans.len(), 1, "expected one plan, got {plans:?}");
-            plans[0]
-        }
-
-        /// Plan and phase calls only, in order.
-        pub fn outline(&self) -> Vec<Seen> {
-            self.seen()
-                .into_iter()
-                .filter(|s| {
-                    matches!(
-                        s,
-                        Seen::Planned(_) | Seen::PhaseStarted(_) | Seen::PhaseFinished(_)
-                    )
-                })
-                .collect()
+        fn push(&self, line: String) {
+            self.seen.lock().unwrap().push(line);
         }
     }
 
     impl crate::OperationObserver for Recorder {
-        fn planned(&self, plan: &crate::OperationPlan) {
-            self.seen.lock().unwrap().push(Seen::Planned(*plan));
+        fn planned(&self, p: &crate::OperationPlan) {
+            let (files, bytes) = (p.files_total, p.bytes_total);
+            let (to_files, to_bytes) = (p.files_to_transfer, p.bytes_to_transfer);
+            self.push(format!("plan {files} {bytes} {to_files} {to_bytes}"));
         }
 
         fn phase_started(&self, phase: crate::Phase) {
-            self.seen.lock().unwrap().push(Seen::PhaseStarted(phase));
+            self.push(format!("start {}", phase.as_str()));
         }
 
         fn phase_finished(&self, phase: crate::Phase) {
-            self.seen.lock().unwrap().push(Seen::PhaseFinished(phase));
+            self.push(format!("end {}", phase.as_str()));
         }
 
         fn transfer_started(&self, path: &Path, _total_bytes: u64) -> Option<crate::FileProgress> {
-            self.seen
-                .lock()
-                .unwrap()
-                .push(Seen::TransferStarted(path.to_path_buf()));
+            self.push(format!("transfer {}", path.display()));
             None
         }
 
         fn file_finished(&self, row: crate::FileRow<'_>) {
-            let (path, code, duration_ms) = match row {
-                crate::FileRow::Add(r) => (
-                    r.path.clone(),
-                    match &r.detail {
-                        crate::AddDetail::Success { .. } => None,
-                        crate::AddDetail::Error { code, .. } => Some(
-                            serde_json::to_value(code)
-                                .unwrap()
-                                .as_str()
-                                .unwrap()
-                                .to_string(),
-                        ),
-                    },
-                    r.duration_ms,
-                ),
-                crate::FileRow::Get(r) => (r.path.clone(), None, None),
-                crate::FileRow::Status(r) => {
-                    (r.path.clone(), r.code.map(|c| c.as_str().to_string()), None)
-                }
+            let (path, json) = match row {
+                crate::FileRow::Add(r) => (&r.path, serde_json::to_value(r)),
+                crate::FileRow::Get(r) => (&r.path, serde_json::to_value(r)),
+                crate::FileRow::Status(r) => (&r.path, serde_json::to_value(r)),
             };
-            self.seen.lock().unwrap().push(Seen::Finished {
-                path,
-                code,
-                duration_ms,
-            });
+            self.push(format!("row {}", path.display()));
+            self.rows.lock().unwrap().push(json.unwrap());
         }
     }
 }

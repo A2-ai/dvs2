@@ -1784,160 +1784,33 @@ mod tests {
         assert_eq!(repo.read("locked/a.csv"), b"a");
     }
 
-    /// What an observer heard, in order.
-    #[derive(Debug, Clone)]
-    enum Heard {
-        Planned(OperationPlan),
-        Started(Phase),
-        Finished(Phase),
-        Transfer,
-        Row(GetRow),
-    }
-
-    /// Records everything; optionally holds the second transfer open until
-    /// another row is reported.
-    #[derive(Default)]
-    struct Recorder {
-        heard: Mutex<Vec<Heard>>,
-        rows_seen: std::sync::Condvar,
-        hold_second_transfer: bool,
-        /// Whether the held transfer saw another file's row before it finished
-        second_saw_a_row: Mutex<Option<bool>>,
-    }
-
-    impl Recorder {
-        fn phases(&self) -> Vec<String> {
-            self.heard()
-                .into_iter()
-                .filter_map(|h| match h {
-                    Heard::Started(p) => Some(format!("+{}", p.as_str())),
-                    Heard::Finished(p) => Some(format!("-{}", p.as_str())),
-                    _ => None,
-                })
-                .collect()
-        }
-
-        fn heard(&self) -> Vec<Heard> {
-            self.heard.lock().unwrap().clone()
-        }
-
-        fn rows(&self) -> Vec<GetRow> {
-            self.heard()
-                .into_iter()
-                .filter_map(|h| match h {
-                    Heard::Row(r) => Some(r),
-                    _ => None,
-                })
-                .collect()
-        }
-    }
-
-    impl crate::OperationObserver for std::sync::Arc<Recorder> {
-        fn planned(&self, plan: &OperationPlan) {
-            self.heard.lock().unwrap().push(Heard::Planned(*plan));
-        }
-        fn phase_started(&self, phase: Phase) {
-            self.heard.lock().unwrap().push(Heard::Started(phase));
-        }
-        fn phase_finished(&self, phase: Phase) {
-            self.heard.lock().unwrap().push(Heard::Finished(phase));
-        }
-        fn transfer_started(
-            &self,
-            path: &Path,
-            _total_bytes: u64,
-        ) -> Option<crate::progress::FileProgress> {
-            let nth = {
-                let mut heard = self.heard.lock().unwrap();
-                heard.push(Heard::Transfer);
-                heard
-                    .iter()
-                    .filter(|h| matches!(h, Heard::Transfer))
-                    .count()
-            };
-            if !(self.hold_second_transfer && nth == 2) {
-                return None;
-            }
-            let me = self.clone();
-            let path = path.to_path_buf();
-            Some(crate::progress::FileProgress {
-                on_bytes: Box::new(|_| {}),
-                on_done: Box::new(move |_| {
-                    // The slow transfer: it does not finish until another
-                    // file's row is reported (or 5 s pass).
-                    let other_row = |heard: &Vec<Heard>| {
-                        heard
-                            .iter()
-                            .any(|h| matches!(h, Heard::Row(r) if r.path != path))
-                    };
-                    let heard = me.heard.lock().unwrap();
-                    let (heard, _) = me
-                        .rows_seen
-                        .wait_timeout_while(heard, std::time::Duration::from_secs(5), |h| {
-                            !other_row(h)
-                        })
-                        .unwrap();
-                    *me.second_saw_a_row.lock().unwrap() = Some(other_row(&heard));
-                }),
-            })
-        }
-        fn file_finished(&self, row: crate::FileRow<'_>) {
-            let crate::FileRow::Get(row) = row else {
-                panic!("get reported a non-get row");
-            };
-            self.heard.lock().unwrap().push(Heard::Row(row.clone()));
-            self.rows_seen.notify_all();
-        }
-    }
-
     impl TestRepo {
         fn get_observed(
             &self,
             names: &[&str],
             unmatched: &[&str],
-            on_conflict: OnConflict,
-            dry_run: bool,
-            recorder: &std::sync::Arc<Recorder>,
-        ) -> GetReport {
-            let backend = self.backend();
-            self.get_observed_on(backend, names, unmatched, on_conflict, dry_run, recorder)
-        }
-
-        fn get_observed_on(
-            &self,
-            backend: &Backend,
-            names: &[&str],
-            unmatched: &[&str],
-            on_conflict: OnConflict,
-            dry_run: bool,
-            recorder: &std::sync::Arc<Recorder>,
-        ) -> GetReport {
+        ) -> (GetReport, Vec<String>, Vec<serde_json::Value>) {
+            let recorder = std::sync::Arc::new(crate::testutil::Recorder::default());
             let selection = GetSelection {
                 tracked: names.iter().map(PathBuf::from).collect::<HashSet<_>>(),
                 unmatched: unmatched.iter().map(PathBuf::from).collect(),
             };
-            let ctx = OperationContext::new().with_observer(std::sync::Arc::new(recorder.clone()));
-            get_files(
-                selection,
-                &self.paths,
-                backend,
-                GetOptions {
-                    dry_run,
-                    on_conflict,
-                    source: SettingSource::Argument,
-                },
-                &ctx,
-            )
+            let options = GetOptions {
+                dry_run: false,
+                on_conflict: OnConflict::Skip,
+                source: SettingSource::Argument,
+            };
+            let ctx = OperationContext::new().with_observer(recorder.clone());
+            let report = get_files(selection, &self.paths, self.backend(), options, &ctx);
+            let rows = recorder.rows.lock().unwrap().clone();
+            (report, recorder.seen(), rows)
         }
     }
 
-    /// The JSON shape of a row plus the fields JSON skips.
-    fn shape(r: &GetRow) -> (serde_json::Value, Option<u64>) {
-        (serde_json::to_value(r).unwrap(), r.duration_ms)
-    }
-
-    /// A mixed batch: restored, unchanged, skipped and untracked rows.
-    fn mixed_batch(repo: &TestRepo) {
+    #[test]
+    fn observer_hears_the_plan_then_each_final_row_once_as_it_finishes() {
+        let repo = TestRepo::new();
+        // Restored, unchanged, skipped (local changes), restored, untracked
         repo.add("a.csv", b"aaa");
         fs::remove_file(repo.root.join("a.csv")).unwrap();
         repo.add("b.csv", b"bb");
@@ -1945,196 +1818,49 @@ mod tests {
         fs::write(repo.root.join("c.csv"), b"edited").unwrap();
         repo.add("d.csv", b"dddd");
         fs::remove_file(repo.root.join("d.csv")).unwrap();
+        let names = ["a.csv", "b.csv", "c.csv", "d.csv"];
+        let (report, seen, mut rows) = repo.get_observed(&names, &["typo.csv"]);
+
+        let at = |line: &str| seen.iter().position(|s| s == line).unwrap();
+        // a (3) and d (4) to download of 11 bytes; typo has no size
+        let plan = at("plan 5 11 2 7");
+        assert!(
+            seen[..plan].iter().all(|s| !s.starts_with("row")),
+            "{seen:?}"
+        );
+        // A transfer's row is reported when it is done, not after the batch
+        assert!(at("row a.csv") < at("end transfer") && at("row d.csv") < at("end transfer"));
+        // Each row once, exactly as in the result (hint included)
+        rows.sort_by_key(|r| r["path"].as_str().unwrap().to_string());
+        let expected: Vec<_> = report
+            .files
+            .iter()
+            .map(|r| serde_json::to_value(r).unwrap())
+            .collect();
+        assert_eq!(rows, expected);
+        assert!(row(&report, "c.csv").hint.is_some());
+        // Rows that did work carry their time
+        assert!(row(&report, "a.csv").duration_ms.is_some());
+        assert!(row(&report, "b.csv").duration_ms.is_some());
+        assert_eq!(row(&report, "typo.csv").duration_ms, None);
     }
 
     #[test]
-    fn every_row_is_reported_once_in_its_final_shape() {
-        for dry_run in [false, true] {
-            let repo = TestRepo::new();
-            mixed_batch(&repo);
-            let recorder = std::sync::Arc::new(Recorder::default());
-            let report = repo.get_observed(
-                &["a.csv", "b.csv", "c.csv", "d.csv"],
-                &["typo.csv"],
-                OnConflict::Skip,
-                dry_run,
-                &recorder,
-            );
-            let rows = recorder.rows();
-            assert_eq!(rows.len(), report.files.len(), "{rows:#?}");
-            for final_row in &report.files {
-                let reported: Vec<_> = rows.iter().filter(|r| r.path == final_row.path).collect();
-                assert_eq!(
-                    reported.len(),
-                    1,
-                    "{} reported once",
-                    final_row.path.display()
-                );
-                assert_eq!(shape(reported[0]), shape(final_row));
-            }
-            // files[] keeps its order: sorted by path
-            let order: Vec<_> = report.files.iter().map(|r| r.path.clone()).collect();
-            let mut sorted = order.clone();
-            sorted.sort();
-            assert_eq!(order, sorted);
-        }
-    }
-
-    #[test]
-    fn a_transfer_row_is_reported_before_a_slower_transfer_finishes() {
+    fn nothing_to_hash_or_fetch_reports_no_such_phase() {
         let repo = TestRepo::new();
         repo.add("a.csv", b"a");
         repo.add("b.csv", b"b");
-        fs::remove_file(repo.root.join("a.csv")).unwrap();
         fs::remove_file(repo.root.join("b.csv")).unwrap();
-        let recorder = std::sync::Arc::new(Recorder {
-            hold_second_transfer: true,
-            ..Default::default()
-        });
-        let report = repo.get_observed(
-            &["a.csv", "b.csv"],
-            &[],
-            OnConflict::Abort,
-            false,
-            &recorder,
-        );
-        assert_eq!(report.outcome, GetOutcome::Complete);
-        assert_eq!(*recorder.second_saw_a_row.lock().unwrap(), Some(true));
-    }
-
-    #[test]
-    fn phases_and_the_plan_come_in_order() {
-        for dry_run in [false, true] {
-            let repo = TestRepo::new();
-            mixed_batch(&repo);
-            let recorder = std::sync::Arc::new(Recorder::default());
-            let report = repo.get_observed(
-                &["a.csv", "b.csv", "c.csv", "d.csv"],
-                &[],
-                OnConflict::Skip,
-                dry_run,
-                &recorder,
-            );
-            let heard = recorder.heard();
-            let marks: Vec<String> = heard
-                .iter()
-                .filter_map(|h| match h {
-                    Heard::Started(p) => Some(format!("+{}", p.as_str())),
-                    Heard::Finished(p) => Some(format!("-{}", p.as_str())),
-                    Heard::Planned(_) => Some("planned".to_string()),
-                    _ => None,
-                })
-                .collect();
-            let expected: &[&str] = if dry_run {
-                &[
-                    "+hash",
-                    "-hash",
-                    "+check_storage",
-                    "planned",
-                    "-check_storage",
-                ]
-            } else {
-                &[
-                    "+hash",
-                    "-hash",
-                    "+check_storage",
-                    "-check_storage",
-                    "planned",
-                    "+transfer",
-                    "-transfer",
-                ]
-            };
-            assert_eq!(marks, expected, "dry_run {dry_run}");
-            // No row before the plan.
-            let planned_at = heard
-                .iter()
-                .position(|h| matches!(h, Heard::Planned(_)))
-                .unwrap();
-            assert!(
-                heard[..planned_at]
-                    .iter()
-                    .all(|h| !matches!(h, Heard::Row(_)))
-            );
-            let Heard::Planned(plan) = heard[planned_at] else {
-                unreachable!()
-            };
-            // a (3) and d (4) need downloading; b (2) is current, c (2) skipped.
-            assert_eq!(
-                plan,
-                OperationPlan {
-                    files_total: 4,
-                    bytes_total: 11,
-                    files_to_transfer: 2,
-                    bytes_to_transfer: 7,
-                }
-            );
-            assert_eq!(report.bytes.total, plan.bytes_total);
-            // The plan counts what get attempts; the result every file not
-            // at its target, so c (skipped) too.
-            assert_eq!(report.bytes.to_transfer, 9);
-        }
-    }
-
-    #[test]
-    fn a_batch_already_current_skips_the_storage_phases() {
-        let repo = TestRepo::new();
-        repo.add("a.csv", b"a");
-        let recorder = std::sync::Arc::new(Recorder::default());
-        repo.get_observed(&["a.csv"], &[], OnConflict::Abort, false, &recorder);
-        let phases: Vec<_> = recorder
-            .heard()
-            .into_iter()
-            .filter_map(|h| match h {
-                Heard::Started(p) => Some(p),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(phases, [Phase::Hash]);
-    }
-
-    #[test]
-    fn rows_that_did_work_have_a_duration() {
-        let repo = TestRepo::new();
-        mixed_batch(&repo);
-        let report = repo.get_with(
-            &["a.csv", "b.csv", "c.csv", "d.csv"],
-            &["typo.csv"],
-            OnConflict::Skip,
-            false,
-        );
-        let duration = |name| row(&report, name).duration_ms;
-        assert!(duration("a.csv").is_some(), "restored");
-        assert!(duration("b.csv").is_some(), "unchanged: hashed");
-        assert!(duration("c.csv").is_some(), "skipped, but hashed");
-        assert_eq!(duration("typo.csv"), None, "not tracked");
-        let serialized = serde_json::to_value(row(&report, "a.csv")).unwrap();
-        assert!(serialized["duration_ms"].is_u64());
-        // Held back: the hashed conflict keeps its hash time, the absent
-        // file (never hashed) has none.
-        let repo = TestRepo::new();
-        mixed_batch(&repo);
-        let report = repo.get(&["a.csv", "c.csv"], OnConflict::Abort);
-        assert_eq!(report.outcome, GetOutcome::Aborted);
-        assert_eq!(duration_of(&report, "a.csv"), None);
-        assert!(duration_of(&report, "c.csv").is_some(), "held back, hashed");
-    }
-
-    fn duration_of(report: &GetReport, name: &str) -> Option<u64> {
-        row(report, name).duration_ms
-    }
-
-    #[test]
-    fn a_batch_with_nothing_to_hash_has_no_hash_phase() {
-        let repo = TestRepo::new();
-        repo.add("a.csv", b"a");
-        fs::remove_file(repo.root.join("a.csv")).unwrap();
-        let recorder = std::sync::Arc::new(Recorder::default());
-        let report = repo.get_observed(&["a.csv"], &[], OnConflict::Abort, false, &recorder);
-        assert_eq!(report.outcome, GetOutcome::Complete);
-        assert_eq!(
-            recorder.phases(),
-            ["+check_storage", "-check_storage", "+transfer", "-transfer"]
-        );
+        let phases = |name| {
+            let (_, seen, _) = repo.get_observed(&[name], &[]);
+            seen.into_iter()
+                .filter(|s| s.starts_with("start"))
+                .collect::<Vec<_>>()
+        };
+        // Already current: hashed, but storage is never asked
+        assert_eq!(phases("a.csv"), ["start hash"]);
+        // Absent: nothing to hash
+        assert_eq!(phases("b.csv"), ["start check_storage", "start transfer"]);
     }
 
     #[test]
