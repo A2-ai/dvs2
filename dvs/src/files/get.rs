@@ -5,7 +5,7 @@
 //! replaced without asking when it equals the baseline, the bytes dvs itself
 //! last wrote or added there; anything else is a conflict, handled by the
 //! `on_conflict` policy. Remote and runtime problems are per file and never stop
-//! the rest of the batch. See work/plans/2026-10-17-get-spec.md in the workspace.
+//! the rest of the batch.
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -13,7 +13,7 @@ use std::sync::Mutex;
 
 use crate::cache::{FileStat, HashCache, baseline_for, record_baseline, try_open_cache};
 use crate::config::{OnConflict, SettingSource};
-use crate::error::{ErrorCode, backend_error_code};
+use crate::error::{Error, ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::globbing::GetSelection;
 use crate::operation::ByteTotals;
@@ -49,10 +49,6 @@ pub enum Before {
 }
 
 impl Before {
-    pub fn is_conflict(self) -> bool {
-        matches!(self, Before::Modified | Before::Unknown)
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             Before::Absent => "absent",
@@ -116,9 +112,9 @@ impl StoredCopy {
     }
 }
 
-/// Why a file did not end up at its target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// Why a file did not end up at its target: a get-specific code, or a shared
+/// one. Serialized as the code's string either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GetCode {
     LocalChanges,
     UnknownLocal,
@@ -128,44 +124,19 @@ pub enum GetCode {
     UnsafePath,
     SourceMissing,
     HashMismatch,
-    AccessDenied,
-    ServerUnavailable,
     DestinationChanged,
     PermissionDenied,
     FileInUse,
-    IoError,
-    BadMetadata,
-    AuthRequired,
-    AuthExpired,
-    ServerTooOld,
-    ProjectNotFound,
-    CredentialsUnreadable,
+    Shared(ErrorCode),
 }
 
 impl From<ErrorCode> for GetCode {
     fn from(code: ErrorCode) -> Self {
-        match code {
-            ErrorCode::AuthRequired => GetCode::AuthRequired,
-            ErrorCode::AuthExpired => GetCode::AuthExpired,
-            ErrorCode::AccessDenied => GetCode::AccessDenied,
-            ErrorCode::ServerUnavailable => GetCode::ServerUnavailable,
-            ErrorCode::ServerTooOld => GetCode::ServerTooOld,
-            ErrorCode::ProjectNotFound => GetCode::ProjectNotFound,
-            ErrorCode::BadMetadata => GetCode::BadMetadata,
-            ErrorCode::CredentialsUnreadable => GetCode::CredentialsUnreadable,
-        }
+        GetCode::Shared(code)
     }
 }
 
 impl GetCode {
-    /// Conflicts, and files held back because of them: local, nothing broken.
-    pub fn is_conflict(self) -> bool {
-        matches!(
-            self,
-            GetCode::LocalChanges | GetCode::UnknownLocal | GetCode::BatchAborted
-        )
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             GetCode::LocalChanges => "local_changes",
@@ -176,19 +147,17 @@ impl GetCode {
             GetCode::UnsafePath => "unsafe_path",
             GetCode::SourceMissing => "source_missing",
             GetCode::HashMismatch => "hash_mismatch",
-            GetCode::AccessDenied => "access_denied",
-            GetCode::ServerUnavailable => "server_unavailable",
             GetCode::DestinationChanged => "destination_changed",
             GetCode::PermissionDenied => "permission_denied",
             GetCode::FileInUse => "file_in_use",
-            GetCode::IoError => "io_error",
-            GetCode::BadMetadata => "bad_metadata",
-            GetCode::AuthRequired => "auth_required",
-            GetCode::AuthExpired => "auth_expired",
-            GetCode::ServerTooOld => "server_too_old",
-            GetCode::ProjectNotFound => "project_not_found",
-            GetCode::CredentialsUnreadable => "credentials_unreadable",
+            GetCode::Shared(code) => code.as_str(),
         }
+    }
+}
+
+impl Serialize for GetCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
     }
 }
 
@@ -212,9 +181,18 @@ pub struct GetRow {
     pub stored_copy: Option<StoredCopy>,
     pub code: Option<GetCode>,
     pub message: Option<String>,
-    /// The next command to run. Left empty by core: each frontend phrases it
-    /// in its own syntax.
+    /// The next step, in CLI syntax
     pub hint: Option<String>,
+}
+
+impl GetRow {
+    /// The working file is a conflict that was left as it is (not replaced).
+    pub fn is_conflict(&self) -> bool {
+        matches!(
+            self.code,
+            Some(GetCode::LocalChanges | GetCode::UnknownLocal)
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -224,9 +202,10 @@ pub enum GetOutcome {
     Complete,
     /// The policy held the batch back: no file was changed
     Aborted,
-    /// Some files are at their target, some are not
+    /// Not every file is at its target; some are, or were skipped as the
+    /// policy asked
     Partial,
-    /// Nothing is at its target, or the operation could not run
+    /// No file is at its target or skipped, or the operation could not run
     Failed,
 }
 
@@ -241,8 +220,12 @@ impl GetOutcome {
     }
 }
 
+/// `total` is every row; `succeeded` the rows at their target (restored,
+/// replaced, unchanged, would_restore, would_replace); `failed` the failed action.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct GetCounts {
+    pub total: usize,
+    pub succeeded: usize,
     pub restored: usize,
     pub replaced: usize,
     pub unchanged: usize,
@@ -261,18 +244,17 @@ pub struct GetReport {
     pub on_conflict: OnConflict,
     pub source: SettingSource,
     pub counts: GetCounts,
-    /// Not serialized, so R output is unchanged; the CLI adds it
-    #[serde(skip)]
     pub bytes: ByteTotals,
     /// An operation-level problem, such as nothing matching the request
-    pub problem: Option<String>,
+    pub problem: Option<Error>,
     pub files: Vec<GetRow>,
 }
 
 impl GetReport {
     /// A report for a request that selected nothing or could not run at all.
     pub fn problem(
-        problem: impl Into<String>,
+        code: ErrorCode,
+        message: impl Into<String>,
         dry_run: bool,
         on_conflict: OnConflict,
         source: SettingSource,
@@ -284,27 +266,32 @@ impl GetReport {
             source,
             counts: GetCounts::default(),
             bytes: ByteTotals::default(),
-            problem: Some(problem.into()),
+            problem: Some(Error::new(code, message)),
             files: Vec::new(),
         }
     }
 
-    /// Some file failed for a reason other than a local conflict, or the
-    /// operation itself had a problem.
-    pub fn has_failures(&self) -> bool {
-        self.problem.is_some()
-            || self
-                .files
-                .iter()
-                .any(|r| !r.satisfied && r.code.is_some_and(|c| !c.is_conflict()))
+    /// Whether get did as asked. A skip the policy asked for counts as done.
+    pub fn verdict(&self) -> GetVerdict {
+        if self.problem.is_some() || self.counts.failed > 0 {
+            GetVerdict::Failed
+        } else if self.outcome == GetOutcome::Aborted {
+            GetVerdict::HeldBack
+        } else {
+            GetVerdict::Done
+        }
     }
+}
 
-    /// Some file was held back or skipped because of a local conflict.
-    pub fn has_conflicts(&self) -> bool {
-        self.files
-            .iter()
-            .any(|r| !r.satisfied && r.code.is_some_and(GetCode::is_conflict))
-    }
+/// How a get ended, for exit codes and R's `on_error`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GetVerdict {
+    /// Did as asked, including leaving files the policy asked to skip
+    Done,
+    /// A file failed, or the operation itself had a problem
+    Failed,
+    /// `abort` held files back because of conflicts; nothing was written
+    HeldBack,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -334,15 +321,10 @@ struct Planned {
 }
 
 impl Planned {
-    /// Classified as a conflict (rows that already failed in the plan are not).
-    fn is_conflict(&self) -> bool {
-        self.row.before.is_conflict() && self.row.action != Action::Failed
-    }
-
     fn needs_transfer(&self, on_conflict: OnConflict) -> bool {
         self.row.action == Action::NotRun
             && (matches!(self.row.before, Before::Absent | Before::Clean)
-                || (self.is_conflict() && on_conflict == OnConflict::Overwrite))
+                || (self.row.is_conflict() && on_conflict == OnConflict::Overwrite))
     }
 
     /// Detected before anything is written: under abort/overwrite, any of these
@@ -351,7 +333,7 @@ impl Planned {
     /// `.dvs` file).
     fn is_known_problem(&self, on_conflict: OnConflict) -> bool {
         self.row.action == Action::Failed
-            || (self.is_conflict() && on_conflict != OnConflict::Overwrite)
+            || (self.row.is_conflict() && on_conflict != OnConflict::Overwrite)
     }
 
     fn set(&mut self, action: Action, code: Option<GetCode>, message: Option<String>) {
@@ -366,22 +348,6 @@ impl Planned {
         );
         self.row.code = code;
         self.row.message = message;
-    }
-
-    fn conflict_code(&self) -> GetCode {
-        if self.row.before == Before::Modified {
-            GetCode::LocalChanges
-        } else {
-            GetCode::UnknownLocal
-        }
-    }
-
-    fn conflict_message(&self) -> String {
-        if self.row.before == Before::Modified {
-            "local changes since dvs last wrote this file".to_string()
-        } else {
-            "differs from the tracked version, and dvs has no record of writing it".to_string()
-        }
     }
 }
 
@@ -494,7 +460,7 @@ fn plan_file(paths: &DvsPaths, relative_path: &Path, cache: Option<&Mutex<HashCa
             return fail(
                 planned,
                 Before::Unknown,
-                GetCode::BadMetadata,
+                GetCode::Shared(ErrorCode::BadMetadata),
                 format!("cannot read {}: {e}", metadata_path.display()),
             );
         }
@@ -554,7 +520,7 @@ fn plan_file(paths: &DvsPaths, relative_path: &Path, cache: Option<&Mutex<HashCa
             let code = e
                 .downcast_ref::<io::Error>()
                 .map(io_code)
-                .unwrap_or(GetCode::IoError);
+                .unwrap_or(GetCode::Shared(ErrorCode::IoError));
             return fail(
                 planned,
                 Before::Unknown,
@@ -577,6 +543,20 @@ fn plan_file(paths: &DvsPaths, relative_path: &Path, cache: Option<&Mutex<HashCa
             None => Before::Unknown,
         }
     };
+    let conflict = match planned.row.before {
+        Before::Modified => Some((
+            GetCode::LocalChanges,
+            "local changes since dvs last wrote this file",
+        )),
+        Before::Unknown => Some((
+            GetCode::UnknownLocal,
+            "differs from the tracked version, and dvs has no record of writing it",
+        )),
+        _ => None,
+    };
+    if let Some((code, message)) = conflict {
+        planned.set(Action::NotRun, Some(code), Some(message.to_string()));
+    }
     planned.metadata = Some(metadata);
     planned
 }
@@ -588,7 +568,7 @@ fn io_code(e: &io::Error) -> GetCode {
     }
     match e.kind() {
         io::ErrorKind::PermissionDenied => GetCode::PermissionDenied,
-        _ => GetCode::IoError,
+        _ => GetCode::Shared(ErrorCode::IoError),
     }
 }
 
@@ -600,7 +580,7 @@ fn code_for(e: &anyhow::Error) -> GetCode {
     e.chain()
         .find_map(|cause| cause.downcast_ref::<io::Error>())
         .map(io_code)
-        .unwrap_or(GetCode::IoError)
+        .unwrap_or(GetCode::Shared(ErrorCode::IoError))
 }
 
 /// Whether the destination is still exactly as the plan saw it.
@@ -631,8 +611,8 @@ fn install(
             .map_err(|e| (io_code(&e), format!("cannot create its directory: {e}")))?;
     }
     let tmp_path = target.with_extension(format!("dvs-tmp.{}", Uuid::new_v4()));
-    let path =
-        ProjectPath::from_path(relative_path).map_err(|e| (GetCode::IoError, e.to_string()))?;
+    let path = ProjectPath::from_path(relative_path)
+        .map_err(|e| (GetCode::Shared(ErrorCode::IoError), e.to_string()))?;
 
     let result = (|| {
         let retrieved = backend
@@ -692,12 +672,26 @@ pub fn get_files(
         source,
     } = options;
     if selection.tracked.is_empty() && selection.unmatched.is_empty() {
-        return GetReport::problem("no tracked files matched", dry_run, on_conflict, source);
+        return GetReport::problem(
+            ErrorCode::NoFilesSelected,
+            "no tracked files matched",
+            dry_run,
+            on_conflict,
+            source,
+        );
     }
 
     let pool = match get_threadpool(selection.tracked.len().max(1)) {
         Ok(p) => p,
-        Err(e) => return GetReport::problem(e.to_string(), dry_run, on_conflict, source),
+        Err(e) => {
+            return GetReport::problem(
+                ErrorCode::OperationFailed,
+                e.to_string(),
+                dry_run,
+                on_conflict,
+                source,
+            );
+        }
     };
     let cache = try_open_cache(paths);
     let cache = cache.as_ref();
@@ -766,13 +760,13 @@ pub fn get_files(
     // the stored-copy hints on conflicts. Files already current need neither.
     let needs_remote = planned
         .iter()
-        .any(|p| p.needs_transfer(on_conflict) || p.is_conflict());
+        .any(|p| p.needs_transfer(on_conflict) || p.row.is_conflict());
     let access = if needs_remote {
         backend.check_access().map_err(access_failure)
     } else {
         Ok(())
     };
-    for p in planned.iter_mut().filter(|p| p.is_conflict()) {
+    for p in planned.iter_mut().filter(|p| p.row.is_conflict()) {
         p.row.stored_copy = Some(match (&access, &p.row.local_hash) {
             (Ok(()), Some(blake3)) => {
                 let hashes = crate::Hashes {
@@ -794,28 +788,24 @@ pub fn get_files(
         on_conflict != OnConflict::Skip && planned.iter().any(|p| p.is_known_problem(on_conflict));
     if blocked {
         for p in planned.iter_mut() {
-            if p.row.before == Before::Current || p.row.action == Action::Failed {
+            // Conflicts kept by the policy already say why they are not run.
+            let kept = p.row.is_conflict() && on_conflict != OnConflict::Overwrite;
+            if p.row.before == Before::Current || p.row.action == Action::Failed || kept {
                 continue;
             }
-            if p.is_conflict() && on_conflict != OnConflict::Overwrite {
-                let (code, message) = (p.conflict_code(), p.conflict_message());
-                p.set(Action::NotRun, Some(code), Some(message));
-            } else {
-                p.set(
-                    Action::NotRun,
-                    Some(GetCode::BatchAborted),
-                    Some("held back: another requested file has a problem".to_string()),
-                );
-            }
+            p.set(
+                Action::NotRun,
+                Some(GetCode::BatchAborted),
+                Some("held back: another requested file has a problem".to_string()),
+            );
         }
         return finish(planned, dry_run, on_conflict, source, true);
     }
     for p in planned
         .iter_mut()
-        .filter(|p| p.is_conflict() && on_conflict == OnConflict::Skip)
+        .filter(|p| p.row.is_conflict() && on_conflict == OnConflict::Skip)
     {
-        let (code, message) = (p.conflict_code(), p.conflict_message());
-        p.set(Action::Skipped, Some(code), Some(message));
+        p.row.action = Action::Skipped;
     }
 
     // 3. Execute the transfers. Each file succeeds or fails on its own.
@@ -878,7 +868,7 @@ pub fn get_files(
     for (i, result) in outcomes {
         let p = &mut planned[i];
         let was_absent = p.row.before == Before::Absent;
-        let was_conflict = p.is_conflict();
+        let was_conflict = p.row.is_conflict();
         match result {
             Ok(()) => {
                 let action = match (dry_run, was_absent) {
@@ -933,8 +923,63 @@ pub fn get_files(
 fn access_failure(e: anyhow::Error) -> FileError {
     let code = backend_error_code(&e)
         .map(GetCode::from)
-        .unwrap_or(GetCode::ServerUnavailable);
+        .unwrap_or(GetCode::Shared(ErrorCode::ServerUnavailable));
     (code, format!("{e:#}"))
+}
+
+/// Quote a path for a shell command line when it needs it.
+pub fn shell_path(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-+".contains(c))
+    {
+        s.into_owned()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
+/// The next command to run for a row.
+fn hint(row: &GetRow) -> Option<String> {
+    let p = shell_path(&row.local_path);
+    let choices = format!(
+        "keep your version: dvs add {p} (makes it the tracked version); \
+         take the tracked version: dvs get --force {p} (replaces yours)"
+    );
+    match row.code? {
+        GetCode::LocalChanges => Some(choices),
+        GetCode::UnknownLocal => Some(format!(
+            "dvs has no record of writing this file (a clone from before dvs recorded this, \
+             or a cleared cache); {choices}"
+        )),
+        GetCode::BatchAborted => {
+            Some("held back by another file; to get the rest: --on-conflict skip".into())
+        }
+        GetCode::NotTracked if row.local_path.is_dir() => Some(
+            "nothing tracked is selected here; add -r to include subdirectories, or check the path"
+                .into(),
+        ),
+        GetCode::NotTracked => Some("check the path; list tracked files with: dvs status".into()),
+        GetCode::SourceMissing => Some(
+            "the stored content of this version is missing (probably an interrupted upload); \
+             tell whoever added it"
+                .into(),
+        ),
+        GetCode::Shared(ErrorCode::AccessDenied) => {
+            Some("check you are logged in with access: dvs info, dvs login".into())
+        }
+        GetCode::Shared(ErrorCode::ServerUnavailable) => {
+            Some("check your network or VPN and the server, then run dvs get again".into())
+        }
+        GetCode::DestinationChanged => Some(format!("run again once nothing is writing {p}")),
+        GetCode::FileInUse => {
+            Some("close the program using the file, then run dvs get again".into())
+        }
+        GetCode::Shared(ErrorCode::BadMetadata) => Some(format!(
+            "fix the .dvs file for {p} (for example a git merge conflict), then run dvs get again"
+        )),
+        _ => None,
+    }
 }
 
 fn finish(
@@ -944,8 +989,18 @@ fn finish(
     source: SettingSource,
     aborted: bool,
 ) -> GetReport {
-    let files: Vec<GetRow> = planned.into_iter().map(|p| p.row).collect();
-    let mut counts = GetCounts::default();
+    let files: Vec<GetRow> = planned
+        .into_iter()
+        .map(|p| GetRow {
+            hint: hint(&p.row),
+            ..p.row
+        })
+        .collect();
+    let mut counts = GetCounts {
+        total: files.len(),
+        succeeded: files.iter().filter(|r| r.satisfied).count(),
+        ..GetCounts::default()
+    };
     for r in &files {
         let slot = match r.action {
             Action::Restored => &mut counts.restored,
@@ -967,12 +1022,11 @@ fn finish(
             bytes.count(size, r.before == Before::Current, installed);
         }
     }
-    let satisfied = files.iter().filter(|r| r.satisfied).count();
     let outcome = if aborted {
         GetOutcome::Aborted
-    } else if satisfied == files.len() {
+    } else if counts.succeeded == counts.total {
         GetOutcome::Complete
-    } else if satisfied == 0 {
+    } else if counts.succeeded + counts.skipped == 0 {
         GetOutcome::Failed
     } else {
         GetOutcome::Partial
@@ -1199,7 +1253,8 @@ mod tests {
         );
         assert_eq!(repo.read("a.csv"), b"a2", "nothing may change on abort");
         assert_eq!(repo.read("b.csv"), b"my edits");
-        assert!(report.has_conflicts() && !report.has_failures());
+        assert_eq!(report.verdict(), GetVerdict::HeldBack);
+        assert!(b.hint.as_deref().unwrap().contains("dvs add b.csv"));
     }
 
     // Spec 4o
@@ -1260,7 +1315,7 @@ mod tests {
         );
         assert_eq!(row(&report, "a.csv").code, Some(GetCode::BatchAborted));
         assert!(!repo.root.join("a.csv").exists());
-        assert!(report.has_failures());
+        assert_eq!(report.verdict(), GetVerdict::Failed);
 
         let report = repo.get_with(&["a.csv"], &["typo.csv"], OnConflict::Skip, false);
         assert_eq!(report.outcome, GetOutcome::Partial);
@@ -1278,7 +1333,10 @@ mod tests {
 
         let report = repo.get(&["a.csv", "b.csv"], OnConflict::Abort);
         assert_eq!(report.outcome, GetOutcome::Aborted);
-        assert_eq!(row(&report, "b.csv").code, Some(GetCode::BadMetadata));
+        assert_eq!(
+            row(&report, "b.csv").code,
+            Some(GetCode::Shared(ErrorCode::BadMetadata))
+        );
         assert_eq!(row(&report, "a.csv").code, Some(GetCode::BatchAborted));
         assert!(!repo.root.join("a.csv").exists());
 
@@ -1306,7 +1364,11 @@ mod tests {
         let repo = TestRepo::new();
         let report = repo.get(&[], OnConflict::Abort);
         assert_eq!(report.outcome, GetOutcome::Failed);
-        assert!(report.problem.is_some() && report.files.is_empty());
+        assert_eq!(
+            report.problem.map(|p| p.code),
+            Some(ErrorCode::NoFilesSelected)
+        );
+        assert!(report.files.is_empty());
     }
 
     // Spec 10
@@ -1329,6 +1391,8 @@ mod tests {
         assert_eq!(report.outcome, GetOutcome::Partial);
         assert_eq!(row(&report, "a.csv").action, Action::Restored);
         assert_eq!(row(&report, "b.csv").code, Some(GetCode::SourceMissing));
+        let c = &report.counts;
+        assert_eq!((c.total, c.succeeded, c.failed), (2, 1, 1));
     }
 
     // Spec 11
@@ -1453,9 +1517,21 @@ mod tests {
         assert_eq!(row(&report, "c.csv").action, Action::Unchanged);
         assert_eq!(row(&report, "d.csv").action, Action::Replaced);
         assert_eq!(report.outcome, GetOutcome::Partial);
-        assert!(report.has_conflicts() && !report.has_failures());
+        assert_eq!(report.verdict(), GetVerdict::Done);
         assert_eq!(repo.read("b.csv"), b"edited");
         assert_eq!(repo.read("d.csv"), b"d1");
+    }
+
+    #[test]
+    fn skipping_every_file_is_partial_and_done() {
+        let repo = TestRepo::new();
+        repo.switched_branch("b.csv", b"b1", b"b2");
+        fs::write(repo.root.join("b.csv"), b"edited").unwrap();
+
+        let report = repo.get(&["b.csv"], OnConflict::Skip);
+        assert_eq!(row(&report, "b.csv").action, Action::Skipped);
+        assert_eq!(report.outcome, GetOutcome::Partial);
+        assert_eq!(report.verdict(), GetVerdict::Done);
     }
 
     // Run from a subdirectory: paths in the report are from the project root
@@ -1555,12 +1631,21 @@ mod tests {
 
     #[test]
     fn access_failures_keep_their_shared_code() {
-        use crate::{BackendError, ErrorCode};
         for code in [ErrorCode::AuthExpired, ErrorCode::ProjectNotFound] {
-            let e: anyhow::Error = BackendError::new(code, "nope").into();
+            let e: anyhow::Error = Error::new(code, "nope").into();
             assert_eq!(access_failure(e).0.as_str(), code.as_str());
         }
         let plain = anyhow::anyhow!("something went wrong");
-        assert_eq!(access_failure(plain).0, GetCode::ServerUnavailable);
+        assert_eq!(
+            access_failure(plain).0,
+            GetCode::Shared(ErrorCode::ServerUnavailable)
+        );
+    }
+
+    #[test]
+    fn codes_serialize_as_flat_strings() {
+        let json = |code: GetCode| serde_json::to_value(code).unwrap();
+        assert_eq!(json(GetCode::LocalChanges), "local_changes");
+        assert_eq!(json(GetCode::Shared(ErrorCode::IoError)), "io_error");
     }
 }

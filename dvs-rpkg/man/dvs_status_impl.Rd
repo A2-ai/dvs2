@@ -34,5 +34,7 @@ statuses are shown.}
 }
 \description{
 Reports the sync status of DVS-managed files. By default all statuses are shown; pass a character vector of status names (e.g. \code{c("current", "absent")}) to restrict output.
+A file whose status cannot be read is always kept, with status \code{"error"}
+and the reason in \code{error}.
 }
 \keyword{internal}

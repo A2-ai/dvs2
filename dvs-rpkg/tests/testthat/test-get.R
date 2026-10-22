@@ -35,6 +35,7 @@ test_that("dvs_get restores deleted files with identical content", {
   result <- dvs_get(paths = c("a.csv", "b.csv"))
   expect_s3_class(result, "dvs_get_result")
   expect_s3_class(result, "tbl_df")
+  expect_equal(names(result), get_columns)
   expect_s3_class(result$size, "dvs_bytes")
   expect_equal(result$action, c("restored", "restored"))
   expect_equal(lapply(c("a.csv", "b.csv"), readLines), original)
@@ -111,7 +112,7 @@ test_that("local changes abort by default and are kept", {
   expect_equal(result$action, "not_run")
   expect_equal(result$code, "local_changes")
   expect_false(result$satisfied)
-  expect_match(result$hint, "dvs_add", fixed = TRUE)
+  expect_match(result$hint, "dvs add t.csv", fixed = TRUE)
   expect_equal(readLines("t.csv"), "my edit")
   info <- dvs_result_info(result)
   expect_equal(info$outcome, "aborted")
@@ -123,7 +124,8 @@ test_that("on_conflict = 'skip' and 'overwrite'", {
   new_dvs_test_repo()
   switch_branches()
   writeLines("my edit", "t.csv")
-  expect_equal(dvs_get("t.csv", on_conflict = "skip")$action, "skipped")
+  # A skip the policy asked for is done: on_error does not fire
+  expect_equal(dvs_get("t.csv", on_conflict = "skip", on_error = "error")$action, "skipped")
   expect_equal(readLines("t.csv"), "my edit")
   result <- dvs_get("t.csv", on_conflict = "overwrite")
   expect_equal(result$action, "replaced")
@@ -141,18 +143,10 @@ test_that("DVS_GET_ON_CONFLICT is used when the argument is NULL", {
   expect_equal(dvs_result_info(result)$source, "env")
 })
 
-test_that("results keep a fixed schema, even with zero rows outside a project", {
+test_that("outside a project dvs_get raises an error", {
   dir <- withr::local_tempdir()
   withr::local_dir(dir)
-  result <- dvs_get()
-  expect_equal(names(result), get_columns)
-  expect_equal(nrow(result), 0L)
-  expect_type(result$satisfied, "logical")
-  expect_type(result$code, "character")
-  info <- dvs_result_info(result)
-  expect_equal(info$outcome, "failed")
-  expect_match(info$problem, "not in a dvs project")
-  expect_true(is.na(info$on_conflict))
+  expect_error(dvs_get(), "Not in a DVS repository")
 })
 
 test_that("on_error controls signalling, and conditions carry the result", {
@@ -191,8 +185,8 @@ test_that("printing shows the outcome, what needs attention, and survives subset
   expect_match(out[1], "aborted", fixed = TRUE)
   expect_match(out[1], "on_conflict = abort (default)", fixed = TRUE)
   expect_false(grepl("NA", out[1], fixed = TRUE))
-  # t.csv is listed with the R command to keep it; u.csv is only held back
-  expect_true(any(grepl("t.csv", out[-1], fixed = TRUE) & grepl("dvs_add(\"t.csv\")", out[-1], fixed = TRUE)))
+  # t.csv is listed with the command to keep it; u.csv is only held back
+  expect_true(any(grepl("dvs add t.csv", out[-1], fixed = TRUE)))
   expect_false(any(grepl("! u.csv", out, fixed = TRUE)))
 
   expect_match(capture.output(print(res[res$path == "t.csv", ]))[1], "1 of 2 rows", fixed = TRUE)

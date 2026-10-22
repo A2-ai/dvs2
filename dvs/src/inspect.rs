@@ -1,6 +1,6 @@
 //! Local facts for machine-readable status, using cached hashes when available.
 use crate::cache::{self, FileStat};
-use crate::{DvsPaths, FileMetadata, Hashes, PathFilter};
+use crate::{DvsPaths, ErrorCode, FileMetadata, Hashes, PathFilter};
 use anyhow::Result;
 use fs_err as fs;
 use rayon::prelude::*;
@@ -9,12 +9,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 #[derive(Clone, Debug, Serialize)]
-pub struct Baseline {
-    pub blake3: String,
-    pub size: u64,
-}
-#[derive(Clone, Debug, Serialize)]
 pub struct WorkingCopy {
+    /// Whether the working file is present and available for inspection.
     pub state: &'static str,
     pub hashes: Option<Hashes>,
     pub size: Option<u64>,
@@ -26,10 +22,7 @@ pub struct StatusFacts {
     pub status: &'static str,
     pub metadata: Option<FileMetadata>,
     pub working: WorkingCopy,
-    pub baseline: Option<Baseline>,
-    /// Local checkout state relative to the baseline and current metadata.
-    pub state: &'static str,
-    pub code: Option<&'static str>,
+    pub code: Option<ErrorCode>,
     pub error: Option<String>,
 }
 
@@ -108,22 +101,16 @@ fn inspect_path(
             size: None,
             hash_source: None,
         },
-        baseline: None,
-        state: "unknown",
         code: None,
         error: None,
     };
     let facts = (|| -> Result<()> {
-        row.code = Some("bad_metadata");
+        row.code = Some(ErrorCode::BadMetadata);
         row.metadata = Some(serde_json::from_reader(fs::File::open(
             paths.metadata_path(&path),
         )?)?);
-        row.code = Some("local_read_failed");
+        row.code = Some(ErrorCode::IoError);
         let key = path.to_string_lossy();
-        row.baseline = cache
-            .as_ref()
-            .and_then(|c| c.lock().ok()?.baseline(&key).ok().flatten())
-            .map(|(blake3, size)| Baseline { blake3, size });
         let full = paths.file_path(&path);
         // Never hash a symlink or traverse a symlinked parent outside the project.
         let mut component = paths.repo_root().to_path_buf();
@@ -145,7 +132,6 @@ fn inspect_path(
                     .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
             {
                 row.status = "absent";
-                row.state = "absent";
                 row.working.state = "absent";
                 return Ok(());
             }
@@ -169,15 +155,6 @@ fn inspect_path(
         } else {
             "unsynced"
         };
-        row.state = if row.status == "current" {
-            "current"
-        } else {
-            match &row.baseline {
-                Some(b) if b.blake3 == hashes.blake3 && b.size == size => "clean",
-                Some(_) => "modified",
-                None => "unknown",
-            }
-        };
         row.working = WorkingCopy {
             state: "present",
             hashes: Some(hashes),
@@ -199,9 +176,10 @@ fn inspect_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Compression;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
-    use std::sync::Mutex;
     use std::sync::mpsc;
+    use uuid::Uuid;
     fn fixture() -> (tempfile::TempDir, DvsPaths) {
         let (temp, root) = create_temp_git_repo();
         let (config, _) = init_dvs_repo(&root);
@@ -253,7 +231,7 @@ mod tests {
         .unwrap();
         let rows = inspect_status(&paths, None, None).unwrap();
         assert_eq!(rows[0].status, "error");
-        assert_eq!(rows[0].code, Some("bad_metadata"));
+        assert_eq!(rows[0].code, Some(ErrorCode::BadMetadata));
     }
 
     #[test]
@@ -281,34 +259,100 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "cache")]
-    fn baseline_distinguishes_clean_old_version_from_edits() {
-        let (_temp, paths) = fixture();
-        let cache = cache::open_cache(&paths).unwrap();
-        let rows = inspect_status(&paths, None, None).unwrap();
-        let original = rows[0].working.hashes.as_ref().unwrap();
-        cache
-            .set_baseline(
-                "data.txt",
-                &original.blake3,
-                rows[0].metadata.as_ref().unwrap().size,
-            )
-            .unwrap();
-        let mut target = rows[0].metadata.clone().unwrap();
-        target.hashes.blake3 = "b".repeat(64);
-        fs::write(
-            paths.metadata_path(std::path::Path::new("data.txt")),
-            serde_json::to_vec(&target).unwrap(),
-        )
-        .unwrap();
+    fn status_returns_empty_vec_for_repo_with_no_tracked_files() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let paths =
+            DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name()).unwrap();
+
+        let statuses = inspect_status(&paths, None, None).unwrap();
+        assert!(statuses.is_empty());
+    }
+
+    /// Helper to set up a repo with files at various directory depths.
+    /// Returns (TempDir, DvsPaths) with tracked files:
+    ///   "a.txt", "dir1/b.txt", "dir1/sub/c.txt", "dir2/d.txt"
+    fn setup_filtered_repo() -> (tempfile::TempDir, DvsPaths) {
+        let (tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths =
+            DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name()).unwrap();
+
+        for name in ["a.txt", "dir1/b.txt", "dir1/sub/c.txt", "dir2/d.txt"] {
+            let file_path = create_file(&root, name, name.as_bytes());
+            let mut metadata =
+                FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+            metadata
+                .save(Uuid::new_v4(), &file_path, backend, &paths, name, None)
+                .unwrap();
+        }
+        (tmp, paths)
+    }
+
+    #[test]
+    fn status_with_filter() {
+        let (_tmp, paths) = setup_filtered_repo();
+
+        // Relative path filter
+        let filter = PathFilter {
+            paths: vec![PathBuf::from("dir1")],
+            recursive: false,
+        };
+        let statuses = inspect_status(&paths, Some(&filter), None).unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
+
+        // Absolute path filter via from_user_paths
+        let abs_path = paths.repo_root().join("dir1/b.txt");
+        let filter = PathFilter::from_user_paths(vec![abs_path], false, &paths);
+        let statuses = inspect_status(&paths, Some(&filter), None).unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
+    }
+
+    #[test]
+    fn status_whole_repo_applies_glob() {
+        let (_tmp, paths) = setup_filtered_repo();
+
+        // No filter (whole repo) + glob: the glob still applies, matched against
+        // the full repo-relative path. `*.txt` (literal separator) hits only
+        // root-level files.
+        let statuses = inspect_status(&paths, None, Some("*.txt")).unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].path, PathBuf::from("a.txt"));
+
+        // `**/*.txt` reaches every tracked file.
+        let statuses = inspect_status(&paths, None, Some("**/*.txt")).unwrap();
+        assert_eq!(statuses.len(), 4);
+    }
+
+    #[test]
+    fn status_bare_glob_anchors_to_cwd_subdir() {
+        let (_tmp, paths) = setup_filtered_repo();
+        let root = paths.repo_root().to_path_buf();
+        // cwd = dir1: a bare glob must scope to the cwd (like add/get), not the
+        // repo root. Pre-fix it globbed the whole repo from any directory.
+        let sub =
+            DvsPaths::new(fs::canonicalize(root.join("dir1")).unwrap(), root, ".dvs").unwrap();
+
+        // Literal separator: only the direct child dir1/b.txt, not a.txt/dir2.
+        let got: Vec<_> = inspect_status(&sub, None, Some("*.txt"))
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert_eq!(got, vec![PathBuf::from("dir1/b.txt")]);
+
+        // Recursive glob reaches dir1/sub/c.txt, still scoped under dir1.
+        let got: Vec<_> = inspect_status(&sub, None, Some("**/*.txt"))
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
         assert_eq!(
-            inspect_status(&paths, None, None).unwrap()[0].state,
-            "clean"
-        );
-        fs::write(paths.repo_root().join("data.txt"), b"user edits").unwrap();
-        assert_eq!(
-            inspect_status(&paths, None, None).unwrap()[0].state,
-            "modified"
+            got,
+            vec![PathBuf::from("dir1/b.txt"), PathBuf::from("dir1/sub/c.txt")]
         );
     }
 }
