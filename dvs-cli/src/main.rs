@@ -831,6 +831,7 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
             on_conflict,
             force,
         } => {
+            let bare = paths.is_empty() && glob.is_none() && !recursive;
             let setup = || -> Result<_> {
                 let config = find_config(&current_dir, credentials)?;
                 let explicit = if force {
@@ -847,6 +848,22 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 Ok((config, on_conflict, source, dvs_paths, selection))
             };
             let (config, on_conflict, source, dvs_paths, selection) = setup()?;
+            // A bare get at the project root with nothing directly in it: the
+            // data is in subdirectories, which -r reaches
+            let at_root = dvs_paths.cwd() == dvs_paths.repo_root();
+            let below = if bare && at_root && selection.tracked.is_empty() {
+                select_paths_for_get(vec![], None, &dvs_paths, true)?
+                    .tracked
+                    .len()
+            } else {
+                0
+            };
+            let recursive_hint = (below > 0).then(|| {
+                format!(
+                    "{below} tracked {} in subdirectories; to get everything in the project: dvs get -r",
+                    if below == 1 { "file is" } else { "files are" }
+                )
+            });
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
@@ -870,9 +887,16 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                 &ctx,
             );
             if cli.json {
-                output::emit_streamed(get_cmd::to_json(&report));
+                let mut result = get_cmd::to_json(&report);
+                if let Some(hint) = &recursive_hint {
+                    result["error"]["hint"] = json!(hint);
+                }
+                output::emit_streamed(result);
             } else {
                 get_cmd::print_human(&report);
+                if let Some(hint) = &recursive_hint {
+                    eprintln!("  {hint}");
+                }
                 report_cancelled(report.counts.cancelled, "retrieved");
             }
             let code = get_cmd::exit_code(&report);
