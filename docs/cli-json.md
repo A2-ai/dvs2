@@ -81,6 +81,8 @@ missing. Every row carries the same error fields:
 - `get`: `path`, `local_path`, `before`, `action`, `satisfied`, `size`, `target_hash`,
   `local_hash`, `stored_copy`.
 - `status`: `path`, `status`, `metadata`, `working`, `baseline`, `state`.
+- `hash`: `path`, `hashes`, `size`, `hash_source` (`cache`, `computed`), and
+  `duration_ms`: the time spent hashing that file, `null` for a row that did no work.
 - `availability`: `hash`, `state` (`present`, `absent`, `unknown`), `in_history`, and a
   second error pair `history_code`/`history_message` for the history lookup, which is a
   separate request that fails on its own. `in_history` and the history pair are `null`
@@ -123,6 +125,7 @@ Row codes, besides the shared ones:
   `unsafe_path`, `source_missing`, `hash_mismatch`, `destination_changed`,
   `permission_denied`, `file_in_use`, `io_error`.
 - `status`: `local_read_failed`.
+- `hash`: `local_read_failed` (symlinks), `io_error`.
 - `availability`: `backend_read_failed` for an unclassified backend failure.
 - `logout` `warnings`: `revoke_failed`.
 

@@ -445,6 +445,44 @@ dvs_status(
 
 Returns a data frame with one row per tracked file.
 
+### hash
+
+`hash` reports the hashes of working files, tracked or not, without needing a record: for example to check
+whether a working file is identical to some recorded version. It uses and fills the hash cache, and never
+writes the baseline or any `.dvs` record.
+
+#### CLI
+
+```shell
+❯ dvs hash --help
+Prints the hashes of files, tracked or not, using and filling the hash cache. Never changes a record or the baseline. With no paths, hashes the tracked files, like status
+
+Usage: dvs hash [OPTIONS] [PATHS]...
+
+Arguments:
+  [PATHS]...  Paths (files or directories) to hash
+
+Options:
+      --json               Output results as JSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+  -r, --recursive          Recursively include files in subdirectories for given directories Without this flag, directories return only their direct children
+  -g, --glob <GLOB>        
+  -h, --help               Print help
+```
+
+Selection follows `status`, plus untracked files that a path or glob names: no paths and no glob selects the
+tracked files `status` would show; a directory selects its direct children (`-r`: everything under it). A
+named path that is missing, a tracked file absent from disk, a symlink and an unreadable directory each get an
+error row; nothing selected is dropped silently. It exits `1` if any file could not be hashed.
+
+```json
+{"v": 1, "command": "hash", "outcome": "complete", "dry_run": false, "counts": {"total": 1, "succeeded": 1, "failed": 0},
+ "files": [{"path": "data/a.csv", "hashes": {"blake3": "…"}, "size": 1048576, "hash_source": "cache", "duration_ms": 0, "code": null, "message": null, "hint": null}]}
+```
+
+`hash_source` is `cache` or `computed`; `hashes`, `size` and `hash_source` match status's `working` object.
+`duration_ms` is the time spent hashing that file, `null` for a row that did no work.
+
 ## Internals
 
 ### Metadata file format
@@ -554,7 +592,7 @@ each path. Unlike the hash cache, `status` never writes it. Deleting it is safe;
 
 ### Parallelism
 
-`add`, `get`, and `status` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
+`add`, `get`, `status` and `hash` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
 variable to control the thread count, if the CLI and R package have not set the number
 of threads directly. If it is unset, the default is `min(available_parallelism * 4, 16)`.
 If it is set to a positive integer, the override is capped at 32. In both cases the final thread count is
