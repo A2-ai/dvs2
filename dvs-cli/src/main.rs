@@ -37,6 +37,7 @@ use crate::observer::CliObserver;
 
 #[derive(Debug, Subcommand)]
 pub enum Init {
+    /// Store data in a directory, such as a shared drive
     Local {
         /// Where the data will be stored
         path: PathBuf,
@@ -53,6 +54,7 @@ pub enum Init {
         #[clap(long)]
         no_compression: bool,
     },
+    /// Store data on a dvs server
     Server {
         /// The project name
         name: String,
@@ -68,6 +70,9 @@ pub enum Init {
         #[clap(long)]
         no_compression: bool,
     },
+    /// Catches `dvs init <path>`, the form before backends, to point at `init local`
+    #[command(external_subcommand)]
+    Other(Vec<String>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -95,8 +100,10 @@ pub enum Command {
     /// At least one path or --glob must be provided
     #[command(next_display_order = 100)]
     Add {
+        /// Files to add, or directories to search with --glob
         #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
+        /// Add the files matching this glob, e.g. '*.csv'
         #[clap(long)]
         glob: Option<String>,
         /// An optional message to add
@@ -115,6 +122,7 @@ pub enum Command {
         /// Without this flag, directories return only their direct children.
         #[clap(long, short, conflicts_with = "glob")]
         recursive: bool,
+        /// Only include the tracked files matching this glob, e.g. '*.csv'
         #[clap(long, short, conflicts_with = "recursive")]
         glob: Option<String>,
         /// Include the files that are current
@@ -147,6 +155,7 @@ pub enum Command {
         /// Without this flag, directories return only their direct children.
         #[clap(long, short, conflicts_with = "glob")]
         recursive: bool,
+        /// Only hash the files matching this glob, e.g. '*.csv'
         #[clap(long, short, conflicts_with = "recursive")]
         glob: Option<String>,
     },
@@ -156,7 +165,9 @@ pub enum Command {
     /// add -r for everything beneath it.
     #[command(next_display_order = 100)]
     Get {
+        /// Tracked files or directories to retrieve
         paths: Vec<PathBuf>,
+        /// Only retrieve the tracked files matching this glob, e.g. '*.csv'
         #[clap(long, short, conflicts_with = "recursive")]
         glob: Option<String>,
         /// Recursively include files in subdirectories for directory inputs.
@@ -180,15 +191,22 @@ pub enum Command {
     Info,
     /// Check whether explicitly named BLAKE3 content is stored, without downloading it
     Availability {
+        /// BLAKE3 hashes to look up
         hashes: Vec<String>,
         /// Also report whether these hashes appear in this file's history
         #[clap(long, value_name = "FILE")]
         path: Option<PathBuf>,
     },
     /// Show stored upload history; no paths queries the whole project's history
-    History { paths: Vec<PathBuf> },
+    History {
+        /// Only show the history of these files
+        paths: Vec<PathBuf>,
+    },
     /// Log in to a DVS server, the one in the config unless a URL is given
-    Login { url: Option<Url> },
+    Login {
+        /// The URL of the dvs server, if not the project's
+        url: Option<Url>,
+    },
     /// Log out from a DVS server
     Logout,
 }
@@ -197,15 +215,31 @@ pub enum Command {
 #[clap(version, author, about, subcommand_negates_reqs = true)]
 pub struct Cli {
     /// Output results as JSON
-    #[clap(long, global = true, display_order = 0)]
+    #[clap(
+        long,
+        global = true,
+        help_heading = "Global Options",
+        display_order = 0
+    )]
     pub json: bool,
 
     /// Stream operation results and transfer progress as NDJSON
-    #[clap(long, global = true, conflicts_with = "json", display_order = 1)]
+    #[clap(
+        long,
+        global = true,
+        help_heading = "Global Options",
+        conflicts_with = "json",
+        display_order = 1
+    )]
     pub emit_events: bool,
 
     /// Number of threads for parallel operations (0 = auto-detect)
-    #[clap(long, global = true, display_order = 1)]
+    #[clap(
+        long,
+        global = true,
+        help_heading = "Global Options",
+        display_order = 1
+    )]
     pub threads: Option<usize>,
 
     #[clap(subcommand)]
@@ -448,6 +482,12 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
                         config.set_compression(Some(Compression::None));
                     }
                     (config, root_dir, metadata_folder_name)
+                }
+                Init::Other(args) => {
+                    return Err(output::coded(
+                        "invalid_arguments",
+                        init_backend_error(&args),
+                    ));
                 }
                 Init::Server {
                     name,
@@ -1070,6 +1110,23 @@ fn try_main(cli: Cli, ctx: &OperationContext) -> Result<()> {
     Ok(())
 }
 
+/// `dvs init <path>` predates backends: name the command that does it now.
+fn init_backend_error(args: &[String]) -> String {
+    let first = args.first().map(String::as_str).unwrap_or_default();
+    let looks_like_path =
+        first.contains(['/', '\\', '.', '~']) || std::path::Path::new(first).exists();
+    if looks_like_path {
+        format!(
+            "dvs init needs a backend before the storage path: did you mean `dvs init local {}`?",
+            args.join(" ")
+        )
+    } else {
+        format!(
+            "unknown backend '{first}' for dvs init: use `dvs init local <PATH>` (a directory) or `dvs init server <NAME> <URL>`"
+        )
+    }
+}
+
 /// A command that already reported its own result and only needs to set the
 /// exit status.
 #[derive(Debug)]
@@ -1207,4 +1264,22 @@ fn finish_events(command: &str, dry_run: bool, mut code: i32) -> i32 {
         }
     }
     code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_with_a_path_points_at_init_local() {
+        let cli = Cli::try_parse_from(["dvs", "init", "../storage"]).unwrap();
+        let Command::Init(Init::Other(args)) = cli.command else {
+            panic!("expected the catch-all init variant");
+        };
+        assert_eq!(
+            init_backend_error(&args),
+            "dvs init needs a backend before the storage path: did you mean `dvs init local ../storage`?"
+        );
+        assert!(init_backend_error(&["lcoal".into()]).starts_with("unknown backend 'lcoal'"));
+    }
 }
