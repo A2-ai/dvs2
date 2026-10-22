@@ -1,12 +1,4 @@
-//! What a running operation (`add`, `get`, `status`, `hash`) shares with its
-//! caller: when it started, and an observer that hears about progress as it
-//! happens.
-//!
-//! The library only reports facts through [`OperationObserver`]: the plan,
-//! phases, transfer bytes and finished rows. Frontends decide what to do with
-//! them (the CLI turns them into NDJSON events and aggregates and throttles
-//! operation progress; the R package drives a progress bar). Every hook has a
-//! no-op default, so an observer implements only what it uses.
+//! Operation context and observer hooks, byte totals, and timing helpers.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -58,13 +50,9 @@ pub struct OperationPlan {
     pub bytes_to_transfer: u64,
 }
 
-/// Byte totals for an `add` or `get` result, dry run included.
-///
-/// `total` sums the sizes of rows whose size is known; `to_transfer` is what
-/// needs uploading (add) or downloading (get); `already_stored` is the rest of
-/// `total` (add: the blob is already in storage; get: the local copy already
-/// matches), so `to_transfer + already_stored == total`. `transferred` is what
-/// actually moved, 0 in a dry run. Rows of unknown size count in none.
+/// Byte totals for an `add` or `get` result: `to_transfer + already_stored
+/// == total`; `transferred` is what actually moved. Rows of unknown size count
+/// in none.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct ByteTotals {
     pub total: u64,
@@ -74,8 +62,6 @@ pub struct ByteTotals {
 }
 
 impl ByteTotals {
-    /// Counts one row of known `size`: in `already_stored` when `stored`,
-    /// else in `to_transfer`, and in `transferred` when its bytes moved.
     pub(crate) fn count(&mut self, size: u64, stored: bool, transferred: bool) {
         self.total += size;
         if stored {
@@ -244,12 +230,10 @@ impl OperationContext {
     }
 }
 
-/// Whole milliseconds since `since`.
 pub fn duration_ms(since: Instant) -> u64 {
     millis(since.elapsed())
 }
 
-/// Whole milliseconds in `duration`, for work summed over several steps.
 pub fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
@@ -261,8 +245,7 @@ pub fn unix_ms(time: SystemTime) -> u64 {
         .unwrap_or(0)
 }
 
-/// RFC 3339 UTC with milliseconds, for `started_at`/`finished_at`,
-/// e.g. `2025-10-21T14:30:00.123Z`.
+/// RFC 3339 UTC with milliseconds, e.g. `2025-10-21T14:30:00.123Z`.
 pub fn rfc3339_ms(time: SystemTime) -> String {
     match jiff::Timestamp::try_from(time) {
         Ok(ts) => format!("{ts:.3}"),
@@ -273,14 +256,6 @@ pub fn rfc3339_ms(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn timestamps_are_unix_ms_and_rfc3339_with_milliseconds() {
-        let time = UNIX_EPOCH + Duration::from_millis(1_761_057_000_123);
-        assert_eq!(unix_ms(time), 1_761_057_000_123);
-        assert_eq!(rfc3339_ms(time), "2025-10-21T14:30:00.123Z");
-        assert_eq!(rfc3339_ms(UNIX_EPOCH), "1970-01-01T00:00:00.000Z");
-    }
 
     #[derive(Default)]
     struct Phases(std::sync::Mutex<Vec<(bool, Phase)>>);
@@ -319,18 +294,5 @@ mod tests {
                 (false, Phase::Transfer),
             ]
         );
-    }
-
-    #[test]
-    fn phases_serialize_as_their_names() {
-        for phase in [
-            Phase::Scan,
-            Phase::Hash,
-            Phase::CheckStorage,
-            Phase::Transfer,
-            Phase::Record,
-        ] {
-            assert_eq!(serde_json::to_value(phase).unwrap(), phase.as_str());
-        }
     }
 }

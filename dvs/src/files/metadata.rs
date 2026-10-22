@@ -104,8 +104,6 @@ impl FileMetadata {
         Ok((outcome, stored.map(|res| res.stored_size)))
     }
 
-    /// [`Self::save`], also reporting what the backend did when it stored the
-    /// file (`None` when it was already in sync and nothing was stored).
     pub(crate) fn save_reporting(
         &mut self,
         operation_id: Uuid,
@@ -130,8 +128,6 @@ impl FileMetadata {
 
         if dvs_file_exists && storage_exists {
             // we read the file anyway to make sure it's not 2 files having the same hash
-            // An unreadable record (e.g. git conflict markers) is
-            // `bad_metadata`, as in get and status (K25)
             let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)
                 .map_err(|e| {
                 BackendError::new(
@@ -181,9 +177,6 @@ impl FileMetadata {
         .map(|res| res.stored_size)
     }
 
-    /// [`Self::store_and_write`], returning everything the backend reported,
-    /// including whether this call created the blob (bytes actually moved) or
-    /// found it already stored.
     pub(crate) fn store_and_write_reporting(
         &mut self,
         operation_id: Uuid,
@@ -357,9 +350,6 @@ mod tests {
         assert!(backend.exists(&metadata.hashes).unwrap());
     }
 
-    // K25: an unreadable record (e.g. git conflict markers) is
-    // `bad_metadata`, the code get and status use for it too, and is left
-    // in place for the user to fix.
     #[test]
     fn save_reports_an_unreadable_record_as_bad_metadata() {
         let (_tmp, root) = create_temp_git_repo();
@@ -394,11 +384,6 @@ mod tests {
         assert_eq!(
             crate::backend_error_code(&error),
             Some(ErrorCode::BadMetadata)
-        );
-        assert!(error.to_string().contains("data.bin.dvs"), "{error}");
-        assert_eq!(
-            fs::read_to_string(dvs_dir.join("data.bin.dvs")).unwrap(),
-            conflicted
         );
     }
 

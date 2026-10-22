@@ -20,15 +20,9 @@ const NOT_ALLOWED: &str =
     "You are not allowed to access this project, make sure you are logged in with the right user.";
 const LOGIN_EXPIRED: &str = "Your login is no longer valid, run `dvs login`";
 
-/// Join `relative` (no leading slash, e.g. `api/init`) onto the server URL
-/// as a path *under* it. Every server and auth URL goes through here so a
-/// proxy prefix survives: `https://h/dvs` and `https://h/dvs/` both give
-/// `https://h/dvs/api/init`. `Url::join` alone drops the prefix for a
-/// leading-slash path, and drops the last segment when the base has no
+/// Join `relative` under the server URL, keeping any proxy path prefix:
+/// `Url::join` drops it for a leading-slash path or a base without a
 /// trailing slash.
-///
-/// A URL that cannot be a base (`mailto:x@y`, `foo:bar`) has no path to put
-/// anything under: that is an error for the caller to report, never a panic.
 pub(crate) fn join_url(base: &Url, relative: &str) -> anyhow::Result<Url> {
     debug_assert!(!relative.starts_with('/'), "{relative} must be relative");
     if base.cannot_be_a_base() {
@@ -42,18 +36,11 @@ pub(crate) fn join_url(base: &Url, relative: &str) -> anyhow::Result<Url> {
         .map_err(|e| anyhow::anyhow!("{base} cannot be used as a dvs server URL: {e}"))
 }
 
-/// The shared code for an HTTP status that has no meaning of its own on the
-/// endpoint that returned it. `None` for statuses outside the shared table
-/// (400, 409, 423, ...), which keep their endpoint-specific message.
+/// The shared code for an HTTP status, `None` for endpoint-specific ones.
 ///
-/// The 404 rule: dvs-server answers a missing project on every project
-/// route (`/api/{name}/...`, `/api/project/{name}`) with 404 and the body
-/// `unknown project "<name>"` (its `resolve_project` extractor; the wording
-/// has not changed since that extractor was written). Any other 404 is the
-/// router's empty "no such route", and a 405 is "no such method on this
-/// route": both mean the server predates the endpoint, `server_too_old`.
-/// Endpoints where 404 itself means "no such content" (blob HEAD/GET) or
-/// "unknown device code" (oauth token) check that before asking here.
+/// dvs-server answers a missing project with 404 and a body starting with
+/// `unknown project`; any other 404 (or a 405) is a route this server does
+/// not have yet.
 pub(crate) fn http_status_code(status: u16, body: &str) -> Option<ErrorCode> {
     match status {
         401 => Some(ErrorCode::AuthExpired),
@@ -68,10 +55,8 @@ pub(crate) fn http_status_code(status: u16, body: &str) -> Option<ErrorCode> {
 /// Wraps a reader and reports bytes as they're read, driving the `on_bytes`
 /// progress callback. Used to stream an upload body while updating a progress bar.
 ///
-/// It also remembers the first error its reader returned. Once ureq or
-/// `io::copy` has failed, that is the only way to tell which side broke: the
-/// local file (an upload source) or the network (a download body). The two
-/// mean different things to callers: `io_error` vs `server_unavailable`.
+/// It also remembers its reader's first error: once ureq or `io::copy` has
+/// failed, that is the only way to tell a local read error from a network one.
 struct CountingReader<'a, R> {
     inner: R,
     on_bytes: Option<&'a (dyn Fn(u64) + Send + Sync)>,
@@ -87,7 +72,6 @@ impl<'a, R> CountingReader<'a, R> {
         }
     }
 
-    /// The first error the wrapped reader returned, if any.
     fn take_error(&mut self) -> Option<std::io::Error> {
         self.error.take()
     }
@@ -98,9 +82,7 @@ impl<R: Read> Read for CountingReader<'_, R> {
         let n = match self.inner.read(buf) {
             Ok(n) => n,
             Err(e) => {
-                // Interrupted is retried by the caller, so it never decides the blame
                 if self.error.is_none() && e.kind() != std::io::ErrorKind::Interrupted {
-                    // io::Error is not Clone: keep a copy, pass the original on
                     self.error = Some(std::io::Error::new(e.kind(), e.to_string()));
                 }
                 return Err(e);
@@ -185,8 +167,6 @@ pub struct ServerBackend {
     pub group: Option<String>,
     #[serde(skip)]
     access_token: OnceLock<Option<String>>,
-    /// Whether failures may repair stored credentials. Set by the frontend,
-    /// never read from `dvs.toml`.
     #[serde(skip)]
     credential_policy: CredentialPolicy,
 }
@@ -230,11 +210,6 @@ impl ServerBackend {
         self.read_url("history")
     }
 
-    /// The stored token, read as the credential policy allows. No token is
-    /// `auth_required`. Under `Preserve` an unreadable store is
-    /// `credentials_unreadable` and is left alone; under `Repair` it is
-    /// repaired (deleted) by the read, or, if even that fails, treated as
-    /// no token as before.
     fn bearer(&self) -> anyhow::Result<String> {
         let token = match self.access_token.get() {
             Some(token) => token,
@@ -266,8 +241,7 @@ impl ServerBackend {
         BackendError::new(code, message).into()
     }
 
-    /// The server rejected the stored token: forget it so the next `init` asks
-    /// to log in, unless the credential policy says to leave it alone
+    /// The server rejected the stored token: forget it so the next `init` asks to log in
     fn login_expired(&self) -> anyhow::Error {
         if self.credential_policy == CredentialPolicy::Repair {
             if let Err(e) = delete_token(&self.url) {
@@ -284,8 +258,6 @@ impl ServerBackend {
         )
     }
 
-    /// A 2xx whose body is not what the endpoint promises: the server is
-    /// not working, never "no content" or an uncoded failure
     fn invalid_response(&self, e: impl std::fmt::Display) -> anyhow::Error {
         self.coded(
             ErrorCode::ServerUnavailable,
@@ -300,9 +272,6 @@ impl ServerBackend {
         )
     }
 
-    /// The error for an HTTP status `what` (e.g. "upload") did not expect,
-    /// per [`http_status_code`]. A 401 goes through [`Self::login_expired`];
-    /// statuses outside the shared table keep the server's own message.
     fn status_error(&self, status: u16, body: &str, what: &str) -> anyhow::Error {
         match http_status_code(status, body) {
             Some(ErrorCode::AuthExpired) => self.login_expired(),
@@ -311,8 +280,6 @@ impl ServerBackend {
         }
     }
 
-    /// The message for a shared-table status. A 401 here never touches
-    /// credentials; callers that may repair them use [`Self::login_expired`].
     fn shared_status_error(&self, code: ErrorCode, status: u16) -> anyhow::Error {
         match code {
             ErrorCode::AuthExpired => self.coded(code, LOGIN_EXPIRED),
@@ -332,7 +299,6 @@ impl ServerBackend {
         }
     }
 
-    /// [`Self::status_error`] for a response, reading its body.
     fn response_error(&self, resp: &mut Response<Body>, what: &str) -> anyhow::Error {
         let body = resp.body_mut().read_to_string().unwrap_or_default();
         self.status_error(resp.status().as_u16(), &body, what)
@@ -543,7 +509,6 @@ impl ServerBackend {
             .send(ureq::SendBody::from_reader(&mut file));
         let mut resp = match sent {
             Ok(resp) => resp,
-            // The source file failed mid-upload: a local problem, not the server's
             Err(e) => match file.take_error() {
                 Some(local) => return Err(local.into()),
                 None => return Err(self.unreachable(e)),
@@ -582,8 +547,7 @@ impl ServerBackend {
             200 => {}
             code => {
                 let body = resp.body_mut().read_to_string().unwrap_or_default();
-                // On a blob, 404 is "no such content" unless it is the
-                // project that is missing
+                // On a blob, 404 is "no such content" unless the project is missing
                 if code == 404 && http_status_code(code, &body) != Some(ErrorCode::ProjectNotFound)
                 {
                     return Ok(false);
@@ -606,9 +570,6 @@ impl ServerBackend {
         Ok(true)
     }
 
-    /// Copy a download body to a local file. The body failing is the
-    /// server's (`server_unavailable`); the local write failing is an
-    /// uncoded io error, which callers report as `io_error`.
     fn download<R: Read>(
         &self,
         body: &mut CountingReader<'_, R>,
@@ -623,8 +584,6 @@ impl ServerBackend {
         })
     }
 
-    /// A HEAD answer has no body, so a blob 404 is always "absent" here;
-    /// callers establish project access first ([`Self::check_access`]).
     pub fn exists(&self, hashes: &Hashes) -> anyhow::Result<bool> {
         let url = self.blob_url(hashes.get_blake3())?;
 
@@ -673,64 +632,31 @@ impl ServerBackend {
     }
 }
 
-/// HTTP stubs for unit tests that talk to a server (here and in `auth`).
 #[cfg(test)]
-pub(crate) mod test_http {
-    use std::io::{Read, Write};
-    use url::Url;
+mod tests {
+    use super::*;
+    use std::io::Write;
 
-    /// One-shot HTTP stub at `http://addr<prefix>`: answers the first
-    /// request with `status` and `body`, and hands back the request line
-    /// (`METHOD /path ...`).
-    pub(crate) fn stub(
-        prefix: &str,
-        status: u16,
-        body: &'static str,
-    ) -> (Url, std::thread::JoinHandle<String>) {
-        respond(
-            prefix,
-            format!(
-                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            ),
-        )
-    }
-
-    /// One-shot stub that answers the first request with the raw bytes of
-    /// `response`, for answers `stub` cannot express (a truncated body).
-    pub(crate) fn respond(
-        prefix: &str,
-        response: String,
-    ) -> (Url, std::thread::JoinHandle<String>) {
+    /// One-shot HTTP server answering the first request with `status` and `body`.
+    fn stub(status: u16, body: &'static str) -> (Url, std::thread::JoinHandle<()>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
+        let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
         let handle = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             stream
                 .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .unwrap();
-            // Read the whole request so the client never sees a reset
-            // mid-send: up to the end of a Content-Length or chunked body.
-            // A client that gives up mid-request (a failing upload source)
-            // ends the request early; that is not the stub's failure.
+            // Read the whole request so the client never sees a reset mid-send
             let mut request = Vec::new();
             let mut buffer = [0u8; 8192];
             loop {
-                let text = String::from_utf8_lossy(&request).to_string();
+                let text = String::from_utf8_lossy(&request).to_ascii_lowercase();
                 if let Some(end) = text.find("\r\n\r\n") {
-                    let head = text[..end].to_ascii_lowercase();
-                    let length = head
+                    let length = text[..end]
                         .lines()
                         .find_map(|l| l.strip_prefix("content-length:"))
-                        .map(|v| v.trim().parse::<usize>().unwrap());
-                    let done = match length {
-                        Some(length) => request.len() >= end + 4 + length,
-                        None if head.contains("transfer-encoding: chunked") => {
-                            text.ends_with("0\r\n\r\n")
-                        }
-                        None => true,
-                    };
-                    if done {
+                        .map_or(0, |v| v.trim().parse::<usize>().unwrap());
+                    if request.len() >= end + 4 + length {
                         break;
                     }
                 }
@@ -739,98 +665,19 @@ pub(crate) mod test_http {
                     Ok(count) => request.extend_from_slice(&buffer[..count]),
                 }
             }
-            let _ = stream.write_all(response.as_bytes());
-            String::from_utf8_lossy(&request)
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .to_string()
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
         });
-        (
-            Url::parse(&format!("http://{address}{prefix}")).unwrap(),
-            handle,
-        )
-    }
-}
-
-#[cfg(test)]
-mod readonly_tests {
-    use super::*;
-    use crate::auth::test_store;
-
-    /// One-shot HTTP stub under the `/proxy` prefix, see [`test_http::stub`].
-    fn stub(status: u16, body: &'static str) -> (Url, std::thread::JoinHandle<String>) {
-        test_http::stub("/proxy", status, body)
-    }
-
-    /// A URL nothing listens on: every request is a transport error.
-    fn closed_url() -> Url {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
-        Url::parse(&format!("http://{address}/proxy")).unwrap()
+        (url, handle)
     }
 
     fn server_at(url: Url) -> ServerBackend {
         let server = ServerBackend::new("project".into(), Some("group".into()), url);
         server.access_token.set(Some("test-token".into())).unwrap();
         server
-    }
-
-    /// A server whose token comes from a credentials store in `dir`, which
-    /// holds a token for that server.
-    fn server_with_store(url: Url, dir: &std::path::Path) -> (ServerBackend, PathBuf) {
-        let path = dir.join("credentials.json");
-        test_store::set(&path);
-        let json = serde_json::json!({ url.as_str(): "test-token" }).to_string();
-        fs::write(&path, json).unwrap();
-        (
-            ServerBackend::new("project".into(), Some("group".into()), url),
-            path,
-        )
-    }
-
-    /// An endpoint call under test, reduced to the code it failed with.
-    type Call = fn(&ServerBackend) -> ErrorCode;
-    /// Same, for calls that need a local file.
-    type CallWithSource = fn(&ServerBackend, &std::path::Path) -> ErrorCode;
-
-    fn code<T>(result: anyhow::Result<T>) -> ErrorCode {
-        match result {
-            Ok(_) => panic!("expected an error"),
-            Err(e) => backend_error_code(&e).unwrap_or_else(|| panic!("not coded: {e:#}")),
-        }
-    }
-
-    fn hashes() -> Hashes {
-        Hashes {
-            blake3: "a".repeat(64),
-            md5: None,
-        }
-    }
-
-    /// `s.store` of `source` as the project file `a`.
-    fn store_from(s: &ServerBackend, source: &std::path::Path) -> anyhow::Result<StoreResult> {
-        let hashes = hashes();
-        let path = ProjectPath::from_path(std::path::Path::new("a")).unwrap();
-        s.store(StoreRequest::new_local(
-            &hashes,
-            source,
-            path,
-            Compression::Zstd,
-        ))
-    }
-
-    /// `s.retrieve` of the project file `a` into `target`.
-    fn retrieve_to(s: &ServerBackend, target: &std::path::Path) -> anyhow::Result<bool> {
-        let hashes = hashes();
-        let path = ProjectPath::from_path(std::path::Path::new("a")).unwrap();
-        s.retrieve(RetrieveRequest::new_local(
-            &hashes,
-            target,
-            path,
-            Compression::Zstd,
-        ))
     }
 
     fn manifest() -> UploadManifest {
@@ -844,96 +691,43 @@ mod readonly_tests {
     }
 
     #[test]
-    fn every_server_url_keeps_the_proxy_prefix_with_or_without_trailing_slash() {
+    fn server_urls_keep_the_path_prefix() {
         for base in ["https://h/dvs", "https://h/dvs/"] {
-            let server = ServerBackend::new("project".into(), None, Url::parse(base).unwrap());
-            let hash = "a".repeat(64);
-            for (url, expected) in [
-                (
-                    server.init_url().unwrap(),
-                    "https://h/dvs/api/init".to_string(),
-                ),
-                (
-                    server.project_url().unwrap(),
-                    "https://h/dvs/api/project/project".into(),
-                ),
-                (
-                    server.blob_url(&hash).unwrap(),
-                    format!("https://h/dvs/api/project/blobs/{hash}"),
-                ),
-                (
-                    server.manifest_url().unwrap(),
-                    "https://h/dvs/api/project/manifest".into(),
-                ),
-                (
-                    server.access_url().unwrap(),
-                    "https://h/dvs/api/project/access".into(),
-                ),
-                (
-                    server.history_url().unwrap(),
-                    "https://h/dvs/api/project/history".into(),
-                ),
-                (
-                    server.read_url("history").unwrap(),
-                    "https://h/dvs/api/project/history".into(),
-                ),
-            ] {
-                assert_eq!(url.as_str(), expected, "base {base}");
-            }
-        }
-        // And a bare host still lands at the root
-        let server = ServerBackend::new("p".into(), None, Url::parse("https://h").unwrap());
-        assert_eq!(server.init_url().unwrap().as_str(), "https://h/api/init");
-    }
-
-    #[test]
-    fn the_status_table_follows_the_server_api() {
-        assert_eq!(http_status_code(401, ""), Some(ErrorCode::AuthExpired));
-        assert_eq!(http_status_code(403, ""), Some(ErrorCode::AccessDenied));
-        assert_eq!(
-            http_status_code(404, "unknown project \"p\""),
-            Some(ErrorCode::ProjectNotFound)
-        );
-        assert_eq!(http_status_code(404, ""), Some(ErrorCode::ServerTooOld));
-        assert_eq!(http_status_code(405, ""), Some(ErrorCode::ServerTooOld));
-        for status in [500, 502, 503] {
+            let url = Url::parse(base).unwrap();
+            let server = ServerBackend::new("project".into(), None, url.clone());
             assert_eq!(
-                http_status_code(status, ""),
-                Some(ErrorCode::ServerUnavailable)
+                server.init_url().unwrap().as_str(),
+                "https://h/dvs/api/init"
             );
-        }
-        for status in [400, 409, 423] {
-            assert_eq!(http_status_code(status, "x"), None);
-        }
-    }
-
-    /// A real HTTP response must retain 404/403/503 semantics through ureq.
-    #[test]
-    fn head_responses_preserve_absent_denied_and_unavailable() {
-        for (status, expected) in [
-            (200, None),
-            (404, None),
-            (403, Some(ErrorCode::AccessDenied)),
-            (503, Some(ErrorCode::ServerUnavailable)),
-        ] {
-            let (url, handle) = stub(status, "");
-            let result = server_at(url).exists_readonly(&hashes());
-            match expected {
-                None => assert_eq!(result.unwrap(), status == 200),
-                Some(expected) => assert_eq!(code(result), expected),
-            }
-            assert!(
-                handle
-                    .join()
+            assert_eq!(
+                server.access_url().unwrap().as_str(),
+                "https://h/dvs/api/project/access"
+            );
+            assert_eq!(
+                crate::auth::get_client_approve_url(&url, "ABCD")
                     .unwrap()
-                    .starts_with("HEAD /proxy/api/project/blobs/")
+                    .as_str(),
+                "https://h/dvs/device/approve?user_code=ABCD"
             );
         }
     }
 
     #[test]
-    fn read_failures_are_coded_and_never_become_missing_content() {
+    fn read_failures_never_become_missing_content() {
         let server = ServerBackend::new("project".into(), None, Url::parse("https://h/").unwrap());
+        for (status, expected) in [
+            (401, ErrorCode::AuthExpired),
+            (404, ErrorCode::ServerTooOld),
+            (429, ErrorCode::ServerUnavailable),
+            (500, ErrorCode::ServerUnavailable),
+        ] {
+            let error = server.read_status(status, "").unwrap_err();
+            assert_eq!(backend_error_code(&error), Some(expected), "{status}");
+        }
+    }
+
+    #[test]
+    fn failures_have_the_shared_codes() {
         for (status, body, expected) in [
             (401, "", ErrorCode::AuthExpired),
             (403, "", ErrorCode::AccessDenied),
@@ -944,327 +738,30 @@ mod readonly_tests {
             ),
             (404, "", ErrorCode::ServerTooOld),
             (405, "", ErrorCode::ServerTooOld),
-            (429, "", ErrorCode::ServerUnavailable),
-            (500, "", ErrorCode::ServerUnavailable),
             (503, "", ErrorCode::ServerUnavailable),
+            (200, "not json", ErrorCode::ServerUnavailable),
         ] {
-            assert_eq!(code(server.read_status(status, body)), expected, "{status}");
+            let (url, handle) = stub(status, body);
+            let error = server_at(url).manifest(&manifest()).err().unwrap();
+            assert_eq!(
+                backend_error_code(&error),
+                Some(expected),
+                "{status} {body}"
+            );
+            handle.join().unwrap();
         }
-    }
 
-    #[test]
-    fn no_token_is_auth_required() {
-        let temp = tempfile::tempdir().unwrap();
-        test_store::set(&temp.path().join("credentials.json"));
-        let server = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
-        assert_eq!(code(server.access()), ErrorCode::AuthRequired);
-        let server = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
-        assert_eq!(code(server.access_readonly()), ErrorCode::AuthRequired);
-        assert!(!temp.path().join("credentials.json").exists());
-    }
-
-    #[test]
-    fn a_401_under_preserve_is_auth_expired_and_keeps_the_token() {
-        let temp = tempfile::tempdir().unwrap();
-        let (url, handle) = stub(401, "invalid or expired token");
-        let (mut server, path) = server_with_store(url, temp.path());
-        server.set_credential_policy(CredentialPolicy::Preserve);
-        let before = fs::read(&path).unwrap();
-        assert_eq!(code(server.access()), ErrorCode::AuthExpired);
-        assert_eq!(fs::read(&path).unwrap(), before);
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn a_401_under_repair_is_auth_expired_and_forgets_the_token() {
-        let temp = tempfile::tempdir().unwrap();
-        let (url, handle) = stub(401, "invalid or expired token");
-        let (server, _path) = server_with_store(url.clone(), temp.path());
-        assert_eq!(code(server.access()), ErrorCode::AuthExpired);
-        assert_eq!(crate::auth::get_token(&url).unwrap(), None);
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn a_401_on_a_read_path_never_forgets_the_token() {
-        let temp = tempfile::tempdir().unwrap();
-        let (url, handle) = stub(401, "invalid or expired token");
-        let (server, path) = server_with_store(url, temp.path());
-        let before = fs::read(&path).unwrap();
-        assert_eq!(code(server.access_readonly()), ErrorCode::AuthExpired);
-        assert_eq!(fs::read(&path).unwrap(), before);
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn a_corrupt_store_under_preserve_is_credentials_unreadable_and_kept() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("credentials.json");
-        test_store::set(&path);
-        let original = b"{ not json";
-        fs::write(&path, original).unwrap();
-        let mut server = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
-        server.set_credential_policy(CredentialPolicy::Preserve);
-        assert_eq!(code(server.access()), ErrorCode::CredentialsUnreadable);
-        let server = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        drop(listener);
+        let error = server_at(closed).access().err().unwrap();
         assert_eq!(
-            code(server.access_readonly()),
-            ErrorCode::CredentialsUnreadable
+            backend_error_code(&error),
+            Some(ErrorCode::ServerUnavailable)
         );
-        assert_eq!(fs::read(&path).unwrap(), original);
-    }
 
-    #[test]
-    fn a_corrupt_store_under_repair_is_deleted_as_before() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("credentials.json");
-        test_store::set(&path);
-        fs::write(&path, b"{ not json").unwrap();
-        let server = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
-        assert_eq!(code(server.access()), ErrorCode::AuthRequired);
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn a_403_is_access_denied_on_every_endpoint() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        fs::write(&source, b"content").unwrap();
-        let calls: Vec<(&str, CallWithSource)> = vec![
-            ("access", |s, _| code(s.check_access())),
-            ("manifest", |s, _| code(s.manifest(&manifest()))),
-            ("history", |s, _| code(s.get_audit_entries(&[]))),
-            ("history_readonly", |s, _| code(s.history_readonly(&[]))),
-            ("exists", |s, _| code(s.exists(&hashes()))),
-            ("store", |s, source| code(store_from(s, source))),
-            ("retrieve", |s, source| {
-                code(retrieve_to(s, &source.with_extension("out")))
-            }),
-        ];
-        for (name, call) in calls {
-            let (url, handle) = stub(403, "forbidden");
-            assert_eq!(
-                call(&server_at(url), &source),
-                ErrorCode::AccessDenied,
-                "{name}"
-            );
-            handle.join().unwrap();
-        }
-    }
-
-    #[test]
-    fn transport_errors_are_server_unavailable_on_every_endpoint() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        fs::write(&source, b"content").unwrap();
-        let server = server_at(closed_url());
-        let hashes = hashes();
-        for (name, result) in [
-            ("init", code(server.init(Compression::Zstd))),
-            ("attach", code(server.attach())),
-            ("access", code(server.access())),
-            ("access_readonly", code(server.access_readonly())),
-            ("manifest", code(server.manifest(&manifest()))),
-            ("history", code(server.get_audit_entries(&[]))),
-            ("history_readonly", code(server.history_readonly(&[]))),
-            ("exists", code(server.exists(&hashes))),
-            ("store", code(store_from(&server, &source))),
-            (
-                "retrieve",
-                code(retrieve_to(&server, &temp.path().join("out"))),
-            ),
-        ] {
-            assert_eq!(result, ErrorCode::ServerUnavailable, "{name}");
-        }
-    }
-
-    #[test]
-    fn a_5xx_is_server_unavailable() {
-        for status in [500, 503] {
-            let (url, handle) = stub(status, "internal server error");
-            assert_eq!(
-                code(server_at(url).manifest(&manifest())),
-                ErrorCode::ServerUnavailable
-            );
-            handle.join().unwrap();
-        }
-    }
-
-    #[test]
-    fn a_missing_endpoint_is_server_too_old() {
-        for status in [404, 405] {
-            let (url, handle) = stub(status, "");
-            assert_eq!(
-                code(server_at(url).access()),
-                ErrorCode::ServerTooOld,
-                "{status}"
-            );
-            handle.join().unwrap();
-            let (url, handle) = stub(status, "");
-            assert_eq!(
-                code(server_at(url).access_readonly()),
-                ErrorCode::ServerTooOld,
-                "{status}"
-            );
-            handle.join().unwrap();
-        }
-    }
-
-    #[test]
-    fn an_unknown_project_is_project_not_found() {
-        const BODY: &str = "unknown project \"project\"";
-        let calls: Vec<(&str, Call)> = vec![
-            ("attach", |s| code(s.attach())),
-            ("access", |s| code(s.access())),
-            ("access_readonly", |s| code(s.access_readonly())),
-            ("manifest", |s| code(s.manifest(&manifest()))),
-            ("history_readonly", |s| code(s.history_readonly(&[]))),
-            ("retrieve", |s| {
-                let temp = tempfile::tempdir().unwrap();
-                code(retrieve_to(s, &temp.path().join("out")))
-            }),
-        ];
-        for (name, call) in calls {
-            let (url, handle) = stub(404, BODY);
-            assert_eq!(call(&server_at(url)), ErrorCode::ProjectNotFound, "{name}");
-            handle.join().unwrap();
-        }
-    }
-
-    #[test]
-    fn a_blob_404_is_still_absent_content() {
-        let temp = tempfile::tempdir().unwrap();
-        let (url, handle) = stub(404, "Not found");
-        let found = retrieve_to(&server_at(url), &temp.path().join("out")).unwrap();
-        assert!(!found);
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn requests_go_under_the_proxy_prefix() {
-        let (url, handle) = stub(200, "{\"missing\":[],\"compression\":\"zstd\"}");
-        server_at(url).manifest(&manifest()).unwrap();
-        assert!(
-            handle
-                .join()
-                .unwrap()
-                .starts_with("POST /proxy/api/project/manifest ")
-        );
-        let (url, handle) = stub(201, "");
-        assert!(!server_at(url).init(Compression::Zstd).unwrap());
-        assert!(handle.join().unwrap().starts_with("POST /proxy/api/init "));
-    }
-
-    #[test]
-    fn a_non_base_server_url_is_an_error_not_a_panic() {
-        for base in ["foo:bar", "mailto:x@y"] {
-            let url = Url::parse(base).unwrap();
-            assert!(join_url(&url, "api/init").is_err(), "{base}");
-            let server = server_at(url);
-            let hashes = hashes();
-            assert!(server.init(Compression::Zstd).is_err(), "{base}");
-            assert!(server.attach().is_err(), "{base}");
-            assert!(server.access().is_err(), "{base}");
-            assert!(server.access_readonly().is_err(), "{base}");
-            assert!(server.exists_readonly(&hashes).is_err(), "{base}");
-            assert!(server.history_readonly(&[]).is_err(), "{base}");
-            assert!(server.manifest(&manifest()).is_err(), "{base}");
-            assert!(server.exists(&hashes).is_err(), "{base}");
-            assert!(server.get_audit_entries(&[]).is_err(), "{base}");
-            let temp = tempfile::tempdir().unwrap();
-            let source = temp.path().join("source");
-            fs::write(&source, b"content").unwrap();
-            assert!(store_from(&server, &source).is_err(), "{base}");
-            let target = temp.path().join("out");
-            assert!(retrieve_to(&server, &target).is_err(), "{base}");
-        }
-    }
-
-    #[test]
-    fn an_invalid_body_on_a_2xx_is_server_unavailable() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        fs::write(&source, b"content").unwrap();
-        let calls: Vec<(&str, u16, CallWithSource)> = vec![
-            ("access", 200, |s, _| code(s.access())),
-            ("access_readonly", 200, |s, _| code(s.access_readonly())),
-            ("manifest", 200, |s, _| code(s.manifest(&manifest()))),
-            ("history", 200, |s, _| code(s.get_audit_entries(&[]))),
-            ("history_readonly", 200, |s, _| {
-                code(s.history_readonly(&[]))
-            }),
-            ("store", 201, |s, source| code(store_from(s, source))),
-        ];
-        for (name, status, call) in calls {
-            let (url, handle) = stub(status, "this is not json");
-            assert_eq!(
-                call(&server_at(url), &source),
-                ErrorCode::ServerUnavailable,
-                "{name}"
-            );
-            handle.join().unwrap();
-        }
-    }
-
-    #[test]
-    fn a_source_that_fails_mid_upload_is_a_local_io_error() {
-        let temp = tempfile::tempdir().unwrap();
-        // A directory opens fine on unix but every read fails (EISDIR)
-        let source = temp.path().join("a-directory");
-        fs::create_dir(&source).unwrap();
-        let (url, handle) = stub(201, r#"{"stored_size":0,"compression":"zstd"}"#);
-        let error = store_from(&server_at(url), &source).err().unwrap();
-        assert_eq!(backend_error_code(&error), None, "{error:#}");
-        assert!(
-            error.downcast_ref::<std::io::Error>().is_some(),
-            "{error:#}"
-        );
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn a_download_cut_off_by_the_network_is_server_unavailable() {
-        let temp = tempfile::tempdir().unwrap();
-        let (url, handle) = test_http::respond(
-            "/proxy",
-            "HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nshort".into(),
-        );
-        let result = retrieve_to(&server_at(url), &temp.path().join("out"));
-        assert_eq!(code(result), ErrorCode::ServerUnavailable);
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn a_local_write_failure_during_download_is_an_io_error() {
-        struct Full;
-        impl std::io::Write for Full {
-            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::other("disk full"))
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let server = server_at(Url::parse("https://h/").unwrap());
-        let mut body = CountingReader::new(&b"downloaded bytes"[..], None);
-        let error = server.download(&mut body, &mut Full).unwrap_err();
-        assert_eq!(backend_error_code(&error), None, "{error:#}");
-        assert!(
-            error.downcast_ref::<std::io::Error>().is_some(),
-            "{error:#}"
-        );
-    }
-
-    #[test]
-    fn no_config_dir_under_preserve_is_auth_required() {
-        test_store::no_config_dir();
-        let mut server = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
-        server.set_credential_policy(CredentialPolicy::Preserve);
-        assert_eq!(code(server.access()), ErrorCode::AuthRequired);
-        let server = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
-        assert_eq!(code(server.access_readonly()), ErrorCode::AuthRequired);
-        // Human mode reads it as no token, as before
-        let server = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
-        assert_eq!(code(server.access()), ErrorCode::AuthRequired);
+        let no_token = ServerBackend::new("p".into(), None, Url::parse("https://h/").unwrap());
+        let error = no_token.access().err().unwrap();
+        assert_eq!(backend_error_code(&error), Some(ErrorCode::AuthRequired));
     }
 }

@@ -270,8 +270,7 @@ pub struct GetReport {
     pub on_conflict: OnConflict,
     pub source: SettingSource,
     pub counts: GetCounts,
-    /// Byte totals (C8, K5). Not serialized here, so R output is unchanged
-    /// (K8); the CLI adds it.
+    /// Not serialized, so R output is unchanged; the CLI adds it
     #[serde(skip)]
     pub bytes: ByteTotals,
     /// An operation-level problem, such as nothing matching the request
@@ -1072,13 +1071,8 @@ fn settle(
     }
 }
 
-/// What every file needing the remote gets when the access check fails: the
-/// shared code (auth_required, auth_expired, access_denied,
-/// server_unavailable, server_too_old, project_not_found, ...), not one
-/// catch-all.
-///
-/// A failure that is not a classified backend error is still the remote
-/// being unusable, so `server_unavailable` (K14), never an I/O code.
+/// The code every file needing the remote gets when the access check fails.
+/// An unclassified failure is still the remote being unusable, not an I/O error.
 fn access_failure(e: anyhow::Error) -> FileError {
     let code = backend_error_code(&e)
         .map(GetCode::from)
@@ -1134,13 +1128,7 @@ fn finish(planned: Vec<Planned>, ending: Ending, ctx: &OperationContext) -> GetR
         };
         *slot += 1;
     }
-    // K5, K12: from the rows, the same in every ending (aborted included).
-    // `to_transfer` is every row whose local copy does not match its target,
-    // whatever then happened to it (held back, skipped, failed);
-    // `already_stored` the ones that match. Unlike the plan's
-    // `bytes_to_transfer` (what get attempts), it does not depend on the
-    // policy. `transferred` is the size of what was installed, so 0 in a dry
-    // run. Rows of unknown size count in none.
+    // `to_transfer` counts every row not at its target, whatever then happened to it
     let mut bytes = ByteTotals::default();
     for r in &files {
         if let Some(size) = r.size {

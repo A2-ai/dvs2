@@ -264,9 +264,8 @@ impl EventStream {
         }
     }
 
-    /// Byte callbacks report deltas. Coalesce them to at most ten progress
-    /// events per second per transfer, always flushing the final count. The
-    /// deltas also drive operation progress.
+    /// Byte callbacks report deltas; coalesced to at most ten progress events
+    /// per second per transfer. The deltas also drive operation progress.
     pub fn progress(&self, path: &Path, total_bytes: u64) -> FileProgress {
         let path = path.to_path_buf();
         self.emit(

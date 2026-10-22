@@ -37,14 +37,10 @@ pub struct AddResult {
     pub duration_ms: Option<u64>,
 }
 
-/// The whole result of an `add`: one row per file, sorted by path, plus byte
-/// totals.
+/// The rows of an `add`, sorted by path, plus byte totals.
 #[derive(Debug, Clone)]
 pub struct AddReport {
     pub files: Vec<AddResult>,
-    /// Sums over the rows whose size is known (every file that was hashed,
-    /// failed ones included); see [`ByteTotals`]. Not serialized by the
-    /// library.
     pub bytes: ByteTotals,
 }
 
@@ -120,8 +116,6 @@ fn error_row(path: PathBuf, error: &anyhow::Error, duration_ms: Option<u64>) -> 
 struct Pending {
     relative_path: PathBuf,
     metadata: FileMetadata,
-    /// Whether storage already has this content, so nothing needs uploading.
-    /// Known once storage has been asked (step 2); false until then.
     stored: bool,
     /// Time spent on this file so far: hashing, then storage and record
     work: Duration,
@@ -145,10 +139,7 @@ impl Pending {
         })
     }
 
-    /// What this file contributes to the byte totals however it ends: once
-    /// hashed its size is known, so a later failure still counts it (in
-    /// `to_transfer` unless storage said it has the content), and the
-    /// result's `total` matches the plan's `bytes_total`.
+    /// Once hashed the size is known, so a later failure still counts it.
     fn row_bytes(&self, transferred: bool) -> RowBytes {
         RowBytes {
             size: self.metadata.size,
@@ -158,22 +149,16 @@ impl Pending {
     }
 }
 
-/// What a finished file contributes to the result's [`ByteTotals`].
 struct RowBytes {
     size: u64,
-    /// The content was already in storage when the add was planned
     stored: bool,
-    /// This file's bytes were uploaded by this add: the backend created the
-    /// blob. A second copy of content this add already uploaded moves nothing.
     transferred: bool,
 }
 
-/// What finishing one file did.
 struct Added {
     outcome: Outcome,
-    /// Size of the stored blob, when a store call reported it
     stored_size: Option<u64>,
-    /// Whether the backend created the blob, i.e. this file's bytes moved
+    /// The backend created the blob, i.e. this file's bytes moved
     created: bool,
 }
 
@@ -314,9 +299,8 @@ pub fn add_files(
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
 
-    // Rows final before the plan, with their byte contribution (`None`: size
-    // unknown). They are reported only once the plan is, so that `planned`
-    // precedes every row.
+    // Rows final before the plan, reported only once it is, so that `planned`
+    // precedes every row. `None`: size unknown.
     let mut results: Vec<(AddResult, Option<RowBytes>)>;
 
     // 1. Hash everything first: the server wants the whole list before any bytes move
@@ -343,9 +327,8 @@ pub fn add_files(
     });
     hashing.finish();
 
-    // 2. Ask storage what it already has. The server is told what we are about
-    // to add (minus files already in sync) and answers with what it is missing.
-    // Other backends, and dry runs, are asked file by file.
+    // 2. Ask storage what it already has: the server through the manifest (minus
+    // files already in sync), other backends and dry runs file by file
     let mut missing = None;
     match backend {
         Backend::Server(server) if !dry_run => {
@@ -373,8 +356,6 @@ pub fn add_files(
                 answer_missing = answer.missing.into_iter().collect();
             }
             for p in &mut pending {
-                // In sync files were not in the manifest, but there is
-                // nothing left to do for them either
                 p.stored = !answer_missing.contains(&p.metadata.hashes.blake3);
             }
             missing = Some(answer_missing);
@@ -524,6 +505,19 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn row_errors_carry_a_code() {
+        let backend = anyhow::Error::from(crate::BackendError::new(ErrorCode::AccessDenied, "no"));
+        let io = anyhow::Error::from(std::io::Error::other("disk"));
+        for (error, expected) in [
+            (backend, AddErrorCode::AccessDenied),
+            (io, AddErrorCode::IoError),
+            (anyhow::anyhow!("other"), AddErrorCode::OperationFailed),
+        ] {
+            assert_eq!(add_error_code(&error), expected);
+        }
+    }
 
     /// A local-storage project: its temp dir guard, root, config and paths.
     fn project() -> (tempfile::TempDir, PathBuf, crate::config::Config, DvsPaths) {
