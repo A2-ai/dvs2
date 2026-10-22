@@ -18,8 +18,7 @@ use crate::error::{Error, ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::globbing::GetSelection;
 use crate::operation::{
-    ByteTotals, FileRow, LazyPhase, OperationContext, OperationPlan, Phase, PhaseGuard, RunOutcome,
-    millis,
+    ByteTotals, FileRow, Hashing, OperationContext, OperationPlan, RunOutcome, millis,
 };
 use crate::paths::ProjectPath;
 use crate::utils::get_threadpool;
@@ -523,7 +522,7 @@ fn plan_file(
     paths: &DvsPaths,
     relative_path: &Path,
     cache: Option<&Mutex<HashCache>>,
-    hashing: &LazyPhase<'_>,
+    hashing: &Hashing<'_>,
 ) -> Planned {
     let mut planned = Planned::new(blank_row(paths, relative_path));
     let fail = |mut planned: Planned, before: Before, code: GetCode, message: String| {
@@ -744,14 +743,11 @@ fn install(
 /// Never errors: every problem is reported in the returned rows or as the
 /// report's `problem`.
 ///
-/// Reports to `ctx`'s observer as it goes: the `hash` phase (the plan, only
-/// when it hashes some working file), the
-/// `check_storage` phase when anything needs the remote, `planned` once the
-/// plan and storage checks are done, then every row through `file_finished`
-/// exactly once, as soon as it is final (rows decided before the transfers
-/// first, then each transfer as it completes). In a dry run the existence
-/// checks that stand in for transfers belong to `check_storage`, so there is
-/// no `transfer` phase. A cancel stops files from *starting*: a file already
+/// Reports to `ctx`'s observer as it goes: hashing (only when the plan hashes
+/// some working file), `planned` once the plan and storage checks are done,
+/// then every row through `file_finished` exactly once, as soon as it is final
+/// (rows decided before the transfers first, then each transfer as it
+/// completes). A cancel stops files from *starting*: a file already
 /// downloading finishes (verified temp file + rename), the rest are `cancelled`.
 pub fn get_files(
     selection: GetSelection,
@@ -800,10 +796,10 @@ pub fn get_files(
         )
     };
 
-    // 1. Plan: classify every file, locally, writing nothing. The hash phase
-    // starts with the first file actually hashed, so a plan that hashes
+    // 1. Plan: classify every file, locally, writing nothing. Hashing is
+    // reported from the first file actually hashed, so a plan that hashes
     // nothing (every file absent, or a cancel first) reports none.
-    let hashing = LazyPhase::new(observer, Phase::Hash);
+    let hashing = Hashing::new(observer);
     let mut planned: Vec<Planned> = pool.install(|| {
         selection
             .tracked
@@ -878,13 +874,12 @@ pub fn get_files(
     // One access check for everything that needs the remote: transfers, and
     // the stored-copy hints on conflicts. Files already current need neither.
     // A cancel by now stops the storage checks from starting too:
-    // no access check, no stored-copy lookups, no check_storage phase.
+    // no access check and no stored-copy lookups.
     let cancelled_before_storage = ctx.is_cancelled();
     let needs_remote = !cancelled_before_storage
         && planned
             .iter()
             .any(|p| p.needs_transfer(on_conflict) || p.row.is_conflict());
-    let mut check_storage = needs_remote.then(|| PhaseGuard::start(observer, Phase::CheckStorage));
     let access = if needs_remote {
         backend.check_access().map_err(access_failure)
     } else {
@@ -927,7 +922,6 @@ pub fn get_files(
                 Some("held back: another requested file has a problem".to_string()),
             );
         }
-        drop(check_storage);
         let plan = operation_plan(&planned, &[]);
         observer.planned(&plan);
         return ending(planned, true);
@@ -959,14 +953,8 @@ pub fn get_files(
         for &i in &transfer_idx {
             planned[i].set(Action::Failed, Some(*code), Some(message.clone()));
         }
-        drop(check_storage);
         observer.planned(&plan);
         return ending(planned, false);
-    }
-    // A dry run's existence checks are storage checks: check_storage stays
-    // open across them, and there is no transfer phase.
-    if !dry_run {
-        drop(check_storage.take());
     }
     observer.planned(&plan);
     // Everything that will not be transferred is final now.
@@ -976,8 +964,6 @@ pub fn get_files(
         }
     }
 
-    let transferring = (!dry_run && !transfer_idx.is_empty())
-        .then(|| PhaseGuard::start(observer, Phase::Transfer));
     let operation_id = Uuid::new_v4();
     let finished: Vec<(usize, GetRow)> = pool.install(|| {
         transfer_idx
@@ -1010,8 +996,6 @@ pub fn get_files(
         planned[i].row = row;
         planned[i].emitted = true;
     }
-    drop(transferring);
-    drop(check_storage);
 
     ending(planned, false)
 }
@@ -1908,8 +1892,6 @@ mod tests {
             seen[..plan].iter().all(|s| !s.starts_with("row")),
             "{seen:?}"
         );
-        // A transfer's row is reported when it is done, not after the batch
-        assert!(at("row a.csv") < at("end transfer") && at("row d.csv") < at("end transfer"));
         // Each row once, exactly as in the result (hint included)
         rows.sort_by_key(|r| r["path"].as_str().unwrap().to_string());
         let expected: Vec<_> = report
@@ -1926,21 +1908,21 @@ mod tests {
     }
 
     #[test]
-    fn nothing_to_hash_or_fetch_reports_no_such_phase() {
+    fn no_hash_events_when_nothing_is_hashed() {
         let repo = TestRepo::new();
         repo.add("a.csv", b"a");
         repo.add("b.csv", b"b");
         fs::remove_file(repo.root.join("b.csv")).unwrap();
-        let phases = |name| {
+        let hash_events = |name| {
             let (_, seen, _) = repo.get_observed(&[name], &[]);
             seen.into_iter()
-                .filter(|s| s.starts_with("start"))
+                .filter(|s| s.starts_with("hash"))
                 .collect::<Vec<_>>()
         };
-        // Already current: hashed, but storage is never asked
-        assert_eq!(phases("a.csv"), ["start hash"]);
+        // Present: hashed
+        assert_eq!(hash_events("a.csv"), ["hash start", "hash end"]);
         // Absent: nothing to hash
-        assert_eq!(phases("b.csv"), ["start check_storage", "start transfer"]);
+        assert!(hash_events("b.csv").is_empty());
     }
 
     #[test]
