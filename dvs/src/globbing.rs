@@ -117,53 +117,56 @@ pub fn resolve_paths_for_add(
     Ok(out)
 }
 
+/// What a `get` request selected: repo-root-relative tracked files, plus the
+/// explicit paths (as the user wrote them) that matched no tracked file.
+#[derive(Debug, Default)]
+pub struct GetSelection {
+    pub tracked: HashSet<PathBuf>,
+    pub unmatched: Vec<PathBuf>,
+}
+
 /// Resolve paths for `get` command by scanning tracked metadata:
 /// - Explicit files or directories: filtered to tracked files under them
 /// - Glob: matched relative to each path argument, or relative to cwd when no paths are given
 /// - No paths + no glob: returns all tracked files directly under cwd
-pub fn resolve_paths_for_get(
+///
+/// Explicit paths that match nothing are returned in `unmatched`.
+pub fn select_paths_for_get(
     paths: Vec<PathBuf>,
     glob_pattern: Option<&str>,
     dvs_paths: &DvsPaths,
     recursive: bool,
-) -> Result<HashSet<PathBuf>> {
+) -> Result<GetSelection> {
     let glob_matcher = build_glob_matcher(glob_pattern)?;
     let tracked = dvs_paths.tracked_paths();
 
     // No explicit paths: scope to cwd and return whatever matches.
     if paths.is_empty() {
         let filter = PathFilter::cwd_scoped(recursive, dvs_paths);
-        return Ok(tracked
-            .into_iter()
-            .filter(|t| filter.matches(t, glob_matcher.as_ref()))
-            .collect());
+        return Ok(GetSelection {
+            tracked: tracked
+                .into_iter()
+                .filter(|t| filter.matches(t, glob_matcher.as_ref()))
+                .collect(),
+            unmatched: Vec::new(),
+        });
     }
 
-    // Explicit paths: every one must resolve to at least one tracked file,
-    // otherwise we refuse the whole batch rather than silently skipping it.
-    let mut out = HashSet::new();
-    let mut missing = Vec::new();
+    let mut selection = GetSelection::default();
     for path in paths {
         let filter = PathFilter::from_user_paths(vec![path.clone()], recursive, dvs_paths);
         let mut matched_any = false;
         for tracked_path in &tracked {
             if filter.matches(tracked_path, glob_matcher.as_ref()) {
-                out.insert(tracked_path.clone());
+                selection.tracked.insert(tracked_path.clone());
                 matched_any = true;
             }
         }
         if !matched_any {
-            missing.push(format!("  {}", path.display()));
+            selection.unmatched.push(path);
         }
     }
-    if !missing.is_empty() {
-        bail!(
-            "The following paths are not tracked by DVS:\n{}",
-            missing.join("\n")
-        );
-    }
-
-    Ok(out)
+    Ok(selection)
 }
 
 #[cfg(test)]
@@ -319,41 +322,41 @@ mod tests {
     #[test]
     fn get_exact_file_match() {
         let (_temp, dvs_paths) = setup_test_repo();
-        let result =
-            resolve_paths_for_get(vec![PathBuf::from("foo.txt")], None, &dvs_paths, false).unwrap();
+        let result = select_paths_for_get(vec![PathBuf::from("foo.txt")], None, &dvs_paths, false)
+            .unwrap()
+            .tracked;
 
         assert_eq!(result.len(), 1);
         assert!(result.contains(&PathBuf::from("foo.txt")));
     }
 
     #[test]
-    fn get_untracked_explicit_path_errors() {
+    fn get_untracked_explicit_path_is_unmatched() {
         let (_temp, dvs_paths) = setup_test_repo();
-        // bar.csv exists on disk but is not tracked; an explicit untracked path
-        // must error rather than be silently dropped.
-        let result = resolve_paths_for_get(
+        // bar.csv exists on disk but is not tracked
+        let result = select_paths_for_get(
             vec![PathBuf::from("foo.txt"), PathBuf::from("bar.csv")],
             None,
             &dvs_paths,
             false,
-        );
+        )
+        .unwrap();
 
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("not tracked"), "unexpected error: {err}");
-        assert!(err.contains("bar.csv"), "unexpected error: {err}");
+        assert!(result.tracked.contains(&PathBuf::from("foo.txt")));
+        assert_eq!(result.unmatched, vec![PathBuf::from("bar.csv")]);
     }
 
     #[test]
     fn get_explicit_file_ignores_glob() {
         let (_temp, dvs_paths) = setup_test_repo();
-        let result = resolve_paths_for_get(
+        let result = select_paths_for_get(
             vec![PathBuf::from("foo.txt")],
             Some("*.csv"),
             &dvs_paths,
             false,
         )
-        .unwrap();
+        .unwrap()
+        .tracked;
 
         assert_eq!(result.len(), 1);
         assert!(result.contains(&PathBuf::from("foo.txt")));
@@ -362,8 +365,9 @@ mod tests {
     #[test]
     fn get_directory_recursive_returns_all_tracked() {
         let (_temp, dvs_paths) = setup_test_repo();
-        let result =
-            resolve_paths_for_get(vec![PathBuf::from("data")], None, &dvs_paths, true).unwrap();
+        let result = select_paths_for_get(vec![PathBuf::from("data")], None, &dvs_paths, true)
+            .unwrap()
+            .tracked;
 
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
@@ -374,8 +378,9 @@ mod tests {
     #[test]
     fn get_directory_non_recursive_excludes_subdirs() {
         let (_temp, dvs_paths) = setup_test_repo();
-        let result =
-            resolve_paths_for_get(vec![PathBuf::from("data")], None, &dvs_paths, false).unwrap();
+        let result = select_paths_for_get(vec![PathBuf::from("data")], None, &dvs_paths, false)
+            .unwrap()
+            .tracked;
 
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(!result.contains(&PathBuf::from("data/subdir/c.csv")));
@@ -386,7 +391,9 @@ mod tests {
     fn get_with_glob_filters() {
         let (_temp, dvs_paths) = setup_test_repo();
         // Empty paths defaults to cwd, then glob filters
-        let result = resolve_paths_for_get(vec![], Some("*.txt"), &dvs_paths, false).unwrap();
+        let result = select_paths_for_get(vec![], Some("*.txt"), &dvs_paths, false)
+            .unwrap()
+            .tracked;
 
         assert!(result.contains(&PathBuf::from("foo.txt")));
         assert!(!result.contains(&PathBuf::from("data/a.csv")));
@@ -397,7 +404,9 @@ mod tests {
         let (_temp, dvs_paths) = setup_test_repo();
         // No explicit paths scopes to cwd (the repo root here). Without
         // `recursive`, only files directly under cwd are returned.
-        let result = resolve_paths_for_get(vec![], None, &dvs_paths, false).unwrap();
+        let result = select_paths_for_get(vec![], None, &dvs_paths, false)
+            .unwrap()
+            .tracked;
         assert!(result.contains(&PathBuf::from("foo.txt")));
         assert!(!result.contains(&PathBuf::from("data/a.csv")));
         assert!(!result.contains(&PathBuf::from("data/subdir/c.csv")));
@@ -406,7 +415,9 @@ mod tests {
     #[test]
     fn get_no_paths_recursive_returns_all_under_cwd() {
         let (_temp, dvs_paths) = setup_test_repo();
-        let result = resolve_paths_for_get(vec![], None, &dvs_paths, true).unwrap();
+        let result = select_paths_for_get(vec![], None, &dvs_paths, true)
+            .unwrap()
+            .tracked;
         assert!(result.contains(&PathBuf::from("foo.txt")));
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
@@ -418,8 +429,9 @@ mod tests {
         // `dvs get . --recursive` should match every tracked path: normalize_path
         // strips the CurDir component, leaving an empty PathBuf that
         // Path::starts_with treats as a prefix of any path.
-        let result =
-            resolve_paths_for_get(vec![PathBuf::from(".")], None, &dvs_paths, true).unwrap();
+        let result = select_paths_for_get(vec![PathBuf::from(".")], None, &dvs_paths, true)
+            .unwrap()
+            .tracked;
         assert!(result.contains(&PathBuf::from("foo.txt")));
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
@@ -429,7 +441,9 @@ mod tests {
     fn get_absolute_file_path() {
         let (temp, dvs_paths) = setup_test_repo();
         let abs_path = temp.path().canonicalize().unwrap().join("foo.txt");
-        let result = resolve_paths_for_get(vec![abs_path], None, &dvs_paths, false).unwrap();
+        let result = select_paths_for_get(vec![abs_path], None, &dvs_paths, false)
+            .unwrap()
+            .tracked;
 
         assert_eq!(result.len(), 1);
         assert!(result.contains(&PathBuf::from("foo.txt")));
@@ -439,7 +453,9 @@ mod tests {
     fn get_absolute_directory_path() {
         let (temp, dvs_paths) = setup_test_repo();
         let abs_path = temp.path().canonicalize().unwrap().join("data");
-        let result = resolve_paths_for_get(vec![abs_path], None, &dvs_paths, true).unwrap();
+        let result = select_paths_for_get(vec![abs_path], None, &dvs_paths, true)
+            .unwrap()
+            .tracked;
 
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
@@ -450,7 +466,9 @@ mod tests {
     fn get_absolute_directory_path_non_recursive() {
         let (temp, dvs_paths) = setup_test_repo();
         let abs_path = temp.path().canonicalize().unwrap().join("data");
-        let result = resolve_paths_for_get(vec![abs_path], None, &dvs_paths, false).unwrap();
+        let result = select_paths_for_get(vec![abs_path], None, &dvs_paths, false)
+            .unwrap()
+            .tracked;
 
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(!result.contains(&PathBuf::from("data/subdir/c.csv")));
@@ -460,13 +478,14 @@ mod tests {
     #[test]
     fn get_directory_glob_is_dir_relative() {
         let (_temp, dvs_paths) = setup_test_repo();
-        let result = resolve_paths_for_get(
+        let result = select_paths_for_get(
             vec![PathBuf::from("data")],
             Some("*.csv"),
             &dvs_paths,
             false,
         )
-        .unwrap();
+        .unwrap()
+        .tracked;
 
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(!result.contains(&PathBuf::from("data/subdir/c.csv")));
@@ -476,13 +495,14 @@ mod tests {
     #[test]
     fn get_directory_recursive_glob_reaches_subdirs() {
         let (_temp, dvs_paths) = setup_test_repo();
-        let result = resolve_paths_for_get(
+        let result = select_paths_for_get(
             vec![PathBuf::from("data")],
             Some("**/*.csv"),
             &dvs_paths,
             false,
         )
-        .unwrap();
+        .unwrap()
+        .tracked;
 
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));

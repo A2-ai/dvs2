@@ -209,17 +209,52 @@ It raises an error if no files match, or if any input path is invalid (the whole
 ### get
 
 `get` retrieves files from the storage into the project.
-Each file in a `get` result reports an outcome:
 
-- `copied`: the file was retrieved from storage
-- `present`: the local file already matches the metadata -> noop
+#### Before, and what dvs does
 
-Retrieval writes to a temp file next to the target. The temp file's hash is verified against the metadata.
-If it doesn't match, the temp file is deleted and the operation fails for that file. On success the temp
-file is renamed over the target. A failed get leaves any existing local file unchanged.
+Each requested file is classified before anything is written:
 
-Users can use `get` with specific paths or globs. In practice those will be ran on the metadata folder rather
-than the actual project, to know what to pull but the resolution works the same way as `add`.
+| `before` | Meaning | What `get` does |
+|---|---|---|
+| `absent` | no working file | restores it |
+| `current` | the working file already matches the metadata | nothing, and needs no server |
+| `clean` | differs, but is exactly what dvs last wrote or added at this path in this clone (the baseline) | replaces it, e.g. after switching git branches |
+| `modified` | differs, and differs from the baseline | conflict |
+| `unknown` | differs, and there is no baseline | conflict |
+| `not_tracked` | no metadata for the path (or a directory with no selected tracked files) | known problem |
+| `not_a_file` | a directory or special file is in the way | known problem, never replaced |
+| `unsafe_path` | a parent is a symlink, or the path leaves the project | known problem, never written |
+
+Conflicts follow `on_conflict`:
+
+- `abort` (default): if any conflict or other known problem exists (including a `.dvs` file that cannot be read,
+  e.g. after a git merge conflict: `bad_metadata`), nothing is written. Every row is returned,
+  with the rest held back as `batch_aborted`.
+- `skip`: conflicts and known problems are left as they are; everything else is retrieved.
+- `overwrite`: conflicts are replaced. Other known problems still abort.
+
+Whatever the policy: the downloaded bytes are verified before install; the destination is checked again just
+before the rename and kept if it changed meanwhile (`destination_changed`); and remote or I/O failures are per
+file, so the other files still complete. A failed get leaves the existing local file unchanged.
+
+Conflict rows report `stored_copy` (`present`, `absent`, `unknown`): whether the local bytes exist in this
+store. It is a hint for the next step, not permission to replace.
+
+The baseline is a table in the cache database (see Hash cache). It is written only after a verified install, a
+`get` that found the file current, or a successful `add`. Losing it makes changed files `unknown`, which costs a
+`--force`, never data.
+
+#### Configuration
+
+Precedence: argument/flag > `DVS_GET_ON_CONFLICT` > `dvs.toml` > `abort`.
+
+```toml
+[get]
+on_conflict = "skip"   # or "abort"
+```
+
+`on_conflict = "overwrite"` in `dvs.toml` is a configuration error: a file committed to the repository must not
+be able to discard someone's local changes. Use the flag or the environment variable.
 
 #### CLI
 
@@ -233,40 +268,79 @@ Arguments:
   [PATHS]...  
 
 Options:
-      --json               Output results as JSON
-      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
-  -g, --glob <GLOB>        
-  -r, --recursive          Recursively include files in subdirectories for directory inputs. Without this flag, directories return only their direct children.
-      --dry-run            Show what would be retrieved without making any actual changes
-  -h, --help               Print help
+      --json                  Output results as JSON
+      --threads <THREADS>     Number of threads for parallel operations (0 = auto-detect)
+  -g, --glob <GLOB>           
+  -r, --recursive             Recursively include files in subdirectories for directory inputs. Without this flag, directories return only their direct children
+      --dry-run               Show what would be retrieved without making any actual changes
+      --on-conflict <POLICY>  What to do with files whose local version dvs did not put there (local changes, or no record): abort changes nothing, skip leaves them and gets the rest, overwrite replaces them. Defaults to DVS_GET_ON_CONFLICT, then [get] on_conflict in dvs.toml, then abort [possible values: abort, skip, overwrite]
+  -f, --force                 Replace files with local changes (same as --on-conflict overwrite)
+  -h, --help                  Print help
 ```
 
-Passing `-r, --recursive` with an explicit directory walks its subdirectories. When no explicit paths are given,
-`get` is scoped to the current directory (relative to the repo root): without `-r` it restores the tracked files
+Passing `-r, --recursive` with an explicit directory walks its subdirectories. The CLI requires a path or `--glob`.
+When no explicit paths are given (R's `dvs_get()`), `get` is scoped to the current directory (relative to the repo root): without `-r` it restores the tracked files
 directly under it, and with `-r` it restores every tracked file beneath it. (At the repo root, `-r` therefore
 restores every tracked file in the project.)
 
-A request that names a path with no tracked file (never added, or misspelled) is refused as a whole, retrieves nothing, and exits with `1`. A request that resolves but has one or more files fail on retrieval (for example a hash mismatch) retrieves the rest and also exits with `1`.
+Human output lists each file that changed or needs attention, then a summary naming the policy and where it came
+from, then the commands to keep or discard local changes.
+
+`--json` prints one envelope (this replaced the earlier bare array), also when `get` cannot start (not in a project,
+invalid configuration): then `files` is empty, `outcome` is `failed`, `problem` says why, and `on_conflict`/`source`
+are null.
+
+```json
+{"v": 1, "command": "get", "outcome": "aborted", "dry_run": false,
+ "on_conflict": "abort", "source": "default",
+ "counts": {"restored": 0, "replaced": 0, "unchanged": 1, "skipped": 0, "not_run": 2, "failed": 0, "would_restore": 0, "would_replace": 0},
+ "problem": null,
+ "files": [{"path": "data/b.csv", "local_path": "data/b.csv", "before": "modified", "action": "not_run",
+            "satisfied": false, "size": 7, "target_hash": "…", "local_hash": "…", "stored_copy": "absent",
+            "code": "local_changes", "message": "…", "hint": "keep your version: dvs add data/b.csv; …"}]}
+```
+
+- `outcome`: `complete`, `aborted` (nothing written), `partial` (also when every file was skipped as
+  `on_conflict = skip` asked) or `failed`.
+- `hint`: the next step, in CLI syntax, filled in by the library.
+- `satisfied`: the file is at its tracked version afterwards; in a dry run, that it would be.
+- A shared cause (`access_denied`, `server_unavailable`) is printed once in human output, not per file.
+- `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run`, `failed`, `would_restore`, `would_replace`.
+- `code`: `local_changes`, `unknown_local`, `batch_aborted`, `not_tracked`, `not_a_file`, `unsafe_path`,
+  `source_missing`, `hash_mismatch`, `access_denied`, `server_unavailable`, `destination_changed`, `permission_denied`, `file_in_use`,
+  `io_error`, `bad_metadata`.
+
+Exit codes: `0` did as asked, including files left as they are because `on_conflict = skip` asked for it; `1` any
+failure or operation problem (takes priority); `3` `on_conflict = abort` held files back because of conflicts
+(nothing was written); `2` usage or configuration errors.
 
 #### Rust library
 
-The library validates every requested path against the metadata first and returns an error, refusing the whole batch, if any path is not tracked. It also returns an error if it cannot set up the threadpool.
-Otherwise it returns a list of results sorted alphabetically by path, letting users decide what to do with each per-file runtime failure.
+`select_paths_for_get` resolves the request and returns the tracked paths plus the unmatched ones, which become
+`not_tracked` rows rather than an error. `get_files(selection, paths, backend, GetOptions { dry_run, on_conflict,
+source }, on_file_start)` returns a `GetReport` with the outcome, counts, an optional operation-level `problem`,
+and one `GetRow` per file sorted by path. `GetReport::verdict()` decides whether get did as asked (a skip the
+policy asked for counts as done), failed, or was held back by `abort`; the CLI exit code and R's `on_error` both
+read it. `Config::get_on_conflict` applies the precedence and returns a `ConfigError` for a project-sourced
+`overwrite`.
 
 #### R package
 
 ```r
-dvs_get(paths = character(0), glob = NULL, recursive = NULL, dry_run = NULL)
+dvs_get(paths = character(0), glob = NULL, recursive = FALSE, dry_run = FALSE,
+        on_conflict = NULL, on_error = getOption("dvs.on_error", "return"))
 ```
 
-- `paths`: character vector of file paths to retrieve (can be empty if `glob` is provided)
-- `glob`: pattern to match files in the metadata folder (same resolution rules as CLI `--glob`)
-- `recursive`: if `TRUE`, walk explicit directory paths recursively (same as the CLI `-r, --recursive`)
-- `dry_run`: if `TRUE`, returns what would be retrieved without making changes
+- `on_conflict`: `NULL` inherits (env, then dvs.toml, then `"abort"`), or `"abort"`, `"skip"`, `"overwrite"`.
+- `on_error`: when get did not do as asked (the CLI's exit `1` or `3`), `"return"` (default) only returns the
+  result; `"warn"` also warns; `"error"` raises. The condition has class `dvs_get_incomplete` and carries the
+  result as `cnd$result`. No warning by default, so
+  `options(warn = 2)` cannot prevent `res <- dvs_get()` from assigning.
 
-Returns a data frame with one row per file.
-
-It raises an error if no files match, or if any requested path is not tracked (the whole batch is refused and nothing is retrieved). A file that fails after a valid batch starts (for example a post-retrieval hash mismatch) does not raise. That file is one row with its `error` column set and the success columns `NA`, next to the rows that succeeded.
+It returns a tibble of class `dvs_get_result` with the same columns as the JSON rows. `dvs_result_info(res)`
+returns the operation information (outcome, `did_as_asked`, policy and its source, counts, problem), and printing
+shows it as a header. Invalid arguments, not being in a dvs project, and configuration errors (`dvs_config_error`)
+are the only immediate errors.
 
 ### status
 
@@ -430,6 +504,10 @@ Example:
 changed. Both `add` and `get` populate the cache after a successful operation, so a subsequent `status`
 check benefits from cache hits. A cache hit is determined by matching the file's `mtime` and `size`. The cache directory is
 automatically added to `.gitignore` on creation. The cache is optional.
+
+The same database holds the `get` baseline (`baseline(path, blake3, size)`): what dvs last wrote or added at
+each path. Unlike the hash cache, `status` never writes it. Deleting it is safe; changed files then count as
+`unknown` until the next `get` or `add`.
 
 ### Parallelism
 

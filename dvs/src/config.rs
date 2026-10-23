@@ -8,7 +8,7 @@ use crate::backends::server::ServerBackend;
 use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, find_repo_root};
 use crate::progress::ProgressReader;
 use crate::utils::parse_size;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use fs_err as fs;
 use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
@@ -139,6 +139,109 @@ pub struct CliConfig {
     progress_threshold: Option<u64>,
 }
 
+/// What `get` does with a working file that differs from its target and that
+/// dvs cannot show it left there itself (local changes, or no baseline).
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OnConflict {
+    /// Change no files if any requested file has a conflict or another known problem
+    #[default]
+    Abort,
+    /// Leave conflicting files as they are and get the rest
+    Skip,
+    /// Replace conflicting files; their local changes are lost
+    Overwrite,
+}
+
+impl OnConflict {
+    pub const CHOICES: [&'static str; 3] = ["abort", "skip", "overwrite"];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OnConflict::Abort => "abort",
+            OnConflict::Skip => "skip",
+            OnConflict::Overwrite => "overwrite",
+        }
+    }
+}
+
+impl std::fmt::Display for OnConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for OnConflict {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "abort" => Ok(OnConflict::Abort),
+            "skip" => Ok(OnConflict::Skip),
+            "overwrite" => Ok(OnConflict::Overwrite),
+            other => Err(format!(
+                "invalid on_conflict value {other:?}: expected one of abort, skip, overwrite"
+            )),
+        }
+    }
+}
+
+/// Where an effective setting came from, reported with every result.
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SettingSource {
+    Argument,
+    Env,
+    Config,
+    Default,
+}
+
+impl SettingSource {
+    /// The stable name used in JSON and R results.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SettingSource::Argument => "argument",
+            SettingSource::Env => "env",
+            SettingSource::Config => "config",
+            SettingSource::Default => "default",
+        }
+    }
+}
+
+/// For people: names the file rather than "config".
+impl std::fmt::Display for SettingSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SettingSource::Argument => "argument",
+            SettingSource::Env => "env",
+            SettingSource::Config => "dvs.toml",
+            SettingSource::Default => "default",
+        })
+    }
+}
+
+/// A problem with dvs.toml or a DVS_* environment variable. Frontends report it
+/// distinctly (the CLI exits 2) because no operation was attempted.
+#[derive(Debug)]
+pub struct ConfigError(pub String);
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+pub const GET_ON_CONFLICT_ENV: &str = "DVS_GET_ON_CONFLICT";
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct GetConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    on_conflict: Option<OnConflict>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Config {
     /// Compression algorithm to use for files in the storage directory
@@ -151,6 +254,8 @@ pub struct Config {
     pub(crate) backend: Backend,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cli: Option<CliConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    get: Option<GetConfig>,
 }
 
 impl Config {
@@ -161,6 +266,7 @@ impl Config {
             metadata_folder_name: None,
             backend: Backend::Local(backend),
             cli: None,
+            get: None,
         })
     }
 
@@ -171,6 +277,7 @@ impl Config {
             metadata_folder_name: None,
             backend: Backend::Server(backend),
             cli: None,
+            get: None,
         }
     }
 
@@ -191,10 +298,9 @@ impl Config {
                 Ok(c) => c,
                 Err(e) => return Some(Err(e.into())),
             };
-            Some(
-                toml::from_str(&content)
-                    .with_context(|| format!("Failed to parse {}", config_path.display())),
-            )
+            Some(toml::from_str(&content).map_err(|e| {
+                ConfigError(format!("Failed to parse {}: {e}", config_path.display())).into()
+            }))
         } else {
             log::debug!("No config file found at {}", config_path.display());
             None
@@ -230,6 +336,19 @@ impl Config {
             Backend::Local(_) => None,
             Backend::Server(s) => Some(&s.url),
         }
+    }
+
+    /// The `on_conflict` policy for `get`: an explicit argument, else
+    /// `DVS_GET_ON_CONFLICT`, else `[get] on_conflict` in dvs.toml, else abort.
+    pub fn get_on_conflict(
+        &self,
+        explicit: Option<OnConflict>,
+    ) -> std::result::Result<(OnConflict, SettingSource), ConfigError> {
+        resolve_on_conflict(
+            explicit,
+            std::env::var(GET_ON_CONFLICT_ENV).ok().as_deref(),
+            self.get.as_ref().and_then(|g| g.on_conflict),
+        )
     }
 
     pub fn progress_bytes_threshold(&self) -> u64 {
@@ -286,5 +405,92 @@ mod tests {
 
         let loaded = Config::find(&root).unwrap().unwrap();
         assert_eq!(loaded.metadata_folder_name(), ".custom_dvs");
+    }
+}
+
+/// Precedence for `on_conflict`, validating every layer whichever wins, so a
+/// bad setting is reported to everyone, not only to those who don't override it.
+///
+/// dvs.toml is shared by everyone working on the project, so it may not say
+/// `overwrite`: that would discard collaborators' unsaved work without them
+/// asking. It is a configuration error, never silently replaced.
+fn resolve_on_conflict(
+    explicit: Option<OnConflict>,
+    env: Option<&str>,
+    project: Option<OnConflict>,
+) -> std::result::Result<(OnConflict, SettingSource), ConfigError> {
+    let env = env
+        .map(|v| {
+            v.parse::<OnConflict>()
+                .map_err(|e| ConfigError(format!("{GET_ON_CONFLICT_ENV}: {e}")))
+        })
+        .transpose()?;
+    if project == Some(OnConflict::Overwrite) {
+        return Err(ConfigError(format!(
+            "{CONFIG_FILE_NAME}: [get] on_conflict = \"overwrite\" is not allowed in project \
+             configuration, because it would discard collaborators' local changes. Use \
+             \"abort\" or \"skip\" here; pass --force (or on_conflict = \"overwrite\" in R, \
+             or {GET_ON_CONFLICT_ENV}=overwrite) when you mean it."
+        )));
+    }
+    Ok(explicit
+        .map(|p| (p, SettingSource::Argument))
+        .or(env.map(|p| (p, SettingSource::Env)))
+        .or(project.map(|p| (p, SettingSource::Config)))
+        .unwrap_or((OnConflict::default(), SettingSource::Default)))
+}
+
+#[cfg(test)]
+mod get_config_tests {
+    use super::*;
+    use crate::testutil::create_temp_git_repo;
+    use OnConflict::*;
+
+    fn config_with(get_section: &str) -> std::result::Result<Config, String> {
+        let (_tmp, root) = create_temp_git_repo();
+        let storage = root.parent().unwrap().join(".storage");
+        Config::new_local(&storage, None)
+            .unwrap()
+            .save(&root)
+            .unwrap();
+        let path = root.join(CONFIG_FILE_NAME);
+        let mut text = fs::read_to_string(&path).unwrap();
+        text.push_str(get_section);
+        fs::write(&path, text).unwrap();
+        Config::find(&root).unwrap().map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn precedence_is_argument_env_project_default() {
+        use SettingSource as S;
+        let r = resolve_on_conflict;
+        assert_eq!(
+            r(Some(Overwrite), Some("skip"), Some(Skip)).unwrap(),
+            (Overwrite, S::Argument)
+        );
+        assert_eq!(
+            r(None, Some("overwrite"), Some(Skip)).unwrap(),
+            (Overwrite, S::Env)
+        );
+        assert_eq!(r(None, None, Some(Skip)).unwrap(), (Skip, S::Config));
+        assert_eq!(r(None, None, None).unwrap(), (Abort, S::Default));
+    }
+
+    #[test]
+    fn bad_settings_are_errors_even_when_overridden() {
+        let err = resolve_on_conflict(Some(Skip), Some("sometimes"), None).unwrap_err();
+        assert!(err.0.contains(GET_ON_CONFLICT_ENV), "{err}");
+        let err = resolve_on_conflict(Some(Abort), Some("overwrite"), Some(Overwrite)).unwrap_err();
+        assert!(err.0.contains("not allowed"), "{err}");
+    }
+
+    #[test]
+    fn dvs_toml_get_section_is_read_and_checked() {
+        let config = config_with("\n[get]\non_conflict = \"skip\"\n").unwrap();
+        assert_eq!(config.get.unwrap().on_conflict, Some(Skip));
+        let err = config_with("\n[get]\non_conflicts = \"skip\"\n").unwrap_err();
+        assert!(err.contains("unknown field"), "{err}");
+        let err = config_with("\n[get]\non_conflict = \"sometimes\"\n").unwrap_err();
+        assert!(err.contains("sometimes"), "{err}");
     }
 }

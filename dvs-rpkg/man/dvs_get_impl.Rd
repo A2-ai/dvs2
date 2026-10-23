@@ -12,6 +12,7 @@ dvs_get_impl(
   glob = NULL,
   recursive = NULL,
   dry_run = NULL,
+  on_conflict = NULL,
   progress_callback = NULL
 )
 }
@@ -30,9 +31,17 @@ directory. Mutually exclusive with \code{glob}.}
 
 \item{dry_run}{If \code{TRUE}, report what would be retrieved without writing files.}
 
+\item{on_conflict}{\code{NULL} (use \code{DVS_GET_ON_CONFLICT}, then \verb{[get] on_conflict}
+in dvs.toml, then \code{"abort"}), or one of \code{"abort"} (change no files if any
+requested file has local changes or another problem), \code{"skip"} (leave those
+files and get the rest) or \code{"overwrite"} (replace them; local changes are lost).}
+
 \item{progress_callback}{Optional handle to enable progress bar display.}
 }
 \description{
 Fetches the specified files from DVS storage and writes them to their original paths in the working directory. With no \code{paths} or \code{glob}, \code{dvs_get()} scopes to the working directory: it restores the files directly under it, and \code{dvs_get(recursive = TRUE)} restores every tracked file beneath it at any depth.
+}
+\details{
+A working file that differs from the tracked version is replaced without asking only when dvs itself put it there (for example after switching git branches). Otherwise it is a conflict, handled by \code{on_conflict}.
 }
 \keyword{internal}

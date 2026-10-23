@@ -272,6 +272,15 @@ pub fn add_files(
         .filter(|r| matches!(r.detail, AddDetail::Success { .. }))
         .map(|r| r.path.clone())
         .collect();
+    if !dry_run {
+        // Successfully added bytes are what dvs last placed at these paths, so a
+        // later `get` may replace them without asking (see files/get.rs).
+        for r in &results {
+            if let AddDetail::Success { hash, size, .. } = &r.detail {
+                cache::record_baseline(cache.as_ref(), &r.path.to_string_lossy(), hash, *size);
+            }
+        }
+    }
     if !dry_run && !successful_paths.is_empty() {
         if let Err(e) = add_to_gitignore(paths.repo_root(), &successful_paths) {
             log::warn!("Failed to update .gitignore: {e}");
