@@ -34,3 +34,9 @@ The R package scaffolding needs to be updated too. The `minirextendr` R package 
 - Pass CLI flags directly, as in `just dvs main --help`. Do not insert `--` before the flags. just forwards `--` literally to the binary.
 - `just dvs HEAD` builds the committed tree, not your uncommitted changes. Use `just install-cli` for the working tree.
 - `just dvs-clean` removes all cached builds, or `just dvs-clean <ref>` removes just one. A plain `cargo clean` in the main worktree also removes the cache, since it lives under `target/`.
+
+## Shared state
+
+If a change adds a DB migration or changes anything on the shared data filesystem (`/data`
+by default), read [docs/shared-state.md](docs/shared-state.md) before opening the PR. It
+needs the `shared-state` label and a #2-tech-devops post before it deploys anywhere.
