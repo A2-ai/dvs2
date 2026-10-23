@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+### Fixed
+
+- `dvs info` no longer reports the default compression (`zstd`) for a server project. The server sets it, so `info` now says "set by the server", and `--json` reports `compression: null`.
+
 ## 0.5.0
 
 ### Breaking
