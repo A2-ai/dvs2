@@ -24,7 +24,7 @@ use dvs::auth::{
 };
 use dvs::config::{Config, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
-use dvs::init::init;
+use dvs::init::{create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
@@ -557,7 +557,9 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
 
             if let Backend::Server(s) = config.backend() {
                 s.attach()?;
-                config.save(current_dir)?;
+                // Before the config, so a failure leaves nothing that blocks a retry
+                create_metadata_folder(&current_dir, &config)?;
+                config.save(&current_dir)?;
                 if cli.json {
                     output::emit(output::envelope("attach", false));
                 }
