@@ -27,8 +27,8 @@ use dvs::init::{create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddResult, Backend, Compression, Counts, ErrorCode, FileMetadata, FileProgress,
-    FileRow, GetOptions, OperationContext, Outcome, PathFilter, add_files, format_size, get_files,
-    set_num_threads,
+    FileRow, GetOptions, OperationContext, Outcome, PathFilter, Status, add_files, format_size,
+    get_files, set_num_threads,
 };
 
 use crate::observer::CliObserver;
@@ -121,7 +121,13 @@ pub enum Command {
         /// Include the files that are absent
         #[clap(long)]
         absent: bool,
-        /// Include files that differ from recorded metadata
+        /// Include files unchanged since the last successful get, when metadata has advanced
+        #[clap(long)]
+        stale: bool,
+        /// Include files changed since the last successful get
+        #[clap(long)]
+        modified: bool,
+        /// Include differing files whose local baseline is unavailable
         #[clap(long)]
         unsynced: bool,
         /// Show all metadata columns in the table output
@@ -231,15 +237,19 @@ struct StatusSelection {
     show_all: bool,
     current: bool,
     absent: bool,
+    stale: bool,
+    modified: bool,
     unsynced: bool,
 }
 
 fn status_row_selected(row: &dvs::StatusFacts, selection: StatusSelection) -> bool {
     selection.show_all
         || row.error.is_some()
-        || (selection.current && row.status == "current")
-        || (selection.absent && row.status == "absent")
-        || (selection.unsynced && row.status == "unsynced")
+        || (selection.current && row.status == Some(Status::Current))
+        || (selection.absent && row.status == Some(Status::Absent))
+        || (selection.stale && row.status == Some(Status::Stale))
+        || (selection.modified && row.status == Some(Status::Modified))
+        || (selection.unsynced && row.status == Some(Status::Unsynced))
 }
 
 fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
@@ -540,17 +550,21 @@ fn try_main(cli: Cli) -> Result<()> {
             recursive,
             current,
             absent,
+            stale,
+            modified,
             unsynced,
             with_metadata,
             glob,
         } => {
             let config = find_config(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let show_all = !current && !absent && !unsynced;
+            let show_all = !current && !absent && !stale && !modified && !unsynced;
             let selection = StatusSelection {
                 show_all,
                 current,
                 absent,
+                stale,
+                modified,
                 unsynced,
             };
 
@@ -598,7 +612,7 @@ fn try_main(cli: Cli) -> Result<()> {
                             row.metadata.as_ref().map(|metadata| {
                                 let mut formatted = StatusRowFull::from(metadata);
                                 formatted.path = row.path.display().to_string();
-                                formatted.status = row.status.to_string();
+                                formatted.status = row.status_name();
                                 formatted
                             })
                         })
@@ -614,7 +628,7 @@ fn try_main(cli: Cli) -> Result<()> {
                         .filter(|row| row.error.is_none())
                         .map(|row| StatusRow {
                             path: row.path.display().to_string(),
-                            status: row.status.to_string(),
+                            status: row.status_name(),
                             size: row
                                 .metadata
                                 .as_ref()

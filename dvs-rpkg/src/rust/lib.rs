@@ -266,7 +266,11 @@ pub enum StatusChoice {
     Current,
     /// Metadata exists but local file is missing.
     Absent,
-    /// Local file exists but differs from stored version.
+    /// Local file matches the last successful get, while metadata has advanced.
+    Stale,
+    /// Local file differs from metadata and the last successful get.
+    Modified,
+    /// Local file differs from metadata, but no local baseline is available.
     Unsynced,
 }
 
@@ -275,6 +279,8 @@ impl From<StatusChoice> for Status {
         match c {
             StatusChoice::Current => Status::Current,
             StatusChoice::Absent => Status::Absent,
+            StatusChoice::Stale => Status::Stale,
+            StatusChoice::Modified => Status::Modified,
             StatusChoice::Unsynced => Status::Unsynced,
         }
     }
@@ -299,7 +305,7 @@ impl From<StatusChoice> for Status {
 ///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
 ///   match recursively across subdirectories. Mutually exclusive with `recursive`.
 /// @param status Character vector of statuses to include. Valid values are
-///   `"current"`, `"absent"`, and `"unsynced"`. When empty (default), all
+///   `"current"`, `"absent"`, `"stale"`, `"modified"`, and `"unsynced"`. When empty (default), all
 ///   statuses are shown.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_status_impl")]
@@ -337,10 +343,7 @@ pub(crate) fn dvs_status(
     )?;
     if !show_all {
         statuses.retain(|row| {
-            row.error.is_some()
-                || status
-                    .iter()
-                    .any(|c| row.status == Status::from(*c).to_string())
+            row.error.is_some() || status.iter().any(|c| row.status == Some(Status::from(*c)))
         });
     }
 
@@ -408,7 +411,7 @@ pub(crate) fn dvs_audit_log(
 #[derive(Serialize)]
 struct FileStatusView<'a> {
     path: &'a Path,
-    status: &'a str,
+    status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<FileMetadataView<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -431,7 +434,7 @@ impl<'a> From<&'a dvs::StatusFacts> for FileStatusView<'a> {
     fn from(row: &'a dvs::StatusFacts) -> Self {
         FileStatusView {
             path: row.path.as_path(),
-            status: row.status,
+            status: row.status_name(),
             metadata: row.metadata.as_ref().map(FileMetadataView::from),
             error: row.error.as_deref(),
         }

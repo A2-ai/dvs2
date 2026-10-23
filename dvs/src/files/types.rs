@@ -21,7 +21,11 @@ pub enum Status {
     Current,
     /// Metadata exists but local file is missing.
     Absent,
-    /// Local file exists but differs from stored version.
+    /// Local file matches the baseline, while metadata points to another version.
+    Stale,
+    /// Local file differs from current metadata and from the local baseline.
+    Modified,
+    /// Local file differs from metadata, but no baseline exists to explain why.
     Unsynced,
 }
 
@@ -30,6 +34,8 @@ impl fmt::Display for Status {
         match self {
             Status::Current => write!(f, "current"),
             Status::Absent => write!(f, "absent"),
+            Status::Stale => write!(f, "stale"),
+            Status::Modified => write!(f, "modified"),
             Status::Unsynced => write!(f, "unsynced"),
             Status::Untracked => write!(f, "untracked"),
         }
