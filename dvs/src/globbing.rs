@@ -32,7 +32,12 @@ pub fn resolve_paths_for_add(
     let mut out = HashSet::new();
     let glob_matcher = build_glob_matcher(glob_pattern)?;
     let repo_root = dvs_paths.repo_root().canonicalize()?;
-    let metadata_root = dvs_paths.metadata_folder().canonicalize()?;
+    // The metadata folder may not exist yet, eg before the first add in an attached
+    // project: there is nothing in it to skip then
+    let metadata_root = dvs_paths
+        .metadata_folder()
+        .canonicalize()
+        .unwrap_or_else(|_| dvs_paths.metadata_folder());
 
     // If no paths given, default to cwd
     let paths = if paths.is_empty() {
@@ -65,6 +70,11 @@ pub fn resolve_paths_for_add(
                     let entry_path = entry.path().canonicalize()?;
                     // Skip directories and metadata root folder
                     if !entry_path.is_file() || entry_path.starts_with(&metadata_root) {
+                        continue;
+                    }
+                    // dvs writes .gitignore files next to tracked data: only an
+                    // explicit path adds one, never a glob
+                    if entry.file_name() == ".gitignore" {
                         continue;
                     }
 
@@ -193,6 +203,21 @@ mod tests {
     }
 
     #[test]
+    fn add_without_metadata_folder() {
+        // An attached project has no metadata folder until something is added
+        let (_temp, dvs_paths) = setup_test_repo();
+        fs::remove_dir_all(dvs_paths.metadata_folder()).unwrap();
+
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("data/a.csv")], None, &dvs_paths).unwrap();
+        assert_eq!(result, HashSet::from([PathBuf::from("data/a.csv")]));
+
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("data")], Some("*.csv"), &dvs_paths).unwrap();
+        assert_eq!(result, HashSet::from([PathBuf::from("data/a.csv")]));
+    }
+
+    #[test]
     fn add_explicit_file_ignores_glob() {
         let (_temp, dvs_paths) = setup_test_repo();
         let result =
@@ -240,6 +265,26 @@ mod tests {
         // We keep it, it will be rejected later down the line since it's a dir
         assert!(result.contains(&PathBuf::from("data")));
         assert!(result.contains(&PathBuf::from("foo.txt")));
+    }
+
+    #[test]
+    fn add_glob_skips_gitignore_unless_explicit() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        File::create(dvs_paths.repo_root().join("data/.gitignore")).unwrap();
+        File::create(dvs_paths.repo_root().join("data/subdir/.gitignore")).unwrap();
+
+        let walked =
+            resolve_paths_for_add(vec![PathBuf::from("data")], Some("**/*"), &dvs_paths).unwrap();
+        assert!(walked.contains(&PathBuf::from("data/a.csv")));
+        assert!(!walked.iter().any(|p| p.ends_with(".gitignore")));
+
+        let walked = resolve_paths_for_add(vec![], Some("data/*"), &dvs_paths).unwrap();
+        assert!(!walked.iter().any(|p| p.ends_with(".gitignore")));
+
+        let explicit =
+            resolve_paths_for_add(vec![PathBuf::from("data/.gitignore")], None, &dvs_paths)
+                .unwrap();
+        assert!(explicit.contains(&PathBuf::from("data/.gitignore")));
     }
 
     #[test]
