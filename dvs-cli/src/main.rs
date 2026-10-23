@@ -1,3 +1,4 @@
+mod cancel;
 mod events;
 mod get_cmd;
 mod observer;
@@ -26,9 +27,9 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::{create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, AddResult, Backend, Compression, Counts, ErrorCode, FileMetadata, FileProgress,
-    FileRow, GetOptions, OperationContext, Outcome, PathFilter, Status, add_files, format_size,
-    get_files, set_num_threads,
+    AddDetail, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode, FileMetadata,
+    FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow, Outcome,
+    PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files, set_num_threads,
 };
 
 use crate::observer::CliObserver;
@@ -252,7 +253,20 @@ fn status_row_selected(row: &dvs::StatusFacts, selection: StatusSelection) -> bo
         || (selection.unsynced && row.status == Some(Status::Unsynced))
 }
 
+/// An add row and whether it has a code (failed or cancelled).
 fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
+    let not_added = |code: ErrorCode, message: &str| {
+        json!({
+            "path": r.path,
+            "outcome": null,
+            "hash": null,
+            "size": null,
+            "stored_size": null,
+            "code": code,
+            "message": message,
+            "duration_ms": r.duration_ms,
+        })
+    };
     let (value, is_error) = match &r.detail {
         AddDetail::Success {
             outcome,
@@ -270,19 +284,8 @@ fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
             }),
             false,
         ),
-        AddDetail::Error { code, error } => (
-            json!({
-                "path": r.path,
-                "outcome": null,
-                "hash": null,
-                "size": null,
-                "stored_size": null,
-                "code": code,
-                "message": error,
-                "duration_ms": r.duration_ms,
-            }),
-            true,
-        ),
+        AddDetail::Error { code, error } => (not_added(*code, error), true),
+        AddDetail::Cancelled { message } => (not_added(ErrorCode::Cancelled, message), true),
     };
     (value, is_error)
 }
@@ -296,6 +299,14 @@ fn status_row(row: &dvs::StatusFacts) -> (serde_json::Value, bool) {
         object.insert("message".into(), message);
     }
     (value, row.error.is_some())
+}
+
+/// Ends a run that reported rows with the exit status of how it ended.
+fn summary_exit(verdict: impl Into<GetVerdict>) -> Result<()> {
+    match output::run_exit_code(verdict) {
+        output::EXIT_OK => Ok(()),
+        code => Err(Exit(code).into()),
+    }
 }
 
 fn progress_style() -> ProgressStyle {
@@ -368,7 +379,7 @@ fn run_device_login(url: &Url, machine: bool) -> Result<()> {
     Ok(())
 }
 
-fn try_main(cli: Cli) -> Result<()> {
+fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
     if let Some(n) = cli.threads {
         set_num_threads(n);
     }
@@ -483,7 +494,9 @@ fn try_main(cli: Cli) -> Result<()> {
                 observer =
                     observer.with_bars(make_progress_callback(config.progress_bytes_threshold()));
             }
-            let ctx = OperationContext::new().with_observer(Arc::new(observer));
+            let ctx = OperationContext::new()
+                .with_cancel(cancel.clone())
+                .with_observer(Arc::new(observer));
             let report = add_files(
                 all_paths,
                 &dvs_paths,
@@ -494,9 +507,6 @@ fn try_main(cli: Cli) -> Result<()> {
                 &ctx,
             )?;
             let results = &report.files;
-            let has_errors = results
-                .iter()
-                .any(|r| matches!(r.detail, AddDetail::Error { .. }));
             if cli.json {
                 let files = results
                     .iter()
@@ -505,12 +515,14 @@ fn try_main(cli: Cli) -> Result<()> {
                         output::file_result(value, is_error)
                     })
                     .collect();
-                let mut result = output::rows_envelope("add", dry_run, files, report.counts);
+                let mut result =
+                    output::rows_envelope("add", dry_run, files, report.counts, report.outcome);
                 result["bytes"] = json!(report.bytes);
                 output::emit_streamed(result);
             } else {
                 for result in results {
                     match &result.detail {
+                        AddDetail::Cancelled { .. } => {}
                         AddDetail::Error { error: err, .. } => {
                             eprintln!("Error adding {}: {err}", result.path.display());
                         }
@@ -537,13 +549,11 @@ fn try_main(cli: Cli) -> Result<()> {
                         },
                     }
                 }
-            }
-            if has_errors {
-                if !cli.json {
+                if report.counts.failed > 0 {
                     eprintln!("Error: Some files failed to add");
                 }
-                return Err(Exit(1).into());
             }
+            summary_exit(report.outcome)?;
         }
         Command::Status {
             paths: user_paths,
@@ -571,7 +581,7 @@ fn try_main(cli: Cli) -> Result<()> {
             let filter = (!user_paths.is_empty())
                 .then(|| PathFilter::from_user_paths(user_paths, recursive, &dvs_paths));
             // Rows stream as soon as their local check completes
-            let mut ctx = OperationContext::new();
+            let mut ctx = OperationContext::new().with_cancel(cancel.clone());
             if events::active().is_some() {
                 let observer = CliObserver::new(false).with_rows(move |row| match row {
                     FileRow::Status(row) if status_row_selected(row, selection) => {
@@ -582,16 +592,25 @@ fn try_main(cli: Cli) -> Result<()> {
                 });
                 ctx = ctx.with_observer(Arc::new(observer));
             }
-            let mut statuses =
-                dvs::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
+            let report = dvs::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
+            let mut statuses = report.files;
             if !show_all {
                 statuses.retain(|row| status_row_selected(row, selection));
             }
-            let failed = statuses.iter().filter(|row| row.error.is_some()).count();
+            // Over the rows shown
+            let counts = Counts::of(&statuses);
+            let outcome = RunOutcome::of(&counts, report.cancelled);
             if cli.json {
-                let (files, failed) = output::file_results(statuses.iter().map(status_row));
-                let counts = Counts::new(statuses.len(), failed);
-                output::emit_streamed(output::rows_envelope("status", false, files, counts));
+                let files = statuses
+                    .iter()
+                    .map(|row| {
+                        let (value, has_code) = status_row(row);
+                        output::file_result(value, has_code)
+                    })
+                    .collect();
+                output::emit_streamed(output::rows_envelope(
+                    "status", false, files, counts, outcome,
+                ));
             } else if statuses.is_empty() {
                 if show_all {
                     println!("No tracked files");
@@ -599,7 +618,7 @@ fn try_main(cli: Cli) -> Result<()> {
                     println!("No tracked files matching the filter")
                 }
             } else {
-                for row in &statuses {
+                for row in statuses.iter().filter(|r| r.state() == RowState::Failed) {
                     if let Some(error) = &row.error {
                         eprintln!("Error getting status for {}: {error}", row.path.display());
                     }
@@ -643,12 +662,10 @@ fn try_main(cli: Cli) -> Result<()> {
                     println!("{table}");
                 }
             }
-            if failed > 0 {
-                if !cli.json {
-                    eprintln!("Error: Some files failed to get status");
-                }
-                return Err(Exit(1).into());
+            if !cli.json && counts.failed > 0 {
+                eprintln!("Error: Some files failed to get status");
             }
+            summary_exit(outcome)?;
         }
         Command::Get {
             paths,
@@ -679,7 +696,9 @@ fn try_main(cli: Cli) -> Result<()> {
                 observer =
                     observer.with_bars(make_progress_callback(config.progress_bytes_threshold()));
             }
-            let ctx = OperationContext::new().with_observer(Arc::new(observer));
+            let ctx = OperationContext::new()
+                .with_cancel(cancel.clone())
+                .with_observer(Arc::new(observer));
             let report = get_files(
                 selection,
                 &dvs_paths,
@@ -696,10 +715,7 @@ fn try_main(cli: Cli) -> Result<()> {
             } else {
                 get_cmd::print_human(&report);
             }
-            let code = get_cmd::exit_code(&report);
-            if code != output::EXIT_OK {
-                return Err(Exit(code).into());
-            }
+            summary_exit(report.verdict())?;
         }
         Command::Info => {
             let config = find_config(&current_dir)?;
@@ -837,7 +853,14 @@ fn try_main(cli: Cli) -> Result<()> {
             let (files, failed) = read_cmd::availability(config.backend(), &hashes)?;
             if cli.json {
                 let counts = Counts::new(files.len(), failed);
-                output::emit(output::rows_envelope("availability", false, files, counts));
+                let outcome = RunOutcome::of(&counts, false);
+                output::emit(output::rows_envelope(
+                    "availability",
+                    false,
+                    files,
+                    counts,
+                    outcome,
+                ));
             } else {
                 for row in files {
                     println!(
@@ -873,7 +896,10 @@ fn try_main(cli: Cli) -> Result<()> {
             if cli.json {
                 let rows: Vec<_> = entries.into_iter().map(output::row_error_fields).collect();
                 let counts = Counts::new(rows.len(), 0);
-                output::emit(output::rows_envelope("history", false, rows, counts));
+                let outcome = RunOutcome::of(&counts, false);
+                output::emit(output::rows_envelope(
+                    "history", false, rows, counts, outcome,
+                ));
             } else {
                 for entry in entries {
                     let action = &entry["action"]["add"];
@@ -1005,6 +1031,14 @@ impl Command {
         }
     }
 
+    /// Commands that stop starting files on a cancel request.
+    fn cancellable(&self) -> bool {
+        matches!(
+            self,
+            Self::Add { .. } | Self::Get { .. } | Self::Status { .. }
+        )
+    }
+
     fn dry_run(&self) -> bool {
         matches!(
             self,
@@ -1035,13 +1069,18 @@ fn main() {
     output::start_clock(Instant::now(), SystemTime::now());
     let command = cli.command.name();
     let dry_run = cli.command.dry_run();
+    // One cancel flag per run, shared by every library call the command makes
+    let cancel = CancelToken::new();
+    if cli.command.cancellable() {
+        cancel::install(&cancel, cli.emit_events);
+    }
     if cli.emit_events {
         events::activate(command);
         // Reuse exactly the JSON command results without rendering human output.
         cli.json = true;
     }
     let json = cli.json;
-    let code = match try_main(cli) {
+    let code = match try_main(cli, &cancel) {
         Ok(()) => 0,
         Err(error) => {
             if let Some(Exit(code)) = error.downcast_ref::<Exit>() {

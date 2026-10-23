@@ -1,10 +1,11 @@
 //! Local facts for machine-readable status, using cached hashes when available.
 use crate::cache::{self, FileStat};
-use crate::operation::{FileRow, Hashing, OperationContext, OperationPlan};
+use crate::operation::{FileRow, Hashing, OperationContext, OperationPlan, OperationRow, RowState};
 use crate::{DvsPaths, ErrorCode, FileMetadata, Hashes, PathFilter, Status};
 use anyhow::Result;
 use fs_err as fs;
 use rayon::prelude::*;
+use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -22,11 +23,10 @@ pub struct WorkingCopy {
     pub size: Option<u64>,
     pub hash_source: Option<&'static str>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct StatusFacts {
     pub path: PathBuf,
-    /// `None` on an error row, which `code` and `error` describe.
-    #[serde(serialize_with = "serialize_status")]
+    /// `None` on an error or cancelled row, which `code` and `error` describe.
     pub status: Option<Status>,
     pub metadata: Option<FileMetadata>,
     pub working: WorkingCopy,
@@ -36,18 +36,47 @@ pub struct StatusFacts {
 }
 
 impl StatusFacts {
-    /// The row's status as shown to people and in results: `error` on an error row.
+    /// The row's status as shown to people and in results: `error` on an
+    /// error row, `cancelled` on a row a cancel stopped.
     pub fn status_name(&self) -> String {
-        status_name(self.status)
+        match (self.status, self.code) {
+            (Some(status), _) => status.to_string(),
+            (None, Some(ErrorCode::Cancelled)) => "cancelled".to_string(),
+            (None, _) => "error".to_string(),
+        }
     }
 }
 
-fn status_name(status: Option<Status>) -> String {
-    status.map_or_else(|| "error".to_string(), |s| s.to_string())
+impl Serialize for StatusFacts {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut row = s.serialize_struct("StatusFacts", 7)?;
+        row.serialize_field("path", &self.path)?;
+        row.serialize_field("status", &self.status_name())?;
+        row.serialize_field("metadata", &self.metadata)?;
+        row.serialize_field("working", &self.working)?;
+        row.serialize_field("baseline", &self.baseline)?;
+        row.serialize_field("code", &self.code)?;
+        row.serialize_field("error", &self.error)?;
+        row.end()
+    }
 }
 
-fn serialize_status<S: Serializer>(status: &Option<Status>, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(&status_name(*status))
+impl OperationRow for StatusFacts {
+    fn state(&self) -> RowState {
+        match (self.status, self.code) {
+            (Some(_), _) => RowState::Succeeded,
+            (None, Some(ErrorCode::Cancelled)) => RowState::Cancelled,
+            (None, _) => RowState::Failed,
+        }
+    }
+}
+
+/// The rows of a status run, sorted by path.
+#[derive(Clone, Debug, Default)]
+pub struct StatusReport {
+    pub files: Vec<StatusFacts>,
+    /// The cancel flag was set when the run finished
+    pub cancelled: bool,
 }
 
 /// How a present working file relates to its record and to the local baseline.
@@ -71,9 +100,30 @@ fn classify(
 /// Inspect tracked files in parallel. Each row goes to `ctx`'s observer as
 /// soon as it completes, so callers can stream rows; the returned rows are
 /// sorted by path. Hashing is reported only once a file is actually hashed.
+/// Once `ctx` is cancelled, files not yet started get a `cancelled` row, and a
+/// run that fails after a cancel still returns its (empty) cancelled report.
 ///
 /// Paths in the result are relative to `paths.repo_root()`, independent of cwd.
 pub fn inspect_status(
+    paths: &DvsPaths,
+    filter: Option<&PathFilter>,
+    glob_pattern: Option<&str>,
+    ctx: &OperationContext,
+) -> Result<StatusReport> {
+    match inspect_all(paths, filter, glob_pattern, ctx) {
+        Ok(files) => Ok(StatusReport {
+            files,
+            cancelled: ctx.is_cancelled(),
+        }),
+        Err(_) if ctx.is_cancelled() => Ok(StatusReport {
+            files: Vec::new(),
+            cancelled: true,
+        }),
+        Err(e) => Err(e),
+    }
+}
+
+fn inspect_all(
     paths: &DvsPaths,
     filter: Option<&PathFilter>,
     glob_pattern: Option<&str>,
@@ -106,7 +156,11 @@ pub fn inspect_status(
         entries
             .into_par_iter()
             .map(|path| {
-                let row = inspect_path(path, paths, &cache, &hashing);
+                let row = if ctx.is_cancelled() {
+                    cancelled_row(path)
+                } else {
+                    inspect_path(path, paths, &cache, &hashing)
+                };
                 observer.file_finished(FileRow::Status(&row));
                 row
             })
@@ -115,6 +169,24 @@ pub fn inspect_status(
     hashing.finish();
     results.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(results)
+}
+
+/// A file the cancelled operation never looked at.
+fn cancelled_row(path: PathBuf) -> StatusFacts {
+    StatusFacts {
+        path,
+        status: None,
+        metadata: None,
+        working: WorkingCopy {
+            state: "unknown",
+            hashes: None,
+            size: None,
+            hash_source: None,
+        },
+        baseline: None,
+        code: Some(ErrorCode::Cancelled),
+        error: Some("cancelled before this file was checked".to_string()),
+    }
 }
 
 fn status_scan_inputs(
@@ -266,20 +338,44 @@ mod tests {
         (temp, paths)
     }
     #[test]
+    fn a_cancel_before_the_run_leaves_every_file_unchecked() {
+        let (_temp, paths) = fixture();
+        let token = crate::CancelToken::new();
+        token.cancel();
+        let ctx = OperationContext::new().with_cancel(token);
+        let report = inspect_status(&paths, None, None, &ctx).unwrap();
+        assert!(report.cancelled);
+        let row = &report.files[0];
+        assert_eq!((row.status, row.code), (None, Some(ErrorCode::Cancelled)));
+        assert_eq!(row.state(), RowState::Cancelled);
+        assert_eq!(serde_json::to_value(row).unwrap()["status"], "cancelled");
+        // A run that fails after a cancel (here an invalid glob) is still cancelled
+        let report = inspect_status(&paths, None, Some("["), &ctx).unwrap();
+        assert!(report.cancelled && report.files.is_empty());
+    }
+
+    #[test]
     fn cache_miss_computes_status_facts() {
         let (_temp, paths) = fixture();
-        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(rows[0].status, Some(Status::Current));
         assert_eq!(rows[0].working.hash_source, Some("computed"));
         #[cfg(feature = "cache")]
         {
-            let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+            let rows = inspect_status(&paths, None, None, &OperationContext::new())
+                .unwrap()
+                .files;
             assert_eq!(rows[0].status, Some(Status::Current));
             assert_eq!(rows[0].working.hash_source, Some("cache"));
             // A changed stat invalidates the cache without reading new file content.
             fs::write(paths.repo_root().join("data.txt"), b"changed content").unwrap();
             assert_eq!(
-                inspect_status(&paths, None, None, &OperationContext::new()).unwrap()[0].status,
+                inspect_status(&paths, None, None, &OperationContext::new())
+                    .unwrap()
+                    .files[0]
+                    .status,
                 Some(Status::Unsynced)
             );
         }
@@ -288,7 +384,9 @@ mod tests {
     fn missing_and_bad_metadata_are_distinct() {
         let (_temp, paths) = fixture();
         fs::remove_file(paths.repo_root().join("data.txt")).unwrap();
-        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(rows[0].status, Some(Status::Absent));
         assert!(rows[0].error.is_none());
         fs::write(
@@ -296,7 +394,9 @@ mod tests {
             b"broken",
         )
         .unwrap();
-        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(rows[0].status, None);
         assert_eq!(serde_json::to_value(&rows[0]).unwrap()["status"], "error");
         assert_eq!(rows[0].code, Some(ErrorCode::BadMetadata));
@@ -342,7 +442,9 @@ mod tests {
     fn baseline_distinguishes_stale_from_modified() {
         let (_temp, paths) = fixture();
         let cache = cache::open_cache(&paths).unwrap();
-        let rows = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         let original = rows[0].working.hashes.as_ref().unwrap();
         cache
             .set_baseline(
@@ -358,10 +460,14 @@ mod tests {
             serde_json::to_vec(&target).unwrap(),
         )
         .unwrap();
-        let stale = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let stale = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(stale[0].status, Some(Status::Stale));
         fs::write(paths.repo_root().join("data.txt"), b"user edits").unwrap();
-        let modified = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let modified = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(modified[0].status, Some(Status::Modified));
     }
 
@@ -372,7 +478,9 @@ mod tests {
         let paths =
             DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name()).unwrap();
 
-        let statuses = inspect_status(&paths, None, None, &OperationContext::new()).unwrap();
+        let statuses = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert!(statuses.is_empty());
     }
 
@@ -406,16 +514,18 @@ mod tests {
             paths: vec![PathBuf::from("dir1")],
             recursive: false,
         };
-        let statuses =
-            inspect_status(&paths, Some(&filter), None, &OperationContext::new()).unwrap();
+        let statuses = inspect_status(&paths, Some(&filter), None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
 
         // Absolute path filter via from_user_paths
         let abs_path = paths.repo_root().join("dir1/b.txt");
         let filter = PathFilter::from_user_paths(vec![abs_path], false, &paths);
-        let statuses =
-            inspect_status(&paths, Some(&filter), None, &OperationContext::new()).unwrap();
+        let statuses = inspect_status(&paths, Some(&filter), None, &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
     }
@@ -427,14 +537,16 @@ mod tests {
         // No filter (whole repo) + glob: the glob still applies, matched against
         // the full repo-relative path. `*.txt` (literal separator) hits only
         // root-level files.
-        let statuses =
-            inspect_status(&paths, None, Some("*.txt"), &OperationContext::new()).unwrap();
+        let statuses = inspect_status(&paths, None, Some("*.txt"), &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("a.txt"));
 
         // `**/*.txt` reaches every tracked file.
-        let statuses =
-            inspect_status(&paths, None, Some("**/*.txt"), &OperationContext::new()).unwrap();
+        let statuses = inspect_status(&paths, None, Some("**/*.txt"), &OperationContext::new())
+            .unwrap()
+            .files;
         assert_eq!(statuses.len(), 4);
     }
 
@@ -450,6 +562,7 @@ mod tests {
         // Literal separator: only the direct child dir1/b.txt, not a.txt/dir2.
         let got: Vec<_> = inspect_status(&sub, None, Some("*.txt"), &OperationContext::new())
             .unwrap()
+            .files
             .into_iter()
             .map(|f| f.path)
             .collect();
@@ -458,6 +571,7 @@ mod tests {
         // Recursive glob reaches dir1/sub/c.txt, still scoped under dir1.
         let got: Vec<_> = inspect_status(&sub, None, Some("**/*.txt"), &OperationContext::new())
             .unwrap()
+            .files
             .into_iter()
             .map(|f| f.path)
             .collect();

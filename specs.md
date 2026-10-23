@@ -87,7 +87,7 @@ check both the result and the exit status, and tolerate additional fields and un
 them as success. Incompatible semantics need a new protocol version.
 
 Every `--json` result is one envelope, error envelopes included: `v` (`1`), `command` (`cli` for argument
-parsing errors), `outcome` (`complete`, `partial` or `failed`; `get` also `aborted`), `dry_run` (a requested
+parsing errors), `outcome` (`complete`, `partial`, `failed` or `cancelled`; `get` also `aborted`), `dry_run` (a requested
 mutation preview), `error`, and for commands with rows (`add`, `get`, `status`, `availability`, `history`)
 `counts` and `files` (the per-file, per-hash or per-entry rows; empty in an error envelope), plus the command's
 own fields (`add`/`get` `bytes`, `get` `on_conflict`/`source`, `init` `project_root`, `logout`
@@ -100,7 +100,7 @@ as the record stores it. The only exception is event `ts` (unix milliseconds).
 
 ```json
 {"v":1,"command":"add","outcome":"failed","dry_run":false,
- "counts":{"total":0,"succeeded":0,"failed":0},
+ "counts":{"total":0,"succeeded":0,"failed":0,"cancelled":0},
  "bytes":{"total":0,"to_transfer":0,"already_stored":0,"transferred":0},
  "error":{"code":"no_files_selected","message":"Path not found: missing.txt","hint":null},
  "files":[],"started_at":"2026-10-21T14:30:00.120Z","finished_at":"2026-10-21T14:30:00.123Z","duration_ms":3}
@@ -114,13 +114,14 @@ as the record stores it. The only exception is event `ts` (unix milliseconds).
 Errors have one shape. The envelope's `error` is `null` or `{code, message, hint}`; every row of every command
 has `code`, `message` and `hint` (all `null` on success; `hint` is `null` where there is none). Rows have fixed
 keys: a field that does not apply is `null`, never missing (an `add` error row has `outcome`, `hash`, `size`,
-`stored_size` as `null`). `counts` has `total` (the rows), `failed` (rows that failed) and `succeeded` (the
-rest; get adds its detailed counts and defines `succeeded` itself), all computed by the library. `error` is a
+`stored_size` as `null`). `counts` has `total` (the rows), `failed` (rows that failed), `cancelled` (rows a
+cancel stopped, see Cancellation) and `succeeded` (the rest), so `total = succeeded + failed + cancelled`; get
+adds its detailed counts and defines `succeeded` itself. All are computed by the library. `error` is a
 failure of the whole command; per-file failures stay in the rows, so a `partial` result normally has
 `error: null`. A `hint` is the next thing to try, for people (only `get` fills row hints today).
 
 Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; `get` see get;
-`status` `path`, `status` (`error` on an error row), `metadata`, `working` (`state` `present`, `absent` or
+`status` `path`, `status` (`error` on an error row, `cancelled` on a cancelled one), `metadata`, `working` (`state` `present`, `absent` or
 `unknown`, `hashes`, `size`, `hash_source` `cache` or `computed`), `baseline` (`blake3`, `size` of what dvs
 last wrote or added at the path; `null` without one); `availability` `hash`, `state` (`present`,
 `absent`, `unknown`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action` (history never
@@ -137,7 +138,8 @@ Backend and credentials failures share one set of codes, at the top level (`erro
 `auth_required` (no token, not logged in), `auth_expired` (the server said 401), `access_denied` (403),
 `server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint that should exist answered
 404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs` record, e.g. git conflict
-markers) and `credentials_unreadable` (the store exists but cannot be read). Command-level codes:
+markers) and `credentials_unreadable` (the store exists but cannot be read). A row can also have
+`code: "cancelled"` (the file never started, see Cancellation), which is not a failure. Command-level codes:
 `not_in_project`, `invalid_configuration`, `invalid_arguments`, `no_files_selected` (also `get` when no tracked
 file matched), `io_error`, and `operation_failed`, the honest fallback when nothing more specific is known.
 `auth_required` is also what `login`, `init` and `attach` report in machine mode when device login would be
@@ -156,8 +158,8 @@ a rejected login (401, `auth_expired`) is an error envelope.
 
 Exit codes, for every command: `0` complete; `1` failure, or some rows failed; `2` usage or configuration
 (`invalid_arguments`, `invalid_configuration`); `3` `get` only, local conflicts held files back and nothing
-else failed. A result written before a nonzero exit is authoritative. No result after the process was killed
-means the operation was interrupted: rescan before retrying.
+else failed; `130` cancelled, over every other code. A result written before a nonzero exit is authoritative.
+No result after the process was killed means the operation was interrupted: rescan before retrying.
 
 dvs never deletes or changes stored credentials on its own, in any mode: a 401 is `auth_expired` and the token
 stays (run `dvs login`); an unreadable credentials store is `credentials_unreadable` and stays. Only `dvs login`
@@ -188,6 +190,19 @@ finished or 1% of the bytes moved since the last one; the final count is always 
 (`"<pid>-<nanos>"`), `seq` (0, 1, 2, ...), `type`, `ts` (unix milliseconds) and `elapsed_ms` (since the
 operation started). Transfer events describe transfer work only: the result is authoritative (a transfer can
 succeed and the install still fail).
+
+##### Cancellation
+
+`add`, `get` and `status` stop on SIGINT (Ctrl-C), SIGTERM or SIGHUP, and with `--emit-events` also
+when stdin, if it is a pipe or socket, reaches end of file (the client went away; Unix only, on Windows use
+Ctrl-C/Ctrl-Break). A signal that was already
+ignored when `dvs` started (for example SIGHUP under `nohup`) stays ignored. They stop *starting* files: a
+file in flight finishes atomically (a verified temp file and rename for `get`, the complete upload and record
+for `add`). Files that never started get `code: "cancelled"` (also `action: "cancelled"` in `get` and
+`status: "cancelled"` in `status`); they count in
+`counts.total` and `counts.cancelled`, in neither `succeeded` nor `failed`. The outcome is `cancelled` whenever the request came
+before the operation finished, the full result is still written, and the exit code is `130`, over every
+other exit code. A second signal exits `130` at once, without a result.
 
 #### R package
 
@@ -304,7 +319,7 @@ Options:
 You can run `dvs add *.csv` and it will be expanded by your shell before calling `dvs`.
 To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library. The glob string must be quoted (for example `--glob '*.csv'`) so the shell does not expand it before `dvs` sees it.
 
-A batch refused for an invalid input path exits with `1` and adds nothing. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`.
+A batch refused for an invalid input path exits with `1` and adds nothing. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`. A cancelled batch exits with `130` (see Cancellation).
 
 #### Rust library
 
@@ -412,7 +427,7 @@ invalid configuration) it is the shared error envelope, without `on_conflict`/`s
 ```json
 {"v": 1, "command": "get", "outcome": "aborted", "dry_run": false,
  "on_conflict": "abort", "source": "default",
- "counts": {"total": 3, "succeeded": 1, "restored": 0, "replaced": 0, "unchanged": 1, "skipped": 0, "not_run": 2, "failed": 0, "would_restore": 0, "would_replace": 0},
+ "counts": {"total": 3, "succeeded": 1, "restored": 0, "replaced": 0, "unchanged": 1, "skipped": 0, "not_run": 2, "cancelled": 0, "failed": 0, "would_restore": 0, "would_replace": 0},
  "error": null,
  "files": [{"path": "data/b.csv", "local_path": "data/b.csv", "before": "modified", "action": "not_run",
             "satisfied": false, "size": 7, "target_hash": "…", "local_hash": "…", "stored_copy": "absent",
@@ -420,24 +435,25 @@ invalid configuration) it is the shared error envelope, without `on_conflict`/`s
 ```
 
 - `outcome`: `complete`, `aborted` (nothing written), `partial` (also when every file was skipped as
-  `on_conflict = skip` asked) or `failed`.
+  `on_conflict = skip` asked), `failed` or `cancelled`.
 - `hint`: the next step, in CLI syntax, filled in by the library.
 - `satisfied`: the file is at its tracked version afterwards; in a dry run, that it would be.
 - A shared cause (`access_denied`, `server_unavailable`) is printed once in human output, not per file.
-- `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run`, `failed`, `would_restore`, `would_replace`.
+- `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run` (held back), `cancelled`, `failed`, `would_restore`,
+  `would_replace`.
 - `code`: `local_changes`, `unknown_local`, `batch_aborted`, `not_tracked`, `not_a_file`, `unsafe_path`,
   `source_missing`, `hash_mismatch`, `access_denied`, `server_unavailable`, `destination_changed`, `permission_denied`, `file_in_use`,
-  `io_error`, `bad_metadata`, and the other shared codes (`auth_required`, `auth_expired`, `server_too_old`,
-  `project_not_found`, `credentials_unreadable`).
+  `io_error`, `bad_metadata`, the shared codes (`auth_required`, `auth_expired`, `server_too_old`,
+  `project_not_found`, `credentials_unreadable`, ...) and `cancelled`.
 - `counts`: `total` (every row) and `succeeded` (rows at their target: restored, replaced, unchanged, and
   would_restore/would_replace in a dry run) next to the per-action counts; `failed` is the `failed` action.
-  Skipped and `not_run` rows (held back) are in neither `succeeded` nor `failed`.
+  Skipped, `not_run` (held back) and `cancelled` rows are in neither `succeeded` nor `failed`.
 - `bytes`: `to_transfer` is the size of every row whose local copy does not match its target (held back,
   skipped and failed rows included), `already_stored` of the rows that match.
 
 Exit codes: `0` did as asked, including files left as they are because `on_conflict = skip` asked for it; `1` any
 failure or operation problem (takes priority); `3` `on_conflict = abort` held files back because of conflicts
-(nothing was written); `2` usage or configuration errors.
+(nothing was written); `2` usage or configuration errors; `130` cancelled (over all of these).
 
 #### Rust library
 

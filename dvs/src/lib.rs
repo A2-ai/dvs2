@@ -24,12 +24,12 @@ pub use files::get::{
     StoredCopy, get_files, shell_path,
 };
 pub use files::metadata::FileMetadata;
-pub use files::status::{Baseline, StatusFacts, WorkingCopy, inspect_status};
+pub use files::status::{Baseline, StatusFacts, StatusReport, WorkingCopy, inspect_status};
 pub use files::types::{Outcome, Status};
 pub use hashes::{HashAlg, Hashes};
 pub use operation::{
-    ByteTotals, Counts, FileRow, OperationContext, OperationObserver, OperationPlan,
-    TransferObserver,
+    ByteTotals, CancelToken, Counts, FileRow, OperationContext, OperationObserver, OperationPlan,
+    OperationRow, RowState, RunOutcome, TransferObserver,
 };
 pub use paths::{AddPathStatus, DvsPaths, PathFilter, ProjectPath, find_repo_root};
 pub use progress::FileProgress;
@@ -87,20 +87,39 @@ pub mod testutil {
     }
 
     /// An observer that records each call as a short line, in order, plus
-    /// every finished row as JSON.
+    /// every finished row as JSON, and can cancel the operation once a given
+    /// number of transfers have started.
     #[derive(Default)]
     pub struct Recorder {
         pub seen: std::sync::Mutex<Vec<String>>,
         pub rows: std::sync::Mutex<Vec<serde_json::Value>>,
+        cancel: Option<(crate::CancelToken, usize)>,
+        count: std::sync::atomic::AtomicUsize,
     }
 
     impl Recorder {
+        /// Cancels `token` when the `n`th transfer starts.
+        pub fn cancelling_on_transfer(token: crate::CancelToken, n: usize) -> Self {
+            Self {
+                cancel: Some((token, n)),
+                ..Self::default()
+            }
+        }
+
         pub fn seen(&self) -> Vec<String> {
             self.seen.lock().unwrap().clone()
         }
 
         fn push(&self, line: String) {
             self.seen.lock().unwrap().push(line);
+        }
+
+        fn tick(&self) {
+            if let Some((token, n)) = &self.cancel {
+                if self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1 == *n {
+                    token.cancel();
+                }
+            }
         }
     }
 
@@ -121,6 +140,7 @@ pub mod testutil {
 
         fn transfer_started(&self, path: &Path, _total_bytes: u64) -> Option<crate::FileProgress> {
             self.push(format!("transfer {}", path.display()));
+            self.tick();
             None
         }
 

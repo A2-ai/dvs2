@@ -4,7 +4,7 @@ use std::time::{Instant, SystemTime};
 
 use anyhow::Error;
 use dvs::operation::{duration_ms, rfc3339_ms};
-use dvs::{ByteTotals, Counts, ErrorCode};
+use dvs::{ByteTotals, Counts, ErrorCode, GetVerdict, RunOutcome};
 use serde_json::{Value, json};
 
 /// Exit codes, shared by every command; only `get` uses 3.
@@ -12,6 +12,8 @@ pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAILED: i32 = 1;
 pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_CONFLICTS: i32 = 3;
+/// A cancelled run, conventional for SIGINT (128 + 2).
+pub const EXIT_CANCELLED: i32 = 130;
 
 /// When this run started, for the timing every result carries.
 #[derive(Clone, Copy)]
@@ -85,6 +87,17 @@ pub fn error_code(error: &Error) -> ErrorCode {
     }
 }
 
+/// The exit status of a run that reported rows: get passes its verdict, add
+/// and status their outcome.
+pub fn run_exit_code(verdict: impl Into<GetVerdict>) -> i32 {
+    match verdict.into() {
+        GetVerdict::Done => EXIT_OK,
+        GetVerdict::Failed => EXIT_FAILED,
+        GetVerdict::HeldBack => EXIT_CONFLICTS,
+        GetVerdict::Cancelled => EXIT_CANCELLED,
+    }
+}
+
 /// The exit status of a run that failed before it could report rows.
 pub fn exit_code(error: &Error) -> i32 {
     match error_code(error) {
@@ -108,15 +121,15 @@ pub fn envelope(command: &str, dry_run: bool) -> Value {
     })
 }
 
-pub fn rows_envelope(command: &str, dry_run: bool, files: Vec<Value>, counts: Counts) -> Value {
+pub fn rows_envelope(
+    command: &str,
+    dry_run: bool,
+    files: Vec<Value>,
+    counts: Counts,
+    outcome: RunOutcome,
+) -> Value {
     let mut value = envelope(command, dry_run);
-    value["outcome"] = json!(if counts.failed == 0 {
-        "complete"
-    } else if counts.failed == counts.total {
-        "failed"
-    } else {
-        "partial"
-    });
+    value["outcome"] = json!(outcome);
     value["counts"] = json!(counts);
     value["files"] = json!(files);
     value
@@ -124,9 +137,13 @@ pub fn rows_envelope(command: &str, dry_run: bool, files: Vec<Value>, counts: Co
 
 pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
     let mut value = match command {
-        "add" | "get" | "status" | "availability" | "history" => {
-            rows_envelope(command, dry_run, vec![], Counts::default())
-        }
+        "add" | "get" | "status" | "availability" | "history" => rows_envelope(
+            command,
+            dry_run,
+            vec![],
+            Counts::default(),
+            RunOutcome::Failed,
+        ),
         _ => envelope(command, dry_run),
     };
     if matches!(command, "add" | "get") {
@@ -160,21 +177,10 @@ pub fn emit_streamed(mut value: Value) {
     }
 }
 
-pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value>, usize) {
-    let mut failed = 0;
-    let files = rows
-        .into_iter()
-        .map(|(value, is_error)| {
-            failed += usize::from(is_error);
-            file_result(value, is_error)
-        })
-        .collect();
-    (files, failed)
-}
-
 /// Streamed rows go through here too, so they match the result's rows.
-pub fn file_result(mut value: Value, is_error: bool) -> Value {
-    if !is_error {
+/// `has_code`: the row failed or was cancelled.
+pub fn file_result(mut value: Value, has_code: bool) -> Value {
+    if !has_code {
         value["code"] = Value::Null;
     } else if value.get("code").is_none_or(Value::is_null) {
         value["code"] = json!(ErrorCode::FileFailed);
@@ -190,4 +196,18 @@ pub fn row_error_fields(mut value: Value) -> Value {
         }
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cancel_exits_130_whatever_the_command() {
+        assert_eq!(run_exit_code(RunOutcome::Cancelled), EXIT_CANCELLED);
+        assert_eq!(run_exit_code(GetVerdict::Cancelled), EXIT_CANCELLED);
+        assert_eq!(run_exit_code(RunOutcome::Partial), EXIT_FAILED);
+        assert_eq!(run_exit_code(RunOutcome::Complete), EXIT_OK);
+        assert_eq!(run_exit_code(GetVerdict::HeldBack), EXIT_CONFLICTS);
+    }
 }

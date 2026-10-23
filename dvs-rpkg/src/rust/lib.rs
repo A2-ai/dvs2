@@ -340,7 +340,8 @@ pub(crate) fn dvs_status(
         filter.as_ref(),
         glob.as_deref(),
         &OperationContext::new(),
-    )?;
+    )?
+    .files;
     if !show_all {
         statuses.retain(|row| {
             row.error.is_some() || status.iter().any(|c| row.status == Some(Status::from(*c)))

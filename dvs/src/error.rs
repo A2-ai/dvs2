@@ -24,6 +24,8 @@ pub enum ErrorCode {
     /// A row that failed without a more specific code
     FileFailed,
     RevokeFailed,
+    /// A row a cancel stopped before it started: a row state, not a failure
+    Cancelled,
 }
 
 impl ErrorCode {
@@ -45,6 +47,7 @@ impl ErrorCode {
             ErrorCode::OperationFailed => "operation_failed",
             ErrorCode::FileFailed => "file_failed",
             ErrorCode::RevokeFailed => "revoke_failed",
+            ErrorCode::Cancelled => "cancelled",
         }
     }
 }

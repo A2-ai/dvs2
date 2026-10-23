@@ -1,20 +1,10 @@
-//! Rendering `dvs get` results: human text, the JSON envelope, and exit codes.
+//! Rendering `dvs get` results: human text and the JSON envelope.
 
 use dvs::{
-    Action, Before, ErrorCode, GetCode, GetOutcome, GetReport, GetRow, GetVerdict, StoredCopy,
-    format_size, shell_path,
+    Action, Before, ErrorCode, GetCode, GetOutcome, GetReport, GetRow, StoredCopy, format_size,
+    shell_path,
 };
 use serde_json::json;
-
-use crate::output::{EXIT_CONFLICTS, EXIT_FAILED, EXIT_OK};
-
-pub fn exit_code(report: &GetReport) -> i32 {
-    match report.verdict() {
-        GetVerdict::Done => EXIT_OK,
-        GetVerdict::Failed => EXIT_FAILED,
-        GetVerdict::HeldBack => EXIT_CONFLICTS,
-    }
-}
 
 /// Failures with one cause shared by every affected file (no access, server
 /// down): their message and hint are printed once, not per file.
@@ -34,6 +24,7 @@ fn label(action: Action) -> &'static str {
         Action::Unchanged => "unchanged",
         Action::Skipped => "skipped",
         Action::NotRun => "not run",
+        Action::Cancelled => "cancelled",
         Action::Failed => "failed",
         Action::WouldRestore => "would restore",
         Action::WouldReplace => "would replace",
@@ -55,6 +46,7 @@ fn counts_phrase(report: &GetReport) -> String {
         (c.unchanged, "{} already current"),
         (c.skipped, "skipped {}"),
         (c.not_run, "{} held back"),
+        (c.cancelled, "cancelled {}"),
         (c.failed, "{} failed"),
     ];
     let out: Vec<String> = parts
@@ -67,6 +59,12 @@ fn counts_phrase(report: &GetReport) -> String {
     } else {
         out.join(", ")
     }
+}
+
+/// Rows listed one per line: every file that changed or needs attention.
+/// Cancelled files are only counted, as add and status do.
+fn is_listed(row: &GetRow) -> bool {
+    !matches!(row.action, Action::Unchanged | Action::Cancelled)
 }
 
 /// Why conflicts stopped things, separating edits from files with no record.
@@ -116,7 +114,7 @@ fn summary(report: &GetReport) -> String {
             let dry = if report.dry_run { "would be " } else { "" };
             format!("aborted, nothing {dry}changed: {}", reasons.join("; "))
         }
-        GetOutcome::Partial | GetOutcome::Failed => {
+        GetOutcome::Partial | GetOutcome::Failed | GetOutcome::Cancelled => {
             format!("{}: {}", report.outcome.as_str(), counts_phrase(report))
         }
     };
@@ -138,15 +136,11 @@ pub fn print_human(report: &GetReport) {
     let width = report
         .files
         .iter()
-        .filter(|r| r.action != Action::Unchanged)
+        .filter(|r| is_listed(r))
         .map(|r| r.local_path.to_string_lossy().chars().count())
         .max()
         .unwrap_or(0);
-    for r in report
-        .files
-        .iter()
-        .filter(|r| r.action != Action::Unchanged)
-    {
+    for r in report.files.iter().filter(|r| is_listed(r)) {
         let detail = match (r.satisfied, &r.message) {
             _ if is_shared(r.code) => String::new(),
             (true, None) => r.size.map(format_size).unwrap_or_default(),

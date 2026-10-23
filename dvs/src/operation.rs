@@ -1,7 +1,9 @@
-//! Operation context and observer hooks, counts, byte totals and timing helpers.
+//! Operation context (observer hooks, cancel flag), counts, byte totals and
+//! timing helpers.
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -10,6 +12,68 @@ use crate::files::add::AddResult;
 use crate::files::get::GetRow;
 use crate::files::status::StatusFacts;
 use crate::progress::FileProgress;
+
+/// A shared "stop starting new files" flag. Cloning shares the flag, so a
+/// signal handler can hold one clone while the operation checks another.
+///
+/// Cancelling never interrupts a file already in flight: it finishes
+/// atomically, and only files that had not started are reported `cancelled`.
+#[derive(Debug, Clone, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+
+impl CancelToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// How one file of an add or status run ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowState {
+    Succeeded,
+    Failed,
+    /// A cancel stopped it before it started
+    Cancelled,
+}
+
+/// A result row that can be counted into [`Counts`].
+pub trait OperationRow {
+    fn state(&self) -> RowState;
+}
+
+/// How an add or status run ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunOutcome {
+    Complete,
+    Partial,
+    Failed,
+    /// A cancel came before the run finished, even if every file had started
+    Cancelled,
+}
+
+impl RunOutcome {
+    /// `cancelled`: the cancel flag was set when the run finished.
+    pub fn of(counts: &Counts, cancelled: bool) -> Self {
+        if cancelled {
+            RunOutcome::Cancelled
+        } else if counts.failed == 0 {
+            RunOutcome::Complete
+        } else if counts.failed == counts.total {
+            RunOutcome::Failed
+        } else {
+            RunOutcome::Partial
+        }
+    }
+}
 
 /// What an operation is about to do, known once selection and storage checks
 /// are done. `status` reports zero `*_to_transfer`.
@@ -46,21 +110,37 @@ impl ByteTotals {
     }
 }
 
-/// Row counts for a result: `succeeded + failed == total`.
+/// Row counts for a result: `succeeded + failed + cancelled == total`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct Counts {
     pub total: usize,
     pub succeeded: usize,
     pub failed: usize,
+    pub cancelled: usize,
 }
 
 impl Counts {
+    /// For results that cannot be cancelled.
     pub fn new(total: usize, failed: usize) -> Self {
         Counts {
             total,
             succeeded: total - failed,
             failed,
+            cancelled: 0,
         }
+    }
+
+    pub fn of<'a, R: OperationRow + 'a>(rows: impl IntoIterator<Item = &'a R>) -> Self {
+        let mut counts = Counts::default();
+        for row in rows {
+            counts.total += 1;
+            match row.state() {
+                RowState::Succeeded => counts.succeeded += 1,
+                RowState::Failed => counts.failed += 1,
+                RowState::Cancelled => counts.cancelled += 1,
+            }
+        }
+        counts
     }
 }
 
@@ -149,16 +229,27 @@ where
     }
 }
 
-/// Passed to every operation: who, if anyone, observes it.
+/// Passed to every operation: who, if anyone, observes it, and its cancel flag.
 #[derive(Clone, Default)]
 pub struct OperationContext {
     observer: Option<Arc<dyn OperationObserver>>,
+    cancel: CancelToken,
 }
 
 impl OperationContext {
-    /// Observed by nobody.
+    /// Observed by nobody, never cancelled unless asked.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_cancel(mut self, cancel: CancelToken) -> Self {
+        self.cancel = cancel;
+        self
+    }
+
+    /// Check before starting each file.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
     }
 
     pub fn with_observer(mut self, observer: Arc<dyn OperationObserver>) -> Self {
@@ -202,6 +293,36 @@ pub fn rfc3339_ms(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Row(RowState);
+    impl OperationRow for Row {
+        fn state(&self) -> RowState {
+            self.0
+        }
+    }
+
+    #[test]
+    fn counts_split_states_and_a_cancel_decides_the_outcome() {
+        use RowState::*;
+        let counts = Counts::of(&[Row(Succeeded), Row(Failed), Row(Cancelled)]);
+        assert_eq!(
+            counts,
+            Counts {
+                total: 3,
+                succeeded: 1,
+                failed: 1,
+                cancelled: 1
+            }
+        );
+        // Cancelled even when every file had already started
+        let started = Counts::of(&[Row(Succeeded)]);
+        assert_eq!(RunOutcome::of(&started, true), RunOutcome::Cancelled);
+        assert_eq!(RunOutcome::of(&started, false), RunOutcome::Complete);
+        let outcome = |rows: &[Row]| RunOutcome::of(&Counts::of(rows), false);
+        assert_eq!(outcome(&[Row(Failed)]), RunOutcome::Failed);
+        assert_eq!(outcome(&[Row(Succeeded), Row(Failed)]), RunOutcome::Partial);
+        assert_eq!(outcome(&[]), RunOutcome::Complete);
+    }
 
     #[test]
     fn started_hashing_finishes_on_an_early_error_exit() {

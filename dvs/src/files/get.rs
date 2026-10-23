@@ -17,7 +17,9 @@ use crate::config::{OnConflict, SettingSource};
 use crate::error::{Error, ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::globbing::GetSelection;
-use crate::operation::{ByteTotals, FileRow, Hashing, OperationContext, OperationPlan, millis};
+use crate::operation::{
+    ByteTotals, FileRow, Hashing, OperationContext, OperationPlan, RunOutcome, millis,
+};
 use crate::paths::ProjectPath;
 use crate::utils::get_threadpool;
 use crate::{Backend, Compression, DvsPaths, RetrieveRequest, cache};
@@ -72,6 +74,8 @@ pub enum Action {
     Unchanged,
     Skipped,
     NotRun,
+    /// Stopped by a cancel request before it started
+    Cancelled,
     Failed,
     WouldRestore,
     WouldReplace,
@@ -85,6 +89,7 @@ impl Action {
             Action::Unchanged => "unchanged",
             Action::Skipped => "skipped",
             Action::NotRun => "not_run",
+            Action::Cancelled => "cancelled",
             Action::Failed => "failed",
             Action::WouldRestore => "would_restore",
             Action::WouldReplace => "would_replace",
@@ -184,7 +189,7 @@ pub struct GetRow {
     /// The next step, in CLI syntax
     pub hint: Option<String>,
     /// Time spent on this file (hash + transfer + install); `None` for rows
-    /// never hashed or transferred.
+    /// never hashed or transferred (cancelled before the plan included).
     pub duration_ms: Option<u64>,
 }
 
@@ -210,6 +215,8 @@ pub enum GetOutcome {
     Partial,
     /// No file is at its target or skipped, or the operation could not run
     Failed,
+    /// Stopped by a cancel request; files that never started are `cancelled`
+    Cancelled,
 }
 
 impl GetOutcome {
@@ -219,6 +226,7 @@ impl GetOutcome {
             GetOutcome::Aborted => "aborted",
             GetOutcome::Partial => "partial",
             GetOutcome::Failed => "failed",
+            GetOutcome::Cancelled => "cancelled",
         }
     }
 }
@@ -234,6 +242,7 @@ pub struct GetCounts {
     pub unchanged: usize,
     pub skipped: usize,
     pub not_run: usize,
+    pub cancelled: usize,
     pub failed: usize,
     pub would_restore: usize,
     pub would_replace: usize,
@@ -276,7 +285,9 @@ impl GetReport {
 
     /// Whether get did as asked. A skip the policy asked for counts as done.
     pub fn verdict(&self) -> GetVerdict {
-        if self.problem.is_some() || self.counts.failed > 0 {
+        if self.outcome == GetOutcome::Cancelled {
+            GetVerdict::Cancelled
+        } else if self.problem.is_some() || self.counts.failed > 0 {
             GetVerdict::Failed
         } else if self.outcome == GetOutcome::Aborted {
             GetVerdict::HeldBack
@@ -295,6 +306,20 @@ pub enum GetVerdict {
     Failed,
     /// `abort` held files back because of conflicts; nothing was written
     HeldBack,
+    /// A cancel came before the run finished
+    Cancelled,
+}
+
+/// An add or status outcome in the same terms, so one mapping gives every
+/// command its exit status.
+impl From<RunOutcome> for GetVerdict {
+    fn from(outcome: RunOutcome) -> Self {
+        match outcome {
+            RunOutcome::Complete => GetVerdict::Done,
+            RunOutcome::Partial | RunOutcome::Failed => GetVerdict::Failed,
+            RunOutcome::Cancelled => GetVerdict::Cancelled,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -352,7 +377,7 @@ impl Planned {
     }
 
     /// A row that was hashed carries at least its hash time, whatever
-    /// happened to it after.
+    /// happened to it after (cancelled included).
     fn fill_hash_duration(&mut self) {
         if self.row.duration_ms.is_none() && self.hashed {
             self.row.duration_ms = Some(millis(self.hash_time));
@@ -391,6 +416,17 @@ fn set_row(row: &mut GetRow, action: Action, code: Option<GetCode>, message: Opt
     );
     row.code = code;
     row.message = message;
+}
+
+/// A file a cancel stopped before it started.
+fn cancel_row(row: &mut GetRow) {
+    let message = "cancelled before it started".to_string();
+    set_row(
+        row,
+        Action::Cancelled,
+        Some(GetCode::Shared(ErrorCode::Cancelled)),
+        Some(message),
+    );
 }
 
 /// An absolute path as a path from the project root, if it is inside it
@@ -711,7 +747,8 @@ fn install(
 /// some working file), `planned` once the plan and storage checks are done,
 /// then every row through `file_finished` exactly once, as soon as it is final
 /// (rows decided before the transfers first, then each transfer as it
-/// completes).
+/// completes). A cancel stops files from *starting*: a file already
+/// downloading finishes (verified temp file + rename), the rest are `cancelled`.
 pub fn get_files(
     selection: GetSelection,
     paths: &DvsPaths,
@@ -724,27 +761,24 @@ pub fn get_files(
         on_conflict,
         source,
     } = options;
+    // A run that stops before planning is still cancelled if a cancel came first
+    let problem = |code: ErrorCode, message: String| {
+        let mut report = GetReport::problem(code, message, dry_run, on_conflict, source);
+        if ctx.is_cancelled() {
+            report.outcome = GetOutcome::Cancelled;
+        }
+        report
+    };
     if selection.tracked.is_empty() && selection.unmatched.is_empty() {
-        return GetReport::problem(
+        return problem(
             ErrorCode::NoFilesSelected,
-            "no tracked files matched",
-            dry_run,
-            on_conflict,
-            source,
+            "no tracked files matched".into(),
         );
     }
 
     let pool = match get_threadpool(selection.tracked.len().max(1)) {
         Ok(p) => p,
-        Err(e) => {
-            return GetReport::problem(
-                ErrorCode::OperationFailed,
-                e.to_string(),
-                dry_run,
-                on_conflict,
-                source,
-            );
-        }
+        Err(e) => return problem(ErrorCode::OperationFailed, e.to_string()),
     };
     let cache = try_open_cache(paths);
     let cache = cache.as_ref();
@@ -764,13 +798,21 @@ pub fn get_files(
 
     // 1. Plan: classify every file, locally, writing nothing. Hashing is
     // reported from the first file actually hashed, so a plan that hashes
-    // nothing reports none.
+    // nothing (every file absent, or a cancel first) reports none.
     let hashing = Hashing::new(observer);
     let mut planned: Vec<Planned> = pool.install(|| {
         selection
             .tracked
             .into_par_iter()
             .map(|p| {
+                // Hashing is starting work too: a cancel stops it. The
+                // row is `unknown` only because nothing looked at the file.
+                if ctx.is_cancelled() {
+                    let mut planned = Planned::new(blank_row(paths, &p));
+                    planned.row.before = Before::Unknown;
+                    cancel_row(&mut planned.row);
+                    return planned;
+                }
                 let started = Instant::now();
                 let mut planned = plan_file(paths, &p, cache, &hashing);
                 planned.hash_time = started.elapsed();
@@ -831,9 +873,13 @@ pub fn get_files(
 
     // One access check for everything that needs the remote: transfers, and
     // the stored-copy hints on conflicts. Files already current need neither.
-    let needs_remote = planned
-        .iter()
-        .any(|p| p.needs_transfer(on_conflict) || p.row.is_conflict());
+    // A cancel by now stops the storage checks from starting too:
+    // no access check and no stored-copy lookups.
+    let cancelled_before_storage = ctx.is_cancelled();
+    let needs_remote = !cancelled_before_storage
+        && planned
+            .iter()
+            .any(|p| p.needs_transfer(on_conflict) || p.row.is_conflict());
     let access = if needs_remote {
         backend.check_access().map_err(access_failure)
     } else {
@@ -863,7 +909,11 @@ pub fn get_files(
         for p in planned.iter_mut() {
             // Conflicts kept by the policy already say why they are not run.
             let kept = p.row.is_conflict() && on_conflict != OnConflict::Overwrite;
-            if p.row.before == Before::Current || p.row.action == Action::Failed || kept {
+            if p.row.before == Before::Current
+                || p.row.action == Action::Failed
+                || kept
+                || p.row.action == Action::Cancelled
+            {
                 continue;
             }
             p.set(
@@ -884,6 +934,14 @@ pub fn get_files(
     }
 
     // 3. Execute the transfers. Each file succeeds or fails on its own.
+    // Cancelled before the storage checks: no transfer starts, so the plan
+    // reports none and each would-be transfer ends cancelled, keeping its
+    // hash time if it was hashed.
+    if cancelled_before_storage {
+        for p in planned.iter_mut().filter(|p| p.needs_transfer(on_conflict)) {
+            cancel_row(&mut p.row);
+        }
+    }
     let transfer_idx: Vec<usize> = planned
         .iter()
         .enumerate()
@@ -913,6 +971,16 @@ pub fn get_files(
             .map(|&i| {
                 let p = &planned[i];
                 let mut row = p.row.clone();
+                // Stop starting files; the ones already started run to the end.
+                if ctx.is_cancelled() {
+                    cancel_row(&mut row);
+                    // Hashed in the plan: that was its work
+                    if p.hashed {
+                        row.duration_ms = Some(millis(p.hash_time));
+                    }
+                    observer.file_finished(FileRow::Get(&row));
+                    return (i, row);
+                }
                 let started = Instant::now();
                 let result = transfer(p, backend, paths, dry_run, operation_id, ctx);
                 settle(&mut row, p, result, dry_run, paths, cache);
@@ -1140,13 +1208,15 @@ fn finish(planned: Vec<Planned>, ending: Ending, ctx: &OperationContext) -> GetR
             Action::Unchanged => &mut counts.unchanged,
             Action::Skipped => &mut counts.skipped,
             Action::NotRun => &mut counts.not_run,
+            Action::Cancelled => &mut counts.cancelled,
             Action::Failed => &mut counts.failed,
             Action::WouldRestore => &mut counts.would_restore,
             Action::WouldReplace => &mut counts.would_replace,
         };
         *slot += 1;
     }
-    // `to_transfer` counts every row not at its target, whatever then happened to it
+    // `to_transfer` counts every row not at its target, whatever then happened
+    // to it (cancelled included)
     let mut bytes = ByteTotals::default();
     for r in &files {
         if let Some(size) = r.size {
@@ -1154,7 +1224,11 @@ fn finish(planned: Vec<Planned>, ending: Ending, ctx: &OperationContext) -> GetR
             bytes.count(size, r.before == Before::Current, installed);
         }
     }
-    let outcome = if aborted {
+    // A cancel request decides the outcome, even when no row ended up
+    // cancelled (every file already in flight)
+    let outcome = if ctx.is_cancelled() {
+        GetOutcome::Cancelled
+    } else if aborted {
         GetOutcome::Aborted
     } else if counts.succeeded == counts.total {
         GetOutcome::Complete
@@ -1788,6 +1862,13 @@ mod tests {
             let rows = recorder.rows.lock().unwrap().clone();
             (report, recorder.seen(), rows)
         }
+
+        fn temp_files_left(&self) -> bool {
+            fs::read_dir(&self.root)
+                .unwrap()
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().contains("dvs-tmp"))
+        }
     }
 
     #[test]
@@ -1842,6 +1923,71 @@ mod tests {
         assert_eq!(hash_events("a.csv"), ["hash start", "hash end"]);
         // Absent: nothing to hash
         assert!(hash_events("b.csv").is_empty());
+    }
+
+    #[test]
+    fn a_cancel_lets_started_files_finish_and_cancels_the_rest() {
+        let repo = TestRepo::new();
+        // More files than the pool can have threads, so some never start.
+        let names: Vec<String> = (0..40).map(|i| format!("f{i:02}.csv")).collect();
+        for name in &names {
+            repo.add(name, name.as_bytes());
+            fs::remove_file(repo.root.join(name)).unwrap();
+        }
+        let token = crate::CancelToken::new();
+        let recorder = std::sync::Arc::new(crate::testutil::Recorder::cancelling_on_transfer(
+            token.clone(),
+            1,
+        ));
+        let selection = GetSelection {
+            tracked: names.iter().map(PathBuf::from).collect(),
+            unmatched: Vec::new(),
+        };
+        let options = GetOptions {
+            dry_run: false,
+            on_conflict: OnConflict::Abort,
+            source: SettingSource::Argument,
+        };
+        let ctx = OperationContext::new()
+            .with_cancel(token)
+            .with_observer(recorder.clone());
+        let report = get_files(selection, &repo.paths, repo.backend(), options, &ctx);
+
+        assert_eq!(report.outcome, GetOutcome::Cancelled);
+        let seen = recorder.seen();
+        let started: HashSet<_> = seen
+            .iter()
+            .filter_map(|s| s.strip_prefix("transfer "))
+            .map(PathBuf::from)
+            .collect();
+        assert!(!started.is_empty());
+        let mut cancelled = 0;
+        for r in &report.files {
+            if started.contains(&r.path) {
+                assert_eq!((r.action, r.code), (Action::Restored, None));
+                assert!(repo.root.join(&r.path).exists());
+            } else {
+                assert_eq!(
+                    (r.action, r.code, r.satisfied, r.duration_ms),
+                    (
+                        Action::Cancelled,
+                        Some(GetCode::Shared(ErrorCode::Cancelled)),
+                        false,
+                        None
+                    )
+                );
+                assert!(!repo.root.join(&r.path).exists());
+                cancelled += 1;
+            }
+        }
+        assert!(cancelled > 0, "the cancel came too late to test anything");
+        assert_eq!(report.counts.cancelled, cancelled);
+        assert_eq!(report.counts.not_run, 0);
+        assert_eq!(report.counts.restored, started.len());
+        assert_eq!(report.counts.failed, 0, "cancelled files are not failures");
+        assert!(!repo.temp_files_left());
+        // Cancelled rows are reported too, once each.
+        assert_eq!(recorder.rows.lock().unwrap().len(), names.len());
     }
 
     #[test]

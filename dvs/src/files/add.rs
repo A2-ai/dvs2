@@ -18,7 +18,7 @@ use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
 use crate::operation::{
     ByteTotals, Counts, FileRow, Hashing, OperationContext, OperationObserver, OperationPlan,
-    duration_ms, millis,
+    OperationRow, RowState, RunOutcome, duration_ms, millis,
 };
 use crate::paths::{DvsPaths, ProjectPath};
 use crate::utils::get_threadpool;
@@ -31,16 +31,40 @@ pub struct AddResult {
     #[serde(flatten)]
     pub detail: AddDetail,
     /// Time spent on this file (hash + transfer + record); `None` when it did
-    /// no work.
+    /// no work (including rows cancelled before hashing; a row cancelled after
+    /// hashing carries its work so far).
     pub duration_ms: Option<u64>,
 }
 
-/// The rows of an `add`, sorted by path, plus counts and byte totals.
-#[derive(Debug, Clone, Default)]
+impl OperationRow for AddResult {
+    fn state(&self) -> RowState {
+        match self.detail {
+            AddDetail::Success { .. } => RowState::Succeeded,
+            AddDetail::Error { .. } => RowState::Failed,
+            AddDetail::Cancelled { .. } => RowState::Cancelled,
+        }
+    }
+}
+
+/// The rows of an `add`, sorted by path, plus counts, outcome and byte totals.
+#[derive(Debug, Clone)]
 pub struct AddReport {
     pub files: Vec<AddResult>,
     pub counts: Counts,
+    pub outcome: RunOutcome,
     pub bytes: ByteTotals,
+}
+
+impl AddReport {
+    fn new(files: Vec<AddResult>, bytes: ByteTotals, cancelled: bool) -> Self {
+        let counts = Counts::of(&files);
+        AddReport {
+            outcome: RunOutcome::of(&counts, cancelled),
+            files,
+            counts,
+            bytes,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +79,9 @@ pub enum AddDetail {
     Error {
         code: ErrorCode,
         error: String,
+    },
+    Cancelled {
+        message: String,
     },
 }
 
@@ -77,6 +104,19 @@ fn error_row(path: PathBuf, error: &anyhow::Error, duration_ms: Option<u64>) -> 
             error: error.to_string(),
         },
         duration_ms,
+    }
+}
+
+/// A file that was not added because the operation was cancelled: no upload,
+/// no record. `work` is the time it already spent (its hashing), `None` when
+/// it was cancelled before it was hashed.
+fn cancelled_row(path: PathBuf, work: Option<Duration>) -> AddResult {
+    AddResult {
+        path,
+        detail: AddDetail::Cancelled {
+            message: "cancelled before this file was added".to_string(),
+        },
+        duration_ms: work.map(millis),
     }
 }
 
@@ -107,7 +147,7 @@ impl Pending {
         })
     }
 
-    /// Once hashed the size is known, so a later failure still counts it.
+    /// Once hashed the size is known, so a later failure or cancel still counts it.
     fn row_bytes(&self, transferred: bool) -> RowBytes {
         RowBytes {
             size: self.metadata.size,
@@ -121,6 +161,17 @@ struct RowBytes {
     size: u64,
     stored: bool,
     transferred: bool,
+}
+
+/// Whether a file that has not started yet is cancelled. The server records
+/// every manifest entry whose content it already has, so after a cancel those
+/// files still write their local record, keeping the two in agreement.
+fn cancelled_before_start(
+    cancelled: bool,
+    hash: &str,
+    manifest_missing: Option<&HashSet<String>>,
+) -> bool {
+    cancelled && !manifest_missing.is_some_and(|missing| !missing.contains(hash))
 }
 
 struct Added {
@@ -204,8 +255,27 @@ fn add_file(
 /// Reports to `ctx`'s observer as it goes: hashing (if any file is hashed,
 /// finished also on an error exit), the plan (once storage has
 /// been asked what it has, and always before any row), each transfer, and
-/// each row as soon as it is final.
+/// each row as soon as it is final. Once `ctx` is cancelled no new file
+/// starts: files in flight finish (upload and record together), the rest get
+/// a `cancelled` row and no record, except files whose add the server already
+/// recorded (see [`cancelled_before_start`]). A run that fails after a cancel
+/// still returns its (empty) cancelled report.
 pub fn add_files(
+    files: Vec<PathBuf>,
+    paths: &DvsPaths,
+    backend: &Backend,
+    message: Option<String>,
+    compression: Compression,
+    dry_run: bool,
+    ctx: &OperationContext,
+) -> Result<AddReport> {
+    match add_all(files, paths, backend, message, compression, dry_run, ctx) {
+        Err(_) if ctx.is_cancelled() => Ok(AddReport::new(Vec::new(), ByteTotals::default(), true)),
+        result => result,
+    }
+}
+
+fn add_all(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
     backend: &Backend,
@@ -219,7 +289,11 @@ pub fn add_files(
     if matched_paths.is_empty() {
         // Still planned, once: nothing to add, and no rows follow
         observer.planned(&OperationPlan::default());
-        return Ok(AddReport::default());
+        return Ok(AddReport::new(
+            Vec::new(),
+            ByteTotals::default(),
+            ctx.is_cancelled(),
+        ));
     }
 
     // If any input is invalid we just bail instead of doing partial execution
@@ -260,6 +334,9 @@ pub fn add_files(
     let mut pending: Vec<Pending>;
     (pending, results) = pool.install(|| {
         valid_paths.into_par_iter().partition_map(|relative_path| {
+            if ctx.is_cancelled() {
+                return Either::Right((cancelled_row(relative_path, None), None));
+            }
             hashing.begin();
             let start = Instant::now();
             let full_path = paths.file_path(&relative_path);
@@ -280,62 +357,75 @@ pub fn add_files(
     hashing.finish();
 
     // 2. Ask storage what it already has: the server through the manifest (minus
-    // files already in sync), other backends and dry runs file by file
+    // files already in sync), other backends and dry runs file by file. The
+    // server records every manifest entry, so a cancel before this sends none
     let mut missing = None;
-    match backend {
-        Backend::Server(server) if !dry_run => {
-            let entries = pending
-                .iter()
-                .filter(|p| !p.in_sync(paths))
-                .map(Pending::manifest_entry)
-                .collect::<Result<Vec<_>>>()?;
-            let checkout = crate::git::current_checkout(paths.repo_root());
-            let mut answer_missing = HashSet::new();
-            // Everything in sync: no manifest, so no storage check either
-            if !entries.is_empty() {
-                let answer = server.manifest(&UploadManifest {
-                    operation_id,
-                    message: message.clone(),
-                    git_branch: checkout.branch.clone(),
-                    git_commit: checkout.commit.clone(),
-                    entries,
-                })?;
-                // The metadata files record the project's compression, not the one asked for
-                for p in &mut pending {
-                    p.metadata.compression = answer.compression;
-                }
-                answer_missing = answer.missing.into_iter().collect();
-            }
-            for p in &mut pending {
-                p.stored = !answer_missing.contains(&p.metadata.hashes.blake3);
-            }
-            missing = Some(answer_missing);
-        }
-        _ => {
-            let (checked, unchecked): (Vec<Pending>, Vec<_>) = pool.install(|| {
-                pending.into_par_iter().partition_map(|mut p| {
-                    let start = Instant::now();
-                    match backend.exists(&p.metadata.hashes) {
-                        Ok(stored) => {
-                            p.stored = stored;
-                            p.work += start.elapsed();
-                            Either::Left(p)
-                        }
-                        Err(e) => {
-                            let bytes = p.row_bytes(false);
-                            let work = p.work + start.elapsed();
-                            let row = error_row(p.relative_path, &e, Some(millis(work)));
-                            Either::Right((row, Some(bytes)))
-                        }
+    let mut storage_asked = false;
+    if !ctx.is_cancelled() {
+        match backend {
+            Backend::Server(server) if !dry_run => {
+                let entries = pending
+                    .iter()
+                    .filter(|p| !p.in_sync(paths))
+                    .map(Pending::manifest_entry)
+                    .collect::<Result<Vec<_>>>()?;
+                let checkout = crate::git::current_checkout(paths.repo_root());
+                let mut answer_missing = HashSet::new();
+                // Everything in sync: no manifest, so no storage check either
+                if !entries.is_empty() {
+                    let answer = server.manifest(&UploadManifest {
+                        operation_id,
+                        message: message.clone(),
+                        git_branch: checkout.branch.clone(),
+                        git_commit: checkout.commit.clone(),
+                        entries,
+                    })?;
+                    // The metadata files record the project's compression, not the one asked for
+                    for p in &mut pending {
+                        p.metadata.compression = answer.compression;
                     }
-                })
-            });
-            pending = checked;
-            results.extend(unchecked);
+                    answer_missing = answer.missing.into_iter().collect();
+                }
+                for p in &mut pending {
+                    // In sync files were not in the manifest, but there is
+                    // nothing left to do for them either
+                    p.stored = !answer_missing.contains(&p.metadata.hashes.blake3);
+                }
+                missing = Some(answer_missing);
+            }
+            _ => {
+                let (checked, unchecked): (Vec<Pending>, Vec<_>) = pool.install(|| {
+                    pending.into_par_iter().partition_map(|mut p| {
+                        if ctx.is_cancelled() {
+                            let bytes = p.row_bytes(false);
+                            let row = cancelled_row(p.relative_path, Some(p.work));
+                            return Either::Right((row, Some(bytes)));
+                        }
+                        let start = Instant::now();
+                        match backend.exists(&p.metadata.hashes) {
+                            Ok(stored) => {
+                                p.stored = stored;
+                                p.work += start.elapsed();
+                                Either::Left(p)
+                            }
+                            Err(e) => {
+                                let bytes = p.row_bytes(false);
+                                let work = p.work + start.elapsed();
+                                let row = error_row(p.relative_path, &e, Some(millis(work)));
+                                Either::Right((row, Some(bytes)))
+                            }
+                        }
+                    })
+                });
+                pending = checked;
+                results.extend(unchecked);
+            }
         }
+        storage_asked = true;
     }
 
-    let to_transfer = pending.iter().filter(|p| !p.stored);
+    // Nothing is known to need uploading until storage has been asked
+    let to_transfer = pending.iter().filter(|p| storage_asked && !p.stored);
     let known_sizes = results.iter().filter_map(|(_, bytes)| bytes.as_ref());
     observer.planned(&OperationPlan {
         files_total,
@@ -350,6 +440,13 @@ pub fn add_files(
 
     // 3. Store what is missing and write the metadata files
     let finish_one = |mut pending: Pending| -> (AddResult, Option<RowBytes>) {
+        let hash = &pending.metadata.hashes.blake3;
+        if cancelled_before_start(ctx.is_cancelled(), hash, missing.as_ref()) {
+            let bytes = pending.row_bytes(false);
+            let row = cancelled_row(pending.relative_path, Some(pending.work));
+            observer.file_finished(FileRow::Add(&row));
+            return (row, Some(bytes));
+        }
         let start = Instant::now();
         let added = add_file(
             &mut pending,
@@ -423,18 +520,13 @@ pub fn add_files(
         }
     }
 
-    let failed = results.len() - successful_paths.len();
-    Ok(AddReport {
-        counts: Counts::new(results.len(), failed),
-        files: results,
-        bytes,
-    })
+    Ok(AddReport::new(results, bytes, ctx.is_cancelled()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operation::TransferObserver;
+    use crate::operation::{CancelToken, TransferObserver};
     use crate::progress::FileProgress;
     use crate::testutil::{Recorder, create_file, create_temp_git_repo, init_dvs_repo};
     use fs_err as fs;
@@ -597,6 +689,107 @@ mod tests {
             ctx,
         )
         .unwrap()
+    }
+
+    fn content_hashes(content: &[u8]) -> crate::Hashes {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        fs::write(tmp.path(), content).unwrap();
+        crate::Hashes::compute_from_path(tmp.path(), &[]).unwrap().0
+    }
+
+    #[test]
+    fn cancel_mid_add_finishes_in_flight_files_and_records_nothing_else() {
+        let (_tmp, root, config, paths) = project();
+        let backend = config.backend();
+        // More files than the pool can have in flight, so some never start
+        let names: Vec<String> = (0..48).map(|i| format!("f{i:02}.txt")).collect();
+        for name in &names {
+            create_file(&root, name, name.as_bytes());
+        }
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+
+        let token = CancelToken::new();
+        let recorder = Arc::new(Recorder::cancelling_on_transfer(token.clone(), 1));
+        let ctx = OperationContext::new()
+            .with_cancel(token)
+            .with_observer(recorder.clone());
+        let report = add(&names, &paths, backend, &ctx);
+
+        let seen = recorder.seen();
+        let transfers: Vec<_> = seen
+            .iter()
+            .filter_map(|s| s.strip_prefix("transfer "))
+            .map(PathBuf::from)
+            .collect();
+        let rows: HashSet<_> = seen.iter().filter(|s| s.starts_with("row ")).collect();
+        let (added, cancelled): (Vec<_>, Vec<_>) = report
+            .files
+            .iter()
+            .partition(|r| r.state() == RowState::Succeeded);
+        assert_eq!(report.outcome, RunOutcome::Cancelled);
+        assert_eq!(report.counts.cancelled, cancelled.len());
+        assert!(cancelled.iter().all(|r| r.state() == RowState::Cancelled));
+        // One row per file, reported once each
+        assert_eq!(report.files.len(), 48);
+        assert_eq!((rows.len(), recorder.rows.lock().unwrap().len()), (48, 48));
+        // Exactly the files in flight when the cancel came finished
+        assert_eq!(added.len(), transfers.len());
+        assert!(!cancelled.is_empty());
+        for row in &added {
+            assert!(transfers.contains(&row.path));
+            assert!(paths.metadata_path(&row.path).is_file());
+            let content = fs::read(paths.file_path(&row.path)).unwrap();
+            assert!(backend.exists(&content_hashes(&content)).unwrap());
+            assert!(row.duration_ms.is_some());
+        }
+        // Files that never started have neither a record nor a blob, but were
+        // hashed before the cancel came, so their hashing time is reported
+        for row in &cancelled {
+            assert!(!transfers.contains(&row.path));
+            assert!(!paths.metadata_path(&row.path).exists());
+            let content = fs::read(paths.file_path(&row.path)).unwrap();
+            assert!(!backend.exists(&content_hashes(&content)).unwrap());
+            assert!(row.duration_ms.is_some());
+        }
+        // Every file was hashed before the cancel, so every row counts in the
+        // plan's total; only what was added was transferred
+        let all_bytes: u64 = names.iter().map(|n| n.len() as u64).sum();
+        let added_bytes: u64 = added.iter().map(|r| r.path.as_os_str().len() as u64).sum();
+        assert!(seen.contains(&format!("plan 48 {all_bytes} 48 {all_bytes}")));
+        assert_eq!(report.bytes.total, all_bytes);
+        assert_eq!(report.bytes.to_transfer, all_bytes);
+        assert_eq!(report.bytes.transferred, added_bytes);
+    }
+
+    #[test]
+    fn a_run_that_fails_after_a_cancel_is_reported_cancelled() {
+        let (_tmp, _root, config, paths) = project();
+        let token = CancelToken::new();
+        token.cancel();
+        // A missing path refuses the batch
+        let report = add_files(
+            vec!["missing.csv".into()],
+            &paths,
+            config.backend(),
+            None,
+            Compression::Zstd,
+            false,
+            &OperationContext::new().with_cancel(token),
+        )
+        .unwrap();
+        assert_eq!(report.outcome, RunOutcome::Cancelled);
+        assert!(report.files.is_empty());
+    }
+
+    #[test]
+    fn after_a_cancel_only_files_the_server_already_recorded_start() {
+        let missing: HashSet<String> = ["new".to_string()].into();
+        // The manifest recorded "old" (the server has it), but not "new"
+        assert!(!cancelled_before_start(true, "old", Some(&missing)));
+        assert!(cancelled_before_start(true, "new", Some(&missing)));
+        // No manifest (local storage): every file not yet started is cancelled
+        assert!(cancelled_before_start(true, "old", None));
+        assert!(!cancelled_before_start(false, "new", Some(&missing)));
     }
 
     #[test]
