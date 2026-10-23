@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "dvs"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -448,7 +448,7 @@ dependencies = [
 
 [[package]]
 name = "dvs-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
