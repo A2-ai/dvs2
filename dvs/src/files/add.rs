@@ -12,8 +12,10 @@ use crate::backends::Backend;
 use crate::backends::server::{UploadManifest, UploadManifestEntry};
 use crate::cache::try_open_cache;
 use crate::config::Compression;
+use crate::error::{ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::gitignore::add_to_gitignore;
+use crate::operation::{ByteTotals, Counts};
 use crate::paths::{DvsPaths, ProjectPath};
 use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
@@ -27,6 +29,14 @@ pub struct AddResult {
     pub detail: AddDetail,
 }
 
+/// The rows of an `add`, sorted by path, plus counts and byte totals.
+#[derive(Debug, Clone, Default)]
+pub struct AddReport {
+    pub files: Vec<AddResult>,
+    pub counts: Counts,
+    pub bytes: ByteTotals,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AddDetail {
@@ -37,14 +47,26 @@ pub enum AddDetail {
         stored_size: u64,
     },
     Error {
+        code: ErrorCode,
         error: String,
     },
+}
+
+fn add_error_code(error: &anyhow::Error) -> ErrorCode {
+    if let Some(code) = backend_error_code(error) {
+        code
+    } else if error.downcast_ref::<std::io::Error>().is_some() {
+        ErrorCode::IoError
+    } else {
+        ErrorCode::OperationFailed
+    }
 }
 
 /// A file to add: the metadata it will get, waiting on the backend.
 struct Pending {
     relative_path: PathBuf,
     metadata: FileMetadata,
+    stored: bool,
 }
 
 impl Pending {
@@ -64,6 +86,27 @@ impl Pending {
             hash: self.metadata.hashes.blake3.clone(),
         })
     }
+
+    fn row_bytes(&self, transferred: bool) -> RowBytes {
+        RowBytes {
+            size: self.metadata.size,
+            stored: self.stored,
+            transferred,
+        }
+    }
+}
+
+struct RowBytes {
+    size: u64,
+    stored: bool,
+    transferred: bool,
+}
+
+struct Added {
+    outcome: Outcome,
+    stored_size: Option<u64>,
+    /// The backend created the blob, i.e. this file's bytes moved
+    created: bool,
 }
 
 /// `missing` is the server's answer to the manifest: the hashes to upload. The local
@@ -76,28 +119,25 @@ fn add_file(
     missing: Option<&HashSet<String>>,
     dry_run: bool,
     on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-) -> Result<(Outcome, Option<u64>)> {
+) -> Result<Added> {
     let full_path = paths.file_path(&pending.relative_path);
     if dry_run {
-        let outcome = if pending.in_sync(paths) && backend.exists(&pending.metadata.hashes)? {
+        let outcome = if pending.stored && pending.in_sync(paths) {
             Outcome::Present
         } else {
             Outcome::Copied
         };
-        return Ok((outcome, None));
+        return Ok(Added {
+            outcome,
+            stored_size: None,
+            created: false,
+        });
     }
-    match missing {
+    let stored = |res: crate::StoreResult| (Some(res.stored_size), res.created);
+    let (outcome, (stored_size, created)) = match missing {
         // The local backend checks for itself whether it has the content
-        None => pending.metadata.save(
-            operation_id,
-            &full_path,
-            backend,
-            paths,
-            &pending.relative_path,
-            on_bytes,
-        ),
-        Some(missing) if missing.contains(&pending.metadata.hashes.blake3) => {
-            let stored_size = pending.metadata.store_and_write(
+        None => {
+            let (outcome, res) = pending.metadata.save(
                 operation_id,
                 &full_path,
                 backend,
@@ -105,15 +145,31 @@ fn add_file(
                 &pending.relative_path,
                 on_bytes,
             )?;
-            Ok((Outcome::Copied, Some(stored_size)))
+            (outcome, res.map_or((None, false), stored))
+        }
+        Some(missing) if missing.contains(&pending.metadata.hashes.blake3) => {
+            let res = pending.metadata.store_and_write(
+                operation_id,
+                &full_path,
+                backend,
+                paths,
+                &pending.relative_path,
+                on_bytes,
+            )?;
+            (Outcome::Copied, stored(res))
         }
         // The server has the content and recorded the add from the manifest
-        Some(_) if pending.in_sync(paths) => Ok((Outcome::Present, None)),
+        Some(_) if pending.in_sync(paths) => (Outcome::Present, (None, false)),
         Some(_) => {
             pending.metadata.write(paths, &pending.relative_path)?;
-            Ok((Outcome::Copied, None))
+            (Outcome::Copied, (None, false))
         }
-    }
+    };
+    Ok(Added {
+        outcome,
+        stored_size,
+        created,
+    })
 }
 
 /// Adds files matching a glob pattern to DVS.
@@ -128,10 +184,10 @@ pub fn add_files(
     compression: Compression,
     dry_run: bool,
     on_file_start: Option<&OnFileStart>,
-) -> Result<Vec<AddResult>> {
+) -> Result<AddReport> {
     let matched_paths = paths.validate_for_add(&files);
     if matched_paths.is_empty() {
-        return Ok(Vec::new());
+        return Ok(AddReport::default());
     }
 
     // If any input is invalid we just bail instead of doing partial execution
@@ -162,8 +218,11 @@ pub fn add_files(
     let cache = try_open_cache(paths);
     let operation_id = Uuid::new_v4();
 
+    let mut results: Vec<(AddResult, Option<RowBytes>)>;
+
     // 1. Hash everything first: the server wants the whole list before any bytes move
-    let (mut pending, mut results): (Vec<Pending>, Vec<AddResult>) = pool.install(|| {
+    let mut pending: Vec<Pending>;
+    (pending, results) = pool.install(|| {
         valid_paths.into_par_iter().partition_map(|relative_path| {
             let full_path = paths.file_path(&relative_path);
             let rel_str = relative_path.to_string_lossy();
@@ -171,22 +230,27 @@ pub fn add_files(
                 Ok((hashes, size)) => Either::Left(Pending {
                     metadata: FileMetadata::from_hashes(hashes, size, compression, message.clone()),
                     relative_path,
+                    stored: false,
                 }),
                 Err(e) => {
                     log::warn!("Failed to add {}: {e}", relative_path.display());
-                    Either::Right(AddResult {
+                    let row = AddResult {
                         path: relative_path,
                         detail: AddDetail::Error {
+                            code: add_error_code(&e),
                             error: e.to_string(),
                         },
-                    })
+                    };
+                    Either::Right((row, None))
                 }
             }
         })
     });
 
-    // 2. Tell the server what we are about to add, minus files already in sync
-    let missing = match backend {
+    // 2. Ask storage what it already has: the server through the manifest (minus
+    // files already in sync), other backends and dry runs file by file
+    let mut missing = None;
+    match backend {
         Backend::Server(server) if !dry_run => {
             let entries = pending
                 .iter()
@@ -194,7 +258,7 @@ pub fn add_files(
                 .map(Pending::manifest_entry)
                 .collect::<Result<Vec<_>>>()?;
             let checkout = crate::git::current_checkout(paths.repo_root());
-            let mut missing = HashSet::new();
+            let mut answer_missing = HashSet::new();
             if !entries.is_empty() {
                 let answer = server.manifest(&UploadManifest {
                     operation_id,
@@ -207,12 +271,40 @@ pub fn add_files(
                 for p in &mut pending {
                     p.metadata.compression = answer.compression;
                 }
-                missing = answer.missing.into_iter().collect();
+                answer_missing = answer.missing.into_iter().collect();
             }
-            Some(missing)
+            for p in &mut pending {
+                p.stored = !answer_missing.contains(&p.metadata.hashes.blake3);
+            }
+            missing = Some(answer_missing);
         }
-        _ => None,
-    };
+        _ => {
+            let (checked, unchecked): (Vec<Pending>, Vec<_>) = pool.install(|| {
+                pending.into_par_iter().partition_map(|mut p| {
+                    match backend.exists(&p.metadata.hashes) {
+                        Ok(stored) => {
+                            p.stored = stored;
+                            Either::Left(p)
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to add {}: {e}", p.relative_path.display());
+                            let bytes = p.row_bytes(false);
+                            let row = AddResult {
+                                path: p.relative_path,
+                                detail: AddDetail::Error {
+                                    code: add_error_code(&e),
+                                    error: e.to_string(),
+                                },
+                            };
+                            Either::Right((row, Some(bytes)))
+                        }
+                    }
+                })
+            });
+            pending = checked;
+            results.extend(unchecked);
+        }
+    }
 
     // 3. Store what is missing and write the metadata files
     results.extend(pool.install(|| {
@@ -231,40 +323,56 @@ pub fn add_files(
                     dry_run,
                     on_bytes,
                 );
-                let result = match added {
-                    Ok((outcome, stored_size)) => {
+                let (result, bytes) = match added {
+                    Ok(added) => {
                         log::info!(
                             "Successfully added {} ({:?})",
                             pending.relative_path.display(),
-                            outcome
+                            added.outcome
                         );
-                        AddResult {
+                        let bytes = pending.row_bytes(added.created);
+                        let result = AddResult {
                             path: pending.relative_path,
                             detail: AddDetail::Success {
-                                outcome,
+                                outcome: added.outcome,
                                 hash: pending.metadata.hashes.blake3,
                                 size: pending.metadata.size,
-                                stored_size: stored_size.unwrap_or(pending.metadata.size),
+                                stored_size: added.stored_size.unwrap_or(pending.metadata.size),
                             },
-                        }
+                        };
+                        (result, bytes)
                     }
                     Err(e) => {
                         log::warn!("Failed to add {}: {e}", pending.relative_path.display());
-                        AddResult {
+                        let bytes = pending.row_bytes(false);
+                        let result = AddResult {
                             path: pending.relative_path,
                             detail: AddDetail::Error {
+                                code: add_error_code(&e),
                                 error: e.to_string(),
                             },
-                        }
+                        };
+                        (result, bytes)
                     }
                 };
                 if let Some(fp) = &file_progress {
                     (fp.on_done)(matches!(result.detail, AddDetail::Success { .. }));
                 }
-                result
+                (result, Some(bytes))
             })
             .collect::<Vec<_>>()
     }));
+
+    let mut bytes = ByteTotals::default();
+    let mut results: Vec<AddResult> = results
+        .into_iter()
+        .map(|(result, row_bytes)| {
+            if let Some(row) = &row_bytes {
+                bytes.count(row.size, row.stored, row.transferred);
+            }
+            result
+        })
+        .collect();
     results.sort_by(|a, b| a.path.cmp(&b.path));
 
     let successful_paths: Vec<_> = results
@@ -287,7 +395,12 @@ pub fn add_files(
         }
     }
 
-    Ok(results)
+    let failed = results.len() - successful_paths.len();
+    Ok(AddReport {
+        counts: Counts::new(results.len(), failed),
+        files: results,
+        bytes,
+    })
 }
 
 #[cfg(test)]
@@ -299,6 +412,19 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn row_errors_carry_a_code() {
+        let backend = anyhow::Error::from(crate::Error::new(ErrorCode::AccessDenied, "no"));
+        let io = anyhow::Error::from(std::io::Error::other("disk"));
+        for (error, expected) in [
+            (backend, ErrorCode::AccessDenied),
+            (io, ErrorCode::IoError),
+            (anyhow::anyhow!("other"), ErrorCode::OperationFailed),
+        ] {
+            assert_eq!(add_error_code(&error), expected);
+        }
+    }
 
     fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
         DvsPaths::new(
@@ -420,7 +546,8 @@ mod tests {
             false,
             Some(&on_file_start),
         )
-        .unwrap();
+        .unwrap()
+        .files;
 
         assert_eq!(results.len(), 3);
         assert!(
@@ -430,5 +557,33 @@ mod tests {
         );
         assert_eq!(done_calls.load(Ordering::SeqCst), 3);
         assert_eq!(success_calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn counts_include_failed_rows() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let paths = make_paths(&root, &config);
+        create_file(&root, "a.txt", b"a");
+        let b = create_file(&root, "b.txt", b"b");
+        fs::set_permissions(&b, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&b).is_ok() {
+            return; // running as root: permissions are not enforced
+        }
+
+        let report = add_files(
+            vec!["a.txt".into(), "b.txt".into()],
+            &paths,
+            config.backend(),
+            None,
+            Compression::Zstd,
+            false,
+            None,
+        )
+        .unwrap();
+        let c = report.counts;
+        assert_eq!((c.total, c.succeeded, c.failed), (2, 1, 1));
     }
 }

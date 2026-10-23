@@ -7,18 +7,34 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use etcetera::BaseStrategy;
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::backends::server::{
+    invalid_response, join_url, response_error, status_error, unreachable,
+};
+use crate::error::{Error, ErrorCode};
 use crate::utils::http_agent;
 
 type TokenStore = HashMap<String, String>;
 
+#[cfg(not(test))]
 fn get_token_store_path() -> Result<PathBuf> {
+    use etcetera::BaseStrategy;
     let d = etcetera::choose_base_strategy()?.config_dir();
     Ok(d.join("dvs").join("credentials.json"))
+}
+
+/// Unit tests never touch the real user's credentials.
+#[cfg(test)]
+fn get_token_store_path() -> Result<PathBuf> {
+    Ok(std::env::temp_dir()
+        .join(format!(
+            "dvs-unit-tests-no-credentials-{}",
+            std::process::id()
+        ))
+        .join("credentials.json"))
 }
 
 fn create_private_dir(dir: &Path) -> Result<()> {
@@ -48,29 +64,28 @@ fn write_store(path: &Path, contents: &str) -> Result<()> {
     Ok(())
 }
 
-/// Reads the token store from `path`. If the file is corrupted, it is deleted
-/// and an empty store is returned so users can log in again.
+/// Reads the token store from `path`; none yet is an empty store. An
+/// unreadable store is an error: only `dvs login` and `dvs logout` replace it.
 fn read_store(path: &Path) -> Result<TokenStore> {
-    match serde_json::from_reader(fs::File::open(path)?) {
-        Ok(store) => Ok(store),
-        Err(e) => {
-            log::warn!(
-                "Credentials store at {} is corrupted ({e}), deleting it",
-                path.display()
-            );
-            fs::remove_file(path)?;
-            Ok(TokenStore::new())
-        }
-    }
+    let unreadable = |reason: String| {
+        Error::new(
+            ErrorCode::CredentialsUnreadable,
+            format!("{} {reason}; run `dvs login` to replace it", path.display()),
+        )
+    };
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(TokenStore::new()),
+        Err(e) => return Err(unreadable(format!("could not be read ({e})")).into()),
+    };
+    serde_json::from_reader(file)
+        .map_err(|e| unreadable(format!("is not a valid credentials store ({e})")).into())
 }
 
 pub fn store_token(url: &Url, token: &str) -> Result<()> {
     let path = get_token_store_path()?;
-    let mut store = if path.exists() {
-        read_store(&path)?
-    } else {
-        TokenStore::new()
-    };
+    // Logging in is the user's way to replace an unreadable store
+    let mut store = read_store(&path).unwrap_or_default();
     store.insert(url.to_string(), token.to_string());
     let json = serde_json::to_string_pretty(&store)?;
     write_store(&path, &json)?;
@@ -79,19 +94,20 @@ pub fn store_token(url: &Url, token: &str) -> Result<()> {
 }
 
 pub fn get_token(url: &Url) -> Result<Option<String>> {
-    let path = get_token_store_path()?;
-    if path.exists() {
-        let store = read_store(&path)?;
-        Ok(store.get(url.as_str()).cloned())
-    } else {
-        Ok(None)
-    }
+    let path = get_token_store_path().map_err(|e| {
+        Error::new(
+            ErrorCode::AuthRequired,
+            format!("Could not find the credentials store ({e}). Log in first"),
+        )
+    })?;
+    Ok(read_store(&path)?.get(url.as_str()).cloned())
 }
 
 pub fn delete_token(url: &Url) -> Result<bool> {
     let path = get_token_store_path()?;
     if path.exists() {
-        let mut store = read_store(&path)?;
+        // Logging out resets an unreadable store
+        let mut store = read_store(&path).unwrap_or_default();
         let old = store.remove(url.as_str());
         let json = serde_json::to_string_pretty(&store)?;
         fs::write(path, json)?;
@@ -108,18 +124,24 @@ pub struct DeviceAuthorizationResponse {
 }
 
 pub fn get_client_approve_url(base_url: &Url, user_code: &str) -> Result<Url> {
-    let mut u = base_url.join("/device/approve")?;
+    let mut u = join_url(base_url, "device/approve")?;
     u.set_query(Some(&format!("user_code={user_code}")));
     Ok(u)
 }
 
 pub fn initiate_device_approval(base_url: &Url) -> Result<DeviceAuthorizationResponse> {
-    let url = base_url.join("/api/oauth/device/authorize")?;
-    let mut resp = http_agent().post(url.as_str()).send_empty()?;
+    let url = join_url(base_url, "api/oauth/device/authorize")?;
+    let mut resp = http_agent()
+        .post(url.as_str())
+        .send_empty()
+        .map_err(|e| unreachable(base_url, e))?;
     if !resp.status().is_success() {
-        bail!("Server error: {}", resp.status());
+        return Err(response_error(base_url, &mut resp, "device login"));
     }
-    let r = resp.body_mut().read_json::<DeviceAuthorizationResponse>()?;
+    let r = resp
+        .body_mut()
+        .read_json::<DeviceAuthorizationResponse>()
+        .map_err(|e| invalid_response(base_url, e))?;
     Ok(r)
 }
 
@@ -134,18 +156,25 @@ pub struct TokenResponse {
 }
 
 pub fn query_for_token(base_url: &Url, device_code: &str) -> Result<Option<TokenResponse>> {
-    let url = base_url.join("/api/oauth/token")?;
-    let mut resp = http_agent().post(url.as_str()).send_json(TokenPayload {
-        device_code: device_code.to_string(),
-    })?;
+    let url = join_url(base_url, "api/oauth/token")?;
+    let mut resp = http_agent()
+        .post(url.as_str())
+        .send_json(TokenPayload {
+            device_code: device_code.to_string(),
+        })
+        .map_err(|e| unreachable(base_url, e))?;
     match resp.status().as_u16() {
         200 => {
-            let r = resp.body_mut().read_json::<TokenResponse>()?;
+            let r = resp
+                .body_mut()
+                .read_json::<TokenResponse>()
+                .map_err(|e| invalid_response(base_url, e))?;
             Ok(Some(r))
         }
         400 => bail!("User code expired"),
         401 => Ok(None),
         404 => bail!("Unknown device code"),
+        code @ (405 | 500..) => Err(status_error(base_url, code, "", "device login")),
         _ => bail!("Unknown server error: {}", resp.status()),
     }
 }
@@ -173,13 +202,43 @@ pub fn poll_for_token(base_url: &Url, device_code: &str) -> Result<TokenResponse
 
 /// Ask the server to revoke `token` so it stops working everywhere, not just on this machine.
 pub fn revoke_token(base_url: &Url, token: &str) -> Result<()> {
-    let url = base_url.join("/api/oauth/token")?;
-    let resp = http_agent()
+    let url = join_url(base_url, "api/oauth/token")?;
+    let mut resp = http_agent()
         .delete(url.as_str())
         .header("authorization", format!("Bearer {token}"))
-        .call()?;
+        .call()
+        .map_err(|e| unreachable(base_url, e))?;
     if !resp.status().is_success() {
-        bail!("Server error: {}", resp.status());
+        return Err(response_error(base_url, &mut resp, "revoking the token"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unparsable_store_is_an_error_and_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        fs::write(&path, "not json").unwrap();
+        let error = read_store(&path).unwrap_err();
+        assert_eq!(
+            crate::backend_error_code(&error),
+            Some(ErrorCode::CredentialsUnreadable)
+        );
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn login_replaces_an_unparsable_store() {
+        let path = get_token_store_path().unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "not json").unwrap();
+        let url = Url::parse("https://h/").unwrap();
+        store_token(&url, "t").unwrap();
+        assert_eq!(get_token(&url).unwrap().as_deref(), Some("t"));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
 }

@@ -5,8 +5,9 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::error::{Error, ErrorCode};
 use crate::paths::ProjectPath;
-use crate::{Backend, Compression, DvsPaths, Hashes, Outcome, StoreRequest};
+use crate::{Backend, Compression, DvsPaths, Hashes, Outcome, StoreRequest, StoreResult};
 
 /// The dvs metadata for a given file
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -81,7 +82,7 @@ impl FileMetadata {
     }
 
     /// Returns whether the file already existed in the dvs folder and therefore is an update
-    /// and the compressed size if applicable.
+    /// and what storage reported, if it stored anything.
     /// Copies the source file to storage and saves metadata atomically (both succeed or neither).
     pub fn save(
         &mut self,
@@ -91,7 +92,7 @@ impl FileMetadata {
         paths: &DvsPaths,
         relative_path: impl AsRef<Path>,
         on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-    ) -> Result<(Outcome, Option<u64>)> {
+    ) -> Result<(Outcome, Option<StoreResult>)> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
         let dvs_file_exists = dvs_file_path.is_file();
         // Only check if file exists on the server if it exists locally
@@ -107,7 +108,13 @@ impl FileMetadata {
 
         if dvs_file_exists && storage_exists {
             // we read the file anyway to make sure it's not 2 files having the same hash
-            let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)?;
+            let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)
+                .map_err(|e| {
+                Error::new(
+                    ErrorCode::BadMetadata,
+                    format!("cannot read {}: {e}", dvs_file_path.display()),
+                )
+            })?;
             if existing == *self {
                 log::debug!(
                     "File {} is already in sync",
@@ -117,7 +124,7 @@ impl FileMetadata {
             }
         }
 
-        let stored_size = self.store_and_write(
+        let stored = self.store_and_write(
             operation_id,
             source_file,
             backend,
@@ -125,11 +132,11 @@ impl FileMetadata {
             relative_path,
             on_bytes,
         )?;
-        Ok((Outcome::Copied, Some(stored_size)))
+        Ok((Outcome::Copied, Some(stored)))
     }
 
     /// Stores the file then writes the metadata, atomically: either both succeed or
-    /// neither is left behind. Returns the compressed size.
+    /// neither is left behind. Returns what storage reported.
     pub fn store_and_write(
         &mut self,
         operation_id: Uuid,
@@ -138,7 +145,7 @@ impl FileMetadata {
         paths: &DvsPaths,
         relative_path: impl AsRef<Path>,
         on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-    ) -> Result<u64> {
+    ) -> Result<StoreResult> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());
 
         // 1. Store file to backend. The backend records the add in its audit log
@@ -165,7 +172,7 @@ impl FileMetadata {
         let metadata_res = self.write(paths, relative_path.as_ref());
 
         match (store_res, metadata_res) {
-            (Ok(res), Ok(_)) => Ok(res.stored_size),
+            (Ok(res), Ok(_)) => Ok(res),
             (Err(e), Ok(_)) => {
                 log::warn!(
                     "Storage failed, rolling back metadata for {}",
@@ -301,6 +308,43 @@ mod tests {
         // Metadata file should exist
         assert!(dvs_dir.join("data.bin.dvs").is_file());
         assert!(backend.exists(&metadata.hashes).unwrap());
+    }
+
+    #[test]
+    fn save_reports_an_unreadable_record_as_bad_metadata() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+        let file_path = create_file(&root, "data.bin", b"binary data");
+        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        metadata
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                None,
+            )
+            .unwrap();
+        let conflicted = "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> theirs\n";
+        fs::write(dvs_dir.join("data.bin.dvs"), conflicted).unwrap();
+
+        let error = metadata
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(
+            crate::backend_error_code(&error),
+            Some(ErrorCode::BadMetadata)
+        );
     }
 
     #[test]

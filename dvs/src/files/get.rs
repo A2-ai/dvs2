@@ -11,11 +11,12 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::backends::server::{Denied, Unreachable};
 use crate::cache::{FileStat, HashCache, baseline_for, record_baseline, try_open_cache};
 use crate::config::{OnConflict, SettingSource};
+use crate::error::{Error, ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::globbing::GetSelection;
+use crate::operation::ByteTotals;
 use crate::paths::ProjectPath;
 use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
@@ -111,9 +112,9 @@ impl StoredCopy {
     }
 }
 
-/// Why a file did not end up at its target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// Why a file did not end up at its target: a get-specific code, or a shared
+/// one. Serialized as the code's string either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GetCode {
     LocalChanges,
     UnknownLocal,
@@ -123,13 +124,16 @@ pub enum GetCode {
     UnsafePath,
     SourceMissing,
     HashMismatch,
-    AccessDenied,
-    ServerUnavailable,
     DestinationChanged,
     PermissionDenied,
     FileInUse,
-    IoError,
-    BadMetadata,
+    Shared(ErrorCode),
+}
+
+impl From<ErrorCode> for GetCode {
+    fn from(code: ErrorCode) -> Self {
+        GetCode::Shared(code)
+    }
 }
 
 impl GetCode {
@@ -143,14 +147,17 @@ impl GetCode {
             GetCode::UnsafePath => "unsafe_path",
             GetCode::SourceMissing => "source_missing",
             GetCode::HashMismatch => "hash_mismatch",
-            GetCode::AccessDenied => "access_denied",
-            GetCode::ServerUnavailable => "server_unavailable",
             GetCode::DestinationChanged => "destination_changed",
             GetCode::PermissionDenied => "permission_denied",
             GetCode::FileInUse => "file_in_use",
-            GetCode::IoError => "io_error",
-            GetCode::BadMetadata => "bad_metadata",
+            GetCode::Shared(code) => code.as_str(),
         }
+    }
+}
+
+impl Serialize for GetCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
     }
 }
 
@@ -213,8 +220,12 @@ impl GetOutcome {
     }
 }
 
+/// `total` is every row; `succeeded` the rows at their target (restored,
+/// replaced, unchanged, would_restore, would_replace); `failed` the failed action.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct GetCounts {
+    pub total: usize,
+    pub succeeded: usize,
     pub restored: usize,
     pub replaced: usize,
     pub unchanged: usize,
@@ -233,15 +244,17 @@ pub struct GetReport {
     pub on_conflict: OnConflict,
     pub source: SettingSource,
     pub counts: GetCounts,
+    pub bytes: ByteTotals,
     /// An operation-level problem, such as nothing matching the request
-    pub problem: Option<String>,
+    pub problem: Option<Error>,
     pub files: Vec<GetRow>,
 }
 
 impl GetReport {
     /// A report for a request that selected nothing or could not run at all.
     pub fn problem(
-        problem: impl Into<String>,
+        code: ErrorCode,
+        message: impl Into<String>,
         dry_run: bool,
         on_conflict: OnConflict,
         source: SettingSource,
@@ -252,7 +265,8 @@ impl GetReport {
             on_conflict,
             source,
             counts: GetCounts::default(),
-            problem: Some(problem.into()),
+            bytes: ByteTotals::default(),
+            problem: Some(Error::new(code, message)),
             files: Vec::new(),
         }
     }
@@ -446,7 +460,7 @@ fn plan_file(paths: &DvsPaths, relative_path: &Path, cache: Option<&Mutex<HashCa
             return fail(
                 planned,
                 Before::Unknown,
-                GetCode::BadMetadata,
+                GetCode::Shared(ErrorCode::BadMetadata),
                 format!("cannot read {}: {e}", metadata_path.display()),
             );
         }
@@ -506,7 +520,7 @@ fn plan_file(paths: &DvsPaths, relative_path: &Path, cache: Option<&Mutex<HashCa
             let code = e
                 .downcast_ref::<io::Error>()
                 .map(io_code)
-                .unwrap_or(GetCode::IoError);
+                .unwrap_or(GetCode::Shared(ErrorCode::IoError));
             return fail(
                 planned,
                 Before::Unknown,
@@ -554,22 +568,19 @@ fn io_code(e: &io::Error) -> GetCode {
     }
     match e.kind() {
         io::ErrorKind::PermissionDenied => GetCode::PermissionDenied,
-        _ => GetCode::IoError,
+        _ => GetCode::Shared(ErrorCode::IoError),
     }
 }
 
 /// The code for a failure: server unreachable or refusing, else by I/O kind.
 fn code_for(e: &anyhow::Error) -> GetCode {
-    if e.is::<Unreachable>() {
-        return GetCode::ServerUnavailable;
-    }
-    if e.is::<Denied>() {
-        return GetCode::AccessDenied;
+    if let Some(code) = backend_error_code(e) {
+        return code.into();
     }
     e.chain()
         .find_map(|cause| cause.downcast_ref::<io::Error>())
         .map(io_code)
-        .unwrap_or(GetCode::IoError)
+        .unwrap_or(GetCode::Shared(ErrorCode::IoError))
 }
 
 /// Whether the destination is still exactly as the plan saw it.
@@ -600,8 +611,8 @@ fn install(
             .map_err(|e| (io_code(&e), format!("cannot create its directory: {e}")))?;
     }
     let tmp_path = target.with_extension(format!("dvs-tmp.{}", Uuid::new_v4()));
-    let path =
-        ProjectPath::from_path(relative_path).map_err(|e| (GetCode::IoError, e.to_string()))?;
+    let path = ProjectPath::from_path(relative_path)
+        .map_err(|e| (GetCode::Shared(ErrorCode::IoError), e.to_string()))?;
 
     let result = (|| {
         let retrieved = backend
@@ -661,12 +672,26 @@ pub fn get_files(
         source,
     } = options;
     if selection.tracked.is_empty() && selection.unmatched.is_empty() {
-        return GetReport::problem("no tracked files matched", dry_run, on_conflict, source);
+        return GetReport::problem(
+            ErrorCode::NoFilesSelected,
+            "no tracked files matched",
+            dry_run,
+            on_conflict,
+            source,
+        );
     }
 
     let pool = match get_threadpool(selection.tracked.len().max(1)) {
         Ok(p) => p,
-        Err(e) => return GetReport::problem(e.to_string(), dry_run, on_conflict, source),
+        Err(e) => {
+            return GetReport::problem(
+                ErrorCode::OperationFailed,
+                e.to_string(),
+                dry_run,
+                on_conflict,
+                source,
+            );
+        }
     };
     let cache = try_open_cache(paths);
     let cache = cache.as_ref();
@@ -737,15 +762,7 @@ pub fn get_files(
         .iter()
         .any(|p| p.needs_transfer(on_conflict) || p.row.is_conflict());
     let access = if needs_remote {
-        backend.check_access().map_err(|e| {
-            // Short of an unreachable server (no token, expired login, no
-            // access), the user cannot get files: access_denied.
-            let code = match code_for(&e) {
-                GetCode::ServerUnavailable => GetCode::ServerUnavailable,
-                _ => GetCode::AccessDenied,
-            };
-            (code, format!("{e:#}"))
-        })
+        backend.check_access().map_err(access_failure)
     } else {
         Ok(())
     };
@@ -901,6 +918,15 @@ pub fn get_files(
     finish(planned, dry_run, on_conflict, source, false)
 }
 
+/// The code every file needing the remote gets when the access check fails.
+/// An unclassified failure is still the remote being unusable, not an I/O error.
+fn access_failure(e: anyhow::Error) -> FileError {
+    let code = backend_error_code(&e)
+        .map(GetCode::from)
+        .unwrap_or(GetCode::Shared(ErrorCode::ServerUnavailable));
+    (code, format!("{e:#}"))
+}
+
 /// Quote a path for a shell command line when it needs it.
 pub fn shell_path(path: &Path) -> String {
     let s = path.to_string_lossy();
@@ -939,17 +965,17 @@ fn hint(row: &GetRow) -> Option<String> {
              tell whoever added it"
                 .into(),
         ),
-        GetCode::AccessDenied => {
+        GetCode::Shared(ErrorCode::AccessDenied) => {
             Some("check you are logged in with access: dvs info, dvs login".into())
         }
-        GetCode::ServerUnavailable => {
+        GetCode::Shared(ErrorCode::ServerUnavailable) => {
             Some("check your network or VPN and the server, then run dvs get again".into())
         }
         GetCode::DestinationChanged => Some(format!("run again once nothing is writing {p}")),
         GetCode::FileInUse => {
             Some("close the program using the file, then run dvs get again".into())
         }
-        GetCode::BadMetadata => Some(format!(
+        GetCode::Shared(ErrorCode::BadMetadata) => Some(format!(
             "fix the .dvs file for {p} (for example a git merge conflict), then run dvs get again"
         )),
         _ => None,
@@ -970,7 +996,11 @@ fn finish(
             ..p.row
         })
         .collect();
-    let mut counts = GetCounts::default();
+    let mut counts = GetCounts {
+        total: files.len(),
+        succeeded: files.iter().filter(|r| r.satisfied).count(),
+        ..GetCounts::default()
+    };
     for r in &files {
         let slot = match r.action {
             Action::Restored => &mut counts.restored,
@@ -984,12 +1014,19 @@ fn finish(
         };
         *slot += 1;
     }
-    let satisfied = files.iter().filter(|r| r.satisfied).count();
+    // `to_transfer` counts every row not at its target, whatever then happened to it
+    let mut bytes = ByteTotals::default();
+    for r in &files {
+        if let Some(size) = r.size {
+            let installed = matches!(r.action, Action::Restored | Action::Replaced);
+            bytes.count(size, r.before == Before::Current, installed);
+        }
+    }
     let outcome = if aborted {
         GetOutcome::Aborted
-    } else if satisfied == files.len() {
+    } else if counts.succeeded == counts.total {
         GetOutcome::Complete
-    } else if satisfied + counts.skipped == 0 {
+    } else if counts.succeeded + counts.skipped == 0 {
         GetOutcome::Failed
     } else {
         GetOutcome::Partial
@@ -1000,6 +1037,7 @@ fn finish(
         on_conflict,
         source,
         counts,
+        bytes,
         problem: None,
         files,
     }
@@ -1051,7 +1089,8 @@ mod tests {
                 false,
                 None,
             )
-            .unwrap();
+            .unwrap()
+            .files;
             assert!(matches!(
                 results[0].detail,
                 crate::AddDetail::Success { .. }
@@ -1294,7 +1333,10 @@ mod tests {
 
         let report = repo.get(&["a.csv", "b.csv"], OnConflict::Abort);
         assert_eq!(report.outcome, GetOutcome::Aborted);
-        assert_eq!(row(&report, "b.csv").code, Some(GetCode::BadMetadata));
+        assert_eq!(
+            row(&report, "b.csv").code,
+            Some(GetCode::Shared(ErrorCode::BadMetadata))
+        );
         assert_eq!(row(&report, "a.csv").code, Some(GetCode::BatchAborted));
         assert!(!repo.root.join("a.csv").exists());
 
@@ -1322,7 +1364,11 @@ mod tests {
         let repo = TestRepo::new();
         let report = repo.get(&[], OnConflict::Abort);
         assert_eq!(report.outcome, GetOutcome::Failed);
-        assert!(report.problem.is_some() && report.files.is_empty());
+        assert_eq!(
+            report.problem.map(|p| p.code),
+            Some(ErrorCode::NoFilesSelected)
+        );
+        assert!(report.files.is_empty());
     }
 
     // Spec 10
@@ -1345,6 +1391,8 @@ mod tests {
         assert_eq!(report.outcome, GetOutcome::Partial);
         assert_eq!(row(&report, "a.csv").action, Action::Restored);
         assert_eq!(row(&report, "b.csv").code, Some(GetCode::SourceMissing));
+        let c = &report.counts;
+        assert_eq!((c.total, c.succeeded, c.failed), (2, 1, 1));
     }
 
     // Spec 11
@@ -1579,5 +1627,25 @@ mod tests {
         let report = repo.get(&["locked/a.csv", "b.csv"], OnConflict::Abort);
         assert_eq!(report.outcome, GetOutcome::Complete);
         assert_eq!(repo.read("locked/a.csv"), b"a");
+    }
+
+    #[test]
+    fn access_failures_keep_their_shared_code() {
+        for code in [ErrorCode::AuthExpired, ErrorCode::ProjectNotFound] {
+            let e: anyhow::Error = Error::new(code, "nope").into();
+            assert_eq!(access_failure(e).0.as_str(), code.as_str());
+        }
+        let plain = anyhow::anyhow!("something went wrong");
+        assert_eq!(
+            access_failure(plain).0,
+            GetCode::Shared(ErrorCode::ServerUnavailable)
+        );
+    }
+
+    #[test]
+    fn codes_serialize_as_flat_strings() {
+        let json = |code: GetCode| serde_json::to_value(code).unwrap();
+        assert_eq!(json(GetCode::LocalChanges), "local_changes");
+        assert_eq!(json(GetCode::Shared(ErrorCode::IoError)), "io_error");
     }
 }

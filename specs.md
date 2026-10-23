@@ -12,6 +12,9 @@ All configuration is handled in a `dvs.toml` config file.
 
 All CLI commands take a `--json` flag if you want to get JSON output.
 
+The CLI JSON protocol (machine-readable envelopes, errors, exit statuses and discovery) is specified under
+[Machine output (`--json`)](#machine-output---json).
+
 The Rust library must not contain anything specific to the CLI or the R package: no `miniextendr-*` dependency, no `println!`/`eprintln!`/`dbg!`. It may depend on the `log` facade but must not pull in a `log` implementer. Logger setup belongs in `dvs-cli` and `dvs-rpkg`.
 
 ## Glossary
@@ -68,6 +71,87 @@ All input must be evaluated, and errors as well as successes must be collected a
 
 Error handling in CLI must be designed around the use case of being a part
 of pipelines, or non-interactive workflows. Returning error codes is necessary.
+
+##### Machine output (`--json`)
+
+This is protocol version 1. `--json` is global: it goes before or after the subcommand (after the argument
+terminator `--` it is a literal path). A command writes one JSON document to stdout, startup, configuration and
+argument failures included; stderr is for diagnostics, which clients must never parse. Explicit `--help` and
+`--version` keep human output and exit `0`. Codes are the API; messages are display text and may change. Clients
+check both the result and the exit status, and tolerate additional fields and unknown codes without treating
+them as success. Incompatible semantics need a new protocol version.
+
+Every `--json` result is one envelope, error envelopes included: `v` (`1`), `command` (`cli` for argument
+parsing errors), `outcome` (`complete`, `partial` or `failed`; `get` also `aborted`), `dry_run` (a requested
+mutation preview), `error`, and for commands with rows (`add`, `get`, `status`) `counts` and `files` (the rows;
+empty in an error envelope), plus the command's own fields (`add`/`get` `bytes`, `get` `on_conflict`/`source`,
+`init` `project_root`, `logout` `revoked`/`warnings`, `info` its discovery fields). It carries its timing:
+`started_at` and `finished_at` (RFC 3339 UTC with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and
+`duration_ms` (integer milliseconds). Every time in JSON output is RFC 3339 UTC; a record's `add_time` is given
+as the record stores it.
+
+```json
+{"v":1,"command":"add","outcome":"failed","dry_run":false,
+ "counts":{"total":0,"succeeded":0,"failed":0},
+ "bytes":{"total":0,"to_transfer":0,"already_stored":0,"transferred":0},
+ "error":{"code":"no_files_selected","message":"Path not found: missing.txt","hint":null},
+ "files":[],"started_at":"2026-10-21T14:30:00.120Z","finished_at":"2026-10-21T14:30:00.123Z","duration_ms":3}
+```
+
+`add` and `get` results have `bytes: {total, to_transfer, already_stored, transferred}` (dry runs too):
+`total` is the sizes of the rows whose size is known; `to_transfer` the bytes that need moving (`add`: upload;
+`get`: see get); `already_stored` the rest (`add`: storage already has the content), so
+`to_transfer + already_stored = total`; `transferred` what actually moved, so `0` in a dry run.
+
+Errors have one shape. The envelope's `error` is `null` or `{code, message, hint}`; every row of every command
+has `code`, `message` and `hint` (all `null` on success; `hint` is `null` where there is none). Rows have fixed
+keys: a field that does not apply is `null`, never missing (an `add` error row has `outcome`, `hash`, `size`,
+`stored_size` as `null`). `counts` has `total` (the rows), `failed` (rows that failed) and `succeeded` (the
+rest; get adds its detailed counts and defines `succeeded` itself), all computed by the library. `error` is a
+failure of the whole command; per-file failures stay in the rows, so a `partial` result normally has
+`error: null`. A `hint` is the next thing to try, for people (only `get` fills row hints today).
+
+Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; `get` see get;
+`status` `path`, `status`, `metadata` (`null` on an error row). `path` is relative to the project root
+(`info`'s `project_root`); get's `local_path` is relative to the current directory.
+
+Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row (`code`):
+`auth_required` (no token, not logged in), `auth_expired` (the server said 401), `access_denied` (403),
+`server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint that should exist answered
+404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs` record, e.g. git conflict
+markers) and `credentials_unreadable` (the store exists but cannot be read). Command-level codes:
+`not_in_project`, `invalid_configuration`, `invalid_arguments`, `no_files_selected` (also `get` when no tracked
+file matched), `io_error`, and `operation_failed`, the honest fallback when nothing more specific is known.
+`auth_required` is also what `login`, `init` and `attach` report in machine mode when device login would be
+needed. Row codes besides the shared ones: `add` `io_error` and `operation_failed` (`file_failed` if a failure
+has no code), `status` `file_failed` (the reason is in `message`), get's codes (see get), and `logout`
+`warnings` `revoke_failed`.
+
+`dvs info --json` finds the project from the working directory. `project_root` and `metadata_directory` are
+absolute native paths. For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
+`unknown` when not logged in), `connection_error`, `user`, `access` and `groups`; a local project reports
+`connection: "not_applicable"`. `connection_error` is `{code, message}` (`server_unavailable`,
+`project_not_found` or `server_too_old`) when `connection` is `unavailable`, else `null`. `access` is the
+server's level (`read`, `write`, `admin`), `not_logged_in` without a token, `none` on a 403 (no membership:
+`connection` is `available`, exit `0`, like human mode's "no access"), or `null` when the server could not say;
+a rejected login (401, `auth_expired`) is an error envelope.
+
+Exit codes, for every command: `0` complete; `1` failure, or some rows failed; `2` usage or configuration
+(`invalid_arguments`, `invalid_configuration`); `3` `get` only, local conflicts held files back and nothing
+else failed. A result written before a nonzero exit is authoritative. No result after the process was killed
+means the operation was interrupted: rescan before retrying.
+
+dvs never deletes or changes stored credentials on its own, in any mode: a 401 is `auth_expired` and the token
+stays (run `dvs login`); an unreadable credentials store is `credentials_unreadable` and stays. Only `dvs login`
+and `dvs logout` change credentials: login replaces an unreadable store with a fresh one, and logout treats it
+as nothing to revoke and resets it. `login --json` reports
+`auth_required` instead of starting device login. Credentials and device secrets are never written to results.
+`logout --json` deletes the local credential even if remote revocation fails: `revoked` is `true` for a
+confirmed revocation, `false` for a failed revoke call, `null` when there was no token; `warnings` is always an
+array of `{code, message}`.
+
+A server URL may carry a path prefix (a proxy, `https://host/dvs`, with or without the trailing slash): every
+request, login included, goes under it.
 
 #### R package
 
@@ -189,7 +273,7 @@ A batch refused for an invalid input path exits with `1` and adds nothing. A bat
 #### Rust library
 
 The library validates every input path first and returns an error, refusing the whole batch, if any path is invalid. It also returns an error if it cannot set up the threadpool.
-Otherwise it returns a list of results sorted alphabetically by path, letting users decide what to do with each per-file runtime failure.
+Otherwise it returns an `AddReport`: the results sorted alphabetically by path, their counts and byte totals, letting users decide what to do with each per-file runtime failure.
 
 #### R package
 
@@ -204,7 +288,7 @@ dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 
 Returns a data frame with one row per file. Glob resolution uses the same rules as the CLI. See the Globbing section.
 
-It raises an error if no files match, or if any input path is invalid (the whole batch is refused and nothing is written). A file that fails after a valid batch starts (for example a permission error during the copy) does not raise. That file is one row with its `error` column set and the success columns `NA`, next to the rows that succeeded.
+It raises an error if no files match, or if any input path is invalid (the whole batch is refused and nothing is written). A file that fails after a valid batch starts (for example a permission error during the copy) does not raise. That file is one row with its `code` and `error` columns set and the success columns `NA`, next to the rows that succeeded.
 
 ### get
 
@@ -286,15 +370,14 @@ restores every tracked file in the project.)
 Human output lists each file that changed or needs attention, then a summary naming the policy and where it came
 from, then the commands to keep or discard local changes.
 
-`--json` prints one envelope (this replaced the earlier bare array), also when `get` cannot start (not in a project,
-invalid configuration): then `files` is empty, `outcome` is `failed`, `problem` says why, and `on_conflict`/`source`
-are null.
+`--json` prints one envelope (this replaced the earlier bare array). When `get` cannot start (not in a project,
+invalid configuration) it is the shared error envelope, without `on_conflict`/`source`.
 
 ```json
 {"v": 1, "command": "get", "outcome": "aborted", "dry_run": false,
  "on_conflict": "abort", "source": "default",
- "counts": {"restored": 0, "replaced": 0, "unchanged": 1, "skipped": 0, "not_run": 2, "failed": 0, "would_restore": 0, "would_replace": 0},
- "problem": null,
+ "counts": {"total": 3, "succeeded": 1, "restored": 0, "replaced": 0, "unchanged": 1, "skipped": 0, "not_run": 2, "failed": 0, "would_restore": 0, "would_replace": 0},
+ "error": null,
  "files": [{"path": "data/b.csv", "local_path": "data/b.csv", "before": "modified", "action": "not_run",
             "satisfied": false, "size": 7, "target_hash": "…", "local_hash": "…", "stored_copy": "absent",
             "code": "local_changes", "message": "…", "hint": "keep your version: dvs add data/b.csv; …"}]}
@@ -308,7 +391,13 @@ are null.
 - `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run`, `failed`, `would_restore`, `would_replace`.
 - `code`: `local_changes`, `unknown_local`, `batch_aborted`, `not_tracked`, `not_a_file`, `unsafe_path`,
   `source_missing`, `hash_mismatch`, `access_denied`, `server_unavailable`, `destination_changed`, `permission_denied`, `file_in_use`,
-  `io_error`, `bad_metadata`.
+  `io_error`, `bad_metadata`, and the other shared codes (`auth_required`, `auth_expired`, `server_too_old`,
+  `project_not_found`, `credentials_unreadable`).
+- `counts`: `total` (every row) and `succeeded` (rows at their target: restored, replaced, unchanged, and
+  would_restore/would_replace in a dry run) next to the per-action counts; `failed` is the `failed` action.
+  Skipped and `not_run` rows (held back) are in neither `succeeded` nor `failed`.
+- `bytes`: `to_transfer` is the size of every row whose local copy does not match its target (held back,
+  skipped and failed rows included), `already_stored` of the rows that match.
 
 Exit codes: `0` did as asked, including files left as they are because `on_conflict = skip` asked for it; `1` any
 failure or operation problem (takes priority); `3` `on_conflict = abort` held files back because of conflicts
@@ -318,7 +407,8 @@ failure or operation problem (takes priority); `3` `on_conflict = abort` held fi
 
 `select_paths_for_get` resolves the request and returns the tracked paths plus the unmatched ones, which become
 `not_tracked` rows rather than an error. `get_files(selection, paths, backend, GetOptions { dry_run, on_conflict,
-source }, on_file_start)` returns a `GetReport` with the outcome, counts, an optional operation-level `problem`,
+source }, on_file_start)` returns a `GetReport` with the outcome, counts (`total` and `succeeded` included),
+byte totals, an optional operation-level `problem` (`{code, message}`, e.g. `no_files_selected`),
 and one `GetRow` per file sorted by path. `GetReport::verdict()` decides whether get did as asked (a skip the
 policy asked for counts as done), failed, or was held back by `abort`; the CLI exit code and R's `on_error` both
 read it. `Config::get_on_conflict` applies the precedence and returns a `ConfigError` for a project-sourced

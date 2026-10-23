@@ -1,18 +1,12 @@
 //! Rendering `dvs get` results: human text, the JSON envelope, and exit codes.
 
-use dvs::config::{OnConflict, SettingSource};
 use dvs::{
-    Action, Before, GetCode, GetOutcome, GetReport, GetRow, GetVerdict, StoredCopy, format_size,
-    shell_path,
+    Action, Before, ErrorCode, GetCode, GetOutcome, GetReport, GetRow, GetVerdict, StoredCopy,
+    format_size, shell_path,
 };
 use serde_json::json;
 
-/// Exit codes for `get`. Usage and configuration errors exit 2 (clap and
-/// `main`).
-pub const EXIT_OK: i32 = 0;
-pub const EXIT_FAILED: i32 = 1;
-pub const EXIT_USAGE: i32 = 2;
-pub const EXIT_CONFLICTS: i32 = 3;
+use crate::output::{EXIT_CONFLICTS, EXIT_FAILED, EXIT_OK};
 
 pub fn exit_code(report: &GetReport) -> i32 {
     match report.verdict() {
@@ -27,7 +21,9 @@ pub fn exit_code(report: &GetReport) -> i32 {
 fn is_shared(code: Option<GetCode>) -> bool {
     matches!(
         code,
-        Some(GetCode::AccessDenied | GetCode::ServerUnavailable)
+        Some(GetCode::Shared(
+            ErrorCode::AccessDenied | ErrorCode::ServerUnavailable
+        ))
     )
 }
 
@@ -240,29 +236,30 @@ pub fn to_json(report: &GetReport) -> serde_json::Value {
         "on_conflict": report.on_conflict,
         "source": report.source,
         "counts": report.counts,
-        "problem": report.problem,
+        "bytes": report.bytes,
+        "error": report
+            .problem
+            .as_ref()
+            .map(|p| crate::output::error_json(p.code, p.message.as_str())),
         "files": report.files,
     })
-}
-
-/// The envelope for a get that could not start (not in a project, invalid
-/// configuration): zero rows, the reason in `problem`, and no policy.
-pub fn problem_json(problem: &str, dry_run: bool) -> serde_json::Value {
-    let report = GetReport::problem(problem, dry_run, OnConflict::Abort, SettingSource::Default);
-    let mut v = to_json(&report);
-    v["on_conflict"] = serde_json::Value::Null;
-    v["source"] = serde_json::Value::Null;
-    v
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use dvs::GetCounts;
+    use dvs::config::{OnConflict, SettingSource};
 
     #[test]
     fn aborted_summary_names_files_that_cannot_be_retrieved() {
-        let mut report = GetReport::problem("", false, OnConflict::Abort, SettingSource::Default);
+        let mut report = GetReport::problem(
+            ErrorCode::OperationFailed,
+            "",
+            false,
+            OnConflict::Abort,
+            SettingSource::Default,
+        );
         report.problem = None;
         report.outcome = GetOutcome::Aborted;
         report.counts = GetCounts {

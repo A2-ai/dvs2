@@ -48,6 +48,7 @@ impl<'a> StoreRequest<'a> {
 }
 
 /// What the backend actually did with the file.
+#[derive(Debug)]
 pub struct StoreResult {
     /// Size of the stored blob, after compression.
     pub stored_size: u64,

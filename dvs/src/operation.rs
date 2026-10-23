@@ -1,0 +1,64 @@
+//! Counts, byte totals and timing helpers for operation results.
+
+use std::time::{Duration, Instant, SystemTime};
+
+use serde::Serialize;
+
+/// Byte totals for an `add` or `get` result: `to_transfer + already_stored
+/// == total`; `transferred` is what actually moved. Rows of unknown size count
+/// in none.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ByteTotals {
+    pub total: u64,
+    pub to_transfer: u64,
+    pub already_stored: u64,
+    pub transferred: u64,
+}
+
+impl ByteTotals {
+    pub(crate) fn count(&mut self, size: u64, stored: bool, transferred: bool) {
+        self.total += size;
+        if stored {
+            self.already_stored += size;
+        } else {
+            self.to_transfer += size;
+        }
+        if transferred {
+            self.transferred += size;
+        }
+    }
+}
+
+/// Row counts for a result: `succeeded + failed == total`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct Counts {
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+}
+
+impl Counts {
+    pub fn new(total: usize, failed: usize) -> Self {
+        Counts {
+            total,
+            succeeded: total - failed,
+            failed,
+        }
+    }
+}
+
+pub fn duration_ms(since: Instant) -> u64 {
+    millis(since.elapsed())
+}
+
+pub fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// RFC 3339 UTC with milliseconds, e.g. `2025-10-21T14:30:00.123Z`.
+pub fn rfc3339_ms(time: SystemTime) -> String {
+    match jiff::Timestamp::try_from(time) {
+        Ok(ts) => format!("{ts:.3}"),
+        Err(_) => format!("{:.3}", jiff::Timestamp::UNIX_EPOCH),
+    }
+}

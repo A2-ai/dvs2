@@ -168,13 +168,6 @@ dvs_get <- function(
     progress_callback = progress_callback
   )
   info <- raw$info
-  if (isTRUE(info$config_error)) {
-    stop(structure(
-      class = c("dvs_config_error", "dvs_error", "error", "condition"),
-      list(message = info$problem, call = sys.call())
-    ))
-  }
-  info$config_error <- NULL
 
   files <- tibble::as_tibble(raw$files)
   files$size <- new_dvs_bytes(files$size)
@@ -256,11 +249,7 @@ dvs_get_summary <- function(info, files = NULL) {
   } else {
     paste(parts, collapse = ", ")
   }
-  policy <- if (is.na(info$on_conflict)) {
-    ""
-  } else {
-    sprintf("; on_conflict = %s (%s)", info$on_conflict, info$source)
-  }
+  policy <- sprintf("; on_conflict = %s (%s)", info$on_conflict, info$source)
   sprintf(
     "dvs get%s: %s, %s%s",
     if (isTRUE(info$dry_run)) " (dry run)" else "",
