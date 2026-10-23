@@ -13,7 +13,8 @@ All configuration is handled in a `dvs.toml` config file.
 All CLI commands take a `--json` flag if you want to get JSON output.
 
 The CLI JSON protocol (machine-readable envelopes, errors, exit statuses and discovery) is specified under
-[Machine output (`--json`)](#machine-output---json).
+[Machine output (`--json`)](#machine-output---json). Client read queries specify rich status facts, content
+availability, and history.
 
 The Rust library must not contain anything specific to the CLI or the R package: no `miniextendr-*` dependency, no `println!`/`eprintln!`/`dbg!`. It may depend on the `log` facade but must not pull in a `log` implementer. Logger setup belongs in `dvs-cli` and `dvs-rpkg`.
 
@@ -42,14 +43,15 @@ You can pass some arguments to it or edit the toml file manually.
 
 Both `add` and `get` support a dry run from the CLI, the library, or the R package, returning the outcome that would have happened for each file without actually doing it.
 
-`status` is a way to check whether everything is checked out or if you have files different from what's in the metadata and
-that you might want to add again.
+`status` checks whether files are checked out as recorded or differ from the version in metadata.
 
-A file in a `dvs` project can be in 3 states:
+A file in a `dvs` project has these status states:
 
 - `current`: tracked in `dvs` and we have the same version as in the metadata folder checked out
 - `absent`: metadata exists in the folder but the local file is not present
-- `unsynced`: local file and metadata exists but the local file differs from the metadata
+- `unsynced`: local content differs from current metadata
+
+Both human-readable and machine-readable CLI status report differing content as `unsynced`.
 
 ### Relative paths vs. absolute paths
 
@@ -83,11 +85,13 @@ them as success. Incompatible semantics need a new protocol version.
 
 Every `--json` result is one envelope, error envelopes included: `v` (`1`), `command` (`cli` for argument
 parsing errors), `outcome` (`complete`, `partial` or `failed`; `get` also `aborted`), `dry_run` (a requested
-mutation preview), `error`, and for commands with rows (`add`, `get`, `status`) `counts` and `files` (the rows;
-empty in an error envelope), plus the command's own fields (`add`/`get` `bytes`, `get` `on_conflict`/`source`,
-`init` `project_root`, `logout` `revoked`/`warnings`, `info` its discovery fields). It carries its timing:
-`started_at` and `finished_at` (RFC 3339 UTC with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and
-`duration_ms` (integer milliseconds). Every time in JSON output is RFC 3339 UTC; a record's `add_time` is given
+mutation preview), `error`, and for commands with rows (`add`, `get`, `status`, `availability`, `history`)
+`counts` and `files` (the per-file, per-hash or per-entry rows; empty in an error envelope), plus the command's
+own fields (`add`/`get` `bytes`, `get` `on_conflict`/`source`, `init` `project_root`, `logout`
+`revoked`/`warnings`, `info` its discovery fields). It carries its timing: `started_at` and `finished_at`
+(RFC 3339 UTC with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and `duration_ms` (integer milliseconds).
+Every time in JSON output is RFC 3339 UTC: `started_at`/`finished_at` and history's `timestamp` with
+milliseconds (the audit log on disk keeps unix seconds), a record's `add_time` is given
 as the record stores it.
 
 ```json
@@ -112,8 +116,17 @@ failure of the whole command; per-file failures stay in the rows, so a `partial`
 `error: null`. A `hint` is the next thing to try, for people (only `get` fills row hints today).
 
 Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; `get` see get;
-`status` `path`, `status`, `metadata` (`null` on an error row). `path` is relative to the project root
-(`info`'s `project_root`); get's `local_path` is relative to the current directory.
+`status` `path`, `status` (`error` on an error row), `metadata`, `working` (`state` `present`, `absent` or
+`unknown`, `hashes`, `size`, `hash_source` `cache` or `computed`); `availability` `hash`, `state` (`present`,
+`absent`, `unknown`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action` (history never
+fails per row). `path` is relative to the project root (`info`'s `project_root`); get's `local_path` is
+relative to the current directory.
+
+`dvs availability <HASHES>...` takes one or more BLAKE3 hashes (an invalid one is `invalid_arguments`) and
+reports, per hash and in input order, whether storage has that content, without downloading it.
+`dvs history <PATHS>...` takes one or more file paths and reports their stored upload history; the files need
+not exist in this checkout. It takes files, not folders: a path that is a folder is refused with
+`invalid_arguments` (exit `2`), as is a path outside the project.
 
 Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row (`code`):
 `auth_required` (no token, not logged in), `auth_expired` (the server said 401), `access_denied` (403),
@@ -123,9 +136,9 @@ markers) and `credentials_unreadable` (the store exists but cannot be read). Com
 `not_in_project`, `invalid_configuration`, `invalid_arguments`, `no_files_selected` (also `get` when no tracked
 file matched), `io_error`, and `operation_failed`, the honest fallback when nothing more specific is known.
 `auth_required` is also what `login`, `init` and `attach` report in machine mode when device login would be
-needed. Row codes besides the shared ones: `add` `io_error` and `operation_failed` (`file_failed` if a failure
-has no code), `status` `file_failed` (the reason is in `message`), get's codes (see get), and `logout`
-`warnings` `revoke_failed`.
+needed. Row codes besides the shared ones: `add`, `status` and `availability` `io_error` and
+`operation_failed` (`file_failed` if a failure has no code), get's codes (see get), and `logout` `warnings`
+`revoke_failed`.
 
 `dvs info --json` finds the project from the working directory. `project_root` and `metadata_directory` are
 absolute native paths. For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
@@ -455,13 +468,13 @@ Options:
   -g, --glob <GLOB>        
       --current            Include the files that are current
       --absent             Include the files that are absent
-      --unsynced           Include the files that are unsynced
+      --unsynced           Include files whose working content differs from metadata
       --with-metadata      Show all metadata columns in the table output
   -h, --help               Print help
 ```
 
 By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`, and
-`--unsynced` flags are filters: when one or more are provided, only files matching those states are shown.
+`--current`, `--absent`, and `--unsynced` flags are filters: when one or more status flags are provided, only files matching those states are shown.
 
 This will exit with `1` if one or more files could not be inspected.
 
@@ -550,7 +563,7 @@ Every `add` and `init` operation is logged to an append-only audit file (`audit.
 Each entry records:
 
 - `operation_id`: a UUID grouping all files from one operation
-- `timestamp`: unix seconds
+- `timestamp`: unix seconds (`dvs history --json` reports it as RFC 3339 UTC)
 - `user`: the system username of whoever ran the command
 - `action`: either `add` or `init`
 
@@ -601,7 +614,7 @@ each path. Unlike the hash cache, `status` never writes it. Deleting it is safe;
 
 ### Parallelism
 
-`add`, `get`, and `status` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
+`add`, `get` and `status` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
 variable to control the thread count, if the CLI and R package have not set the number
 of threads directly. If it is unset, the default is `min(available_parallelism * 4, 16)`.
 If it is set to a positive integer, the override is capped at 32. In both cases the final thread count is

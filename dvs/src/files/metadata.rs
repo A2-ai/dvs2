@@ -381,4 +381,55 @@ mod tests {
         assert_eq!(outcome, Outcome::Present);
         assert!(stored_size.is_none());
     }
+
+    #[test]
+    fn save_local_updates_metadata_when_content_matches_different_file() {
+        // - Add file A with content "foo" (hash H1)
+        // - Add file B with content "bar" (hash H2)
+        // - Change file B's content to "foo" (now hash H1)
+        // - Run `add` on B
+        // => B's metadata is updated to hash H1
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+
+        // Add file A with content "foo" (hash H1)
+        let file_a = create_file(&root, "a.txt", b"foo");
+        let mut metadata_a = FileMetadata::from_file(&file_a, Compression::Zstd, None).unwrap();
+        metadata_a
+            .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt", None)
+            .unwrap();
+        let hash_h1 = metadata_a.hashes.blake3.clone();
+
+        // Add file B with content "bar" (hash H2)
+        let file_b = create_file(&root, "b.txt", b"bar");
+        let mut metadata_b = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
+        metadata_b
+            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", None)
+            .unwrap();
+        let hash_h2 = metadata_b.hashes.blake3.clone();
+        assert_ne!(hash_h1, hash_h2);
+
+        // Change file B's content to "foo" (now hash H1)
+        fs::write(&file_b, b"foo").unwrap();
+
+        // Run add on B with new content
+        let mut metadata_b_new = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
+        assert_eq!(metadata_b_new.hashes.blake3, hash_h1);
+
+        metadata_b_new
+            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", None)
+            .unwrap();
+
+        // Verify metadata was updated
+        let dvs_file = dvs_dir.join("b.txt.dvs");
+        let stored: FileMetadata =
+            serde_json::from_reader(fs::File::open(&dvs_file).unwrap()).unwrap();
+
+        assert_eq!(
+            stored.hashes.blake3, hash_h1,
+            "Metadata should be updated to new hash"
+        );
+    }
 }

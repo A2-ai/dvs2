@@ -1,5 +1,6 @@
 mod get_cmd;
 mod output;
+mod read_cmd;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -23,8 +24,7 @@ use dvs::init::{create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddResult, Backend, Compression, Counts, ErrorCode, FileMetadata, FileProgress,
-    FileStatus, GetOptions, Outcome, PathFilter, Status, StatusDetail, add_files, format_size,
-    get_files, get_status, set_num_threads,
+    GetOptions, Outcome, PathFilter, add_files, format_size, get_files, set_num_threads,
 };
 
 #[derive(Debug, Subcommand)]
@@ -115,7 +115,7 @@ pub enum Command {
         /// Include the files that are absent
         #[clap(long)]
         absent: bool,
-        /// Include the files that are unsynced
+        /// Include files whose working content differs from metadata
         #[clap(long)]
         unsynced: bool,
         /// Show all metadata columns in the table output
@@ -151,6 +151,17 @@ pub enum Command {
     },
     /// Show the project configuration and the server info is using a dvs-server backend
     Info,
+    /// Check whether explicitly named BLAKE3 content is stored, without downloading it
+    Availability {
+        #[clap(required = true)]
+        hashes: Vec<String>,
+    },
+    /// Show the stored upload history of files
+    History {
+        /// Files to show the history of (not folders)
+        #[clap(required = true)]
+        paths: Vec<PathBuf>,
+    },
     /// Log in to a DVS server, the one in the config unless a URL is given
     Login { url: Option<Url> },
     /// Log out from a DVS server
@@ -238,18 +249,15 @@ fn add_row(r: &AddResult) -> (serde_json::Value, bool) {
     (value, is_error)
 }
 
-fn status_row(row: &FileStatus) -> (serde_json::Value, bool) {
-    let (value, is_error) = match &row.detail {
-        StatusDetail::Success { status, metadata } => (
-            json!({"path": row.path, "status": status, "metadata": metadata}),
-            false,
-        ),
-        StatusDetail::Error { error } => (
-            json!({"path": row.path, "status": null, "metadata": null, "message": error}),
-            true,
-        ),
-    };
-    (value, is_error)
+/// The library's `error` text is the row's `message`, as on every other row.
+fn status_row(row: &dvs::StatusFacts) -> (serde_json::Value, bool) {
+    let mut value = serde_json::to_value(row).expect("status rows serialize");
+    if let Some(object) = value.as_object_mut()
+        && let Some(message) = object.remove("error")
+    {
+        object.insert("message".into(), message);
+    }
+    (value, row.error.is_some())
 }
 
 fn progress_style() -> ProgressStyle {
@@ -507,20 +515,16 @@ fn try_main(cli: Cli) -> Result<()> {
                     user_paths, recursive, &dvs_paths,
                 ))
             };
-            let mut statuses = get_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
+            let mut statuses = dvs::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref())?;
             if !show_all {
-                statuses.retain(|x| match &x.detail {
-                    StatusDetail::Success { status, .. } => {
-                        (current && *status == Status::Current)
-                            || (absent && *status == Status::Absent)
-                            || (unsynced && *status == Status::Unsynced)
-                    }
-                    StatusDetail::Error { .. } => true,
+                statuses.retain(|row| {
+                    row.error.is_some()
+                        || (current && row.status == "current")
+                        || (absent && row.status == "absent")
+                        || (unsynced && row.status == "unsynced")
                 });
             }
-            let has_errors = statuses
-                .iter()
-                .any(|s| matches!(s.detail, StatusDetail::Error { .. }));
+            let failed = statuses.iter().filter(|row| row.error.is_some()).count();
             if cli.json {
                 let (files, failed) = output::file_results(statuses.iter().map(status_row));
                 let counts = Counts::new(statuses.len(), failed);
@@ -532,29 +536,22 @@ fn try_main(cli: Cli) -> Result<()> {
                     println!("No tracked files matching the filter")
                 }
             } else {
-                for file_status in &statuses {
-                    if let StatusDetail::Error { error } = &file_status.detail {
-                        eprintln!(
-                            "Error getting status for {}: {error}",
-                            file_status.path.display()
-                        );
+                for row in &statuses {
+                    if let Some(error) = &row.error {
+                        eprintln!("Error getting status for {}: {error}", row.path.display());
                     }
                 }
 
                 if with_metadata {
                     let rows: Vec<StatusRowFull> = statuses
                         .iter()
-                        .filter_map(|fs| match &fs.detail {
-                            StatusDetail::Success { status, metadata } => {
-                                let mut row = metadata
-                                    .as_ref()
-                                    .map(StatusRowFull::from)
-                                    .unwrap_or_default();
-                                row.path = fs.path.display().to_string();
-                                row.status = status.to_string();
-                                Some(row)
-                            }
-                            StatusDetail::Error { .. } => None,
+                        .filter_map(|row| {
+                            row.metadata.as_ref().map(|metadata| {
+                                let mut formatted = StatusRowFull::from(metadata);
+                                formatted.path = row.path.display().to_string();
+                                formatted.status = row.status.to_string();
+                                formatted
+                            })
                         })
                         .collect();
                     let mut table = tabled::Table::new(rows);
@@ -565,19 +562,15 @@ fn try_main(cli: Cli) -> Result<()> {
                 } else {
                     let rows: Vec<StatusRow> = statuses
                         .iter()
-                        .filter_map(|fs| match &fs.detail {
-                            StatusDetail::Success { status, metadata } => {
-                                let size = match metadata {
-                                    Some(m) => format_size(m.size),
-                                    None => String::new(),
-                                };
-                                Some(StatusRow {
-                                    path: fs.path.display().to_string(),
-                                    status: status.to_string(),
-                                    size,
-                                })
-                            }
-                            StatusDetail::Error { .. } => None,
+                        .filter(|row| row.error.is_none())
+                        .map(|row| StatusRow {
+                            path: row.path.display().to_string(),
+                            status: row.status.to_string(),
+                            size: row
+                                .metadata
+                                .as_ref()
+                                .map(|m| format_size(m.size))
+                                .unwrap_or_default(),
                         })
                         .collect();
                     let mut table = tabled::Table::new(rows);
@@ -587,7 +580,7 @@ fn try_main(cli: Cli) -> Result<()> {
                     println!("{table}");
                 }
             }
-            if has_errors {
+            if failed > 0 {
                 if !cli.json {
                     eprintln!("Error: Some files failed to get status");
                 }
@@ -772,6 +765,65 @@ fn try_main(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Command::Availability { hashes } => {
+            let config = find_config(&current_dir)?;
+            let (files, failed) = read_cmd::availability(config.backend(), &hashes)?;
+            if cli.json {
+                let counts = Counts::new(files.len(), failed);
+                output::emit(output::rows_envelope("availability", false, files, counts));
+            } else {
+                for row in files {
+                    println!(
+                        "{} {}",
+                        row["state"].as_str().unwrap_or("unknown"),
+                        row["hash"].as_str().unwrap_or_default()
+                    );
+                    if let Some(message) = row["message"].as_str() {
+                        eprintln!("{message}");
+                    }
+                }
+            }
+            if failed != 0 {
+                return Err(Exit(1).into());
+            }
+        }
+        Command::History { paths } => {
+            let user_paths: Vec<String> = paths
+                .into_iter()
+                .map(|path| {
+                    path.into_os_string().into_string().map_err(|_| {
+                        output::coded(ErrorCode::InvalidArguments, "history paths must be UTF-8")
+                    })
+                })
+                .collect::<Result<_>>()?;
+            let config = find_config(&current_dir)?;
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
+            let entries = read_cmd::history(
+                config.backend(),
+                &dvs_paths,
+                user_paths.into_iter().map(PathBuf::from).collect(),
+            )?;
+            if cli.json {
+                let rows: Vec<_> = entries.into_iter().map(output::row_error_fields).collect();
+                let counts = Counts::new(rows.len(), 0);
+                output::emit(output::rows_envelope("history", false, rows, counts));
+            } else {
+                for entry in entries {
+                    let action = &entry["action"]["add"];
+                    println!(
+                        "{} {} {} {}",
+                        entry["timestamp"].as_str().unwrap_or_default(),
+                        entry["user"].as_str().unwrap_or_default(),
+                        action["file"]["path"]
+                            .as_str()
+                            .unwrap_or("(project initialized)"),
+                        action["file"]["hashes"]["blake3"]
+                            .as_str()
+                            .unwrap_or_default()
+                    );
+                }
+            }
+        }
         Command::Login { url: Some(url) } => {
             run_device_login(&url, cli.json)?;
         }
@@ -873,6 +925,8 @@ impl Command {
             Self::Status { .. } => "status",
             Self::Get { .. } => "get",
             Self::Info => "info",
+            Self::Availability { .. } => "availability",
+            Self::History { .. } => "history",
             Self::Login { .. } => "login",
             Self::Logout => "logout",
         }

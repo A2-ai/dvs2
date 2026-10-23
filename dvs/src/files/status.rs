@@ -1,122 +1,139 @@
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-
+//! Local facts for machine-readable status, using cached hashes when available.
+use crate::cache::{self, FileStat};
+use crate::{DvsPaths, ErrorCode, FileMetadata, Hashes, PathFilter};
 use anyhow::Result;
 use fs_err as fs;
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use std::path::PathBuf;
 
-use crate::cache::{HashCache, try_open_cache};
-use crate::files::metadata::FileMetadata;
-use crate::paths::{DvsPaths, PathFilter};
-use crate::utils::get_threadpool;
-use crate::{Status, cache};
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FileStatus {
+#[derive(Debug, Serialize)]
+pub struct WorkingCopy {
+    /// Whether the working file is present and available for inspection.
+    pub state: &'static str,
+    pub hashes: Option<Hashes>,
+    pub size: Option<u64>,
+    pub hash_source: Option<&'static str>,
+}
+#[derive(Debug, Serialize)]
+pub struct StatusFacts {
     pub path: PathBuf,
-    #[serde(flatten)]
-    pub detail: StatusDetail,
+    pub status: &'static str,
+    pub metadata: Option<FileMetadata>,
+    pub working: WorkingCopy,
+    pub code: Option<ErrorCode>,
+    pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(untagged)]
-pub enum StatusDetail {
-    Success {
-        status: Status,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metadata: Option<FileMetadata>,
-    },
-    Error {
-        error: String,
-    },
-}
-
-fn get_file_status(
-    paths: &DvsPaths,
-    relative_path: impl AsRef<Path>,
-    cache: Option<&Mutex<HashCache>>,
-) -> Result<(Status, Option<FileMetadata>)> {
-    let dvs_file_path = paths.metadata_path(relative_path.as_ref());
-    if !dvs_file_path.is_file() {
-        return Ok((Status::Untracked, None));
-    }
-    let existing_metadata: FileMetadata = serde_json::from_reader(fs::File::open(dvs_file_path)?)?;
-    // If we have read the metadata, but we can't find the original file
-    let file_path = paths.file_path(relative_path.as_ref());
-    if !file_path.is_file() {
-        return Ok((Status::Absent, Some(existing_metadata)));
-    }
-    let rel_str = relative_path.as_ref().to_string_lossy();
-    let (hashes, size) = cache::hashes_for_file(&file_path, &rel_str, cache)?;
-
-    if existing_metadata.hashes == hashes && existing_metadata.size == size {
-        Ok((Status::Current, Some(existing_metadata)))
-    } else {
-        Ok((Status::Unsynced, Some(existing_metadata)))
-    }
-}
-
-pub fn get_status(
+/// Paths in the result are relative to `paths.repo_root()`, independent of cwd.
+pub fn inspect_status(
     paths: &DvsPaths,
     filter: Option<&PathFilter>,
     glob_pattern: Option<&str>,
-) -> Result<Vec<FileStatus>> {
-    let dvs_directory = paths.metadata_folder();
-    log::debug!("Scanning metadata folder: {}", dvs_directory.display());
-    let cache = try_open_cache(paths);
+) -> Result<Vec<StatusFacts>> {
     let glob = crate::globbing::build_glob_matcher(glob_pattern)?;
-
-    let entries = paths.tracked_paths();
-
-    if entries.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // A bare glob with no explicit paths anchors to the cwd, matching `add` and
-    // `get` (specs.md Globbing section). Without this the glob matched against
-    // the full repo-relative path, so from a subdirectory `status --glob` globbed
-    // the repo root while `get --glob` globbed the cwd.
-    let cwd_filter = match (filter, glob_pattern) {
-        (None, Some(_)) => Some(PathFilter::cwd_scoped(false, paths)),
-        _ => None,
+    let cwd_filter = if filter.is_none() && glob_pattern.is_some() {
+        Some(PathFilter::cwd_scoped(false, paths))
+    } else {
+        None
     };
     let filter = filter.or(cwd_filter.as_ref());
-
-    let pool = get_threadpool(entries.len())?;
-
-    let mut results: Vec<FileStatus> = pool.install(|| {
+    let cache = cache::try_open_cache(paths);
+    let entries: Vec<_> = paths
+        .tracked_paths()
+        .into_iter()
+        .filter(|path| !filter.is_some_and(|f| !f.matches(path, glob.as_ref())))
+        .collect();
+    let pool = crate::utils::get_threadpool(entries.len().max(1))?;
+    let mut results = pool.install(|| {
         entries
             .into_par_iter()
-            .filter_map(|relative| {
-                // With a filter the glob is anchored to the matched path. With no
-                // filter and no glob, every tracked file is kept.
-                let keep = match filter {
-                    Some(f) => f.matches(&relative, glob.as_ref()),
-                    None => true,
+            .map(|path| {
+                let mut row = StatusFacts {
+                    path: path.clone(),
+                    status: "error",
+                    metadata: None,
+                    working: WorkingCopy {
+                        state: "unknown",
+                        hashes: None,
+                        size: None,
+                        hash_source: None,
+                    },
+                    code: None,
+                    error: None,
                 };
-                if !keep {
-                    return None;
+                let facts = (|| -> Result<()> {
+                    row.code = Some(ErrorCode::BadMetadata);
+                    row.metadata = Some(serde_json::from_reader(fs::File::open(
+                        paths.metadata_path(&path),
+                    )?)?);
+                    row.code = Some(ErrorCode::IoError);
+                    let key = path.to_string_lossy();
+                    let full = paths.file_path(&path);
+                    // Never hash a symlink or traverse a symlinked parent outside the project.
+                    let mut component = paths.repo_root().to_path_buf();
+                    for part in path.components() {
+                        component.push(part.as_os_str());
+                        match fs::symlink_metadata(&component) {
+                            Ok(meta) if meta.file_type().is_symlink() => {
+                                anyhow::bail!("working path contains a symlink")
+                            }
+                            Ok(_) => (),
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                            Err(e) => return Err(e.into()),
+                        }
+                    }
+                    let stat = match FileStat::from_path(&full) {
+                        Ok(stat) => stat,
+                        Err(e)
+                            if e.downcast_ref::<std::io::Error>()
+                                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+                        {
+                            row.status = "absent";
+                            row.working.state = "absent";
+                            return Ok(());
+                        }
+                        Err(e) => return Err(e),
+                    };
+                    anyhow::ensure!(full.is_file(), "working path is not a regular file");
+                    row.working.size = Some(stat.size);
+                    let hit = cache
+                        .as_ref()
+                        .and_then(|c| c.lock().ok()?.lookup(&key, &stat).ok().flatten());
+                    let (hashes, size, source) = match hit {
+                        Some(hashes) => (hashes, stat.size, "cache"),
+                        None => {
+                            let (hashes, size) =
+                                cache::hashes_for_file(&full, &key, cache.as_ref())?;
+                            (hashes, size, "computed")
+                        }
+                    };
+                    let target = row.metadata.as_ref().unwrap();
+                    row.status = if hashes == target.hashes && size == target.size {
+                        "current"
+                    } else {
+                        "unsynced"
+                    };
+                    row.working = WorkingCopy {
+                        state: "present",
+                        hashes: Some(hashes),
+                        size: Some(size),
+                        hash_source: Some(source),
+                    };
+                    Ok(())
+                })();
+                match facts {
+                    Ok(()) => row.code = None,
+                    Err(e) => {
+                        row.status = "error";
+                        row.error = Some(format!("{e:#}"));
+                    }
                 }
-                let detail = match get_file_status(paths, &relative, cache.as_ref()) {
-                    Ok((status, file_metadata)) => StatusDetail::Success {
-                        status,
-                        metadata: file_metadata,
-                    },
-                    Err(e) => StatusDetail::Error {
-                        error: e.to_string(),
-                    },
-                };
-                Some(FileStatus {
-                    path: relative,
-                    detail,
-                })
+                row
             })
-            .collect()
+            .collect::<Vec<_>>()
     });
     results.sort_by(|a, b| a.path.cmp(&b.path));
-
-    log::debug!("Found {} tracked files", results.len());
     Ok(results)
 }
 
@@ -124,215 +141,71 @@ pub fn get_status(
 mod tests {
     use super::*;
     use crate::Compression;
-    use crate::paths::normalize_path;
     use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
     use uuid::Uuid;
-
-    fn make_paths(root: &Path, config: &crate::config::Config) -> DvsPaths {
-        DvsPaths::new(
-            root.to_path_buf(),
-            root.to_path_buf(),
-            config.metadata_folder_name(),
+    fn fixture() -> (tempfile::TempDir, DvsPaths) {
+        let (temp, root) = create_temp_git_repo();
+        let (config, _) = init_dvs_repo(&root);
+        let paths =
+            DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name()).unwrap();
+        let full = create_file(&root, "data.txt", b"original");
+        let (hashes, size) = Hashes::compute_from_path(&full, &[]).unwrap();
+        // Serialize via the actual metadata type so the fixture tracks the file format.
+        let metadata = FileMetadata::from_file(&full, crate::Compression::Zstd, None).unwrap();
+        fs::write(
+            paths.metadata_path(std::path::Path::new("data.txt")),
+            serde_json::to_vec(&metadata).unwrap(),
         )
-        .unwrap()
+        .unwrap();
+        assert_eq!(hashes.blake3, metadata.hashes.blake3);
+        assert_eq!(size, metadata.size);
+        (temp, paths)
     }
-
-    fn make_cache(paths: &DvsPaths) -> Mutex<HashCache> {
-        Mutex::new(HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap())
-    }
-
     #[test]
-    fn get_file_status_returns_untracked_for_new_file() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let paths = make_paths(&root, &config);
-        create_file(&root, "new.txt", b"content");
-
-        let cache = make_cache(&paths);
-        let (status, metadata) = get_file_status(&paths, "new.txt", Some(&cache)).unwrap();
-        assert_eq!(status, Status::Untracked);
-        assert!(metadata.is_none());
-    }
-
-    #[test]
-    fn get_file_status_returns_current_for_synced_file() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-        let file_path = create_file(&root, "synced.txt", b"content");
-
-        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-        metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "synced.txt",
-                None,
-            )
-            .unwrap();
-
-        let cache = make_cache(&paths);
-        let (status, metadata) = get_file_status(&paths, "synced.txt", Some(&cache)).unwrap();
-        assert_eq!(status, Status::Current);
-        assert!(metadata.is_some());
-    }
-
-    #[test]
-    fn get_file_status_returns_absent_when_file_deleted() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-        let file_path = create_file(&root, "deleted.txt", b"content");
-
-        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-        metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "deleted.txt",
-                None,
-            )
-            .unwrap();
-
-        // Delete the original file
-        fs::remove_file(&file_path).unwrap();
-
-        let cache = make_cache(&paths);
-        let (status, metadata) = get_file_status(&paths, "deleted.txt", Some(&cache)).unwrap();
-        assert_eq!(status, Status::Absent);
-        assert!(metadata.is_some());
-    }
-
-    #[test]
-    fn get_file_status_returns_unsynced_when_file_modified() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-        let file_path = create_file(&root, "modified.txt", b"original");
-
-        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-        metadata
-            .save(
-                Uuid::new_v4(),
-                &file_path,
-                backend,
-                &paths,
-                "modified.txt",
-                None,
-            )
-            .unwrap();
-
-        // Modify the file
-        fs::write(&file_path, b"changed content").unwrap();
-
-        let cache = make_cache(&paths);
-        let (status, metadata) = get_file_status(&paths, "modified.txt", Some(&cache)).unwrap();
-        assert_eq!(status, Status::Unsynced);
-        assert!(metadata.is_some());
-    }
-
-    #[test]
-    fn get_status_returns_all_tracked_files() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-
-        // Add multiple files
-        for name in ["a.txt", "b.txt", "subdir/c.txt"] {
-            let file_path = create_file(&root, name, name.as_bytes());
-            let mut metadata =
-                FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
-            metadata
-                .save(Uuid::new_v4(), &file_path, backend, &paths, name, None)
-                .unwrap();
-        }
-
-        let statuses = get_status(&paths, None, None).unwrap();
-        assert_eq!(statuses.len(), 3);
-
-        // All should be Current
-        for status in &statuses {
-            match &status.detail {
-                StatusDetail::Success { status, metadata } => {
-                    assert_eq!(*status, Status::Current);
-                    assert!(metadata.is_some());
-                }
-                StatusDetail::Error { error } => panic!("unexpected error: {error}"),
-            }
+    fn cache_miss_computes_status_facts() {
+        let (_temp, paths) = fixture();
+        let rows = inspect_status(&paths, None, None).unwrap();
+        assert_eq!(rows[0].status, "current");
+        assert_eq!(rows[0].working.hash_source, Some("computed"));
+        #[cfg(feature = "cache")]
+        {
+            let rows = inspect_status(&paths, None, None).unwrap();
+            assert_eq!(rows[0].status, "current");
+            assert_eq!(rows[0].working.hash_source, Some("cache"));
+            // A changed stat invalidates the cache without reading new file content.
+            fs::write(paths.repo_root().join("data.txt"), b"changed content").unwrap();
+            assert_eq!(
+                inspect_status(&paths, None, None).unwrap()[0].status,
+                "unsynced"
+            );
         }
     }
+    #[test]
+    fn missing_and_bad_metadata_are_distinct() {
+        let (_temp, paths) = fixture();
+        fs::remove_file(paths.repo_root().join("data.txt")).unwrap();
+        let rows = inspect_status(&paths, None, None).unwrap();
+        assert_eq!(rows[0].status, "absent");
+        assert!(rows[0].error.is_none());
+        fs::write(
+            paths.metadata_path(std::path::Path::new("data.txt")),
+            b"broken",
+        )
+        .unwrap();
+        let rows = inspect_status(&paths, None, None).unwrap();
+        assert_eq!(rows[0].status, "error");
+        assert_eq!(rows[0].code, Some(ErrorCode::BadMetadata));
+    }
 
     #[test]
-    fn get_status_returns_empty_vec_for_repo_with_no_tracked_files() {
+    fn status_returns_empty_vec_for_repo_with_no_tracked_files() {
         let (_tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
-        let paths = make_paths(&root, &config);
+        let paths =
+            DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name()).unwrap();
 
-        let statuses = get_status(&paths, None, None).unwrap();
+        let statuses = inspect_status(&paths, None, None).unwrap();
         assert!(statuses.is_empty());
-    }
-
-    #[test]
-    fn save_local_updates_metadata_when_content_matches_different_file() {
-        // - Add file A with content "foo" (hash H1)
-        // - Add file B with content "bar" (hash H2)
-        // - Change file B's content to "foo" (now hash H1)
-        // - Run `add` on B
-        // => B's metadata is updated to hash H1
-        let (_tmp, root) = create_temp_git_repo();
-        let (config, dvs_dir) = init_dvs_repo(&root);
-        let backend = config.backend();
-        let paths = make_paths(&root, &config);
-
-        // Add file A with content "foo" (hash H1)
-        let file_a = create_file(&root, "a.txt", b"foo");
-        let mut metadata_a = FileMetadata::from_file(&file_a, Compression::Zstd, None).unwrap();
-        metadata_a
-            .save(Uuid::new_v4(), &file_a, backend, &paths, "a.txt", None)
-            .unwrap();
-        let hash_h1 = metadata_a.hashes.blake3.clone();
-
-        // Add file B with content "bar" (hash H2)
-        let file_b = create_file(&root, "b.txt", b"bar");
-        let mut metadata_b = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
-        metadata_b
-            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", None)
-            .unwrap();
-        let hash_h2 = metadata_b.hashes.blake3.clone();
-        assert_ne!(hash_h1, hash_h2);
-
-        // Change file B's content to "foo" (now hash H1)
-        fs::write(&file_b, b"foo").unwrap();
-
-        // Run add on B with new content
-        let mut metadata_b_new = FileMetadata::from_file(&file_b, Compression::Zstd, None).unwrap();
-        assert_eq!(metadata_b_new.hashes.blake3, hash_h1);
-
-        metadata_b_new
-            .save(Uuid::new_v4(), &file_b, backend, &paths, "b.txt", None)
-            .unwrap();
-
-        // Verify metadata was updated
-        let dvs_file = dvs_dir.join("b.txt.dvs");
-        let stored: FileMetadata =
-            serde_json::from_reader(fs::File::open(&dvs_file).unwrap()).unwrap();
-
-        assert_eq!(
-            stored.hashes.blake3, hash_h1,
-            "Metadata should be updated to new hash"
-        );
-
-        let cache = make_cache(&paths);
-        let (status, _metadata) = get_file_status(&paths, "b.txt", Some(&cache)).unwrap();
-        assert_eq!(status, Status::Current);
     }
 
     /// Helper to set up a repo with files at various directory depths.
@@ -342,7 +215,8 @@ mod tests {
         let (tmp, root) = create_temp_git_repo();
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let backend = config.backend();
-        let paths = make_paths(&root, &config);
+        let paths =
+            DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name()).unwrap();
 
         for name in ["a.txt", "dir1/b.txt", "dir1/sub/c.txt", "dir2/d.txt"] {
             let file_path = create_file(&root, name, name.as_bytes());
@@ -355,75 +229,8 @@ mod tests {
         (tmp, paths)
     }
 
-    fn run_filter_cases(cases: Vec<(&[&str], &str, bool)>, recursive: bool) {
-        for (filter_paths, test_path, expected) in cases {
-            let filter = PathFilter {
-                paths: filter_paths
-                    .iter()
-                    .filter_map(|p| normalize_path(PathBuf::from(p)))
-                    .collect(),
-                recursive,
-            };
-            assert_eq!(
-                filter.matches(Path::new(test_path), None),
-                expected,
-                "filter={filter_paths:?} recursive={recursive} path={test_path:?}"
-            );
-        }
-    }
-
     #[test]
-    fn status_filter_matches_non_recursive() {
-        // (filter_paths, test_path, expected)
-        let cases: Vec<(&[&str], &str, bool)> = vec![
-            // direct child matches
-            (&["dir1"], "dir1/b.txt", true),
-            // nested child does NOT match
-            (&["dir1"], "dir1/sub/c.txt", false),
-            // exact file match
-            (&["dir2/d.txt"], "dir2/d.txt", true),
-            // exact file: different file does NOT match
-            (&["dir2/d.txt"], "dir2/e.txt", false),
-            // "." matches root-level files
-            (&["."], "a.txt", true),
-            // "." does NOT match nested files
-            (&["."], "dir1/b.txt", false),
-            // "../foo" escapes root → dropped, matches nothing
-            (&["../foo"], "foo", false),
-            // "dir1/../dir2" normalizes to "dir2", matches direct child
-            (&["dir1/../dir2"], "dir2/d.txt", true),
-            // "dir1/.." normalizes to root, matches root-level files
-            (&["dir1/.."], "a.txt", true),
-        ];
-        run_filter_cases(cases, false);
-    }
-
-    #[test]
-    fn status_filter_matches_recursive() {
-        // (filter_paths, test_path, expected)
-        let cases: Vec<(&[&str], &str, bool)> = vec![
-            // direct child matches
-            (&["dir1"], "dir1/b.txt", true),
-            // nested child matches
-            (&["dir1"], "dir1/sub/c.txt", true),
-            // unrelated dir does NOT match
-            (&["dir1"], "dir2/d.txt", false),
-            // "." matches everything recursively
-            (&["."], "a.txt", true),
-            (&["."], "dir1/b.txt", true),
-            (&["."], "dir1/sub/c.txt", true),
-            // "../foo" escapes root → dropped
-            (&["../foo"], "foo", false),
-            // "a/../../x" escapes root → dropped
-            (&["a/../../x"], "x", false),
-            // "dir1/../dir2" normalizes to "dir2", matches descendants
-            (&["dir1/../dir2"], "dir2/d.txt", true),
-        ];
-        run_filter_cases(cases, true);
-    }
-
-    #[test]
-    fn get_status_with_filter() {
+    fn status_with_filter() {
         let (_tmp, paths) = setup_filtered_repo();
 
         // Relative path filter
@@ -431,31 +238,31 @@ mod tests {
             paths: vec![PathBuf::from("dir1")],
             recursive: false,
         };
-        let statuses = get_status(&paths, Some(&filter), None).unwrap();
+        let statuses = inspect_status(&paths, Some(&filter), None).unwrap();
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
 
         // Absolute path filter via from_user_paths
         let abs_path = paths.repo_root().join("dir1/b.txt");
         let filter = PathFilter::from_user_paths(vec![abs_path], false, &paths);
-        let statuses = get_status(&paths, Some(&filter), None).unwrap();
+        let statuses = inspect_status(&paths, Some(&filter), None).unwrap();
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
     }
 
     #[test]
-    fn get_status_whole_repo_applies_glob() {
+    fn status_whole_repo_applies_glob() {
         let (_tmp, paths) = setup_filtered_repo();
 
         // No filter (whole repo) + glob: the glob still applies, matched against
         // the full repo-relative path. `*.txt` (literal separator) hits only
         // root-level files.
-        let statuses = get_status(&paths, None, Some("*.txt")).unwrap();
+        let statuses = inspect_status(&paths, None, Some("*.txt")).unwrap();
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("a.txt"));
 
         // `**/*.txt` reaches every tracked file.
-        let statuses = get_status(&paths, None, Some("**/*.txt")).unwrap();
+        let statuses = inspect_status(&paths, None, Some("**/*.txt")).unwrap();
         assert_eq!(statuses.len(), 4);
     }
 
@@ -469,7 +276,7 @@ mod tests {
             DvsPaths::new(fs::canonicalize(root.join("dir1")).unwrap(), root, ".dvs").unwrap();
 
         // Literal separator: only the direct child dir1/b.txt, not a.txt/dir2.
-        let got: Vec<_> = get_status(&sub, None, Some("*.txt"))
+        let got: Vec<_> = inspect_status(&sub, None, Some("*.txt"))
             .unwrap()
             .into_iter()
             .map(|f| f.path)
@@ -477,7 +284,7 @@ mod tests {
         assert_eq!(got, vec![PathBuf::from("dir1/b.txt")]);
 
         // Recursive glob reaches dir1/sub/c.txt, still scoped under dir1.
-        let got: Vec<_> = get_status(&sub, None, Some("**/*.txt"))
+        let got: Vec<_> = inspect_status(&sub, None, Some("**/*.txt"))
             .unwrap()
             .into_iter()
             .map(|f| f.path)
@@ -486,53 +293,5 @@ mod tests {
             got,
             vec![PathBuf::from("dir1/b.txt"), PathBuf::from("dir1/sub/c.txt")]
         );
-    }
-
-    #[test]
-    fn from_user_paths_with_subdirectory_cwd() {
-        let (_tmp, root) = create_temp_git_repo();
-        let (_config, _dvs_dir) = init_dvs_repo(&root);
-
-        // Create subdirectories so canonicalize works in DvsPaths::new
-        fs::create_dir_all(root.join("subdir/deep")).unwrap();
-        fs::create_dir_all(root.join("dir2")).unwrap();
-
-        // From subdir/: ../foo → resolves to "foo" (valid)
-        let paths = DvsPaths::new(
-            fs::canonicalize(root.join("subdir")).unwrap(),
-            root.to_path_buf(),
-            ".dvs",
-        )
-        .unwrap();
-        let filter = PathFilter::from_user_paths(vec![PathBuf::from("../foo")], false, &paths);
-        assert_eq!(filter.paths, vec![PathBuf::from("foo")]);
-
-        // From subdir/: ../../foo → escapes root → dropped (empty)
-        let filter = PathFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths);
-        assert!(
-            filter.paths.is_empty(),
-            "../../foo should escape root and be dropped"
-        );
-
-        // From subdir/deep/: ../../foo → resolves to "foo" (valid, 2 levels up = root)
-        let paths_deep = DvsPaths::new(
-            fs::canonicalize(root.join("subdir/deep")).unwrap(),
-            root.to_path_buf(),
-            ".dvs",
-        )
-        .unwrap();
-        let filter =
-            PathFilter::from_user_paths(vec![PathBuf::from("../../foo")], false, &paths_deep);
-        assert_eq!(filter.paths, vec![PathBuf::from("foo")]);
-
-        // From subdir/: ../dir2/file.txt → resolves to "dir2/file.txt"
-        let filter =
-            PathFilter::from_user_paths(vec![PathBuf::from("../dir2/file.txt")], false, &paths);
-        assert_eq!(filter.paths, vec![PathBuf::from("dir2/file.txt")]);
-
-        // From subdir/: absolute path with .. like <root>/subdir/../a.txt → normalizes to "a.txt"
-        let abs_with_dotdot = root.join("subdir/../a.txt");
-        let filter = PathFilter::from_user_paths(vec![abs_with_dotdot], false, &paths);
-        assert_eq!(filter.paths, vec![PathBuf::from("a.txt")]);
     }
 }

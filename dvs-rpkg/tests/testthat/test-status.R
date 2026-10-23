@@ -141,3 +141,15 @@ test_that("dvs_status returns POSIXct add_time and dvs_bytes size", {
   expect_s3_class(result$size, "dvs_bytes")
   expect_equal(typeof(unclass(result$size)), "double")
 })
+
+test_that("dvs_status keeps an unreadable record as an error row", {
+  new_dvs_test_repo()
+  write_theoph("t.csv")
+  dvs_add(paths = file.path(getwd(), "t.csv"))
+  writeLines("broken", file.path(".dvs", "t.csv.dvs"))
+
+  result <- dvs_status(status = "current")
+  expect_equal(nrow(result), 1L)
+  expect_equal(result$status, "error")
+  expect_false(is.na(result$error))
+})
