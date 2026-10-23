@@ -370,6 +370,15 @@ fn add_summary(report: &AddReport, dry_run: bool) -> String {
 }
 
 /// One line closing a human status: "Checked 3, 1 failed".
+/// The compression `info` reports. A server project's is set on the server and not kept in
+/// dvs.toml, so it is `None` rather than the default.
+fn info_compression(config: &Config) -> Option<String> {
+    match config.backend() {
+        Backend::Local(_) => Some(config.compression().to_string()),
+        Backend::Server(_) => None,
+    }
+}
+
 fn status_summary(counts: &Counts) -> String {
     let checked = counts.succeeded;
     summary_line([(checked, format!("Checked {checked}"))], counts).unwrap_or_default()
@@ -827,7 +836,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
         }
         Command::Info => {
             let config = find_config(&current_dir)?;
-            let compression = config.compression().to_string();
+            let compression = info_compression(&config);
             // What get does with local changes, and where that was set. An
             // invalid setting is shown, not an error: only get refuses to run
             let on_conflict = config.get_on_conflict(None);
@@ -863,7 +872,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                         println!("dvs {}", dvs::VERSION);
                         println!("backend     local");
                         println!("storage     {}", l.path.display());
-                        println!("compression {compression}");
+                        println!("compression {}", compression.as_deref().unwrap_or_default());
                         println!("{on_conflict_line}");
                     }
                 }
@@ -962,7 +971,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                                 println!("groups      {}", a.groups.join(", "));
                             }
                         }
-                        println!("compression {compression}");
+                        println!("compression set by the server");
                         println!("{on_conflict_line}");
                     }
                 }
@@ -1294,6 +1303,16 @@ mod tests {
             "dvs init needs a backend before the storage path: did you mean `dvs init local ../storage`?"
         );
         assert!(init_backend_error(&["lcoal".into()]).starts_with("unknown backend 'lcoal'"));
+    }
+
+    #[test]
+    fn info_leaves_server_compression_to_the_server() {
+        let url = Url::parse("https://dvs.example.com").unwrap();
+        let mut config = Config::new_server("trial".into(), url, None);
+        config.set_compression(Some(Compression::None));
+        assert_eq!(info_compression(&config), None);
+        let local = Config::new_local("/tmp/store", None).unwrap();
+        assert_eq!(info_compression(&local).as_deref(), Some("zstd"));
     }
 
     #[test]

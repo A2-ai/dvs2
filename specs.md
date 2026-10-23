@@ -189,7 +189,8 @@ needed. Row codes besides the shared ones: `add`, `status` and `availability` `i
 `dvs info --json` finds the project from the working directory. `project_root` and `metadata_directory` are
 absolute native paths. For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
 `unknown` when not logged in), `connection_error`, `user`, `access` and `groups`; a local project reports
-`connection: "not_applicable"`. `connection_error` is `{code, message}` (`server_unavailable`,
+`connection: "not_applicable"`. `compression` is a local project's (`zstd` or `none`), and `null` for a server
+project, whose compression is set on the server (human `info` prints "set by the server"). `connection_error` is `{code, message}` (`server_unavailable`,
 `project_not_found` or `server_too_old`) when `connection` is `unavailable`, else `null`. `access` is the
 server's level (`read`, `write`, `admin`), `not_logged_in` without a token, `none` on a 403 (no membership:
 `connection` is `available`, exit `0`, like human mode's "no access"), or `null` when the server could not say;
