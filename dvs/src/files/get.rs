@@ -10,15 +10,15 @@
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use crate::cache::{FileStat, HashCache, baseline_for, record_baseline, try_open_cache};
 use crate::config::{OnConflict, SettingSource};
 use crate::error::{Error, ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
 use crate::globbing::GetSelection;
-use crate::operation::ByteTotals;
+use crate::operation::{ByteTotals, FileRow, Hashing, OperationContext, OperationPlan, millis};
 use crate::paths::ProjectPath;
-use crate::progress::OnFileStart;
 use crate::utils::get_threadpool;
 use crate::{Backend, Compression, DvsPaths, RetrieveRequest, cache};
 use fs_err as fs;
@@ -183,6 +183,9 @@ pub struct GetRow {
     pub message: Option<String>,
     /// The next step, in CLI syntax
     pub hint: Option<String>,
+    /// Time spent on this file (hash + transfer + install); `None` for rows
+    /// never hashed or transferred.
+    pub duration_ms: Option<u64>,
 }
 
 impl GetRow {
@@ -318,9 +321,44 @@ struct Planned {
     /// The working file's stat when it was classified, to detect it changing
     /// while its replacement downloads. None when it was absent.
     stat: Option<FileStat>,
+    /// Time spent classifying it (mostly hashing), part of its `duration_ms`.
+    hash_time: Duration,
+    /// Hashing was attempted, whether or not it succeeded.
+    hashed: bool,
+    /// Already reported through `file_finished`: every row is, exactly once.
+    emitted: bool,
 }
 
 impl Planned {
+    fn new(row: GetRow) -> Self {
+        Planned {
+            row,
+            metadata: None,
+            stat: None,
+            hash_time: Duration::ZERO,
+            hashed: false,
+            emitted: false,
+        }
+    }
+
+    /// Report the row as final, unless it already was.
+    fn emit(&mut self, ctx: &OperationContext) {
+        if !self.emitted {
+            self.emitted = true;
+            self.fill_hash_duration();
+            self.row.hint = hint(&self.row);
+            ctx.observer().file_finished(FileRow::Get(&self.row));
+        }
+    }
+
+    /// A row that was hashed carries at least its hash time, whatever
+    /// happened to it after.
+    fn fill_hash_duration(&mut self) {
+        if self.row.duration_ms.is_none() && self.hashed {
+            self.row.duration_ms = Some(millis(self.hash_time));
+        }
+    }
+
     fn needs_transfer(&self, on_conflict: OnConflict) -> bool {
         self.row.action == Action::NotRun
             && (matches!(self.row.before, Before::Absent | Before::Clean)
@@ -337,18 +375,22 @@ impl Planned {
     }
 
     fn set(&mut self, action: Action, code: Option<GetCode>, message: Option<String>) {
-        self.row.action = action;
-        self.row.satisfied = matches!(
-            action,
-            Action::Restored
-                | Action::Replaced
-                | Action::Unchanged
-                | Action::WouldRestore
-                | Action::WouldReplace
-        );
-        self.row.code = code;
-        self.row.message = message;
+        set_row(&mut self.row, action, code, message);
     }
+}
+
+fn set_row(row: &mut GetRow, action: Action, code: Option<GetCode>, message: Option<String>) {
+    row.action = action;
+    row.satisfied = matches!(
+        action,
+        Action::Restored
+            | Action::Replaced
+            | Action::Unchanged
+            | Action::WouldRestore
+            | Action::WouldReplace
+    );
+    row.code = code;
+    row.message = message;
 }
 
 /// An absolute path as a path from the project root, if it is inside it
@@ -434,16 +476,19 @@ fn blank_row(paths: &DvsPaths, relative_path: &Path) -> GetRow {
         code: None,
         message: None,
         hint: None,
+        duration_ms: None,
     }
 }
 
-/// Classify one tracked file. Reads only local state.
-fn plan_file(paths: &DvsPaths, relative_path: &Path, cache: Option<&Mutex<HashCache>>) -> Planned {
-    let mut planned = Planned {
-        row: blank_row(paths, relative_path),
-        metadata: None,
-        stat: None,
-    };
+/// Classify one tracked file. Reads only local state. `hashing` begins
+/// just before the working file is hashed.
+fn plan_file(
+    paths: &DvsPaths,
+    relative_path: &Path,
+    cache: Option<&Mutex<HashCache>>,
+    hashing: &Hashing<'_>,
+) -> Planned {
+    let mut planned = Planned::new(blank_row(paths, relative_path));
     let fail = |mut planned: Planned, before: Before, code: GetCode, message: String| {
         planned.row.before = before;
         planned.set(Action::Failed, Some(code), Some(message));
@@ -514,6 +559,8 @@ fn plan_file(paths: &DvsPaths, relative_path: &Path, cache: Option<&Mutex<HashCa
 
     let rel_str = relative_path.to_string_lossy();
     let stat = FileStat::from_path(&target).ok();
+    hashing.begin();
+    planned.hashed = true;
     let (hashes, size) = match cache::hashes_for_file(&target, &rel_str, cache) {
         Ok(h) => h,
         Err(e) => {
@@ -659,12 +706,18 @@ fn install(
 ///
 /// Never errors: every problem is reported in the returned rows or as the
 /// report's `problem`.
+///
+/// Reports to `ctx`'s observer as it goes: hashing (only when the plan hashes
+/// some working file), `planned` once the plan and storage checks are done,
+/// then every row through `file_finished` exactly once, as soon as it is final
+/// (rows decided before the transfers first, then each transfer as it
+/// completes).
 pub fn get_files(
     selection: GetSelection,
     paths: &DvsPaths,
     backend: &Backend,
     options: GetOptions,
-    on_file_start: Option<&OnFileStart>,
+    ctx: &OperationContext,
 ) -> GetReport {
     let GetOptions {
         dry_run,
@@ -695,15 +748,37 @@ pub fn get_files(
     };
     let cache = try_open_cache(paths);
     let cache = cache.as_ref();
+    let observer = ctx.observer();
+    let ending = |planned, aborted| {
+        finish(
+            planned,
+            Ending {
+                dry_run,
+                on_conflict,
+                source,
+                aborted,
+            },
+            ctx,
+        )
+    };
 
-    // 1. Plan: classify every file, locally, writing nothing.
+    // 1. Plan: classify every file, locally, writing nothing. Hashing is
+    // reported from the first file actually hashed, so a plan that hashes
+    // nothing reports none.
+    let hashing = Hashing::new(observer);
     let mut planned: Vec<Planned> = pool.install(|| {
         selection
             .tracked
             .into_par_iter()
-            .map(|p| plan_file(paths, &p, cache))
+            .map(|p| {
+                let started = Instant::now();
+                let mut planned = plan_file(paths, &p, cache, &hashing);
+                planned.hash_time = started.elapsed();
+                planned
+            })
             .collect()
     });
+    hashing.finish();
     let cwd_rel = paths
         .cwd_relative_to_root()
         .map(Path::to_path_buf)
@@ -716,11 +791,7 @@ pub fn get_files(
         } else {
             Some(normalize(&cwd_rel.join(&user_path)))
         };
-        let mut p = Planned {
-            row: blank_row(paths, inside.as_deref().unwrap_or(&user_path)),
-            metadata: None,
-            stat: None,
-        };
+        let mut p = Planned::new(blank_row(paths, inside.as_deref().unwrap_or(&user_path)));
         let is_dir = paths.file_path(&p.row.path).is_dir();
         if inside.is_none() {
             p.row.local_path = user_path;
@@ -744,6 +815,8 @@ pub fn get_files(
         .filter(|p| p.row.before == Before::Current)
     {
         p.set(Action::Unchanged, None, None);
+        // Hashing it was the work: nothing to transfer.
+        p.row.duration_ms = Some(millis(p.hash_time));
         if !dry_run {
             if let Some(m) = &p.metadata {
                 record_baseline(
@@ -768,7 +841,7 @@ pub fn get_files(
     };
     for p in planned.iter_mut().filter(|p| p.row.is_conflict()) {
         p.row.stored_copy = Some(match (&access, &p.row.local_hash) {
-            (Ok(()), Some(blake3)) => {
+            (Ok(()), Some(blake3)) if needs_remote => {
                 let hashes = crate::Hashes {
                     blake3: blake3.clone(),
                     md5: None,
@@ -799,7 +872,9 @@ pub fn get_files(
                 Some("held back: another requested file has a problem".to_string()),
             );
         }
-        return finish(planned, dry_run, on_conflict, source, true);
+        let plan = operation_plan(&planned, &[]);
+        observer.planned(&plan);
+        return ending(planned, true);
     }
     for p in planned
         .iter_mut()
@@ -815,107 +890,144 @@ pub fn get_files(
         .filter(|(_, p)| p.needs_transfer(on_conflict))
         .map(|(i, _)| i)
         .collect();
+    let plan = operation_plan(&planned, &transfer_idx);
     if let Err((code, message)) = &access {
         for &i in &transfer_idx {
             planned[i].set(Action::Failed, Some(*code), Some(message.clone()));
         }
-        return finish(planned, dry_run, on_conflict, source, false);
+        observer.planned(&plan);
+        return ending(planned, false);
+    }
+    observer.planned(&plan);
+    // Everything that will not be transferred is final now.
+    for p in planned.iter_mut() {
+        if !p.needs_transfer(on_conflict) {
+            p.emit(ctx);
+        }
     }
 
     let operation_id = Uuid::new_v4();
-    let outcomes: Vec<(usize, Result<(), FileError>)> = pool.install(|| {
+    let finished: Vec<(usize, GetRow)> = pool.install(|| {
         transfer_idx
             .par_iter()
             .map(|&i| {
                 let p = &planned[i];
+                let mut row = p.row.clone();
+                let started = Instant::now();
+                let result = transfer(p, backend, paths, dry_run, operation_id, ctx);
+                settle(&mut row, p, result, dry_run, paths, cache);
+                row.duration_ms = Some(millis(p.hash_time + started.elapsed()));
+                row.hint = hint(&row);
+                // Final the moment its own transfer is done, not when the batch is.
+                observer.file_finished(FileRow::Get(&row));
+                (i, row)
+            })
+            .collect()
+    });
+    for (i, row) in finished {
+        planned[i].row = row;
+        planned[i].emitted = true;
+    }
+
+    ending(planned, false)
+}
+
+/// Fetch one planned file (a dry run only asks storage whether it is there).
+fn transfer(
+    p: &Planned,
+    backend: &Backend,
+    paths: &DvsPaths,
+    dry_run: bool,
+    operation_id: Uuid,
+    ctx: &OperationContext,
+) -> Result<(), FileError> {
+    let metadata = p
+        .metadata
+        .as_ref()
+        .expect("planned transfers have metadata");
+    if dry_run {
+        return match backend.exists(&metadata.hashes) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err((
+                GetCode::SourceMissing,
+                "this version is not in storage".to_string(),
+            )),
+            Err(e) => Err((code_for(&e), format!("{e:#}"))),
+        };
+    }
+    let file_progress = ctx.observer().transfer_started(&p.row.path, metadata.size);
+    let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
+    let result = install(
+        backend,
+        paths,
+        &p.row.path,
+        metadata,
+        &p.stat,
+        operation_id,
+        on_bytes,
+    );
+    if let Some(fp) = &file_progress {
+        (fp.on_done)(result.is_ok());
+    }
+    result
+}
+
+/// Make `row` (a copy of `p.row`) final for its transfer's `result`, and
+/// record what a real install wrote.
+fn settle(
+    row: &mut GetRow,
+    p: &Planned,
+    result: Result<(), FileError>,
+    dry_run: bool,
+    paths: &DvsPaths,
+    cache: Option<&Mutex<HashCache>>,
+) {
+    let was_absent = p.row.before == Before::Absent;
+    let was_conflict = p.row.is_conflict();
+    match result {
+        Ok(()) => {
+            let action = match (dry_run, was_absent) {
+                (true, true) => Action::WouldRestore,
+                (true, false) => Action::WouldReplace,
+                (false, true) => Action::Restored,
+                (false, false) => Action::Replaced,
+            };
+            let message = was_conflict.then(|| {
+                match (dry_run, p.row.before == Before::Modified) {
+                    (true, true) => "local changes would be discarded",
+                    (false, true) => "local changes were discarded",
+                    (true, false) => "the local version would be replaced",
+                    (false, false) => "the local version was replaced",
+                }
+                .to_string()
+            });
+            set_row(row, action, None, message);
+            if !dry_run {
                 let metadata = p
                     .metadata
                     .as_ref()
                     .expect("planned transfers have metadata");
-                if dry_run {
-                    let found = backend.exists(&metadata.hashes);
-                    return (
-                        i,
-                        match found {
-                            Ok(true) => Ok(()),
-                            Ok(false) => Err((
-                                GetCode::SourceMissing,
-                                "this version is not in storage".to_string(),
-                            )),
-                            Err(e) => Err((code_for(&e), format!("{e:#}"))),
-                        },
-                    );
-                }
-                let file_progress = on_file_start.map(|f| f(&p.row.path, metadata.size));
-                let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
-                let result = install(
-                    backend,
-                    paths,
-                    &p.row.path,
-                    metadata,
-                    &p.stat,
-                    operation_id,
-                    on_bytes,
-                );
-                if let Some(fp) = &file_progress {
-                    (fp.on_done)(result.is_ok());
-                }
-                (i, result)
-            })
-            .collect()
-    });
-
-    for (i, result) in outcomes {
-        let p = &mut planned[i];
-        let was_absent = p.row.before == Before::Absent;
-        let was_conflict = p.row.is_conflict();
-        match result {
-            Ok(()) => {
-                let action = match (dry_run, was_absent) {
-                    (true, true) => Action::WouldRestore,
-                    (true, false) => Action::WouldReplace,
-                    (false, true) => Action::Restored,
-                    (false, false) => Action::Replaced,
-                };
-                let message = was_conflict.then(|| {
-                    match (dry_run, p.row.before == Before::Modified) {
-                        (true, true) => "local changes would be discarded",
-                        (false, true) => "local changes were discarded",
-                        (true, false) => "the local version would be replaced",
-                        (false, false) => "the local version was replaced",
-                    }
-                    .to_string()
-                });
-                p.set(action, None, message);
-                if !dry_run {
-                    let metadata = p
-                        .metadata
-                        .as_ref()
-                        .expect("planned transfers have metadata");
-                    let rel_str = p.row.path.to_string_lossy().into_owned();
-                    record_baseline(cache, &rel_str, &metadata.hashes.blake3, metadata.size);
-                    if let Some(mtx) = cache {
-                        if let Ok(stat) = FileStat::from_path(&paths.file_path(&p.row.path)) {
-                            if let Err(e) =
-                                mtx.lock()
-                                    .unwrap()
-                                    .insert(&rel_str, &stat, &metadata.hashes)
-                            {
-                                log::warn!("Cache store failed after get for {rel_str}: {e}");
-                            }
+                let rel_str = p.row.path.to_string_lossy().into_owned();
+                record_baseline(cache, &rel_str, &metadata.hashes.blake3, metadata.size);
+                if let Some(mtx) = cache {
+                    if let Ok(stat) = FileStat::from_path(&paths.file_path(&p.row.path)) {
+                        if let Err(e) =
+                            mtx.lock()
+                                .unwrap()
+                                .insert(&rel_str, &stat, &metadata.hashes)
+                        {
+                            log::warn!("Cache store failed after get for {rel_str}: {e}");
                         }
                     }
-                    log::info!("Retrieved {} ({})", p.row.path.display(), action.as_str());
                 }
-            }
-            Err((code, message)) => {
-                log::warn!("Failed to get {}: {message}", p.row.path.display());
-                p.set(Action::Failed, Some(code), Some(message));
+                log::info!("Retrieved {} ({})", p.row.path.display(), action.as_str());
             }
         }
+        Err((code, message)) => {
+            log::warn!("Failed to get {}: {message}", p.row.path.display());
+            set_row(row, Action::Failed, Some(code), Some(message));
+        }
     }
-
-    finish(planned, dry_run, on_conflict, source, false)
 }
 
 /// The code every file needing the remote gets when the access check fails.
@@ -982,18 +1094,38 @@ fn hint(row: &GetRow) -> Option<String> {
     }
 }
 
-fn finish(
-    planned: Vec<Planned>,
+/// The plan as reported to the observer: every row, and the ones to download.
+/// Rows of unknown size count in no byte total.
+fn operation_plan(planned: &[Planned], transfer_idx: &[usize]) -> OperationPlan {
+    let size = |p: &Planned| p.row.size.unwrap_or(0);
+    OperationPlan {
+        files_total: planned.len() as u64,
+        bytes_total: planned.iter().map(size).sum(),
+        files_to_transfer: transfer_idx.len() as u64,
+        bytes_to_transfer: transfer_idx.iter().map(|&i| size(&planned[i])).sum(),
+    }
+}
+
+/// How a `get` ended, for [`finish`].
+struct Ending {
     dry_run: bool,
     on_conflict: OnConflict,
     source: SettingSource,
     aborted: bool,
-) -> GetReport {
+}
+
+fn finish(planned: Vec<Planned>, ending: Ending, ctx: &OperationContext) -> GetReport {
+    let Ending {
+        dry_run,
+        on_conflict,
+        source,
+        aborted,
+    } = ending;
     let files: Vec<GetRow> = planned
         .into_iter()
-        .map(|p| GetRow {
-            hint: hint(&p.row),
-            ..p.row
+        .map(|mut p| {
+            p.emit(ctx);
+            p.row
         })
         .collect();
     let mut counts = GetCounts {
@@ -1087,7 +1219,7 @@ mod tests {
                 None,
                 Compression::Zstd,
                 false,
-                None,
+                &OperationContext::new(),
             )
             .unwrap()
             .files;
@@ -1143,7 +1275,7 @@ mod tests {
                     on_conflict,
                     source: SettingSource::Argument,
                 },
-                None,
+                &OperationContext::new(),
             )
         }
 
@@ -1556,7 +1688,13 @@ mod tests {
             on_conflict: OnConflict::Skip,
             source: SettingSource::Argument,
         };
-        let report = get_files(selection, &in_data, repo.backend(), options, None);
+        let report = get_files(
+            selection,
+            &in_data,
+            repo.backend(),
+            options,
+            &OperationContext::new(),
+        );
         let local = |name: &str| row(&report, name).local_path.clone();
         assert_eq!(local("data/x.csv"), PathBuf::from("x.csv"));
         assert_eq!(local("data/typo.csv"), PathBuf::from("typo.csv"));
@@ -1627,6 +1765,83 @@ mod tests {
         let report = repo.get(&["locked/a.csv", "b.csv"], OnConflict::Abort);
         assert_eq!(report.outcome, GetOutcome::Complete);
         assert_eq!(repo.read("locked/a.csv"), b"a");
+    }
+
+    impl TestRepo {
+        fn get_observed(
+            &self,
+            names: &[&str],
+            unmatched: &[&str],
+        ) -> (GetReport, Vec<String>, Vec<serde_json::Value>) {
+            let recorder = std::sync::Arc::new(crate::testutil::Recorder::default());
+            let selection = GetSelection {
+                tracked: names.iter().map(PathBuf::from).collect::<HashSet<_>>(),
+                unmatched: unmatched.iter().map(PathBuf::from).collect(),
+            };
+            let options = GetOptions {
+                dry_run: false,
+                on_conflict: OnConflict::Skip,
+                source: SettingSource::Argument,
+            };
+            let ctx = OperationContext::new().with_observer(recorder.clone());
+            let report = get_files(selection, &self.paths, self.backend(), options, &ctx);
+            let rows = recorder.rows.lock().unwrap().clone();
+            (report, recorder.seen(), rows)
+        }
+    }
+
+    #[test]
+    fn observer_hears_the_plan_then_each_final_row_once_as_it_finishes() {
+        let repo = TestRepo::new();
+        // Restored, unchanged, skipped (local changes), restored, untracked
+        repo.add("a.csv", b"aaa");
+        fs::remove_file(repo.root.join("a.csv")).unwrap();
+        repo.add("b.csv", b"bb");
+        repo.switched_branch("c.csv", b"c1", b"c2");
+        fs::write(repo.root.join("c.csv"), b"edited").unwrap();
+        repo.add("d.csv", b"dddd");
+        fs::remove_file(repo.root.join("d.csv")).unwrap();
+        let names = ["a.csv", "b.csv", "c.csv", "d.csv"];
+        let (report, seen, mut rows) = repo.get_observed(&names, &["typo.csv"]);
+
+        let at = |line: &str| seen.iter().position(|s| s == line).unwrap();
+        // a (3) and d (4) to download of 11 bytes; typo has no size
+        let plan = at("plan 5 11 2 7");
+        assert!(
+            seen[..plan].iter().all(|s| !s.starts_with("row")),
+            "{seen:?}"
+        );
+        // Each row once, exactly as in the result (hint included)
+        rows.sort_by_key(|r| r["path"].as_str().unwrap().to_string());
+        let expected: Vec<_> = report
+            .files
+            .iter()
+            .map(|r| serde_json::to_value(r).unwrap())
+            .collect();
+        assert_eq!(rows, expected);
+        assert!(row(&report, "c.csv").hint.is_some());
+        // Rows that did work carry their time
+        assert!(row(&report, "a.csv").duration_ms.is_some());
+        assert!(row(&report, "b.csv").duration_ms.is_some());
+        assert_eq!(row(&report, "typo.csv").duration_ms, None);
+    }
+
+    #[test]
+    fn no_hash_events_when_nothing_is_hashed() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        repo.add("b.csv", b"b");
+        fs::remove_file(repo.root.join("b.csv")).unwrap();
+        let hash_events = |name| {
+            let (_, seen, _) = repo.get_observed(&[name], &[]);
+            seen.into_iter()
+                .filter(|s| s.starts_with("hash"))
+                .collect::<Vec<_>>()
+        };
+        // Present: hashed
+        assert_eq!(hash_events("a.csv"), ["hash start", "hash end"]);
+        // Absent: nothing to hash
+        assert!(hash_events("b.csv").is_empty());
     }
 
     #[test]

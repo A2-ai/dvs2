@@ -137,11 +137,27 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
     value
 }
 
-/// Single rendering seam for JSON and, in future, terminal event results.
-/// Adds the timing every result carries.
+/// Single rendering seam for JSON and terminal event results. Adds the
+/// timing every result carries.
 pub fn emit(mut value: Value) {
     stamp(&mut value);
-    println!("{value}");
+    if let Some(events) = crate::events::active() {
+        events.record_result(value);
+    } else {
+        println!("{value}");
+    }
+}
+
+/// Record a result whose file rows have already been streamed as they
+/// completed; without events, the same as [`emit`].
+pub fn emit_streamed(mut value: Value) {
+    match crate::events::active() {
+        Some(events) => {
+            stamp(&mut value);
+            events.record_streamed_result(value);
+        }
+        None => emit(value),
+    }
 }
 
 pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value>, usize) {
@@ -156,6 +172,7 @@ pub fn file_results(rows: impl IntoIterator<Item = (Value, bool)>) -> (Vec<Value
     (files, failed)
 }
 
+/// Streamed rows go through here too, so they match the result's rows.
 pub fn file_result(mut value: Value, is_error: bool) -> Value {
     if !is_error {
         value["code"] = Value::Null;
