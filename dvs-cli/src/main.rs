@@ -27,15 +27,17 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::{create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode, FileMetadata,
-    FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow, Outcome,
-    PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files, set_num_threads,
+    AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
+    FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow,
+    Outcome, PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files,
+    set_num_threads,
 };
 
 use crate::observer::CliObserver;
 
 #[derive(Debug, Subcommand)]
 pub enum Init {
+    /// Store data in a directory, such as a shared drive
     Local {
         /// Where the data will be stored
         path: PathBuf,
@@ -52,6 +54,7 @@ pub enum Init {
         #[clap(long)]
         no_compression: bool,
     },
+    /// Store data on a dvs server
     Server {
         /// The project name
         name: String,
@@ -67,6 +70,9 @@ pub enum Init {
         #[clap(long)]
         no_compression: bool,
     },
+    /// Catches `dvs init <path>`, the form before backends, to point at `init local`
+    #[command(external_subcommand)]
+    Other(Vec<String>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -94,8 +100,10 @@ pub enum Command {
     /// At least one path or --glob must be provided
     #[command(next_display_order = 100)]
     Add {
+        /// Files to add, or directories to search with --glob
         #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
+        /// Add the files matching this glob, e.g. '*.csv'
         #[clap(long)]
         glob: Option<String>,
         /// An optional message to add
@@ -114,6 +122,7 @@ pub enum Command {
         /// Without this flag, directories return only their direct children.
         #[clap(long, short, conflicts_with = "glob")]
         recursive: bool,
+        /// Only include the tracked files matching this glob, e.g. '*.csv'
         #[clap(long, short, conflicts_with = "recursive")]
         glob: Option<String>,
         /// Include the files that are current
@@ -141,8 +150,10 @@ pub enum Command {
     /// pass `--glob '**/*'`.
     #[command(next_display_order = 100)]
     Get {
+        /// Tracked files or directories to retrieve
         #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
+        /// Only retrieve the tracked files matching this glob, e.g. '*.csv'
         #[clap(long, short, conflicts_with = "recursive")]
         glob: Option<String>,
         /// Recursively include files in subdirectories for directory inputs.
@@ -166,6 +177,7 @@ pub enum Command {
     Info,
     /// Check whether explicitly named BLAKE3 content is stored, without downloading it
     Availability {
+        /// BLAKE3 hashes to look up
         #[clap(required = true)]
         hashes: Vec<String>,
     },
@@ -176,7 +188,10 @@ pub enum Command {
         paths: Vec<PathBuf>,
     },
     /// Log in to a DVS server, the one in the config unless a URL is given
-    Login { url: Option<Url> },
+    Login {
+        /// The URL of the dvs server, if not the project's
+        url: Option<Url>,
+    },
     /// Log out from a DVS server
     Logout,
 }
@@ -185,19 +200,45 @@ pub enum Command {
 #[clap(version, author, about, subcommand_negates_reqs = true)]
 pub struct Cli {
     /// Output results as JSON
-    #[clap(long, global = true, display_order = 0)]
+    #[clap(
+        long,
+        global = true,
+        help_heading = "Global Options",
+        display_order = 0
+    )]
     pub json: bool,
 
     /// Stream operation results and transfer progress as NDJSON
-    #[clap(long, global = true, conflicts_with = "json", display_order = 1)]
+    #[clap(
+        long,
+        global = true,
+        help_heading = "Global Options",
+        conflicts_with = "json",
+        display_order = 1
+    )]
     pub emit_events: bool,
 
     /// Number of threads for parallel operations (0 = auto-detect)
-    #[clap(long, global = true, display_order = 1)]
+    #[clap(
+        long,
+        global = true,
+        help_heading = "Global Options",
+        display_order = 1
+    )]
     pub threads: Option<usize>,
 
     #[clap(subcommand)]
     pub command: Command,
+}
+
+#[derive(Tabled)]
+struct HistoryRow {
+    #[tabled(rename = "time (UTC)")]
+    time: String,
+    user: String,
+    path: String,
+    blake3: String,
+    message: String,
 }
 
 #[derive(Tabled)]
@@ -301,6 +342,57 @@ fn status_row(row: &dvs::StatusFacts) -> (serde_json::Value, bool) {
     (value, row.error.is_some())
 }
 
+/// One line closing a human add: "Added 2, 1 unchanged, 1 failed".
+fn add_summary(report: &AddReport, dry_run: bool) -> String {
+    let added = report
+        .files
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.detail,
+                AddDetail::Success {
+                    outcome: Outcome::Copied,
+                    ..
+                }
+            )
+        })
+        .count();
+    let unchanged = report.counts.succeeded - added;
+    let verb = if dry_run { "Would add" } else { "Added" };
+    summary_line(
+        [
+            (added, format!("{verb} {added}")),
+            (unchanged, format!("{unchanged} unchanged")),
+        ],
+        &report.counts,
+    )
+    .unwrap_or_else(|| "Nothing to add".to_string())
+}
+
+/// One line closing a human status: "Checked 3, 1 failed".
+fn status_summary(counts: &Counts) -> String {
+    let checked = counts.succeeded;
+    summary_line([(checked, format!("Checked {checked}"))], counts).unwrap_or_default()
+}
+
+/// The non-zero parts, then the failed and cancelled counts, as one sentence.
+fn summary_line<const N: usize>(parts: [(usize, String); N], counts: &Counts) -> Option<String> {
+    let mut line = parts
+        .into_iter()
+        .chain([
+            (counts.failed, format!("{} failed", counts.failed)),
+            (counts.cancelled, format!("cancelled {}", counts.cancelled)),
+        ])
+        .filter(|(n, _)| *n > 0)
+        .map(|(_, part)| part)
+        .collect::<Vec<_>>()
+        .join(", ");
+    // Whichever part comes first starts the sentence
+    let first = line.get(..1)?.to_uppercase();
+    line.replace_range(..1, &first);
+    Some(line)
+}
+
 /// Ends a run that reported rows with the exit status of how it ended.
 fn summary_exit(verdict: impl Into<GetVerdict>) -> Result<()> {
     match output::run_exit_code(verdict) {
@@ -401,6 +493,12 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                     }
                     (config, root_dir, metadata_folder_name)
                 }
+                Init::Other(args) => {
+                    return Err(output::coded(
+                        ErrorCode::InvalidArguments,
+                        init_backend_error(&args),
+                    ));
+                }
                 Init::Server {
                     name,
                     url,
@@ -433,7 +531,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 result["project_root"] = json!(repo_root);
                 output::emit(result);
             } else {
-                println!("DVS Initialized at {repo_root:?}");
+                println!("DVS Initialized at {}", repo_root.display());
             }
         }
         Command::Attach {
@@ -545,12 +643,19 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                                     format_size(*size),
                                 );
                             }
-                            Outcome::Present => {}
+                            Outcome::Present => println!(
+                                "Unchanged: {} [{}] already tracked",
+                                result.path.display(),
+                                format_size(*size),
+                            ),
                         },
                     }
                 }
-                if report.counts.failed > 0 {
-                    eprintln!("Error: Some files failed to add");
+                let line = add_summary(&report, dry_run);
+                if report.outcome == RunOutcome::Complete {
+                    println!("\n{line}");
+                } else {
+                    eprintln!("\n{line}");
                 }
             }
             summary_exit(report.outcome)?;
@@ -661,9 +766,12 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                         .with(Modify::new(Rows::first()).with(Alignment::left()));
                     println!("{table}");
                 }
-            }
-            if !cli.json && counts.failed > 0 {
-                eprintln!("Error: Some files failed to get status");
+                let line = status_summary(&counts);
+                if outcome == RunOutcome::Complete {
+                    println!("\n{line}");
+                } else {
+                    eprintln!("\n{line}");
+                }
             }
             summary_exit(outcome)?;
         }
@@ -720,12 +828,22 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
         Command::Info => {
             let config = find_config(&current_dir)?;
             let compression = config.compression().to_string();
+            // What get does with local changes, and where that was set. An
+            // invalid setting is shown, not an error: only get refuses to run
+            let on_conflict = config.get_on_conflict(None);
+            let on_conflict_line = match &on_conflict {
+                Ok((policy, source)) => format!("on_conflict {policy} ({source})"),
+                Err(error) => format!("on_conflict invalid: {error}"),
+            };
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let info_json = |fields: serde_json::Value| {
                 let mut result = output::envelope("info", false);
                 for (key, value) in fields.as_object().expect("info fields are an object") {
                     result[key] = value.clone();
                 }
+                result["on_conflict"] = json!(on_conflict.as_ref().ok().map(|(p, _)| p));
+                result["on_conflict_source"] =
+                    json!(on_conflict.as_ref().ok().map(|(_, s)| s.as_str()));
                 result["project_root"] = json!(dvs_paths.repo_root());
                 result["metadata_directory"] = json!(dvs_paths.metadata_folder());
                 output::emit(result);
@@ -746,6 +864,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                         println!("backend     local");
                         println!("storage     {}", l.path.display());
                         println!("compression {compression}");
+                        println!("{on_conflict_line}");
                     }
                 }
                 Backend::Server(s) => {
@@ -844,6 +963,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                             }
                         }
                         println!("compression {compression}");
+                        println!("{on_conflict_line}");
                     }
                 }
             }
@@ -900,21 +1020,39 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 output::emit(output::rows_envelope(
                     "history", false, rows, counts, outcome,
                 ));
+            } else if entries.is_empty() {
+                println!("No history");
             } else {
-                for entry in entries {
-                    let action = &entry["action"]["add"];
-                    println!(
-                        "{} {} {} {}",
-                        entry["timestamp"].as_str().unwrap_or_default(),
-                        entry["user"].as_str().unwrap_or_default(),
-                        action["file"]["path"]
-                            .as_str()
-                            .unwrap_or("(project initialized)"),
-                        action["file"]["hashes"]["blake3"]
-                            .as_str()
-                            .unwrap_or_default()
-                    );
-                }
+                // Newest first whatever order the backend returns; timestamps
+                // are UTC whole seconds, so they sort as text
+                let mut entries: Vec<_> = entries.iter().collect();
+                entries.sort_by(|a, b| b["timestamp"].as_str().cmp(&a["timestamp"].as_str()));
+                let rows: Vec<HistoryRow> = entries
+                    .into_iter()
+                    .map(|entry| {
+                        let add = &entry["action"]["add"];
+                        let text =
+                            |v: &serde_json::Value| v.as_str().unwrap_or_default().to_string();
+                        HistoryRow {
+                            time: text(&entry["timestamp"])
+                                .replacen('T', " ", 1)
+                                .trim_end_matches('Z')
+                                .trim_end_matches(".000")
+                                .to_string(),
+                            user: text(&entry["user"]),
+                            path: add["file"]["path"]
+                                .as_str()
+                                .unwrap_or("(project initialized)")
+                                .to_string(),
+                            blake3: text(&add["file"]["hashes"]["blake3"])
+                                .chars()
+                                .take(12)
+                                .collect(),
+                            message: text(&add["message"]),
+                        }
+                    })
+                    .collect();
+                println!("{}", tabled::Table::new(rows));
             }
         }
         Command::Login { url: Some(url) } => {
@@ -995,6 +1133,23 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `dvs init <path>` predates backends: name the command that does it now.
+fn init_backend_error(args: &[String]) -> String {
+    let first = args.first().map(String::as_str).unwrap_or_default();
+    let looks_like_path =
+        first.contains(['/', '\\', '.', '~']) || std::path::Path::new(first).exists();
+    if looks_like_path {
+        format!(
+            "dvs init needs a backend before the storage path: did you mean `dvs init local {}`?",
+            args.join(" ")
+        )
+    } else {
+        format!(
+            "unknown backend '{first}' for dvs init: use `dvs init local <PATH>` (a directory) or `dvs init server <NAME> <URL>`"
+        )
+    }
 }
 
 /// A command that already reported its own result and only needs to set the
@@ -1122,4 +1277,62 @@ fn finish_events(command: &str, dry_run: bool, mut code: i32) -> i32 {
         }
     }
     code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_with_a_path_points_at_init_local() {
+        let cli = Cli::try_parse_from(["dvs", "init", "../storage"]).unwrap();
+        let Command::Init(Init::Other(args)) = cli.command else {
+            panic!("expected the catch-all init variant");
+        };
+        assert_eq!(
+            init_backend_error(&args),
+            "dvs init needs a backend before the storage path: did you mean `dvs init local ../storage`?"
+        );
+        assert!(init_backend_error(&["lcoal".into()]).starts_with("unknown backend 'lcoal'"));
+    }
+
+    #[test]
+    fn status_summary_reports_failed_and_cancelled() {
+        let counts = Counts {
+            total: 6,
+            succeeded: 3,
+            failed: 1,
+            cancelled: 2,
+        };
+        assert_eq!(status_summary(&counts), "Checked 3, 1 failed, cancelled 2");
+    }
+
+    #[test]
+    fn add_summary_takes_its_counts_from_the_library() {
+        let row = |outcome| AddResult {
+            path: "a.csv".into(),
+            detail: AddDetail::Success {
+                outcome,
+                hash: String::new(),
+                size: 0,
+                stored_size: 0,
+            },
+            duration_ms: None,
+        };
+        let report = AddReport {
+            files: vec![row(Outcome::Copied), row(Outcome::Present)],
+            counts: Counts {
+                total: 5,
+                succeeded: 2,
+                failed: 1,
+                cancelled: 2,
+            },
+            outcome: RunOutcome::Cancelled,
+            bytes: Default::default(),
+        };
+        assert_eq!(
+            add_summary(&report, false),
+            "Added 1, 1 unchanged, 1 failed, cancelled 2"
+        );
+    }
 }

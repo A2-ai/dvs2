@@ -118,12 +118,26 @@ fn summary(report: &GetReport) -> String {
             format!("{}: {}", report.outcome.as_str(), counts_phrase(report))
         }
     };
-    format!(
-        "dvs get{}: {what} (on_conflict = {}, {})",
-        if report.dry_run { " (dry run)" } else { "" },
-        report.on_conflict,
-        report.source
-    )
+    let mut line = what;
+    if let Some(first) = line.get(..1) {
+        line.replace_range(..1, &first.to_uppercase());
+    }
+    // The policy only matters when it decided something: a file with local
+    // changes or no record was skipped, held back or replaced
+    if policy_acted(report) {
+        line.push_str(&format!(
+            "\non_conflict = {} ({})",
+            report.on_conflict, report.source
+        ));
+    }
+    line
+}
+
+fn policy_acted(report: &GetReport) -> bool {
+    report
+        .files
+        .iter()
+        .any(|r| matches!(r.before, Before::Modified | Before::Unknown))
 }
 
 /// Print the report for people: one line per file that changed or needs
@@ -140,6 +154,7 @@ pub fn print_human(report: &GetReport) {
         .map(|r| r.local_path.to_string_lossy().chars().count())
         .max()
         .unwrap_or(0);
+    let listed = report.files.iter().any(is_listed);
     for r in report.files.iter().filter(|r| is_listed(r)) {
         let detail = match (r.satisfied, &r.message) {
             _ if is_shared(r.code) => String::new(),
@@ -162,7 +177,8 @@ pub fn print_human(report: &GetReport) {
             eprintln!("{}", line.trim_end());
         }
     }
-    let summary = summary(report);
+    // Set apart from the file lines, like add's
+    let summary = format!("{}{}", if listed { "\n" } else { "" }, summary(report));
     if report.outcome == GetOutcome::Complete {
         println!("{summary}");
     } else {
