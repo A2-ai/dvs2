@@ -29,24 +29,26 @@ connections = ["miniextendr-api/connections"]
 # tarball path needs freeze. The frozen Cargo.toml is never committed: `just
 # vendor` consumers restore it after the build (see dvs-rpkg/tests/install-*).
 #
-# miniextendr stays a git dep. As an external framework crate it resolves
-# offline via source replacement (vendor/.cargo-config.toml's
-# `[source."git+<url>"]`), the form configure writes in tarball mode. freeze
-# leaves it as git.
+# miniextendr stays a git dep, pinned by `rev`. Keep the `rev` of
+# miniextendr-api and miniextendr-lint and the minirextendr `commit` in
+# rproject.toml at the same commit (AGENTS.md, "Bump the miniextendr pin").
+# As an external framework crate it resolves offline via source replacement
+# (vendor/.cargo-config.toml's `[source."git+<url>"]`), the form configure
+# writes in tarball mode. freeze leaves it as git.
 #
 # Caveat: a consumer that extracts `dvs-rpkg/` alone with neither the `dvs`
 # sibling nor a bundled inst/vendor.tar.xz (e.g. `rv sync` or a bare
 # `install.packages()` of just the subdir) cannot source-build dvs.
 # install_github (whole-repo) and tarball installs are unaffected.
 [dependencies]
-miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", features = ["serde", "time", "log"] }
+miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", rev = "681b9101515423a4b424afd129b39aa46a3c4085", features = ["serde", "time", "log"] }
 dvs = { path = "../../../dvs", package = "dvs" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.149"
 anyhow = "1.0.100"
 
 [build-dependencies]
-miniextendr-lint = { git = "https://github.com/A2-ai/miniextendr" }
+miniextendr-lint = { git = "https://github.com/A2-ai/miniextendr", rev = "681b9101515423a4b424afd129b39aa46a3c4085" }
 
 [profile.dev]
 codegen-units = 1
