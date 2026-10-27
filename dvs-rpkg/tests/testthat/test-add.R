@@ -160,3 +160,26 @@ test_that("dvs_add resolves a bare relative path from a nested working directory
     file.path(repo, ".dvs", "analysis", "run1", "data.csv.dvs")
   ))
 })
+
+test_that("the progress bar path keeps cli's config rooted", {
+  skip_on_cran()
+  new_dvs_test_repo()
+  files <- file.path(getwd(), sprintf("f%d.bin", 1:3))
+  set.seed(1)
+  for (f in files) writeBin(as.raw(sample(0:255, 600 * 1024, TRUE)), f)
+
+  # dvs_add() shows the bar only in interactive sessions, so call the entry
+  # point with a handle. The bar is rebuilt for each file. Every allocation
+  # collects garbage: an unrooted config list is freed before cli reads it
+  # ("Unknown cli progress bar configuration").
+  gctorture(TRUE)
+  on.exit(gctorture(FALSE), add = TRUE)
+  utils::capture.output(
+    result <- dvs_add_impl(paths = files, progress_callback = ProgressBarCallback$new()),
+    type = "message"
+  )
+  gctorture(FALSE)
+
+  expect_equal(nrow(result), 3L)
+  expect_true(all(result$outcome == "copied"))
+})

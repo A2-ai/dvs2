@@ -4,8 +4,8 @@
 //! static inline functions. The shim is compiled by R's build system
 //! and linked into the final shared object.
 
-use miniextendr_api::SEXP;
 use miniextendr_api::sys::{R_PreserveObject, R_ReleaseObject};
+use miniextendr_api::{Preserved, SEXP};
 
 #[cfg(not(test))]
 unsafe extern "C" {
@@ -51,8 +51,10 @@ impl CliProgressBar {
     pub fn grow_total(&mut self, size: f64) {
         self.total += size;
         self.done();
+        // cli allocates before it reads `config`, so keep it rooted until the
+        // bar exists.
+        let config = Preserved::new(miniextendr_api::list!("show_after" = 0.0));
         unsafe {
-            let config = miniextendr_api::list!("show_after" = 0.0);
             self.bar = cli_progress_bar_shim(self.total, config.as_sexp());
             R_PreserveObject(self.bar);
             cli_progress_set_clear_shim(self.bar, 0);
