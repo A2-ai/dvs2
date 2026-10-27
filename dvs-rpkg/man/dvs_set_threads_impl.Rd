@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-wrappers.R
 \name{dvs_set_threads_impl}
 \alias{dvs_set_threads_impl}
-\title{dvs_set_threads_impl}
+\title{Set the number of threads used by DVS parallel operations}
 \usage{
 dvs_set_threads_impl(threads = NULL)
 }
@@ -10,8 +10,6 @@ dvs_set_threads_impl(threads = NULL)
 \item{threads}{Integer number of threads, or \code{NULL} to reset.}
 }
 \description{
-Set the number of threads used by DVS parallel operations.
-
 Controls the thread pool size for add, get, and status operations.
 Pass \code{NULL} to revert to automatic detection.
 }

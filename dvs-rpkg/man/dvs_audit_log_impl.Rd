@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-wrappers.R
 \name{dvs_audit_log_impl}
 \alias{dvs_audit_log_impl}
-\title{dvs_audit_log_impl}
+\title{Materialize the audit log as a data frame}
 \usage{
 dvs_audit_log_impl(paths = character(0))
 }
@@ -13,8 +13,6 @@ vector (the default) returns the whole log, including \code{init} entries. A
 non-empty filter drops all \code{init} entries.}
 }
 \description{
-Materialize the audit log as a data frame.
-
 Reads the audit log of the DVS repository containing the working
 directory and returns one row per entry. The column structure is inherited
 directly from \verb{dvs::audit::AuditEntry}'s serde representation, so the rpkg

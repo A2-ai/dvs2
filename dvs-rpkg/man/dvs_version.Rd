@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-wrappers.R
 \name{dvs_version}
 \alias{dvs_version}
-\title{dvs_version}
+\title{Version of the bundled DVS Rust core crate}
 \usage{
 dvs_version()
 }

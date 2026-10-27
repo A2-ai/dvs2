@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-wrappers.R
 \name{format_byte_size}
 \alias{format_byte_size}
-\title{format_byte_size}
+\title{Format a byte count as a human-readable size string}
 \usage{
 format_byte_size(size_bytes)
 }
@@ -10,5 +10,5 @@ format_byte_size(size_bytes)
 \item{size_bytes}{non-negative integer representing file sizes in bytes.}
 }
 \description{
-Format a byte count as a human-readable size string.
+Format a byte count as a human-readable size string
 }

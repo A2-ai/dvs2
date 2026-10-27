@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-wrappers.R
 \name{dvs_get_impl}
 \alias{dvs_get_impl}
-\title{dvs_get_impl}
+\title{Retrieve files from DVS storage into the working directory}
 \usage{
 dvs_get_impl(
   paths = character(0),
@@ -36,8 +36,6 @@ files and get the rest) or \code{"overwrite"} (replace them; local changes are l
 \item{progress_callback}{Optional handle to enable progress bar display.}
 }
 \description{
-Retrieve files from DVS storage into the working directory.
-
 Fetches the specified files from DVS storage and writes them
 to their original paths in the working directory. With no \code{paths}
 or \code{glob}, \code{dvs_get()} scopes to the working directory: it restores

@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-commands.R
 \name{dvs_get}
 \alias{dvs_get}
-\title{dvs_get_impl}
+\title{Retrieve files from DVS storage into the working directory}
 \usage{
 dvs_get(
   paths = character(0),
@@ -59,8 +59,6 @@ In scripts and pipelines, use \code{on_error = "error"} (or set
 that was not updated.
 }
 \description{
-Retrieve files from DVS storage into the working directory.
-
 Fetches the specified files from DVS storage and writes them
 to their original paths in the working directory. With no \code{paths}
 or \code{glob}, \code{dvs_get()} scopes to the working directory: it restores
