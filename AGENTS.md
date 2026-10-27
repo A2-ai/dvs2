@@ -8,7 +8,7 @@ Commit `Cargo.lock` due to the presence of dependencies on github.
 
 No development build vendors. Vendoring happens only in the release tarball build.
 
-The recipes that call minirextendr put the rv library first in `R_LIBS`, so they use the minirextendr that `dvs-rpkg/rproject.toml` and `dvs-rpkg/rv.lock` pin. Run `just rpkg-sync` after a fresh checkout or a pin change.
+The recipes that call minirextendr put the rv library first in `R_LIBS`, so they use the minirextendr that `dvs-rpkg/rproject.toml` and `dvs-rpkg/rv.lock` pin. Run `just rpkg-sync` after a fresh checkout or a pin change. They stop unless the `Rscript` on `PATH` is the R version in `rproject.toml` and the rv library holds minirextendr.
 
 ## Release tarball
 
