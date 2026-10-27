@@ -4,26 +4,38 @@ Commit `Cargo.lock` due to the presence of dependencies on github.
 
 ## Development iteration
 
-The R bindings to the embedded rust crate are generated when
+`just rpkg-dev` is the full development build (`minirextendr::miniextendr_build()`): autoconf, configure, a compile that writes `R/dvs-wrappers.R` from the linked library, roxygen2 (`NAMESPACE`, `man/`), then one install. `devtools::load_all("dvs-rpkg")` also compiles the embedded crate and regenerates the wrappers. Any build of the R package rewrites `R/dvs-wrappers.R` when the Rust side changed.
 
-- `devtools::load_all({"dvs-rpkg")`
+No development build vendors. Vendoring happens only in the release tarball build.
 
-this will compile the embedded rust crate, regenerate R wrappers, and replace them if they are different
-from previous iteration, and then build the package.
+The recipes that call minirextendr put the rv library first in `R_LIBS`, so they use the minirextendr that `dvs-rpkg/rproject.toml` and `dvs-rpkg/rv.lock` pin. Run `just rpkg-sync` after a fresh checkout or a pin change.
 
-Any invocation that rebuilds the r package will update the R wrappers for the embedded rust crate.
+## Release tarball
 
-## Upgrade miniextendr version
+`just rpkg-build-tarball` writes the offline, CRAN-ready `dist/dvs_<version>.tar.gz` (`minirextendr::miniextendr_build_tarball()`). It refreshes the wrappers, `NAMESPACE` and `man/`, seals every crate into `inst/vendor.tar.xz` with cargo-revendor, builds the tarball, and restores `src/rust/Cargo.toml`, `Cargo.lock` and `vendor/`. `just rpkg-check-cran` runs `R CMD check --as-cran` on that tarball. Both need cargo-revendor at the pin: `just install-revendor`.
 
-Run
+Never commit `inst/vendor.tar.xz`. While it exists, `configure` builds in offline tarball mode. The miniextendr pre-commit hook refuses it.
 
-```shell
-just rpkg-update
-```
+## Bump the miniextendr pin
 
-in order to update miniextendr in the embedded rust crate i.e. `cargo update --manifest-path=dvs-rpkg/src/rust/Cargo.toml`.
+The pin is the `rev` of `miniextendr-api` and `miniextendr-lint` in `dvs-rpkg/src/rust/Cargo.toml` and the minirextendr `commit` in `dvs-rpkg/rproject.toml`. Keep all three at one commit. The miniextendr pre-commit hook refuses a commit where `rv.lock` and `src/rust/Cargo.lock` name different commits. `just rpkg-update` does not move the pin.
 
-The R package scaffolding needs to be updated too. The `minirextendr` R package has a `minirextendr::upgrade_miniextendr_package` that will facilitate the upgrade.
+1. See how far main is ahead:
+
+   ```shell
+   old=$(grep -o 'rev = "[0-9a-f]*"' dvs-rpkg/src/rust/Cargo.toml | head -1 | cut -d'"' -f2)
+   gh api "repos/A2-ai/miniextendr/compare/$old...main" --jq '.ahead_by'
+   ```
+
+   Read the commits (`git log --oneline "$old..origin/main"` in a miniextendr clone) for API changes that reach `dvs-rpkg/src/rust/*.rs` and for features that replace hand-written code.
+2. Move the three pins. Run `just rpkg-sync` (`rv plan`, then `rv sync`). Check that `rv.lock` and `src/rust/Cargo.lock` name the new commit.
+3. Compile with `just rpkg-check`, `just rpkg-check --all-features` and `just rpkg-clippy --all-features`. Port the API drift. This is the pin commit.
+4. Diff the two pins' templates: `git diff --stat "$old" <new> -- minirextendr/inst/templates` in a miniextendr clone.
+5. Run `just rpkg-upgrade` (`upgrade_miniextendr_package(configure_ac = FALSE)`). It refreshes the build templates, the agent skills in `.claude/skills/` and the miniextendr sections of the git hooks. Review every file it lists. It stops when `configure.ac` cannot substitute the new `Makevars.in`. Then run it with `configure_ac = TRUE` and restore the `AC_INIT` version, which the template resets to `0.1.0`.
+6. Run `just rpkg-dev` and review `git diff dvs-rpkg/R dvs-rpkg/man dvs-rpkg/NAMESPACE`. This is the scaffold commit.
+7. Test: `devtools::test("dvs-rpkg")`, `just rpkg-build-tarball` and an offline install of the tarball, `just rpkg-check-cran`, `bash dvs-rpkg/tests/rv`. Outside devtools, run testthat with `NOT_CRAN=true`. The `gctorture` cases skip without it.
+
+The pin bump is one commit, the scaffold refresh another, and each adopted feature its own.
 
 ## Run the dvs CLI from any git ref
 

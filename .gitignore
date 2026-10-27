@@ -54,6 +54,9 @@ testfile.bin
 # Downloaded sample datasets (just datasets)
 datasets/
 
+# Release tarballs (just rpkg-build-tarball)
+/dist/
+
 /AGENTS.md
 /MAINTAINER.md
 /specs.md
