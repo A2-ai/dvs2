@@ -33,7 +33,10 @@ config.log
 # Claude Code session transcripts
 2026-*.txt
 dvsR/2026-*.txt
-.claude/
+# Local Claude Code state stays ignored. The miniextendr skills that
+# minirextendr::use_claude_skills() installs are tracked.
+/.claude/*
+!/.claude/skills/
 
 # Archived crates (server/daemon moved here)
 archived-crates.zip
