@@ -17,7 +17,7 @@ use miniextendr_api::list::List;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
 use miniextendr_api::time::OffsetDateTime;
-use miniextendr_api::{BuiltDataFrame, MatchArg, SEXP, miniextendr};
+use miniextendr_api::{BuiltDataFrame, MatchArg, Preserved, SEXP, miniextendr};
 
 use anyhow::{Result, anyhow};
 use serde::Serialize;
@@ -362,14 +362,16 @@ pub(crate) fn dvs_status(
             })
         })
         .collect();
-    let add_time_sexp = add_times.into_sexp();
+    // Rooted until the frame holds it. Building the frame allocates, and
+    // `with_column` allocates the new frame before it stores the column.
+    let add_time = Preserved::new(add_times);
 
     Ok(miniextendr_api::serde::vec_to_dataframe(&views)?
         .drop("metadata_hashes_md5")
         .strip_prefix("metadata_hashes_")
         .strip_prefix("metadata_")
         .rename("blake3", "hash")
-        .with_column("add_time", add_time_sexp))
+        .with_column("add_time", add_time.as_sexp()))
 }
 
 /// @title Materialize the audit log as a data frame
