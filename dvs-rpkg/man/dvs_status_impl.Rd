@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-wrappers.R
 \name{dvs_status_impl}
 \alias{dvs_status_impl}
-\title{dvs_status_impl}
+\title{Report the sync status of DVS-managed files}
 \usage{
 dvs_status_impl(
   paths = character(0),
@@ -30,8 +30,6 @@ match recursively across subdirectories. Mutually exclusive with \code{recursive
 statuses are shown.}
 }
 \description{
-Report the sync status of DVS-managed files.
-
 Reports the sync status of DVS-managed files. By default all statuses
 are shown; pass a character vector
 of status names (e.g. \code{c("current", "absent")}) to restrict output.

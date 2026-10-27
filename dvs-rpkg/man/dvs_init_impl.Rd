@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-wrappers.R
 \name{dvs_init_impl}
 \alias{dvs_init_impl}
-\title{dvs_init_impl}
+\title{Initialize a DVS repository in the given directory}
 \usage{
 dvs_init_impl(
   storage_path,
@@ -30,8 +30,6 @@ A single-row data frame describing the resulting configuration:
 An optional config field that was not set comes back as \code{NA}.
 }
 \description{
-Initialize a DVS repository in the given directory.
-
 Creates the \code{.dvs} metadata folder and configures storage for versioned files.
 }
 \keyword{internal}

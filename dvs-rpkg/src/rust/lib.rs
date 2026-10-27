@@ -142,8 +142,8 @@ impl From<CompressionChoice> for Compression {
     }
 }
 
-/// Initialize a DVS repository in the given directory.
-///
+/// @title Initialize a DVS repository in the given directory
+/// @description
 /// Creates the `.dvs` metadata folder and configures storage for versioned files.
 ///
 /// @param storage_path Path to the storage directory where file contents are kept.
@@ -191,8 +191,8 @@ pub(crate) fn dvs_init(
     Ok(miniextendr_api::serde::vec_to_dataframe(&[config])?)
 }
 
-/// Add files to DVS-managed storage.
-///
+/// @title Add files to DVS-managed storage
+/// @description
 /// Hashes and copies the specified files into DVS storage.
 ///
 /// @param paths Character vector of file paths to add to DVS storage.
@@ -286,8 +286,8 @@ impl From<StatusChoice> for Status {
     }
 }
 
-/// Report the sync status of DVS-managed files.
-///
+/// @title Report the sync status of DVS-managed files
+/// @description
 /// Reports the sync status of DVS-managed files. By default all statuses
 /// are shown; pass a character vector
 /// of status names (e.g. `c("current", "absent")`) to restrict output.
@@ -372,8 +372,8 @@ pub(crate) fn dvs_status(
         .with_column("add_time", add_time_sexp))
 }
 
-/// Materialize the audit log as a data frame.
-///
+/// @title Materialize the audit log as a data frame
+/// @description
 /// Reads the audit log of the DVS repository containing the working
 /// directory and returns one row per entry. The column structure is inherited
 /// directly from `dvs::audit::AuditEntry`'s serde representation, so the rpkg
@@ -456,8 +456,8 @@ impl<'a> From<&'a FileMetadata> for FileMetadataView<'a> {
 
 // endregion
 
-/// Retrieve files from DVS storage into the working directory.
-///
+/// @title Retrieve files from DVS storage into the working directory
+/// @description
 /// Fetches the specified files from DVS storage and writes them
 /// to their original paths in the working directory. With no `paths`
 /// or `glob`, `dvs_get()` scopes to the working directory: it restores
@@ -669,8 +669,8 @@ fn get_result_list(report: &GetReport) -> List {
     List::from_raw_pairs(result)
 }
 
-/// Set the number of threads used by DVS parallel operations.
-///
+/// @title Set the number of threads used by DVS parallel operations
+/// @description
 /// Controls the thread pool size for add, get, and status operations.
 /// Pass `NULL` to revert to automatic detection.
 ///
@@ -681,16 +681,14 @@ pub(crate) fn dvs_set_threads(#[miniextendr(default = "NULL")] threads: Option<u
     set_num_threads(threads.unwrap_or(0));
 }
 
-/// Format a byte count as a human-readable size string.
-///
+/// @title Format a byte count as a human-readable size string
 /// @param size_bytes non-negative integer representing file sizes in bytes.
 #[miniextendr]
 pub fn format_byte_size(size_bytes: u64) -> String {
     dvs::format_size(size_bytes)
 }
 
-/// Version of the bundled DVS Rust core crate
-///
+/// @title Version of the bundled DVS Rust core crate
 /// @return The version of the `dvs` Rust crate compiled into this package, as a
 ///   string (e.g. `"0.3.0"`).
 #[miniextendr]
@@ -698,8 +696,8 @@ pub fn dvs_version() -> String {
     dvs::VERSION.to_string()
 }
 
-/// Set the log level for DVS internals
-///
+/// @title Set the log level for DVS internals
+/// @description
 /// Controls which log messages from the DVS internals are routed to R's
 /// console. `error` and `warn` go to [stderr()]; `info`, `debug`, and `trace`
 /// go to stdout.

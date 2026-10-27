@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-wrappers.R
 \name{set_dvs_log_level}
 \alias{set_dvs_log_level}
-\title{set_dvs_log_level}
+\title{Set the log level for DVS internals}
 \usage{
 set_dvs_log_level(level = c("off", "error", "warn", "info", "debug", "trace"))
 }
@@ -14,10 +14,8 @@ is \code{"off"}.}
 Called for its side effect; returns \code{NULL} invisibly.
 }
 \description{
-Set the log level for DVS internals
-
 Controls which log messages from the DVS internals are routed to R's
-console. \code{error} and \code{warn} go to stderr(); \code{info}, \code{debug}, and \code{trace}
+console. \code{error} and \code{warn} go to \code{\link[=stderr]{stderr()}}; \code{info}, \code{debug}, and \code{trace}
 go to stdout.
 
 The R package does not consult the \code{RUST_LOG} environment variable.

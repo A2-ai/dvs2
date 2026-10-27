@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-wrappers.R
 \name{dvs_add_impl}
 \alias{dvs_add_impl}
-\title{dvs_add_impl}
+\title{Add files to DVS-managed storage}
 \usage{
 dvs_add_impl(
   paths = character(0),
@@ -27,8 +27,6 @@ match recursively across subdirectories.}
 \item{progress_callback}{Optional handle to enable progress bar display.}
 }
 \description{
-Add files to DVS-managed storage.
-
 Hashes and copies the specified files into DVS storage.
 }
 \keyword{internal}
