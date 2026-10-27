@@ -28,6 +28,7 @@
 ^\.Rprofile$
 ^rv$
 ^rproject\.toml$
+^rv\.lock$
 
 # R CMD check output
 \.Rcheck$
