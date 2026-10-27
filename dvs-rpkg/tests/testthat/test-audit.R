@@ -34,3 +34,16 @@ test_that("dvs_audit_log with a non-matching path returns zero rows without erro
   expect_s3_class(bogus, "tbl_df")
   expect_equal(nrow(bogus), 0L)
 })
+
+test_that("dvs_audit_log flattens the action into columns with a POSIXct timestamp", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add(paths = file.path(getwd(), "a.csv"), message = "why")
+
+  log <- dvs_audit_log()
+  expect_s3_class(log$timestamp, "POSIXct")
+  expect_equal(log$action_variant, c("init", "add"))
+  expect_equal(log$action_file_path, c(NA, "a.csv"))
+  expect_equal(log$action_message, c(NA, "why"))
+  expect_false("action" %in% names(log))
+})
