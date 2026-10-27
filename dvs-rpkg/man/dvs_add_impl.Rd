@@ -9,7 +9,8 @@ dvs_add_impl(
   message = NULL,
   glob = NULL,
   dry_run = NULL,
-  progress_callback = NULL
+  progress_callback = NULL,
+  .call = NULL
 )
 }
 \arguments{
@@ -25,6 +26,8 @@ match recursively across subdirectories.}
 \item{dry_run}{If \code{TRUE}, report what would be added without modifying anything.}
 
 \item{progress_callback}{Optional handle to enable progress bar display.}
+
+\item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }
 \description{
 Hashes and copies the specified files into DVS storage.

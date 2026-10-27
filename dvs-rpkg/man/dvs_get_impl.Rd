@@ -10,7 +10,8 @@ dvs_get_impl(
   recursive = NULL,
   dry_run = NULL,
   on_conflict = NULL,
-  progress_callback = NULL
+  progress_callback = NULL,
+  .call = NULL
 )
 }
 \arguments{
@@ -34,6 +35,8 @@ requested file has local changes or another problem), \code{"skip"} (leave those
 files and get the rest) or \code{"overwrite"} (replace them; local changes are lost).}
 
 \item{progress_callback}{Optional handle to enable progress bar display.}
+
+\item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }
 \description{
 Fetches the specified files from DVS storage and writes them

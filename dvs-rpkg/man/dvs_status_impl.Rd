@@ -8,7 +8,8 @@ dvs_status_impl(
   paths = character(0),
   recursive = NULL,
   glob = NULL,
-  status = c("current", "absent", "stale", "modified", "unsynced")
+  status = c("current", "absent", "stale", "modified", "unsynced"),
+  .call = NULL
 )
 }
 \arguments{
@@ -28,6 +29,8 @@ match recursively across subdirectories. Mutually exclusive with \code{recursive
 \item{status}{Character vector of statuses to include. Valid values are
 \code{"current"}, \code{"absent"}, \code{"stale"}, \code{"modified"}, and \code{"unsynced"}. When empty (default), all
 statuses are shown.}
+
+\item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }
 \description{
 Reports the sync status of DVS-managed files. By default all statuses
