@@ -167,6 +167,32 @@ test_that("dvs_status returns POSIXct add_time and dvs_bytes size", {
   expect_equal(typeof(unclass(result$size)), "double")
 })
 
+status_columns <- c(
+  "path", "status", "hash", "size", "created_by", "compression",
+  "message", "error", "add_time"
+)
+
+test_that("dvs_status has the same columns whatever the rows", {
+  new_dvs_test_repo()
+  expect_named(dvs_status(), status_columns)
+
+  write_theoph("t.csv")
+  dvs_add(paths = file.path(getwd(), "t.csv"))
+  expect_named(dvs_status(), status_columns)
+})
+
+test_that("dvs_status keeps a message that only a later row has", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  writeLines("b", "b.csv")
+  dvs_add(paths = file.path(getwd(), "a.csv"))
+  dvs_add(paths = file.path(getwd(), "b.csv"), message = "why")
+
+  result <- dvs_status()
+  expect_equal(result$message[result$path == "b.csv"], "why")
+  expect_true(is.na(result$message[result$path == "a.csv"]))
+})
+
 test_that("dvs_status keeps add_time rooted while it builds the frame", {
   skip_on_cran()
   new_dvs_test_repo()
