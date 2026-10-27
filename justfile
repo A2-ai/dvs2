@@ -104,6 +104,27 @@ dvs-clean *ref:
 # rproject.toml and rv.lock pin, and devtools and roxygen2 from the user library.
 rpkg_rscript := 'R_LIBS="$(cd ' + rpkg_dir + ' && pwd)/$(cd ' + rpkg_dir + ' && rv library)" Rscript'
 
+# The rv library is built for the R version in rproject.toml. Another R
+# fails to load it with dlopen errors, and an rv library without
+# minirextendr would leave R_LIBS pointing nowhere, so an older minirextendr
+# from the user library would run instead. Stop before either happens.
+[private]
+rpkg-r-guard:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    want="$(sed -n 's/^r_version = "\(.*\)"$/\1/p' {{quote(rpkg_dir / "rproject.toml")}})"
+    have="$(Rscript -e 'cat(R.version$major, sub("[.].*", "", R.version$minor), sep = ".")')"
+    if [ "$want" != "$have" ]; then
+      echo "error: Rscript on PATH is R $have, rproject.toml wants R $want." >&2
+      echo "  Put R $want first on PATH (rig default $want), then run just rpkg-sync." >&2
+      exit 1
+    fi
+    lib="$(cd {{quote(rpkg_dir)}} && pwd)/$(cd {{quote(rpkg_dir)}} && rv library)"
+    if [ ! -f "$lib/minirextendr/DESCRIPTION" ]; then
+      echo "error: minirextendr is not in the rv library $lib. Run: just rpkg-sync" >&2
+      exit 1
+    fi
+
 # Sync the rv project library (rv reads rproject.toml from the cwd, in dvs-rpkg/)
 [working-directory: 'dvs-rpkg']
 rpkg-sync *args:
@@ -120,8 +141,13 @@ rpkg-build *args:
 rpkg-build-release *args:
     cargo build --manifest-path={{quote(rpkg_manifest)}} --release {{args}}
 
+# cargo test, the testthat suite against the checkout (devtools sets
+# NOT_CRAN, so the gctorture cases run), then the rv install from a local
+# path.
+[doc('Run the rpkg cargo tests, the testthat suite and the rv install test.')]
 rpkg-test *args:
     cargo test --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    Rscript -e 'devtools::test("{{rpkg_dir}}", stop_on_failure = TRUE)'
     bash {{quote(rpkg_dir / "tests/rv")}}
 
 rpkg-clippy *args:
@@ -143,7 +169,7 @@ rpkg-update *args:
 # writes R/dvs-wrappers.R from the linked library, roxygen2, then one
 # install. Nothing in it vendors.
 [doc('Build with minirextendr: configure, wrappers, roxygen2, install. No vendoring.')]
-rpkg-dev:
+rpkg-dev: rpkg-r-guard
     {{rpkg_rscript}} -e 'minirextendr::miniextendr_build("{{rpkg_dir}}")'
 
 rpkg-document:
@@ -163,7 +189,7 @@ alias install-rpkg := rpkg-install
 # Needs cargo-revendor at the pin: `just install-revendor`. dist/ must
 # exist: pkgbuild writes to a dest_path that does not exist as a file.
 [doc('Build the vendored, offline release tarball into dist/.')]
-rpkg-build-tarball:
+rpkg-build-tarball: rpkg-r-guard
     mkdir -p dist
     {{rpkg_rscript}} -e 'minirextendr::miniextendr_build_tarball("{{rpkg_dir}}", dest_path = "dist")'
 
@@ -171,18 +197,18 @@ rpkg-build-tarball:
 # WARNING. The remote part of the CRAN incoming check is off: CRAN has a
 # package named DVS, and "Conflicting package names" is an ERROR on every run.
 [doc('R CMD check --as-cran the vendored release tarball.')]
-rpkg-check-cran:
+rpkg-check-cran: rpkg-r-guard
     _R_CHECK_CRAN_INCOMING_REMOTE_=false {{rpkg_rscript}} -e 'minirextendr::miniextendr_check("{{rpkg_dir}}")'
 
 [doc('Diagnose the package with minirextendr::miniextendr_doctor().')]
-rpkg-doctor:
+rpkg-doctor: rpkg-r-guard
     {{rpkg_rscript}} -e 'minirextendr::miniextendr_doctor("{{rpkg_dir}}")'
 
 # Refresh the scaffold, the agent skills and the git hook sections from the
 # pinned minirextendr. configure.ac is left alone: its template resets the
 # AC_INIT version to 0.1.0, so merge a configure.ac template change by hand.
 [doc('Refresh the scaffold, skills and git hooks from the pinned minirextendr.')]
-rpkg-upgrade:
+rpkg-upgrade: rpkg-r-guard
     {{rpkg_rscript}} -e 'minirextendr::upgrade_miniextendr_package("{{rpkg_dir}}", configure_ac = FALSE)'
 
 # Run the four install-* integration tests sequentially.
