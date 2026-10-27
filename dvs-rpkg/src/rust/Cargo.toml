@@ -5,6 +5,12 @@ edition = "2024"
 rust-version = '1.85'
 publish = false
 
+# An argument that fails the generated R checks or its conversion raises
+# `dvs_error_argument` and `dvs_error` in front of miniextendr's classes, so
+# one `dvs_error` handler catches it like the package's other errors.
+[package.metadata.miniextendr]
+conversion_error_class = ["dvs_error_argument", "dvs_error"]
+
 # Make this a standalone workspace (prevents inheriting from parent)
 [workspace]
 
