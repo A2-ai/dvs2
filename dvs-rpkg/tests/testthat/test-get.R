@@ -195,3 +195,22 @@ test_that("printing shows the outcome, what needs attention, and survives subset
   cnd <- tryCatch(dvs_get(c("t.csv", "u.csv"), on_error = "error"), error = identity)
   expect_match(conditionMessage(cnd), "t.csv", fixed = TRUE)
 })
+
+test_that("the dvs_get result survives a collection at every allocation", {
+  skip_on_cran()
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add("a.csv")
+  file.remove("a.csv")
+
+  gctorture(TRUE)
+  on.exit(gctorture(FALSE), add = TRUE)
+  raw <- dvs_get_impl(paths = c("a.csv", "missing.csv"), on_conflict = "skip")
+  gctorture(FALSE)
+
+  expect_named(raw, c("files", "info"))
+  expect_equal(names(raw$files), get_columns)
+  expect_equal(raw$files$action, c("restored", "failed"))
+  expect_identical(raw$info$counts$restored, 1L)
+  expect_identical(raw$info$problem, NA_character_)
+})
