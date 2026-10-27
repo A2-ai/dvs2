@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-commands.R
 \name{dvs_init}
 \alias{dvs_init}
-\title{Initialize a DVS repository in the given directory}
+\title{dvs_init_impl}
 \usage{
 dvs_init(
   storage_path,
@@ -25,5 +25,7 @@ dvs_init(
 (default) or \code{"none"}.}
 }
 \description{
+Initialize a DVS repository in the given directory.
+
 Creates the \code{.dvs} metadata folder and configures storage for versioned files.
 }

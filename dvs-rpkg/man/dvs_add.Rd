@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-commands.R
 \name{dvs_add}
 \alias{dvs_add}
-\title{Add files to DVS-managed storage}
+\title{dvs_add_impl}
 \usage{
 dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 }
@@ -19,5 +19,7 @@ match recursively across subdirectories.}
 \item{dry_run}{If \code{TRUE}, report what would be added without modifying anything.}
 }
 \description{
+Add files to DVS-managed storage.
+
 Hashes and copies the specified files into DVS storage.
 }

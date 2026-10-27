@@ -2,7 +2,7 @@
 % Please edit documentation in R/dvs-commands.R
 \name{dvs_status}
 \alias{dvs_status}
-\title{Report the sync status of DVS-managed files}
+\title{dvs_status_impl}
 \usage{
 dvs_status(
   paths = character(0),
@@ -30,7 +30,11 @@ match recursively across subdirectories. Mutually exclusive with \code{recursive
 statuses are shown.}
 }
 \description{
-Reports the sync status of DVS-managed files. By default all statuses are shown; pass a character vector of status names (e.g. \code{c("current", "absent")}) to restrict output.
+Report the sync status of DVS-managed files.
+
+Reports the sync status of DVS-managed files. By default all statuses
+are shown; pass a character vector
+of status names (e.g. \code{c("current", "absent")}) to restrict output.
 A file whose status cannot be read is always kept, with status \code{"error"}
 and the reason in \code{error}.
 }

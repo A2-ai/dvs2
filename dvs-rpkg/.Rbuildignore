@@ -50,3 +50,7 @@
 # Static libraries in vendored crates (R CMD check objects NOTE)
 ^vendor/.*\.a$
 ^vendor/.*\.lib$
+^CLAUDE\.md$
+^AGENTS\.md$
+^src/rust/\.Cargo\.toml\.prefreeze$
+^src/rust/\.dev-vendor-backup-
