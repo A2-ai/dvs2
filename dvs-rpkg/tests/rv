@@ -4,6 +4,7 @@ trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RPKG_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${RPKG_DIR}/.." && pwd)"
 
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -12,8 +13,13 @@ echo "=== rv init ==="
 cd "$TMPDIR"
 rv init
 
-echo "=== rv add dvs (local path) ==="
-rv add dvs --path "$RPKG_DIR"
+# dvs-rpkg/ alone lacks the ../../../dvs core crate it depends on by path.
+# A local path to the repository root plus `directory` has rv run
+# bootstrap.R in the checkout, which stages the core crate. `rv add --path`
+# takes no --directory (that flag is for git sources), so write the entry.
+echo "=== rproject.toml: dvs from $ROOT_DIR, directory dvs-rpkg ==="
+ROOT_DIR="$ROOT_DIR" perl -0pi -e 's{dependencies = \[\s*\]}{dependencies = [\n    { name = "dvs", path = "$ENV{ROOT_DIR}", directory = "dvs-rpkg" },\n]}' rproject.toml
+grep -q 'directory = "dvs-rpkg"' rproject.toml
 
 echo "=== rv sync ==="
 rv sync

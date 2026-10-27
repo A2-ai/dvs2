@@ -10,24 +10,26 @@ TMPDIR="$(mktemp -d)"
 LIB="$TMPDIR/Rlib"
 mkdir -p "$LIB"
 
-RESTORE_PATHS=("dvs-rpkg/src/rust/Cargo.toml" "dvs-rpkg/src/rust/Cargo.lock")
-cleanup() {
-  rm -rf "$TMPDIR"
-  ( cd "$ROOT_DIR" && git checkout HEAD -- "${RESTORE_PATHS[@]}" 2>/dev/null || true )
-}
-trap cleanup EXIT
+trap 'rm -rf "$TMPDIR"' EXIT
 
-echo "=== just vendor (populate inst/vendor.tar.xz) ==="
-( cd "$ROOT_DIR" && just vendor )
-
-echo "=== R CMD build dvs-rpkg ==="
-cd "$TMPDIR"
-R CMD build "$RPKG_DIR"
-TARBALL="$(find . -maxdepth 1 -name 'dvs_*.tar.gz' -print -quit)"
+# The release path: minirextendr's tarball build is the one step that
+# vendors. It restores the source tree on exit.
+echo "=== miniextendr_build_tarball (vendor, build, restore) ==="
+cd "$ROOT_DIR"
+RV_LIB="$RPKG_DIR/$(cd "$RPKG_DIR" && rv library)"
+BEFORE="$(shasum dvs-rpkg/src/rust/Cargo.toml dvs-rpkg/src/rust/Cargo.lock)"
+R_LIBS="$RV_LIB" Rscript -e 'minirextendr::miniextendr_build_tarball("dvs-rpkg", dest_path = commandArgs(TRUE)[[1]])' "$TMPDIR"
+TARBALL="$(find "$TMPDIR" -maxdepth 1 -name 'dvs_*.tar.gz' -print -quit)"
 test -n "$TARBALL"
 echo "Built: $TARBALL"
 
+echo "=== source tree restored ==="
+test "$(shasum dvs-rpkg/src/rust/Cargo.toml dvs-rpkg/src/rust/Cargo.lock)" = "$BEFORE"
+test ! -e dvs-rpkg/inst/vendor.tar.xz
+test ! -e dvs-rpkg/src/rust/.Cargo.toml.prefreeze
+
 echo "=== R CMD INSTALL --library=$LIB (offline) ==="
+cd "$TMPDIR"
 CARGO_HOME="$TMPDIR/cargo-home" \
 CARGO_NET_OFFLINE=1 \
   R CMD INSTALL --no-test-load --library="$LIB" "$TARBALL"
