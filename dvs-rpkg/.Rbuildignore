@@ -23,6 +23,11 @@
 ^bootstrap\.R$
 ^\.gitignore$
 ^\.DS_Store$
+# rv project files. A shipped .Rprofile would activate an rv library at
+# install time, and rv/ holds the local library.
+^\.Rprofile$
+^rv$
+^rproject\.toml$
 
 # R CMD check output
 \.Rcheck$
