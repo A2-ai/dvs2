@@ -18,10 +18,13 @@ if ! git branch -r --contains "$SHA" 2>/dev/null | grep -q '^[[:space:]]*origin/
   exit 0
 fi
 
-TMPDIR="$(mktemp -d)"
-LIB="$TMPDIR/Rlib"
+# The scratch directory is not named TMPDIR. TMPDIR is exported, so the name
+# would hand this directory to every child process as its temp directory, and
+# a server one of them starts (sccache) keeps it after the trap deletes it.
+WORK_DIR="$(mktemp -d)"
+LIB="$WORK_DIR/Rlib"
 mkdir -p "$LIB"
-trap 'rm -rf "$TMPDIR"' EXIT
+trap 'rm -rf "$WORK_DIR"' EXIT
 
 echo "=== remotes::install_github $REMOTE_REPO@$SHA, subdir=dvs-rpkg ==="
 Rscript --vanilla - <<RSCRIPT
@@ -39,8 +42,8 @@ remotes::install_github(
 RSCRIPT
 
 echo "=== FFI smoke: dvs_init ==="
-SMOKE_ROOT="$(mktemp -d)"
-SMOKE_STORE="$(mktemp -d)"
+SMOKE_ROOT="$(mktemp -d "$WORK_DIR/smoke-root.XXXXXX")"
+SMOKE_STORE="$(mktemp -d "$WORK_DIR/smoke-store.XXXXXX")"
 Rscript -e "
   .libPaths(c('$LIB', .libPaths()))
   dvs::dvs_init('$SMOKE_STORE', root_dir = '$SMOKE_ROOT')

@@ -6,11 +6,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RPKG_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ROOT_DIR="$(cd "${RPKG_DIR}/.." && pwd)"
 
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+# The scratch directory is not named TMPDIR. TMPDIR is exported, so the name
+# would hand this directory to every child process as its temp directory, and
+# a server one of them starts (sccache) keeps it after the trap deletes it.
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
 
 echo "=== rv init ==="
-cd "$TMPDIR"
+cd "$WORK_DIR"
 rv init
 
 # dvs-rpkg/ alone lacks the ../../../dvs core crate it depends on by path.
