@@ -207,7 +207,7 @@ dependencies = []
 [[packages]]
 name = "minirextendr"
 version = "0.2.0"
-source = { git = "https://github.com/A2-ai/miniextendr", sha = "681b9101515423a4b424afd129b39aa46a3c4085", directory = "minirextendr" }
+source = { git = "https://github.com/A2-ai/miniextendr", sha = "1f8296ea2c5027b9e2dda521ba9a12eef1336ab7", directory = "minirextendr" }
 force_source = true
 dependencies = [
     "cli",
