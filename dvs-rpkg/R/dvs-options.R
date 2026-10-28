@@ -48,3 +48,35 @@ set_dvs_threads <- function(threads) {
   options(dvs.num_threads = threads)
   invisible(old)
 }
+
+# Applies options(dvs.num_threads) before an add, get or status. The value
+# reaches the Rust side as `threads`, so a bad value is reported as the
+# option, with the call of the operation the user called.
+apply_dvs_threads_option <- function(frame = parent.frame()) {
+  force(frame)
+  rename_option_error(
+    dvs_set_threads_impl(getOption("dvs.num_threads"), .call = frame),
+    "threads",
+    "dvs.num_threads"
+  )
+}
+
+# Evaluates `expr`, whose argument `param` holds the value of
+# options(<option>). A dvs_error_argument for `param` names the option in its
+# message instead, and keeps `param` as the argument the option feeds. With
+# `option` NULL the value did not come from an option.
+rename_option_error <- function(expr, param, option) {
+  if (is.null(option)) {
+    return(expr)
+  }
+  tryCatch(expr, dvs_error_argument = function(cnd) {
+    if (identical(cnd$param, param)) {
+      cnd$message <- sub(
+        sprintf("^[`']%s[`']", param),
+        sprintf("`options(%s)`", option),
+        conditionMessage(cnd)
+      )
+    }
+    stop(cnd)
+  })
+}
