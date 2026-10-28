@@ -193,11 +193,26 @@ rpkg-build-tarball: rpkg-r-guard
     mkdir -p dist
     {{rpkg_rscript}} -e 'minirextendr::miniextendr_build_tarball("{{rpkg_dir}}", dest_path = "dist")'
 
+# R CMD check points TMPDIR at a directory of its own and deletes it at the
+# end. An sccache server that the check's first compile starts keeps that
+# TMPDIR, and every later Rust build on the machine then fails with
+# "sccache: Failed to create temp dir" until the server stops. Start the
+# server here, outside the check. A server that is already running is left
+# as it is: stopping it would break builds in progress elsewhere. A stale one
+# needs `sccache --stop-server`.
+[private]
+rpkg-sccache-server:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v sccache >/dev/null 2>&1; then
+      sccache --start-server >/dev/null 2>&1 || true
+    fi
+
 # R CMD check --as-cran --no-manual on that vendored tarball. Fails on a
 # WARNING. The remote part of the CRAN incoming check is off: CRAN has a
 # package named DVS, and "Conflicting package names" is an ERROR on every run.
 [doc('R CMD check --as-cran the vendored release tarball.')]
-rpkg-check-cran: rpkg-r-guard
+rpkg-check-cran: rpkg-r-guard rpkg-sccache-server
     _R_CHECK_CRAN_INCOMING_REMOTE_=false {{rpkg_rscript}} -e 'minirextendr::miniextendr_check("{{rpkg_dir}}")'
 
 [doc('Diagnose the package with minirextendr::miniextendr_doctor().')]
