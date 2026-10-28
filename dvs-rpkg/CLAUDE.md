@@ -41,7 +41,7 @@ just rpkg-doctor             # minirextendr::miniextendr_doctor()
 just install-revendor        # cargo-revendor at the pinned miniextendr commit
 just rpkg-build-tarball      # dist/dvs_<version>.tar.gz, offline-installable
 just rpkg-check-cran         # R CMD check --as-cran on that tarball
-just rpkg-reference          # HTML reference manual from man/ into rust-target/doc/r
+just rpkg-reference          # HTML reference manual from man/, copied to dist/reference
 
 # Scaffold
 just rpkg-sync               # rv plan + sync of the pinned minirextendr (rv.lock)

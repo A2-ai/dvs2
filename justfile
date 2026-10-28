@@ -206,12 +206,18 @@ rpkg-doctor: rpkg-r-guard
 
 # The single-page HTML reference manual, built from man/ with base R's
 # tools::pkg2HTML() (R >= 4.4). It runs checkRd over man/ first and stops on a
-# finding, so it also lints the Rd files after rpkg-document. Writes only
-# dvs-rpkg/rust-target/doc/r/, which a clean install removes. Pass an output
-# directory to write elsewhere.
-[doc('Build the HTML reference manual into dvs-rpkg/rust-target/doc/r.')]
-rpkg-reference *args:
-    Rscript {{quote(rpkg_dir / "tools/build-html-reference.R")}} {{args}}
+# finding, so it also lints the Rd files after rpkg-document. The script
+# writes dvs-rpkg/rust-target/doc/r/, which a clean install removes, so the
+# recipe copies the result to dist/reference/, next to the release tarball.
+[doc('Build the HTML reference manual and copy it to dist/reference.')]
+rpkg-reference:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    Rscript {{quote(rpkg_dir / "tools/build-html-reference.R")}}
+    rm -rf dist/reference
+    mkdir -p dist/reference
+    cp -R {{quote(rpkg_dir / "rust-target/doc/r")}}/. dist/reference/
+    echo "copied to dist/reference/dvs.html"
 
 # Refresh the scaffold, configure.ac, the agent skills and the git hook
 # sections from the pinned minirextendr. configure.ac's AC_INIT takes the
