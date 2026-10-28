@@ -1,3 +1,10 @@
+#' @section NULL and NA in arguments:
+#' `NULL` in an optional argument means the argument was not given, and its
+#' default applies. For example `root_dir = NULL` in [dvs_init()] is the
+#' working directory, and `message = NULL` in [dvs_add()] adds no message.
+#' `NA` is never a value, and an `NA` in any argument is an error. The commands
+#' raise it as a `dvs_error_argument` condition, also a `dvs_error`, that
+#' names the call.
 #' @keywords internal
 "_PACKAGE"
 

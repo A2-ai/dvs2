@@ -157,9 +157,9 @@ impl From<CompressionChoice> for Compression {
 #[miniextendr(r_name = "dvs_init_impl", internal, call = caller)]
 pub(crate) fn dvs_init(
     #[miniextendr(no_na)] storage_path: PathBuf,
-    #[miniextendr(default = "NULL")] root_dir: Option<PathBuf>,
-    #[miniextendr(default = "NULL")] group: Option<String>,
-    #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
+    #[miniextendr(default = "NULL", no_na)] root_dir: Option<PathBuf>,
+    #[miniextendr(default = "NULL", no_na)] group: Option<String>,
+    #[miniextendr(default = "NULL", no_na)] metadata_folder_name: Option<String>,
     #[miniextendr(match_arg, default = "\"zstd\"")] compression: CompressionChoice,
 ) -> Result<BuiltDataFrame> {
     let root_dir = match root_dir {
@@ -205,7 +205,7 @@ pub(crate) fn dvs_init(
 #[miniextendr(r_name = "dvs_add_impl", internal, call = caller)]
 pub(crate) fn dvs_add(
     #[miniextendr(default = "character(0)", no_na)] paths: Vec<PathBuf>,
-    #[miniextendr(default = "NULL")] message: Option<String>,
+    #[miniextendr(default = "NULL", no_na)] message: Option<String>,
     #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
     #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
@@ -693,14 +693,14 @@ impl From<&GetReport> for GetInfo {
 /// @param threads Integer number of threads, or `NULL` to reset.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_set_threads_impl", internal, call = caller)]
-pub(crate) fn dvs_set_threads(#[miniextendr(default = "NULL")] threads: Option<usize>) {
+pub(crate) fn dvs_set_threads(#[miniextendr(default = "NULL", no_na)] threads: Option<usize>) {
     set_num_threads(threads.unwrap_or(0));
 }
 
 /// @title Format a byte count as a human-readable size string
 /// @param size_bytes non-negative integer representing file sizes in bytes.
 #[miniextendr]
-pub fn format_byte_size(size_bytes: u64) -> String {
+pub fn format_byte_size(#[miniextendr(no_na)] size_bytes: u64) -> String {
     dvs::format_size(size_bytes)
 }
 

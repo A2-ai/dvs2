@@ -31,6 +31,7 @@ test_that("2.5 GiB u64 from Rust survives the trip to dvs_bytes and formats corr
 
   expect_match(format_byte_size(size_bytes), "2\\.5")
   expect_match(format_byte_size(size_bytes), "GB")
+  expect_argument_error(quote(format_byte_size(NA_real_)), "size_bytes")
 })
 
 test_that("dvs_bytes + and - preserve class", {
