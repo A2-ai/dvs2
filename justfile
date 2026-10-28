@@ -204,6 +204,15 @@ rpkg-check-cran: rpkg-r-guard
 rpkg-doctor: rpkg-r-guard
     {{rpkg_rscript}} -e 'minirextendr::miniextendr_doctor("{{rpkg_dir}}")'
 
+# The single-page HTML reference manual, built from man/ with base R's
+# tools::pkg2HTML() (R >= 4.4). It runs checkRd over man/ first and stops on a
+# finding, so it also lints the Rd files after rpkg-document. Writes only
+# dvs-rpkg/rust-target/doc/r/, which a clean install removes. Pass an output
+# directory to write elsewhere.
+[doc('Build the HTML reference manual into dvs-rpkg/rust-target/doc/r.')]
+rpkg-reference *args:
+    Rscript {{quote(rpkg_dir / "tools/build-html-reference.R")}} {{args}}
+
 # Refresh the scaffold, configure.ac, the agent skills and the git hook
 # sections from the pinned minirextendr. configure.ac's AC_INIT takes the
 # version from DESCRIPTION.
