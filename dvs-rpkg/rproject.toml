@@ -7,7 +7,7 @@ repositories = [
 ]
 
 dependencies = [
-  {name = "minirextendr", git = "https://github.com/A2-ai/miniextendr", commit = "1f8296ea2c5027b9e2dda521ba9a12eef1336ab7", directory = "minirextendr"},
+  {name = "minirextendr", git = "https://github.com/A2-ai/miniextendr", commit = "3861312ff2ab4fcd74a9a9032a11541b89529356", directory = "minirextendr"},
     "cli",
     "tibble",
     "pillar",
