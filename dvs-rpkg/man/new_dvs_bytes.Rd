@@ -7,7 +7,8 @@
 new_dvs_bytes(x)
 }
 \arguments{
-\item{x}{atomic numeric / integer / logical vector (incl. \code{NA})}
+\item{x}{atomic numeric / integer / logical vector (incl. \code{NA}). \code{NULL}
+raises a \code{dvs_error_argument} condition.}
 }
 \value{
 a \code{dvs_bytes} object inheriting from \code{numeric}
