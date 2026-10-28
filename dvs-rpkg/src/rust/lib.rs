@@ -10,13 +10,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::SyncSender;
 
-use miniextendr_api::dataframe::IntoDataFrame;
+use miniextendr_api::dataframe::{DataFrame, IntoDataFrame};
 use miniextendr_api::externalptr::ExternalPtr;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
 use miniextendr_api::serde::AsSerialize;
 use miniextendr_api::{
-    BuiltDataFrame, DataFrameRow, IntoList, MatchArg, PreferList, Preserved, miniextendr,
+    BuiltDataFrame, DataFrameRow, IntoList, MatchArg, PreferList, Preserved, SEXP, SexpExt,
+    miniextendr,
 };
 
 use anyhow::{Result, anyhow};
@@ -682,6 +683,30 @@ impl From<&GetReport> for GetInfo {
             counts: AsSerialize(report.counts.clone()),
             problem: report.problem.as_ref().map(|p| p.message.clone()),
         }
+    }
+}
+
+/// @title Operation information for a dvs result
+/// @description
+/// The rows of a [dvs_get()] result describe each file. This returns what
+/// applies to the whole operation.
+///
+/// @param x A result returned by [dvs_get()]. Anything else raises a
+///   `dvs_error_argument` condition.
+/// @return A list: `command`, `outcome` (`"complete"`, `"aborted"`,
+///   `"partial"` or `"failed"`), `did_as_asked` (`TRUE` unless a file failed
+///   or `on_conflict = "abort"` held files back), `dry_run`, `on_conflict` and
+///   its `source` (`"argument"`, `"env"`, `"config"` for dvs.toml, or
+///   `"default"`), `counts` (a named list of row counts: `total`, `succeeded`
+///   for the rows at their target, then one count per action, the same fields
+///   as the CLI's JSON `counts`) and `problem` (an operation-level message, or
+///   `NA` when there is none).
+#[miniextendr]
+pub fn dvs_result_info(x: DataFrame) -> SEXP {
+    // dvs_get() sets this attribute on its result.
+    match x.as_sexp().get_attr_opt(SEXP::symbol("dvs_info")) {
+        Some(info) => info,
+        None => miniextendr_api::arg_error!(param = "x", "`x` is not a dvs result"),
     }
 }
 

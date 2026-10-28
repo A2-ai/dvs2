@@ -3,7 +3,8 @@
 #' default applies. For example `root_dir = NULL` in [dvs_init()] is the
 #' working directory, and `message = NULL` in [dvs_add()] adds no message.
 #' `NA` is never a value in an argument of [dvs_init()], [dvs_add()],
-#' [dvs_status()], [dvs_get()], [set_dvs_threads()] or [set_dvs_log_level()].
+#' [dvs_status()], [dvs_get()], [dvs_result_info()], [set_dvs_threads()],
+#' [set_dvs_log_level()] or [format_byte_size()].
 #' An `NA` there raises a `dvs_error_argument` condition, also a `dvs_error`,
 #' that names the call. [new_dvs_bytes()] takes `NA` for an unknown size.
 #' @keywords internal
