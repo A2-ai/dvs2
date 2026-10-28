@@ -16,7 +16,8 @@ dvs_get_impl(
 )
 }
 \arguments{
-\item{paths}{Character vector of file paths to retrieve from DVS storage.}
+\item{paths}{Character vector of file paths to retrieve from DVS storage.
+\code{NULL} is the same as \code{character(0)}.}
 
 \item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).
 Globs use a literal path separator: \verb{*.csv} only matches files in the

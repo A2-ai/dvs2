@@ -94,6 +94,13 @@ test_that("dvs_add with glob picks up matching files", {
   expect_setequal(basename(result$path), c("data_a.csv", "data_b.csv"))
 })
 
+test_that("dvs_add takes paths = NULL as no paths", {
+  new_dvs_test_repo()
+  write_theoph_shuffled("data_a.csv", seed = 7)
+  result <- dvs_add(paths = NULL, glob = "*.csv")
+  expect_equal(basename(result$path), "data_a.csv")
+})
+
 test_that("dvs_add accepts a message without error", {
   new_dvs_test_repo()
   write_theoph("t.csv")

@@ -34,6 +34,12 @@ test_that("dvs_status() with no filter shows all three statuses", {
   expect_setequal(result$status, c("current", "absent", "modified"))
 })
 
+test_that("dvs_status takes paths = NULL as no paths", {
+  new_dvs_test_repo()
+  plant_three_statuses()
+  expect_equal(dvs_status(paths = NULL), dvs_status())
+})
+
 test_that("dvs_status(status = 'current') returns only current", {
   new_dvs_test_repo()
   plant_three_statuses()
