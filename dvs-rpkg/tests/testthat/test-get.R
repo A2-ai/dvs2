@@ -159,6 +159,8 @@ test_that("on_error controls signalling, and conditions carry the result", {
   writeLines("my edit", "t.csv")
   expect_silent(res <- dvs_get("t.csv"))
   expect_warning(dvs_get("t.csv", on_error = "warn"), class = "dvs_get_incomplete")
+  # A unique prefix matches, as with match.arg()
+  expect_warning(dvs_get("t.csv", on_error = "w"), class = "dvs_get_incomplete")
   cnd <- tryCatch(dvs_get("t.csv", on_error = "error"), dvs_get_incomplete = identity)
   expect_s3_class(cnd, "dvs_error")
   expect_equal(cnd$result$code, "local_changes")
@@ -180,6 +182,9 @@ test_that("dvs_get raises a wrong argument as a dvs_error_argument", {
   expect_argument_error(quote(dvs_get(recursive = NA)), "recursive")
   expect_argument_error(quote(dvs_get(dry_run = "yes")), "dry_run")
   expect_argument_error(quote(dvs_get(on_conflict = "bogus")), "on_conflict")
+  expect_argument_error(quote(dvs_get(on_error = "bogus")), "on_error")
+  withr::local_options(dvs.on_error = "bogus")
+  expect_argument_error(quote(dvs_get()), "on_error")
 })
 
 test_that("overwrite in dvs.toml is a configuration error", {
@@ -235,7 +240,8 @@ test_that("the dvs_get result survives a collection at every allocation", {
   raw <- dvs_get_impl(paths = c("a.csv", "missing.csv"), on_conflict = "skip")
   gctorture(FALSE)
 
-  expect_named(raw, c("files", "info"))
+  expect_named(raw, c("files", "info", "on_error"))
+  expect_identical(raw$on_error, "return")
   expect_equal(names(raw$files), get_columns)
   expect_equal(raw$files$action, c("restored", "failed"))
   expect_identical(raw$info$counts$restored, 1L)

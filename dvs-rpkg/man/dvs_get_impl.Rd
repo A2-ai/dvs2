@@ -10,6 +10,7 @@ dvs_get_impl(
   recursive = NULL,
   dry_run = NULL,
   on_conflict = NULL,
+  on_error = c("return", "warn", "error"),
   progress_callback = NULL,
   .call = NULL
 )
@@ -33,6 +34,10 @@ directory. Mutually exclusive with \code{glob}.}
 in dvs.toml, then \code{"abort"}), or one of \code{"abort"} (change no files if any
 requested file has local changes or another problem), \code{"skip"} (leave those
 files and get the rest) or \code{"overwrite"} (replace them; local changes are lost).}
+
+\item{on_error}{What \code{dvs_get()} does when get did not do as asked:
+\code{"return"}, \code{"warn"} or \code{"error"}. The result carries the matched choice
+back to R, which acts on it.}
 
 \item{progress_callback}{Optional handle to enable progress bar display.}
 
