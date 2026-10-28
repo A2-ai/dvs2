@@ -319,7 +319,11 @@ pub(crate) fn dvs_status(
         return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
     }
 
-    let show_all = status.is_empty() || status.len() == StatusChoice::CHOICES.len();
+    // Every choice selected shows every row, as no status flag does in the CLI.
+    let show_all = status.is_empty()
+        || StatusChoice::CHOICES
+            .iter()
+            .all(|choice| status.iter().any(|c| c.to_choice() == *choice));
 
     let filter = if paths.is_empty() {
         None

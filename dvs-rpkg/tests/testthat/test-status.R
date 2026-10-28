@@ -212,6 +212,18 @@ test_that("dvs_status keeps add_time rooted while it builds the frame", {
   expect_false(any(is.na(result$add_time)))
 })
 
+test_that("dvs_status shows every status only when every choice is selected", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add(paths = file.path(getwd(), "a.csv"))
+  writeLines("changed", "a.csv")
+  expect_equal(dvs_status()$status, "modified")
+
+  # Five entries, but not "modified"
+  result <- dvs_status(status = c("current", "current", "absent", "stale", "stale"))
+  expect_equal(nrow(result), 0L)
+})
+
 test_that("dvs_status keeps an unreadable record as an error row", {
   new_dvs_test_repo()
   write_theoph("t.csv")
