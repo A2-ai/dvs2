@@ -212,13 +212,18 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<BuiltDataFrame> {
+    let paths = paths.unwrap_or_default();
+    // The CLI requires paths unless --glob is given. With neither, the library
+    // would refuse the working directory as a directory.
+    if paths.is_empty() && glob.is_none() {
+        miniextendr_api::arg_error!(param = "paths", "`paths` or `glob` is required");
+    }
     let config = find_config()?;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let all_paths: Vec<_> =
-        resolve_paths_for_add(paths.unwrap_or_default(), glob.as_deref(), &dvs_paths)?
-            .into_iter()
-            .collect();
+    let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
+        .into_iter()
+        .collect();
     if all_paths.is_empty() {
         return Err(anyhow!("No files to add"));
     }
