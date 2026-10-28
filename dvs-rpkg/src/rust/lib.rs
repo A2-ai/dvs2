@@ -345,19 +345,8 @@ pub(crate) fn dvs_status(
         });
     }
 
-    // DataFrameRow has no datetime columns, so add_time joins as a POSIXct
-    // vector converted from the jiff timestamps. Rooted until the frame holds
-    // it: with_column allocates the new frame before it stores the column.
-    let add_time = Preserved::new(
-        statuses
-            .iter()
-            .map(|s| s.metadata.as_ref().map(|m| m.add_time))
-            .collect::<Vec<Option<_>>>(),
-    );
     let rows: Vec<StatusRow> = statuses.iter().map(StatusRow::from).collect();
-    Ok(rows
-        .into_dataframe()?
-        .with_column("add_time", add_time.as_sexp()))
+    Ok(rows.into_dataframe()?)
 }
 
 /// @title Materialize the audit log as a data frame
@@ -403,9 +392,9 @@ pub(crate) fn dvs_audit_log(
 
 // region: status rows
 
-/// One row of the `dvs_status()` frame, without `add_time`. The columns are
-/// fixed: a row without metadata, or without a message or error, fills them
-/// with `NA`.
+/// One row of the `dvs_status()` frame. The columns are fixed: a row without
+/// metadata, or without a message or error, fills them with `NA`. `add_time`
+/// is a POSIXct column in UTC.
 #[derive(DataFrameRow)]
 struct StatusRow {
     path: String,
@@ -416,6 +405,7 @@ struct StatusRow {
     compression: Option<String>,
     message: Option<String>,
     error: Option<String>,
+    add_time: Option<miniextendr_api::jiff::Timestamp>,
 }
 
 impl From<&dvs::StatusFacts> for StatusRow {
@@ -430,6 +420,7 @@ impl From<&dvs::StatusFacts> for StatusRow {
             compression: metadata.map(|m| m.compression.to_string()),
             message: metadata.and_then(|m| m.message.clone()),
             error: row.error.clone(),
+            add_time: metadata.map(|m| m.add_time),
         }
     }
 }
