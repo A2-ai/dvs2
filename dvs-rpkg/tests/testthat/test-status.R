@@ -170,7 +170,7 @@ test_that("dvs_status returns POSIXct add_time and dvs_bytes size", {
 
 status_columns <- c(
   "path", "status", "hash", "size", "created_by", "compression",
-  "message", "error", "add_time"
+  "message", "code", "error", "add_time"
 )
 
 test_that("dvs_status has the same columns whatever the rows", {
@@ -181,6 +181,7 @@ test_that("dvs_status has the same columns whatever the rows", {
   write_theoph("t.csv")
   dvs_add(paths = file.path(getwd(), "t.csv"))
   expect_named(dvs_status(), status_columns)
+  expect_true(is.na(dvs_status()$code))
 })
 
 test_that("dvs_status keeps a message that only a later row has", {
@@ -233,6 +234,7 @@ test_that("dvs_status keeps an unreadable record as an error row", {
   result <- dvs_status(status = "current")
   expect_equal(nrow(result), 1L)
   expect_equal(result$status, "error")
+  expect_equal(result$code, "bad_metadata")
   expect_false(is.na(result$error))
 })
 
