@@ -31,7 +31,7 @@ The pin is the `rev` of `miniextendr-api` and `miniextendr-lint` in `dvs-rpkg/sr
 2. Move the three pins. Run `just rpkg-sync` (`rv plan`, then `rv sync`). Check that `rv.lock` and `src/rust/Cargo.lock` name the new commit.
 3. Compile with `just rpkg-check`, `just rpkg-check --all-features` and `just rpkg-clippy --all-features`. Port the API drift. This is the pin commit.
 4. Diff the two pins' templates: `git diff --stat "$old" <new> -- minirextendr/inst/templates` in a miniextendr clone.
-5. Run `just rpkg-upgrade` (`upgrade_miniextendr_package(configure_ac = FALSE)`). It refreshes the build templates, the agent skills in `.claude/skills/` and the miniextendr sections of the git hooks. Review every file it lists. It stops when `configure.ac` cannot substitute the new `Makevars.in`. Then run it with `configure_ac = TRUE` and restore the `AC_INIT` version, which the template resets to `0.1.0`.
+5. Run `just rpkg-upgrade` (`upgrade_miniextendr_package(configure_ac = TRUE)`). It refreshes the build templates, `configure.ac`, `src/Makevars.win`, the agent skills in `.claude/skills/` and the miniextendr sections of the git hooks. `AC_INIT` keeps the version in `DESCRIPTION`. Review every file it lists.
 6. Run `just rpkg-dev` and review `git diff dvs-rpkg/R dvs-rpkg/man dvs-rpkg/NAMESPACE`. This is the scaffold commit.
 7. Test: `devtools::test("dvs-rpkg")`, `just rpkg-build-tarball` and an offline install of the tarball, `just rpkg-check-cran`, `bash dvs-rpkg/tests/rv`. Outside devtools, run testthat with `NOT_CRAN=true`. The `gctorture` cases skip without it.
 

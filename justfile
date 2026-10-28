@@ -204,12 +204,12 @@ rpkg-check-cran: rpkg-r-guard
 rpkg-doctor: rpkg-r-guard
     {{rpkg_rscript}} -e 'minirextendr::miniextendr_doctor("{{rpkg_dir}}")'
 
-# Refresh the scaffold, the agent skills and the git hook sections from the
-# pinned minirextendr. configure.ac is left alone: its template resets the
-# AC_INIT version to 0.1.0, so merge a configure.ac template change by hand.
+# Refresh the scaffold, configure.ac, the agent skills and the git hook
+# sections from the pinned minirextendr. configure.ac's AC_INIT takes the
+# version from DESCRIPTION.
 [doc('Refresh the scaffold, skills and git hooks from the pinned minirextendr.')]
 rpkg-upgrade: rpkg-r-guard
-    {{rpkg_rscript}} -e 'minirextendr::upgrade_miniextendr_package("{{rpkg_dir}}", configure_ac = FALSE)'
+    {{rpkg_rscript}} -e 'minirextendr::upgrade_miniextendr_package("{{rpkg_dir}}", configure_ac = TRUE)'
 
 # Run the four install-* integration tests sequentially.
 # install-tarball requires cargo-revendor; it is skipped if not installed.

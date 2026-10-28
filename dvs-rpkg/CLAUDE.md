@@ -44,7 +44,7 @@ just rpkg-check-cran         # R CMD check --as-cran on that tarball
 
 # Scaffold
 just rpkg-sync               # rv plan + sync of the pinned minirextendr (rv.lock)
-just rpkg-upgrade            # upgrade_miniextendr_package(configure_ac = FALSE)
+just rpkg-upgrade            # upgrade_miniextendr_package(configure_ac = TRUE)
 
 # Combined targets
 just build-all               # Build dvs + dvs-rpkg
@@ -65,8 +65,9 @@ bash ./configure
 # Build and install the R package
 R CMD INSTALL .
 # Do not ship `R CMD build .` output. It does not run bootstrap.R, so the
-# tarball lacks ../../../dvs and its install fails in cargo ("failed to
-# read .../dvs/Cargo.toml"). devtools::build() stages the core crate.
+# tarball lacks ../../../dvs and its configure stops ("Path dependencies
+# outside the package directory are missing"). devtools::build() stages the
+# core crate.
 # Release tarballs come from `just rpkg-build-tarball`.
 
 # Dev workflow (in R console)
