@@ -128,9 +128,9 @@ set_dvs_log_level("off")     # restore default (silent)
 
 ### Key Dependencies
 
-- **miniextendr** (git: A2-ai/miniextendr) — Rust-to-R FFI framework with serde support, `log` feature enabled for R-console log routing
-- **dvs** (path: `../dvs`) — core DVS library (patched in Cargo.toml)
-- **R imports**: jsonlite
+- **miniextendr** (git: A2-ai/miniextendr, pinned by `rev`): the Rust-to-R FFI framework. The `serde`, `jiff` and `log` features are on. `log` routes log records to the R console.
+- **dvs** (path dependency `../../../dvs` in `src/rust/Cargo.toml`): the core DVS library
+- **R imports**: cli, pillar, tibble
 - **Rust requires**: rustc >= 1.85.0
 
 ### Vendoring
@@ -172,17 +172,18 @@ Defined in `src/rust/lib.rs` with `#[miniextendr]` unless noted:
 | `set_dvs_threads` | Set the `dvs.num_threads` option (R side, `R/dvs-options.R`) | Previous value, invisibly |
 | `set_dvs_log_level` | Set the Rust log level | NULL |
 | `format_byte_size` | Human-readable byte size | String |
+| `dvs_result_info` | What applies to a whole `dvs_get()` result: outcome, policy, counts (R side, `R/dvs-commands.R`) | List |
 | `new_dvs_bytes` | Construct a `dvs_bytes` vector (R side, `R/pillar.R`) | `dvs_bytes` numeric |
 
 This table is a high-level index only. The authoritative parameter signatures live in the `#[miniextendr]` definitions in `src/rust/lib.rs` and the R help pages (`?dvs_get` and `man/*.Rd`).
 
-`dvs_status()` and the `dvs_get()` file rows come from `#[derive(DataFrameRow)]` row types, so their columns are fixed. `dvs_init()` and `dvs_add()` go through miniextendr's serde conversion (`vec_to_dataframe`), so their columns follow the rows: `dvs_add()` has `code` and `error` only when a file failed. `dvs_audit_log()` uses `vec_to_dataframe_flatten_enums` to spread each entry's action into `action_*` columns. Errors propagate as `anyhow::Result<T>` converted to R error objects. A wrong argument type raises a `dvs_error_argument` condition, also a `dvs_error`, that names the user's call.
+`dvs_status()` and the `dvs_get()` file rows come from `#[derive(DataFrameRow)]` row types, so their columns are fixed. `dvs_init()` and `dvs_add()` go through miniextendr's serde conversion (`vec_to_dataframe`), so their columns follow the rows: `dvs_add()` has `code` and `error` only when a file failed. `dvs_audit_log()` uses `vec_to_dataframe_flatten_enums` to spread each entry's action into `action_*` columns. Errors propagate as `anyhow::Result<T>` converted to R error objects. A wrong argument, or `NA` in a path, glob or TRUE/FALSE argument, raises a `dvs_error_argument` condition, also a `dvs_error`, that names the user's call. An `NA` message, group, root directory or metadata folder name means the argument was not given. A dvs.toml that does not load raises a `dvs_config_error`.
 
 ## Environment Variables
 
 | Variable | Effect |
 |----------|--------|
-| `CARGO_PROFILE` | `release` (default) or `debug` |
+| `CARGO_PROFILE` | `release` (default) or `dev`. `debug` is read as `dev` with a warning |
 | `CARGO_FEATURES` | Comma-separated cargo features (e.g., `nonapi`) |
 | `RUST_TOOLCHAIN` | e.g., `+stable`, `+nightly` |
 | `DVS_AUTO_FEATURES` | Escape hatch for `tools/detect-features.R`; inject features without setting `CARGO_FEATURES` (which would skip the script entirely) |

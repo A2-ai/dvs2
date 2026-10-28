@@ -17,7 +17,7 @@
 #'
 #' # Temporarily use 2 threads
 #' withr::with_options(list(dvs.num_threads = 2), {
-#'   dvs_add(files = "big_data.csv")
+#'   dvs_add(paths = "big_data.csv")
 #' })
 #' }
 #'
