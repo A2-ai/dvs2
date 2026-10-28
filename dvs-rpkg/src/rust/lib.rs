@@ -302,7 +302,7 @@ impl From<StatusChoice> for Status {
 /// @param paths Character vector of file or directory paths to check status for.
 ///   `NULL` is the same as `character(0)`.
 /// @param recursive If `TRUE`, directory inputs include all descendants;
-///   if `FALSE` or `NULL` (default), only direct children of the directory
+///   if `FALSE` or `NULL`, only direct children of the directory
 ///   are returned. The flag only constrains descendants of paths passed
 ///   explicitly — when `paths` is empty, every tracked file is returned
 ///   regardless of nesting depth, and `recursive` has no effect.
@@ -508,7 +508,7 @@ impl From<OnConflictChoice> for OnConflict {
 ///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
 ///   match recursively across subdirectories. Mutually exclusive with `recursive`.
 /// @param recursive If `TRUE`, directory inputs include all descendants;
-///   if `FALSE` or `NULL` (default), only direct children of the directory
+///   if `FALSE` or `NULL`, only direct children of the directory
 ///   are returned. With no explicit `paths` the directory is the working
 ///   directory. Mutually exclusive with `glob`.
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.

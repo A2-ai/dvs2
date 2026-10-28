@@ -26,7 +26,7 @@ dvs_add <- function(
   paths = character(0),
   message = NULL,
   glob = NULL,
-  dry_run = NULL
+  dry_run = FALSE
 ) {
   apply_dvs_threads_option()
   progress_callback <- NULL
@@ -61,7 +61,7 @@ dvs_add <- function(
 #' @export
 dvs_status <- function(
   paths = character(0),
-  recursive = NULL,
+  recursive = FALSE,
   glob = NULL,
   status = c("current", "absent", "stale", "modified", "unsynced")
 ) {

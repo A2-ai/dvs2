@@ -4,7 +4,7 @@
 \alias{dvs_add}
 \title{Add files to DVS-managed storage}
 \usage{
-dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
+dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = FALSE)
 }
 \arguments{
 \item{paths}{Character vector of file paths to add to DVS storage. \code{NULL}
