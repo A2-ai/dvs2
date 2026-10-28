@@ -9,7 +9,6 @@ dvs_init <- function(
   metadata_folder_name = NULL,
   compression = c("zstd", "none")
 ) {
-  compression <- match.arg(compression)
   result <- dvs_init_impl(
     storage_path = storage_path,
     root_dir = root_dir,
@@ -139,25 +138,13 @@ dvs_get <- function(
   on_conflict = NULL,
   on_error = getOption("dvs.on_error", "return")
 ) {
-  if (!is.character(paths) || anyNA(paths)) {
-    stop("`paths` must be a character vector without NA", call. = FALSE)
-  }
-  if (!isTRUE(recursive) && !isFALSE(recursive)) {
-    stop("`recursive` must be TRUE or FALSE", call. = FALSE)
-  }
-  if (!isTRUE(dry_run) && !isFALSE(dry_run)) {
-    stop("`dry_run` must be TRUE or FALSE", call. = FALSE)
-  }
-  if (!is.null(on_conflict)) {
-    on_conflict <- match.arg(on_conflict, c("abort", "skip", "overwrite"))
-  }
   on_error <- match.arg(on_error, c("return", "warn", "error"))
 
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   progress_callback <- NULL
   # Only show a progress bar in interactive sessions; non-interactive callers
   # should prefer dvs-cli (see #118).
-  if (!dry_run && interactive()) {
+  if (!isTRUE(dry_run) && interactive()) {
     progress_callback <- ProgressBarCallback$new()
   }
 
