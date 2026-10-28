@@ -18,11 +18,14 @@ if ! git branch -r --contains "$SHA" 2>/dev/null | grep -q '^[[:space:]]*origin/
   exit 0
 fi
 
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+# The scratch directory is not named TMPDIR. TMPDIR is exported, so the name
+# would hand this directory to every child process as its temp directory, and
+# a server one of them starts (sccache) keeps it after the trap deletes it.
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
 
 echo "=== rv init ==="
-cd "$TMPDIR"
+cd "$WORK_DIR"
 rv init
 
 echo "=== rv add dvs --git $REMOTE_URL --commit $SHA --directory dvs-rpkg ==="
@@ -30,16 +33,16 @@ rv add dvs --git "$REMOTE_URL" --commit "$SHA" --directory dvs-rpkg
 
 echo "=== resolve rv library path ==="
 # rv lays out packages at rv/library/<R-version>/<arch>/ (no trailing /library)
-RV_LIB="$(echo "$TMPDIR"/rv/library/*/*)"
+RV_LIB="$(echo "$WORK_DIR"/rv/library/*/*)"
 if [ ! -d "$RV_LIB" ]; then
-  echo "ERROR: rv library directory not found at expected glob $TMPDIR/rv/library/*/*" >&2
+  echo "ERROR: rv library directory not found at expected glob $WORK_DIR/rv/library/*/*" >&2
   exit 1
 fi
 echo "rv lib: $RV_LIB"
 
 echo "=== FFI smoke: dvs_init ==="
-SMOKE_ROOT="$(mktemp -d)"
-SMOKE_STORE="$(mktemp -d)"
+SMOKE_ROOT="$(mktemp -d "$WORK_DIR/smoke-root.XXXXXX")"
+SMOKE_STORE="$(mktemp -d "$WORK_DIR/smoke-store.XXXXXX")"
 Rscript -e "
   .libPaths(c('$RV_LIB', .libPaths()))
   dvs::dvs_init('$SMOKE_STORE', root_dir = '$SMOKE_ROOT')
