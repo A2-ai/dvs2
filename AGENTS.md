@@ -14,7 +14,7 @@ The recipes that call minirextendr put the rv library first in `R_LIBS`, so they
 
 `just rpkg-build-tarball` writes the offline, CRAN-ready `dist/dvs_<version>.tar.gz` (`minirextendr::miniextendr_build_tarball()`). It refreshes the wrappers, `NAMESPACE` and `man/`, seals every crate into `inst/vendor.tar.xz` with cargo-revendor, builds the tarball, and restores `src/rust/Cargo.toml`, `Cargo.lock` and `vendor/`. `just rpkg-check-cran` runs `R CMD check --as-cran` on that tarball. Both need cargo-revendor at the pin: `just install-revendor`.
 
-`just rpkg-reference` builds the single-page HTML reference manual from `man/` into `dvs-rpkg/rust-target/doc/r/dvs.html`. It checks the Rd files first and stops on a problem. It reads no build output and writes nothing the build watches.
+`just rpkg-reference` builds the single-page HTML reference manual from `man/` and copies it to `dist/reference/dvs.html`. It checks the Rd files first and stops on a problem. It reads no build output and writes nothing the build watches.
 
 Never commit `inst/vendor.tar.xz`. While it exists, `configure` builds in offline tarball mode. The miniextendr pre-commit hook refuses it.
 
