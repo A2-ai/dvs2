@@ -46,7 +46,9 @@ and always the same columns: \code{path}, \code{local_path}, \code{before} (\cod
 \code{"not_a_file"}, \code{"unsafe_path"}), \code{action} (\code{"restored"}, \code{"replaced"},
 \code{"unchanged"}, \code{"skipped"}, \code{"not_run"}, \code{"failed"}, \code{"would_restore"},
 \code{"would_replace"}), \code{satisfied}, \code{size}, \code{target_hash}, \code{local_hash},
-\code{stored_copy}, \code{code}, \code{message} and \code{hint}. \code{\link[=dvs_result_info]{dvs_result_info()}} returns
+\code{stored_copy}, \code{code}, \code{message}, \code{hint} and \code{duration_ms} (the
+milliseconds spent on the file, \code{NA} when it was never hashed or
+copied). \code{\link[=dvs_result_info]{dvs_result_info()}} returns
 the outcome and the policy that applied. Outside a dvs project it raises an
 error; configuration errors (for example \code{on_conflict = "overwrite"} in
 dvs.toml) raise a \code{dvs_config_error}.

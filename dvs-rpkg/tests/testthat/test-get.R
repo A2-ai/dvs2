@@ -21,7 +21,8 @@ switch_branches <- function() {
 
 get_columns <- c(
   "path", "local_path", "before", "action", "satisfied", "size",
-  "target_hash", "local_hash", "stored_copy", "code", "message", "hint"
+  "target_hash", "local_hash", "stored_copy", "code", "message", "hint",
+  "duration_ms"
 )
 
 test_that("dvs_get restores deleted files with identical content", {
@@ -37,6 +38,8 @@ test_that("dvs_get restores deleted files with identical content", {
   expect_s3_class(result, "tbl_df")
   expect_equal(names(result), get_columns)
   expect_s3_class(result$size, "dvs_bytes")
+  expect_type(result$duration_ms, "double")
+  expect_false(anyNA(result$duration_ms))
   expect_equal(result$action, c("restored", "restored"))
   expect_equal(lapply(c("a.csv", "b.csv"), readLines), original)
   expect_equal(dvs_result_info(result)$outcome, "complete")
@@ -91,6 +94,7 @@ test_that("an untracked path is a row, and holds the batch back by default", {
 
   result <- dvs_get(paths = c("tracked.csv", "untracked.csv"), on_conflict = "skip")
   expect_equal(result$action[result$path == "tracked.csv"], "restored")
+  expect_true(is.na(result$duration_ms[result$path == "untracked.csv"]))
 })
 
 test_that("after a branch switch, files dvs wrote are replaced without asking", {
