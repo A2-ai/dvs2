@@ -688,12 +688,26 @@ impl From<&GetReport> for GetInfo {
 /// @title Set the number of threads used by DVS parallel operations
 /// @description
 /// Controls the thread pool size for add, get, and status operations.
-/// Pass `NULL` to revert to automatic detection.
+/// Pass `NULL` or `0` to revert to automatic detection, as `--threads 0` does
+/// in the CLI.
 ///
-/// @param threads Integer number of threads, or `NULL` to reset.
+/// @param threads A whole number of threads, `0` or `NULL` for automatic
+///   detection.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_set_threads_impl", internal, call = caller)]
-pub(crate) fn dvs_set_threads(#[miniextendr(default = "NULL", no_na)] threads: Option<usize>) {
+pub(crate) fn dvs_set_threads(
+    // usize reads TRUE as 1. A thread count is a number, and a bare NA is a
+    // logical too.
+    #[miniextendr(
+        default = "NULL",
+        no_na,
+        not_inherits(
+            "logical",
+            message = "`threads` must be a number, not TRUE, FALSE or NA"
+        )
+    )]
+    threads: Option<usize>,
+) {
     set_num_threads(threads.unwrap_or(0));
 }
 

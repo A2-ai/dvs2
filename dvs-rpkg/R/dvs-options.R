@@ -6,8 +6,10 @@
 #'
 #' Can also be set via `.Rprofile` or temporarily with [withr::with_options()].
 #'
-#' @param threads Integer number of threads to use. Set to `NULL` to revert to
-#'   the default (automatic detection).
+#' @param threads A whole number of threads to use. `NULL` or `0` reverts to
+#'   the default, automatic detection, as `--threads 0` does in the CLI. A
+#'   value that is not a whole number of zero or more, `NA` included, raises a
+#'   `dvs_error_argument` condition.
 #'
 #' @return The previous value of `dvs.num_threads` (invisibly).
 #'
@@ -23,11 +25,10 @@
 #'
 #' @export
 set_dvs_threads <- function(threads) {
+  # The Rust side checks the value and applies it now. Every operation
+  # applies the option again before it runs.
+  dvs_set_threads_impl(threads)
   if (!is.null(threads)) {
-    stopifnot(
-      "'threads' must be a single positive integer" =
-        is.numeric(threads) && length(threads) == 1L && !is.na(threads) && threads > 0
-    )
     threads <- as.integer(threads)
   }
   old <- getOption("dvs.num_threads")

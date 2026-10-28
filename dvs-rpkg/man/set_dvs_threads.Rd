@@ -7,8 +7,10 @@
 set_dvs_threads(threads)
 }
 \arguments{
-\item{threads}{Integer number of threads to use. Set to \code{NULL} to revert to
-the default (automatic detection).}
+\item{threads}{A whole number of threads to use. \code{NULL} or \code{0} reverts to
+the default, automatic detection, as \verb{--threads 0} does in the CLI. A
+value that is not a whole number of zero or more, \code{NA} included, raises a
+\code{dvs_error_argument} condition.}
 }
 \value{
 The previous value of \code{dvs.num_threads} (invisibly).
