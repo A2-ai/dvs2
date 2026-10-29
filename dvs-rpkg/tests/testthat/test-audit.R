@@ -47,3 +47,8 @@ test_that("dvs_audit_log flattens the action into columns with a POSIXct timesta
   expect_equal(log$action_message, c(NA, "why"))
   expect_false("action" %in% names(log))
 })
+
+test_that("dvs_audit_log raises an NA path as a dvs_error_argument", {
+  new_dvs_test_repo()
+  expect_argument_error(quote(dvs_audit_log(paths = NA_character_)), "paths")
+})

@@ -156,7 +156,7 @@ impl From<CompressionChoice> for Compression {
 /// @keywords internal
 #[miniextendr(r_name = "dvs_init_impl", internal, call = caller)]
 pub(crate) fn dvs_init(
-    storage_path: PathBuf,
+    #[miniextendr(no_na)] storage_path: PathBuf,
     #[miniextendr(default = "NULL")] root_dir: Option<PathBuf>,
     #[miniextendr(default = "NULL")] group: Option<String>,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
@@ -204,10 +204,10 @@ pub(crate) fn dvs_init(
 /// @keywords internal
 #[miniextendr(r_name = "dvs_add_impl", internal, call = caller)]
 pub(crate) fn dvs_add(
-    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)", no_na)] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] message: Option<String>,
-    #[miniextendr(default = "NULL")] glob: Option<String>,
-    #[miniextendr(default = "NULL")] dry_run: Option<bool>,
+    #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
+    #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<BuiltDataFrame> {
     let current_dir = std::env::current_dir()?;
@@ -308,9 +308,9 @@ impl From<StatusChoice> for Status {
 /// @keywords internal
 #[miniextendr(r_name = "dvs_status_impl", internal, call = caller)]
 pub(crate) fn dvs_status(
-    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
-    #[miniextendr(default = "NULL")] recursive: Option<bool>,
-    #[miniextendr(default = "NULL")] glob: Option<String>,
+    #[miniextendr(default = "character(0)", no_na)] paths: Vec<PathBuf>,
+    #[miniextendr(default = "NULL", no_na)] recursive: Option<bool>,
+    #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
     #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
 ) -> Result<BuiltDataFrame> {
     let current_dir = std::env::current_dir()?;
@@ -373,7 +373,7 @@ pub(crate) fn dvs_status(
 /// @keywords internal
 #[miniextendr(r_name = "dvs_audit_log_impl", internal, call = caller)]
 pub(crate) fn dvs_audit_log(
-    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)", no_na)] paths: Vec<PathBuf>,
 ) -> Result<BuiltDataFrame> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -499,10 +499,10 @@ impl From<OnConflictChoice> for OnConflict {
 /// @keywords internal
 #[miniextendr(r_name = "dvs_get_impl", internal, call = caller)]
 pub(crate) fn dvs_get(
-    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
-    #[miniextendr(default = "NULL")] glob: Option<String>,
-    #[miniextendr(default = "NULL")] recursive: Option<bool>,
-    #[miniextendr(default = "NULL")] dry_run: Option<bool>,
+    #[miniextendr(default = "character(0)", no_na)] paths: Vec<PathBuf>,
+    #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
+    #[miniextendr(default = "NULL", no_na)] recursive: Option<bool>,
+    #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
     #[miniextendr(match_arg)] on_conflict: Option<OnConflictChoice>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<GetResult> {

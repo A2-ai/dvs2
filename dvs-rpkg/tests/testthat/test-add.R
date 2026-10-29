@@ -183,3 +183,16 @@ test_that("the progress bar path keeps cli's config rooted", {
   expect_equal(nrow(result), 3L)
   expect_true(all(result$outcome == "copied"))
 })
+
+test_that("dvs_add raises a wrong argument as a dvs_error_argument", {
+  new_dvs_test_repo()
+  expect_argument_error(quote(dvs_add(paths = NA_character_)), "paths")
+  expect_argument_error(quote(dvs_add("t.csv", dry_run = NA)), "dry_run")
+})
+
+test_that("dvs_add takes an NA message as no message", {
+  new_dvs_test_repo()
+  write_theoph("t.csv")
+  dvs_add(paths = file.path(getwd(), "t.csv"), message = NA_character_)
+  expect_true(is.na(dvs_status()$message))
+})

@@ -171,6 +171,17 @@ test_that("on_error controls signalling, and conditions carry the result", {
   expect_equal(res$code, "local_changes")
 })
 
+test_that("dvs_get raises a wrong argument as a dvs_error_argument", {
+  new_dvs_test_repo()
+  expect_argument_error(quote(dvs_get(paths = 1)), "paths")
+  # NA is no path. Read as "", it would select the working directory.
+  expect_argument_error(quote(dvs_get(paths = NA_character_)), "paths")
+  expect_argument_error(quote(dvs_get(glob = NA_character_)), "glob")
+  expect_argument_error(quote(dvs_get(recursive = NA)), "recursive")
+  expect_argument_error(quote(dvs_get(dry_run = "yes")), "dry_run")
+  expect_argument_error(quote(dvs_get(on_conflict = "bogus")), "on_conflict")
+})
+
 test_that("overwrite in dvs.toml is a configuration error", {
   new_dvs_test_repo()
   cat('\n[get]\non_conflict = "overwrite"\n', file = "dvs.toml", append = TRUE)
