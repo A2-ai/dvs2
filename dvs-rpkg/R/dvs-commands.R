@@ -95,9 +95,10 @@ dvs_audit_log <- function(paths = character(0)) {
 #' @param dry_run If `TRUE`, report what would happen without writing files.
 #' @param on_error What to do when get did not do as asked (a file failed, or
 #'   `on_conflict = "abort"` held files back; files left by
-#'   `on_conflict = "skip"` count as done): `"return"` (the default) only
-#'   returns the result, `"warn"` also warns and `"error"` raises an error. The
-#'   condition has class `dvs_get_incomplete` and carries the result as
+#'   `on_conflict = "skip"` count as done): `"return"` only returns the
+#'   result, `"warn"` also warns and `"error"` raises an error. `NULL` (the
+#'   default) takes the `dvs.on_error` option, and `"return"` when it is unset.
+#'   The condition has class `dvs_get_incomplete` and carries the result as
 #'   `cnd$result`. Pipelines can set `options(dvs.on_error = "error")`.
 #' @return A tibble of class `dvs_get_result` with one row per requested file
 #'   and always the same columns: `path`, `local_path`, `before` (`"absent"`,
@@ -136,7 +137,7 @@ dvs_get <- function(
   recursive = FALSE,
   dry_run = FALSE,
   on_conflict = NULL,
-  on_error = getOption("dvs.on_error", "return")
+  on_error = NULL
 ) {
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   progress_callback <- NULL
@@ -152,7 +153,7 @@ dvs_get <- function(
     recursive = recursive,
     dry_run = dry_run,
     on_conflict = on_conflict,
-    on_error = on_error,
+    on_error = on_error %||% getOption("dvs.on_error", "return"),
     progress_callback = progress_callback
   )
   info <- raw$info

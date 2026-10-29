@@ -166,6 +166,8 @@ test_that("on_error controls signalling, and conditions carry the result", {
   expect_equal(cnd$result$code, "local_changes")
   withr::local_options(dvs.on_error = "error")
   expect_error(dvs_get("t.csv"), class = "dvs_get_incomplete")
+  # NULL is not given, so the option applies as it does when on_error is missing
+  expect_error(dvs_get("t.csv", on_error = NULL), class = "dvs_get_incomplete")
 
   # The default only returns, so options(warn = 2) cannot prevent assignment
   withr::local_options(dvs.on_error = NULL, warn = 2)
