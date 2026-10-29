@@ -162,6 +162,7 @@ test_that("dvs_status returns POSIXct add_time and dvs_bytes size", {
 
   result <- dvs_status()
   expect_s3_class(result$add_time, "POSIXct")
+  expect_equal(attr(result$add_time, "tzone"), "UTC")
   expect_false(any(is.na(result$add_time)))
   expect_s3_class(result$size, "dvs_bytes")
   expect_equal(typeof(unclass(result$size)), "double")
@@ -175,6 +176,7 @@ status_columns <- c(
 test_that("dvs_status has the same columns whatever the rows", {
   new_dvs_test_repo()
   expect_named(dvs_status(), status_columns)
+  expect_s3_class(dvs_status()$add_time, "POSIXct")
 
   write_theoph("t.csv")
   dvs_add(paths = file.path(getwd(), "t.csv"))
