@@ -14,9 +14,10 @@ A list: \code{command}, \code{outcome} (\code{"complete"}, \code{"aborted"},
 \code{"partial"} or \code{"failed"}), \code{did_as_asked} (\code{TRUE} unless a file failed
 or \code{on_conflict = "abort"} held files back), \code{dry_run}, \code{on_conflict} and
 its \code{source} (\code{"argument"}, \code{"env"}, \code{"config"} for dvs.toml, or
-\code{"default"}), \code{counts} (a named
-list of row counts per action) and \code{problem} (an operation-level message,
-or \code{NA} when there is none).
+\code{"default"}), \code{counts} (a named list of row counts: \code{total}, \code{succeeded}
+for the rows at their target, then one count per action, the same fields
+as the CLI's JSON \code{counts}) and \code{problem} (an operation-level message, or
+\code{NA} when there is none).
 }
 \description{
 The rows of a \code{\link[=dvs_get]{dvs_get()}} result describe each file. This returns what

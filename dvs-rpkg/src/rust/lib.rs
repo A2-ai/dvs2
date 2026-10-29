@@ -5,29 +5,27 @@
 mod cli_progress;
 mod test_support;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::SyncSender;
 
+use miniextendr_api::dataframe::IntoDataFrame;
 use miniextendr_api::externalptr::ExternalPtr;
-use miniextendr_api::gc_protect::ProtectScope;
-use miniextendr_api::into_r::IntoR;
-use miniextendr_api::list::List;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
-use miniextendr_api::time::OffsetDateTime;
-use miniextendr_api::{BuiltDataFrame, MatchArg, Preserved, SEXP, miniextendr};
+use miniextendr_api::serde::AsSerialize;
+use miniextendr_api::{
+    BuiltDataFrame, DataFrameRow, IntoList, MatchArg, PreferList, Preserved, miniextendr,
+};
 
 use anyhow::{Result, anyhow};
-use serde::Serialize;
-
 use dvs::config::{Config, ConfigError, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileMetadata, FileProgress, GetOptions, GetReport, GetRow, GetVerdict, Hashes,
+    Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
     OperationContext, PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
 };
 
@@ -291,8 +289,8 @@ impl From<StatusChoice> for Status {
 /// Reports the sync status of DVS-managed files. By default all statuses
 /// are shown; pass a character vector
 /// of status names (e.g. `c("current", "absent")`) to restrict output.
-/// A file whose status cannot be read is always kept, with status `"error"`
-/// and the reason in `error`.
+/// A file whose status cannot be read is always kept, with status `"error"`,
+/// the kind of failure in `code` and the reason in `error`.
 ///
 /// @param paths Character vector of file or directory paths to check status for.
 /// @param recursive If `TRUE`, directory inputs include all descendants;
@@ -324,7 +322,11 @@ pub(crate) fn dvs_status(
         return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
     }
 
-    let show_all = status.is_empty() || status.len() == StatusChoice::CHOICES.len();
+    // Every choice selected shows every row, as no status flag does in the CLI.
+    let show_all = status.is_empty()
+        || StatusChoice::CHOICES
+            .iter()
+            .all(|choice| status.iter().any(|c| c.to_choice() == *choice));
 
     let filter = if paths.is_empty() {
         None
@@ -348,41 +350,21 @@ pub(crate) fn dvs_status(
         });
     }
 
-    // Serialize through a local view that omits `add_time` from the serde
-    // path — jiff's `Timestamp` serde format is RFC 3339, and stringifying
-    // into a character column only to throw it away when appending the
-    // POSIXct column below is wasted work. The jiff timestamps are instead
-    // passed straight through to `time::OffsetDateTime` → POSIXct.
-    let views: Vec<FileStatusView<'_>> = statuses.iter().map(FileStatusView::from).collect();
-    let add_times: Vec<Option<OffsetDateTime>> = statuses
-        .iter()
-        .map(|s| {
-            s.metadata.as_ref().and_then(|m| {
-                OffsetDateTime::from_unix_timestamp_nanos(m.add_time.as_nanosecond()).ok()
-            })
-        })
-        .collect();
-    // Rooted until the frame holds it. Building the frame allocates, and
-    // `with_column` allocates the new frame before it stores the column.
-    let add_time = Preserved::new(add_times);
-
-    Ok(miniextendr_api::serde::vec_to_dataframe(&views)?
-        .drop("metadata_hashes_md5")
-        .strip_prefix("metadata_hashes_")
-        .strip_prefix("metadata_")
-        .rename("blake3", "hash")
-        .with_column("add_time", add_time.as_sexp()))
+    let rows: Vec<StatusRow> = statuses.iter().map(StatusRow::from).collect();
+    Ok(rows.into_dataframe()?)
 }
 
 /// @title Materialize the audit log as a data frame
 /// @description
 /// Reads the audit log of the DVS repository containing the working
-/// directory and returns one row per entry. The column structure is inherited
-/// directly from `dvs::audit::AuditEntry`'s serde representation, so the rpkg
-/// never reaches into the dvs crate's internal types. The `action` enum
-/// currently surfaces as a nested list-column. Flattening it through serde
-/// without re-encoding dvs internals is tracked as miniextendr#1056, with a
-/// builder-based alternative in miniextendr#1055.
+/// directory and returns one row per entry: `operation_id`, `timestamp`
+/// (POSIXct, UTC) and `user`, then the entry's action flattened into
+/// columns. `action_variant` is `"init"` or `"add"`. The other `action_`
+/// columns hold that action's fields, for an add `action_file_path`,
+/// `action_file_hashes_blake3`, `action_compression` and `action_message`,
+/// and are `NA` where the action has no such field. The columns follow
+/// `dvs::audit::AuditEntry`'s serde representation, so the rpkg never
+/// reaches into the dvs crate's internal types.
 ///
 /// @param paths Character vector of repo-root-relative file paths recorded at
 ///   add time. The filter keeps only `add` entries for those files. An empty
@@ -403,55 +385,62 @@ pub(crate) fn dvs_audit_log(
     // serializer, so the structure is inherited through serde. vec_to_dataframe
     // returns an empty data frame when the filter matches nothing.
     let entries = config.backend().get_audit_entries(&paths)?;
-    Ok(miniextendr_api::serde::vec_to_dataframe(&entries)?)
-}
-
-// region: status serde view (skips add_time)
-
-/// Serialize-only view of a status row whose [`FileMetadata`] view
-/// omits `add_time`. The caller appends `add_time` as a POSIXct column
-/// directly from the original `jiff::Timestamp` values.
-#[derive(Serialize)]
-struct FileStatusView<'a> {
-    path: &'a Path,
-    status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    metadata: Option<FileMetadataView<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<&'a str>,
-}
-
-#[derive(Serialize)]
-struct FileMetadataView<'a> {
-    hashes: &'a Hashes,
-    size: u64,
-    created_by: &'a str,
-    // `add_time` deliberately omitted — surfaced as a POSIXct column at the
-    // DataFrame boundary, not stringified into the serde output.
-    compression: &'a Compression,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<&'a str>,
-}
-
-impl<'a> From<&'a dvs::StatusFacts> for FileStatusView<'a> {
-    fn from(row: &'a dvs::StatusFacts) -> Self {
-        FileStatusView {
-            path: row.path.as_path(),
-            status: row.status_name(),
-            metadata: row.metadata.as_ref().map(FileMetadataView::from),
-            error: row.error.as_deref(),
-        }
+    let frame = miniextendr_api::serde::vec_to_dataframe_flatten_enums(&entries, &["action"])?;
+    if entries.is_empty() {
+        return Ok(frame);
     }
+    // The log keeps unix seconds. Report them as POSIXct, as the CLI reports
+    // RFC 3339 times. Rooted until the frame holds the column.
+    let timestamp = Preserved::new(entries.iter().map(|e| e.timestamp).collect::<Vec<_>>());
+    Ok(frame.with_column("timestamp", timestamp.as_sexp()))
 }
 
-impl<'a> From<&'a FileMetadata> for FileMetadataView<'a> {
-    fn from(m: &'a FileMetadata) -> Self {
-        FileMetadataView {
-            hashes: &m.hashes,
-            size: m.size,
-            created_by: &m.created_by,
-            compression: &m.compression,
-            message: m.message.as_deref(),
+// region: status rows
+
+/// One row of the `dvs_status()` frame. The columns are fixed: a row without
+/// metadata, or without a message, code or error, fills them with `NA`.
+/// `add_time` is a POSIXct column in UTC.
+#[derive(DataFrameRow)]
+struct StatusRow {
+    path: String,
+    status: String,
+    hash: Option<String>,
+    size: Option<f64>,
+    created_by: Option<String>,
+    compression: Option<String>,
+    message: Option<String>,
+    code: Option<String>,
+    error: Option<String>,
+    add_time: Option<miniextendr_api::jiff::Timestamp>,
+}
+
+impl From<&dvs::StatusFacts> for StatusRow {
+    fn from(row: &dvs::StatusFacts) -> Self {
+        // No `..`: a field added to StatusFacts does not compile here until it
+        // has a column or is left out by name. `status_name()` reads `status`.
+        // The frame leaves out `working` and `baseline`, the details of the
+        // local copy.
+        let dvs::StatusFacts {
+            path,
+            status: _,
+            metadata,
+            working: _,
+            baseline: _,
+            code,
+            error,
+        } = row;
+        let metadata = metadata.as_ref();
+        StatusRow {
+            path: path.to_string_lossy().into_owned(),
+            status: row.status_name(),
+            hash: metadata.map(|m| m.hashes.blake3.clone()),
+            size: metadata.map(|m| m.size as f64),
+            created_by: metadata.map(|m| m.created_by.clone()),
+            compression: metadata.map(|m| m.compression.to_string()),
+            message: metadata.and_then(|m| m.message.clone()),
+            code: code.map(|c| c.as_str().to_string()),
+            error: error.clone(),
+            add_time: metadata.map(|m| m.add_time),
         }
     }
 }
@@ -494,7 +483,7 @@ pub(crate) fn dvs_get(
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] on_conflict: Option<String>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<List> {
+) -> Result<GetResult> {
     let dry_run = dry_run.unwrap_or(false);
     let explicit: Option<OnConflict> = on_conflict
         .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
@@ -546,7 +535,15 @@ pub(crate) fn dvs_get(
             &OperationContext::new(),
         )
     };
-    Ok(get_result_list(&report))
+    Ok(GetResult {
+        files: report
+            .files
+            .iter()
+            .map(GetFileRow::from)
+            .collect::<Vec<_>>()
+            .into_dataframe()?,
+        info: GetInfo::from(&report),
+    })
 }
 
 /// Raises the classed `dvs_config_error`.
@@ -554,121 +551,97 @@ fn config_error(message: &str) -> ! {
     miniextendr_api::error!(class = "dvs_config_error", "{message}")
 }
 
-/// `list(files = <data.frame with a fixed schema>, info = <list>)`.
-fn get_result_list(report: &GetReport) -> List {
-    fn strs<'a>(
-        rows: &'a [GetRow],
-        f: impl Fn(&'a GetRow) -> Option<String>,
-    ) -> Vec<Option<String>> {
-        rows.iter().map(f).collect()
+/// One row of the `files` frame of a `dvs_get()` result.
+#[derive(DataFrameRow)]
+struct GetFileRow {
+    path: String,
+    local_path: String,
+    before: String,
+    action: String,
+    satisfied: bool,
+    size: Option<f64>,
+    target_hash: Option<String>,
+    local_hash: Option<String>,
+    stored_copy: Option<String>,
+    code: Option<String>,
+    message: Option<String>,
+    hint: Option<String>,
+    duration_ms: Option<f64>,
+}
+
+impl From<&GetRow> for GetFileRow {
+    fn from(row: &GetRow) -> Self {
+        // No `..`: a field added to GetRow does not compile here until it
+        // has a column.
+        let GetRow {
+            path,
+            local_path,
+            before,
+            action,
+            satisfied,
+            size,
+            target_hash,
+            local_hash,
+            stored_copy,
+            code,
+            message,
+            hint,
+            duration_ms,
+        } = row;
+        GetFileRow {
+            path: path.to_string_lossy().into_owned(),
+            local_path: local_path.to_string_lossy().into_owned(),
+            before: before.as_str().to_string(),
+            action: action.as_str().to_string(),
+            satisfied: *satisfied,
+            size: size.map(|s| s as f64),
+            target_hash: target_hash.clone(),
+            local_hash: local_hash.clone(),
+            stored_copy: stored_copy.map(|c| c.as_str().to_string()),
+            code: code.map(|c| c.as_str().to_string()),
+            message: message.clone(),
+            hint: hint.clone(),
+            duration_ms: duration_ms.map(|d| d as f64),
+        }
     }
-    let rows = &report.files;
-    // SAFETY: called on the R main thread from a #[miniextendr] function.
-    // Every SEXP is protected as soon as it is allocated, before the next one.
-    let scope = unsafe { ProtectScope::new() };
-    let protect = |sexp: SEXP| unsafe { scope.protect_raw(sexp) };
-    let named = |pairs: Vec<(&'static str, SEXP)>| protect(List::from_raw_pairs(pairs).into_sexp());
+}
 
-    let mut columns: Vec<(&'static str, SEXP)> = Vec::with_capacity(12);
-    let mut column = |name: &'static str, values: SEXP| columns.push((name, protect(values)));
-    column(
-        "path",
-        strs(rows, |r| Some(r.path.to_string_lossy().into_owned())).into_sexp(),
-    );
-    column(
-        "local_path",
-        strs(rows, |r| Some(r.local_path.to_string_lossy().into_owned())).into_sexp(),
-    );
-    column(
-        "before",
-        strs(rows, |r| Some(r.before.as_str().to_string())).into_sexp(),
-    );
-    column(
-        "action",
-        strs(rows, |r| Some(r.action.as_str().to_string())).into_sexp(),
-    );
-    column(
-        "satisfied",
-        rows.iter()
-            .map(|r| r.satisfied)
-            .collect::<Vec<bool>>()
-            .into_sexp(),
-    );
-    column(
-        "size",
-        rows.iter()
-            .map(|r| r.size.map(|s| s as f64))
-            .collect::<Vec<Option<f64>>>()
-            .into_sexp(),
-    );
-    column(
-        "target_hash",
-        strs(rows, |r| r.target_hash.clone()).into_sexp(),
-    );
-    column(
-        "local_hash",
-        strs(rows, |r| r.local_hash.clone()).into_sexp(),
-    );
-    column(
-        "stored_copy",
-        strs(rows, |r| r.stored_copy.map(|c| c.as_str().to_string())).into_sexp(),
-    );
-    column(
-        "code",
-        strs(rows, |r| r.code.map(|c| c.as_str().to_string())).into_sexp(),
-    );
-    column("message", strs(rows, |r| r.message.clone()).into_sexp());
-    column("hint", strs(rows, |r| r.hint.clone()).into_sexp());
-    let files = protect(
-        List::from_raw_pairs(columns)
-            .set_data_frame_class()
-            .set_row_names_int(rows.len())
-            .into_sexp(),
-    );
+/// What `dvs_get_impl()` returns, `list(files, info)`. R adds the classes.
+#[derive(IntoList, PreferList)]
+struct GetResult {
+    files: BuiltDataFrame,
+    info: GetInfo,
+}
 
-    let c = &report.counts;
-    let mut counts: Vec<(&'static str, SEXP)> = Vec::with_capacity(8);
-    let mut count =
-        |name: &'static str, n: usize| counts.push((name, protect((n as i32).into_sexp())));
-    count("restored", c.restored);
-    count("replaced", c.replaced);
-    count("unchanged", c.unchanged);
-    count("skipped", c.skipped);
-    count("not_run", c.not_run);
-    count("failed", c.failed);
-    count("would_restore", c.would_restore);
-    count("would_replace", c.would_replace);
-    let counts = named(counts);
+/// The list `dvs_result_info()` returns for a `dvs_get()` result. The fields
+/// are the list's entries, in order.
+#[derive(IntoList, PreferList)]
+struct GetInfo {
+    command: &'static str,
+    outcome: &'static str,
+    did_as_asked: bool,
+    dry_run: bool,
+    on_conflict: &'static str,
+    source: &'static str,
+    /// GetCounts through serde, the same fields as the CLI's JSON `counts`.
+    counts: AsSerialize<GetCounts>,
+    /// The operation-level problem's message, `NA` when there is none.
+    problem: Option<String>,
+}
 
-    let mut info: Vec<(&'static str, SEXP)> = Vec::with_capacity(9);
-    let mut field = |name: &'static str, value: SEXP| info.push((name, protect(value)));
-    field("command", "get".to_string().into_sexp());
-    field("outcome", report.outcome.as_str().to_string().into_sexp());
-    field(
-        "did_as_asked",
-        (report.verdict() == GetVerdict::Done).into_sexp(),
-    );
-    field("dry_run", report.dry_run.into_sexp());
-    field(
-        "on_conflict",
-        report.on_conflict.as_str().to_string().into_sexp(),
-    );
-    field("source", report.source.as_str().to_string().into_sexp());
-    field("counts", counts);
-    field(
-        "problem",
-        report
-            .problem
-            .as_ref()
-            .map(|p| p.message.clone())
-            .into_sexp(),
-    );
-    let info = named(info);
-
-    let mut result: Vec<(&'static str, SEXP)> = Vec::with_capacity(2);
-    result.push(("files", files));
-    result.push(("info", info));
-    List::from_raw_pairs(result)
+impl From<&GetReport> for GetInfo {
+    fn from(report: &GetReport) -> Self {
+        GetInfo {
+            command: "get",
+            outcome: report.outcome.as_str(),
+            did_as_asked: report.verdict() == GetVerdict::Done,
+            dry_run: report.dry_run,
+            on_conflict: report.on_conflict.as_str(),
+            source: report.source.as_str(),
+            counts: AsSerialize(report.counts.clone()),
+            problem: report.problem.as_ref().map(|p| p.message.clone()),
+        }
+    }
 }
 
 /// @title Set the number of threads used by DVS parallel operations

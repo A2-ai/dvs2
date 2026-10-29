@@ -128,7 +128,7 @@ set_dvs_log_level("off")     # restore default (silent)
 
 ### Key Dependencies
 
-- **miniextendr** (git: A2-ai/miniextendr, pinned by `rev`): the Rust-to-R FFI framework. The `serde`, `time` and `log` features are on. `log` routes log records to the R console.
+- **miniextendr** (git: A2-ai/miniextendr, pinned by `rev`): the Rust-to-R FFI framework. The `serde`, `jiff` and `log` features are on. `log` routes log records to the R console.
 - **dvs** (path dependency `../../../dvs` in `src/rust/Cargo.toml`): the core DVS library
 - **R imports**: cli, pillar, tibble
 - **Rust requires**: rustc >= 1.85.0
@@ -177,7 +177,7 @@ Defined in `src/rust/lib.rs` with `#[miniextendr]` unless noted:
 
 This table is a high-level index only. The authoritative parameter signatures live in the `#[miniextendr]` definitions in `src/rust/lib.rs` and the R help pages (`?dvs_get` and `man/*.Rd`).
 
-Results are returned as DataFrames via miniextendr's serde columnar conversion (`vec_to_dataframe`). Errors propagate as `anyhow::Result<T>` converted to R error objects.
+`dvs_status()` and the `dvs_get()` file rows come from `#[derive(DataFrameRow)]` row types, so their columns are fixed. `dvs_init()` and `dvs_add()` go through miniextendr's serde conversion (`vec_to_dataframe`), so their columns follow the rows: `dvs_add()` has `code` and `error` only when a file failed. `dvs_audit_log()` uses `vec_to_dataframe_flatten_enums` to spread each entry's action into `action_*` columns. Errors propagate as `anyhow::Result<T>` converted to R error objects.
 
 ## Environment Variables
 

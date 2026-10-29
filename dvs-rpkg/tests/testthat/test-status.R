@@ -162,9 +162,38 @@ test_that("dvs_status returns POSIXct add_time and dvs_bytes size", {
 
   result <- dvs_status()
   expect_s3_class(result$add_time, "POSIXct")
+  expect_equal(attr(result$add_time, "tzone"), "UTC")
   expect_false(any(is.na(result$add_time)))
   expect_s3_class(result$size, "dvs_bytes")
   expect_equal(typeof(unclass(result$size)), "double")
+})
+
+status_columns <- c(
+  "path", "status", "hash", "size", "created_by", "compression",
+  "message", "code", "error", "add_time"
+)
+
+test_that("dvs_status has the same columns whatever the rows", {
+  new_dvs_test_repo()
+  expect_named(dvs_status(), status_columns)
+  expect_s3_class(dvs_status()$add_time, "POSIXct")
+
+  write_theoph("t.csv")
+  dvs_add(paths = file.path(getwd(), "t.csv"))
+  expect_named(dvs_status(), status_columns)
+  expect_true(is.na(dvs_status()$code))
+})
+
+test_that("dvs_status keeps a message that only a later row has", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  writeLines("b", "b.csv")
+  dvs_add(paths = file.path(getwd(), "a.csv"))
+  dvs_add(paths = file.path(getwd(), "b.csv"), message = "why")
+
+  result <- dvs_status()
+  expect_equal(result$message[result$path == "b.csv"], "why")
+  expect_true(is.na(result$message[result$path == "a.csv"]))
 })
 
 test_that("dvs_status keeps add_time rooted while it builds the frame", {
@@ -184,6 +213,18 @@ test_that("dvs_status keeps add_time rooted while it builds the frame", {
   expect_false(any(is.na(result$add_time)))
 })
 
+test_that("dvs_status shows every status only when every choice is selected", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add(paths = file.path(getwd(), "a.csv"))
+  writeLines("changed", "a.csv")
+  expect_equal(dvs_status()$status, "modified")
+
+  # Five entries, but not "modified"
+  result <- dvs_status(status = c("current", "current", "absent", "stale", "stale"))
+  expect_equal(nrow(result), 0L)
+})
+
 test_that("dvs_status keeps an unreadable record as an error row", {
   new_dvs_test_repo()
   write_theoph("t.csv")
@@ -193,5 +234,6 @@ test_that("dvs_status keeps an unreadable record as an error row", {
   result <- dvs_status(status = "current")
   expect_equal(nrow(result), 1L)
   expect_equal(result$status, "error")
+  expect_equal(result$code, "bad_metadata")
   expect_false(is.na(result$error))
 })

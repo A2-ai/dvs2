@@ -21,7 +21,8 @@ switch_branches <- function() {
 
 get_columns <- c(
   "path", "local_path", "before", "action", "satisfied", "size",
-  "target_hash", "local_hash", "stored_copy", "code", "message", "hint"
+  "target_hash", "local_hash", "stored_copy", "code", "message", "hint",
+  "duration_ms"
 )
 
 test_that("dvs_get restores deleted files with identical content", {
@@ -37,6 +38,8 @@ test_that("dvs_get restores deleted files with identical content", {
   expect_s3_class(result, "tbl_df")
   expect_equal(names(result), get_columns)
   expect_s3_class(result$size, "dvs_bytes")
+  expect_type(result$duration_ms, "double")
+  expect_false(anyNA(result$duration_ms))
   expect_equal(result$action, c("restored", "restored"))
   expect_equal(lapply(c("a.csv", "b.csv"), readLines), original)
   expect_equal(dvs_result_info(result)$outcome, "complete")
@@ -91,6 +94,7 @@ test_that("an untracked path is a row, and holds the batch back by default", {
 
   result <- dvs_get(paths = c("tracked.csv", "untracked.csv"), on_conflict = "skip")
   expect_equal(result$action[result$path == "tracked.csv"], "restored")
+  expect_true(is.na(result$duration_ms[result$path == "untracked.csv"]))
 })
 
 test_that("after a branch switch, files dvs wrote are replaced without asking", {
@@ -183,6 +187,8 @@ test_that("printing shows the outcome, what needs attention, and survives subset
   res <- dvs_get(c("t.csv", "u.csv"))
   out <- capture.output(print(res))
   expect_match(out[1], "aborted", fixed = TRUE)
+  # The whole result prints its summary, not the line for a subset.
+  expect_false(grepl("rows from", out[1], fixed = TRUE))
   expect_match(out[1], "on_conflict = abort (default)", fixed = TRUE)
   expect_false(grepl("NA", out[1], fixed = TRUE))
   # t.csv is listed with the command to keep it; u.csv is only held back
@@ -194,4 +200,50 @@ test_that("printing shows the outcome, what needs attention, and survives subset
 
   cnd <- tryCatch(dvs_get(c("t.csv", "u.csv"), on_error = "error"), error = identity)
   expect_match(conditionMessage(cnd), "t.csv", fixed = TRUE)
+})
+
+test_that("the dvs_get result survives a collection at every allocation", {
+  skip_on_cran()
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add("a.csv")
+  file.remove("a.csv")
+
+  gctorture(TRUE)
+  on.exit(gctorture(FALSE), add = TRUE)
+  raw <- dvs_get_impl(paths = c("a.csv", "missing.csv"), on_conflict = "skip")
+  gctorture(FALSE)
+
+  expect_named(raw, c("files", "info"))
+  expect_equal(names(raw$files), get_columns)
+  expect_equal(raw$files$action, c("restored", "failed"))
+  expect_identical(raw$info$counts$restored, 1L)
+  expect_identical(raw$info$problem, NA_character_)
+})
+
+test_that("dvs_get counts carry the core's fields", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add("a.csv")
+  file.remove("a.csv")
+
+  counts <- dvs_result_info(dvs_get(c("a.csv", "missing.csv"), on_conflict = "skip"))$counts
+  expect_named(counts, c(
+    "total", "succeeded", "restored", "replaced", "unchanged", "skipped",
+    "not_run", "cancelled", "failed", "would_restore", "would_replace"
+  ))
+  expect_identical(counts$total, 2L)
+  expect_identical(counts$succeeded, 1L)
+  expect_identical(counts$restored, 1L)
+  expect_identical(counts$failed, 1L)
+  expect_identical(counts$cancelled, 0L)
+})
+
+test_that("the get summary names cancelled files as the CLI does", {
+  info <- list(
+    command = "get", outcome = "cancelled", dry_run = FALSE,
+    on_conflict = "abort", source = "default", problem = NA_character_,
+    counts = list(total = 3L, restored = 1L, cancelled = 2L, failed = 0L)
+  )
+  expect_match(dvs_get_summary(info), "restored 1, cancelled 2", fixed = TRUE)
 })
