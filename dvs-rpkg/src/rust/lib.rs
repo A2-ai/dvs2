@@ -566,9 +566,9 @@ pub(crate) fn dvs_get(
     })
 }
 
-/// Raises the classed `dvs_config_error`.
+/// Raises a `dvs_config_error`, one of the `dvs_error` family.
 fn config_error(message: &str) -> ! {
-    miniextendr_api::error!(class = "dvs_config_error", "{message}")
+    miniextendr_api::error!(class = ["dvs_config_error", "dvs_error"], "{message}")
 }
 
 /// One row of the `files` frame of a `dvs_get()` result.

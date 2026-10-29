@@ -237,3 +237,11 @@ test_that("dvs_status keeps an unreadable record as an error row", {
   expect_equal(result$code, "bad_metadata")
   expect_false(is.na(result$error))
 })
+
+test_that("a wrong argument type is a dvs_error_argument", {
+  new_dvs_test_repo()
+  cnd <- tryCatch(dvs_status(glob = 1), error = identity)
+  expect_s3_class(cnd, "dvs_error_argument")
+  expect_s3_class(cnd, "dvs_error")
+  expect_equal(cnd$param, "glob")
+})

@@ -175,6 +175,7 @@ test_that("overwrite in dvs.toml is a configuration error", {
   new_dvs_test_repo()
   cat('\n[get]\non_conflict = "overwrite"\n', file = "dvs.toml", append = TRUE)
   expect_error(dvs_get(), class = "dvs_config_error")
+  expect_error(dvs_get(), class = "dvs_error")
 })
 
 test_that("printing shows the outcome, what needs attention, and survives subsetting", {
