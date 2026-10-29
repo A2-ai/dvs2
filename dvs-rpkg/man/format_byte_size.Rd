@@ -7,7 +7,7 @@
 format_byte_size(size_bytes)
 }
 \arguments{
-\item{size_bytes}{non-negative integer representing file sizes in bytes.}
+\item{size_bytes}{A size in bytes: one whole number, 0 or more.}
 }
 \value{
 A string. Below 1024 bytes it is the count with \code{B}, as in

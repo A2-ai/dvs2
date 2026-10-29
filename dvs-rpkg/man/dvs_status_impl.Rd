@@ -13,8 +13,8 @@ dvs_status_impl(
 )
 }
 \arguments{
-\item{paths}{Character vector of file or directory paths to check status for.
-\code{NULL} is the same as \code{character(0)}.}
+\item{paths}{Files or directories to report, relative to the working
+directory. \code{NULL} is the same as \code{character(0)}.}
 
 \item{recursive}{If \code{TRUE}, directory inputs include all descendants;
 if \code{FALSE} or \code{NULL}, only direct children of the directory
@@ -22,14 +22,26 @@ are returned. The flag only constrains descendants of paths passed
 explicitly — when \code{paths} is empty, every tracked file is returned
 regardless of nesting depth, and \code{recursive} has no effect.}
 
-\item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).
-Globs use a literal path separator: \verb{*.csv} only matches files in the
-target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} to
-match recursively across subdirectories. Mutually exclusive with \code{recursive}.}
+\item{glob}{A glob that selects tracked files, such as \code{"*.csv"}. It
+runs from the working directory, or from each directory in \code{paths}. \code{*}
+does not cross a path separator, so \verb{*.csv} matches \code{a.csv} but not
+\code{sub/a.csv}. Use \verb{**/*.csv} to match at any depth. Mutually exclusive
+with \code{recursive}.}
 
-\item{status}{Character vector of statuses to include. Valid values are
-\code{"current"}, \code{"absent"}, \code{"stale"}, \code{"modified"}, and \code{"unsynced"}. \code{NULL},
-\code{character(0)} and the default show every status.}
+\item{status}{The statuses to include, any of:
+\itemize{
+\item \code{"current"}: the local file matches the tracked version.
+\item \code{"absent"}: the file is tracked but missing locally.
+\item \code{"stale"}: the local file is what dvs last wrote or added there, and
+the tracked version has changed since, for example after a git pull.
+\code{\link[=dvs_get]{dvs_get()}} updates it.
+\item \code{"modified"}: the local file differs from the tracked version and from
+what dvs last wrote or added there.
+\item \code{"unsynced"}: the local file differs from the tracked version, and dvs
+has no record of what it last wrote there.
+}
+
+\code{NULL}, \code{character(0)} and the default show every status.}
 
 \item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }

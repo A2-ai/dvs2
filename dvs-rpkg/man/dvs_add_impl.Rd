@@ -14,15 +14,19 @@ dvs_add_impl(
 )
 }
 \arguments{
-\item{paths}{Character vector of file paths to add to DVS storage. \code{NULL}
-is the same as \code{character(0)}.}
+\item{paths}{Files to add, or directories to search with \code{glob},
+relative to the working directory. \code{NULL} is the same as
+\code{character(0)}. \code{paths} or \code{glob} is required, and a directory needs
+\code{glob}.}
 
-\item{message}{Optional commit message describing why the files were added.}
+\item{message}{A message stored with the files' metadata, such as why
+they were added.}
 
-\item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).
-Globs use a literal path separator: \verb{*.csv} only matches files in the
-target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} to
-match recursively across subdirectories.}
+\item{glob}{A glob that selects the files to add, such as \code{"*.csv"}. It
+runs from the working directory, or from each directory in \code{paths}. A
+file named in \code{paths} is added whether or not it matches. \code{*} does not
+cross a path separator, so \verb{*.csv} matches \code{a.csv} but not
+\code{sub/a.csv}. Use \verb{**/*.csv} to match at any depth.}
 
 \item{dry_run}{If \code{TRUE}, report what would be added without modifying anything.}
 
