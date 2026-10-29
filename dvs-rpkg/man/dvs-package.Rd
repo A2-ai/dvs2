@@ -8,6 +8,16 @@
 \description{
 Provides version control and management system for large binary and text files that are stored either locally or remotely. Uses content-addressable storage with blake3 hashing to efficiently deduplicate files while tracking metadata in Git-friendly .dvs files.
 }
+\section{NULL and NA in arguments}{
+
+\code{NULL} in an optional argument means the argument was not given, and its
+default applies. For example \code{root_dir = NULL} in \code{\link[=dvs_init]{dvs_init()}} is the
+working directory, and \code{message = NULL} in \code{\link[=dvs_add]{dvs_add()}} adds no message.
+\code{NA} is never a value, and an \code{NA} in any argument is an error. The commands
+raise it as a \code{dvs_error_argument} condition, also a \code{dvs_error}, that
+names the call.
+}
+
 \author{
 \strong{Maintainer}: Jenna Johnson \email{jenna@a2-ai.com}
 

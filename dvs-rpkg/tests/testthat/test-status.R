@@ -248,4 +248,7 @@ test_that("a wrong argument type is a dvs_error_argument", {
   expect_identical(conditionCall(cnd), quote(dvs_status(glob = 1)))
   expect_argument_error(quote(dvs_status(paths = NA_character_)), "paths")
   expect_argument_error(quote(dvs_status(recursive = NA)), "recursive")
+  # The thread count comes from an option the user may set to NA
+  withr::local_options(dvs.num_threads = NA)
+  expect_argument_error(quote(dvs_status()), "threads")
 })
