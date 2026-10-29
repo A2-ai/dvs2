@@ -195,6 +195,11 @@ test_that("dvs_add raises a wrong argument as a dvs_error_argument", {
   new_dvs_test_repo()
   expect_argument_error(quote(dvs_add(paths = NA_character_)), "paths")
   expect_argument_error(quote(dvs_add("t.csv", dry_run = NA)), "dry_run")
+  # Neither paths nor glob: the CLI requires one of them too
+  expect_argument_error(quote(dvs_add()), "paths")
+  expect_argument_error(quote(dvs_add(paths = NULL)), "paths")
+  cnd <- tryCatch(dvs_add(), error = identity)
+  expect_equal(conditionMessage(cnd), "`paths` or `glob` is required")
 })
 
 test_that("dvs_add takes NULL as no message and refuses NA", {
