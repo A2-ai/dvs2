@@ -210,8 +210,7 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<BuiltDataFrame> {
-    let current_dir = std::env::current_dir()?;
-    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+    let config = find_config()?;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
     let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
@@ -313,9 +312,7 @@ pub(crate) fn dvs_status(
     #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
     #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
 ) -> Result<BuiltDataFrame> {
-    let current_dir = std::env::current_dir()?;
-
-    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+    let config = find_config()?;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
     if glob.is_some() && recursive.unwrap_or(false) {
@@ -375,8 +372,7 @@ pub(crate) fn dvs_status(
 pub(crate) fn dvs_audit_log(
     #[miniextendr(default = "character(0)", no_na)] paths: Vec<PathBuf>,
 ) -> Result<BuiltDataFrame> {
-    let current_dir = std::env::current_dir()?;
-    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+    let config = find_config()?;
 
     // An empty `paths` slice returns the whole audit log. A non-empty filter
     // keeps only `add` entries recording one of those repo-root-relative paths
@@ -511,12 +507,7 @@ pub(crate) fn dvs_get(
     if glob.is_some() && recursive.unwrap_or(false) {
         return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
     }
-    let current_dir = std::env::current_dir()?;
-    let config =
-        match Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))? {
-            Err(e) => config_error(&e.to_string()),
-            Ok(c) => c,
-        };
+    let config = find_config()?;
     let (policy, source) = match config.get_on_conflict(explicit) {
         Ok(p) => p,
         Err(ConfigError(message)) => config_error(&message),
@@ -564,6 +555,17 @@ pub(crate) fn dvs_get(
             .into_dataframe()?,
         info: GetInfo::from(&report),
     })
+}
+
+/// The config of the dvs project that holds the working directory. Outside a
+/// project it is an error. A dvs.toml that does not load raises a
+/// `dvs_config_error`.
+fn find_config() -> Result<Config> {
+    let current_dir = std::env::current_dir()?;
+    match Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))? {
+        Ok(config) => Ok(config),
+        Err(e) => config_error(&e.to_string()),
+    }
 }
 
 /// Raises a `dvs_config_error`, one of the `dvs_error` family.
