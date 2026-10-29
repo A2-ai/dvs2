@@ -177,7 +177,7 @@ Defined in `src/rust/lib.rs` with `#[miniextendr]` unless noted:
 
 This table is a high-level index only. The authoritative parameter signatures live in the `#[miniextendr]` definitions in `src/rust/lib.rs` and the R help pages (`?dvs_get` and `man/*.Rd`).
 
-Results are returned as DataFrames via miniextendr's serde columnar conversion (`vec_to_dataframe`). Errors propagate as `anyhow::Result<T>` converted to R error objects.
+`dvs_status()` and the `dvs_get()` file rows come from `#[derive(DataFrameRow)]` row types, so their columns are fixed. `dvs_init()` and `dvs_add()` go through miniextendr's serde conversion (`vec_to_dataframe`), so their columns follow the rows: `dvs_add()` has `code` and `error` only when a file failed. `dvs_audit_log()` uses `vec_to_dataframe_flatten_enums` to spread each entry's action into `action_*` columns. Errors propagate as `anyhow::Result<T>` converted to R error objects.
 
 ## Environment Variables
 
