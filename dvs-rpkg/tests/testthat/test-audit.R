@@ -11,6 +11,13 @@ test_that("dvs_audit_log returns the init and add entries", {
   expect_gte(nrow(log), 2L)
 })
 
+test_that("dvs_audit_log takes paths = NULL as no filter", {
+  new_dvs_test_repo()
+  write_theoph("theoph.csv")
+  dvs_add(paths = "theoph.csv")
+  expect_equal(dvs_audit_log(paths = NULL), dvs_audit_log())
+})
+
 test_that("dvs_audit_log filters to the add entry for the given path", {
   new_dvs_test_repo()
   write_theoph("theoph.csv")

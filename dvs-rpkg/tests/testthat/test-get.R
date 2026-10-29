@@ -187,6 +187,16 @@ test_that("dvs_get raises a wrong argument as a dvs_error_argument", {
   expect_argument_error(quote(dvs_get()), "on_error")
 })
 
+test_that("dvs_get takes paths = NULL as no paths", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add("a.csv")
+  unlink("a.csv")
+  res <- dvs_get(paths = NULL, dry_run = TRUE)
+  expect_equal(res$path, "a.csv")
+  expect_equal(res$action, "would_restore")
+})
+
 test_that("dvs_result_info refuses anything but a dvs result", {
   expect_argument_error(quote(dvs_result_info(data.frame(a = 1))), "x")
   expect_argument_error(quote(dvs_result_info(1)), "x")

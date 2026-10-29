@@ -13,7 +13,8 @@ dvs_status_impl(
 )
 }
 \arguments{
-\item{paths}{Character vector of file or directory paths to check status for.}
+\item{paths}{Character vector of file or directory paths to check status for.
+\code{NULL} is the same as \code{character(0)}.}
 
 \item{recursive}{If \code{TRUE}, directory inputs include all descendants;
 if \code{FALSE} or \code{NULL} (default), only direct children of the directory

@@ -194,7 +194,8 @@ pub(crate) fn dvs_init(
 /// @description
 /// Hashes and copies the specified files into DVS storage.
 ///
-/// @param paths Character vector of file paths to add to DVS storage.
+/// @param paths Character vector of file paths to add to DVS storage. `NULL`
+///   is the same as `character(0)`.
 /// @param message Optional commit message describing why the files were added.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 ///   Globs use a literal path separator: `*.csv` only matches files in the
@@ -205,7 +206,7 @@ pub(crate) fn dvs_init(
 /// @keywords internal
 #[miniextendr(r_name = "dvs_add_impl", internal, call = caller)]
 pub(crate) fn dvs_add(
-    #[miniextendr(default = "character(0)", no_na)] paths: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)", no_na)] paths: Option<Vec<PathBuf>>,
     #[miniextendr(default = "NULL", no_na)] message: Option<String>,
     #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
     #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
@@ -214,9 +215,10 @@ pub(crate) fn dvs_add(
     let config = find_config()?;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
-        .into_iter()
-        .collect();
+    let all_paths: Vec<_> =
+        resolve_paths_for_add(paths.unwrap_or_default(), glob.as_deref(), &dvs_paths)?
+            .into_iter()
+            .collect();
     if all_paths.is_empty() {
         return Err(anyhow!("No files to add"));
     }
@@ -293,6 +295,7 @@ impl From<StatusChoice> for Status {
 /// the kind of failure in `code` and the reason in `error`.
 ///
 /// @param paths Character vector of file or directory paths to check status for.
+///   `NULL` is the same as `character(0)`.
 /// @param recursive If `TRUE`, directory inputs include all descendants;
 ///   if `FALSE` or `NULL` (default), only direct children of the directory
 ///   are returned. The flag only constrains descendants of paths passed
@@ -308,7 +311,7 @@ impl From<StatusChoice> for Status {
 /// @keywords internal
 #[miniextendr(r_name = "dvs_status_impl", internal, call = caller)]
 pub(crate) fn dvs_status(
-    #[miniextendr(default = "character(0)", no_na)] paths: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)", no_na)] paths: Option<Vec<PathBuf>>,
     #[miniextendr(default = "NULL", no_na)] recursive: Option<bool>,
     #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
     #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
@@ -326,6 +329,7 @@ pub(crate) fn dvs_status(
             .iter()
             .all(|choice| status.iter().any(|c| c.to_choice() == *choice));
 
+    let paths = paths.unwrap_or_default();
     let filter = if paths.is_empty() {
         None
     } else {
@@ -366,12 +370,12 @@ pub(crate) fn dvs_status(
 ///
 /// @param paths Character vector of repo-root-relative file paths recorded at
 ///   add time. The filter keeps only `add` entries for those files. An empty
-///   vector (the default) returns the whole log, including `init` entries. A
-///   non-empty filter drops all `init` entries.
+///   vector (the default) or `NULL` returns the whole log, including `init`
+///   entries. A non-empty filter drops all `init` entries.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_audit_log_impl", internal, call = caller)]
 pub(crate) fn dvs_audit_log(
-    #[miniextendr(default = "character(0)", no_na)] paths: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)", no_na)] paths: Option<Vec<PathBuf>>,
 ) -> Result<BuiltDataFrame> {
     let config = find_config()?;
 
@@ -381,7 +385,9 @@ pub(crate) fn dvs_audit_log(
     // dvs crate's own serde impls and handed straight to the dataframe
     // serializer, so the structure is inherited through serde. vec_to_dataframe
     // returns an empty data frame when the filter matches nothing.
-    let entries = config.backend().get_audit_entries(&paths)?;
+    let entries = config
+        .backend()
+        .get_audit_entries(&paths.unwrap_or_default())?;
     let frame = miniextendr_api::serde::vec_to_dataframe_flatten_enums(&entries, &["action"])?;
     if entries.is_empty() {
         return Ok(frame);
@@ -491,6 +497,7 @@ impl From<OnConflictChoice> for OnConflict {
 /// branches). Otherwise it is a conflict, handled by `on_conflict`.
 ///
 /// @param paths Character vector of file paths to retrieve from DVS storage.
+///   `NULL` is the same as `character(0)`.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 ///   Globs use a literal path separator: `*.csv` only matches files in the
 ///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
@@ -511,7 +518,7 @@ impl From<OnConflictChoice> for OnConflict {
 /// @keywords internal
 #[miniextendr(r_name = "dvs_get_impl", internal, call = caller)]
 pub(crate) fn dvs_get(
-    #[miniextendr(default = "character(0)", no_na)] paths: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)", no_na)] paths: Option<Vec<PathBuf>>,
     #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
     #[miniextendr(default = "NULL", no_na)] recursive: Option<bool>,
     #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
@@ -531,7 +538,7 @@ pub(crate) fn dvs_get(
     };
     let dvs_paths = DvsPaths::from_cwd(&config)?;
     let selection = select_paths_for_get(
-        paths,
+        paths.unwrap_or_default(),
         glob.as_deref(),
         &dvs_paths,
         recursive.unwrap_or(false),

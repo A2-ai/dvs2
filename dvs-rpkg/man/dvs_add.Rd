@@ -7,7 +7,8 @@
 dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 }
 \arguments{
-\item{paths}{Character vector of file paths to add to DVS storage.}
+\item{paths}{Character vector of file paths to add to DVS storage. \code{NULL}
+is the same as \code{character(0)}.}
 
 \item{message}{Optional commit message describing why the files were added.}
 

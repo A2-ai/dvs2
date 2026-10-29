@@ -9,8 +9,8 @@ dvs_audit_log(paths = character(0))
 \arguments{
 \item{paths}{Character vector of repo-root-relative file paths recorded at
 add time. The filter keeps only \code{add} entries for those files. An empty
-vector (the default) returns the whole log, including \code{init} entries. A
-non-empty filter drops all \code{init} entries.}
+vector (the default) or \code{NULL} returns the whole log, including \code{init}
+entries. A non-empty filter drops all \code{init} entries.}
 }
 \description{
 Reads the audit log of the DVS repository containing the working
