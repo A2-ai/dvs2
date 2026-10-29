@@ -5,15 +5,21 @@
 ### Breaking
 
 - R package: requires R 4.4 or later.
+- R package: `dvs_audit_log()` spreads each entry's action into columns: `action_variant` ("init" or "add") and one `action_<field>` column per field that the actions carry, `NA` where an action has none. The action was a list-column. `timestamp` is a date-time (UTC), not unix seconds.
 
 ### Added
 
 - R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
 - R package: `just rpkg-reference` builds the HTML reference manual in `dist/reference/`.
+- R package: `dvs_status()` has a `code` column, the kind of failure of a row that failed, as in the CLI's JSON.
+- R package: `dvs_get()` has a `duration_ms` column.
+- R package: the counts of `dvs_result_info()` include `total`, `succeeded` and `cancelled`, as in the CLI's JSON.
 
 ### Fixed
 
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
+- R package: `dvs_status()` had no `message` column when the first file had no message. It now returns the same columns for every repository, also one with no tracked files.
+- R package: `dvs_status()` with a repeated `status` choice could show every status.
 
 ## 0.5.1
 
