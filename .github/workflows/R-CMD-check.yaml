@@ -1,0 +1,249 @@
+# Workflow derived from https://github.com/r-lib/actions/tree/v2/examples
+# Need help debugging build failures? Start at https://github.com/r-lib/actions#where-to-find-help
+#
+# Adapted from ncakit's R-CMD-check.yaml. The R package lives in dvs-rpkg/
+# and its Rust backend depends on the dvs core crate of this repository by
+# path, so the whole repository is checked out.
+#
+# What is checked is the release tarball, the one `just rpkg-build-tarball`
+# builds: minirextendr::miniextendr_build_tarball() refreshes the wrappers,
+# seals every crate into inst/vendor.tar.xz with cargo-revendor and builds
+# dist/dvs_<version>.tar.gz. Its install is offline, so CI checks the archive
+# that is released.
+#
+# The check runs only on request, never on a push or a pull request. Start it
+# from the Actions tab or with
+#   gh workflow run R-CMD-check.yaml --ref <branch> [-f as_cran=true]
+# GitHub offers a workflow_dispatch workflow only once this file is on the
+# default branch, and the run uses the copy on the branch given as --ref. The
+# branch needs the minirextendr build (rpkg-build-tarball and the rv project
+# in dvs-rpkg/).
+#
+# The check fails on an ERROR or a WARNING. With as_cran it runs --as-cran,
+# with the remote part of the CRAN incoming check off: CRAN has a package
+# named DVS, and "Conflicting package names" is an ERROR on every run, as in
+# `just rpkg-check-cran`.
+on:
+  workflow_dispatch:
+    inputs:
+      as_cran:
+        description: Run R CMD check with --as-cran
+        type: boolean
+        default: false
+
+name: R-CMD-check
+
+permissions: read-all
+
+jobs:
+  R-CMD-check:
+    runs-on: ${{ matrix.config.os }}
+
+    name: ${{ matrix.config.os }} (${{ matrix.config.r }})
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          # Windows is off, as in ci.yml (#129).
+          - {os: macos-latest,   r: '4.6', rust-version: 'stable'}
+          - {os: ubuntu-latest,  r: '4.6', rust-version: 'stable'}
+          - {os: ubuntu-latest,  r: '4.5', rust-version: 'stable'}
+          - {os: ubuntu-latest,  r: '4.4', rust-version: 'stable'}
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.config.rust-version }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            dvs-rpkg/src/rust
+          shared-key: ${{ matrix.config.os }}-R${{ matrix.config.r }}-${{ matrix.config.rust-version }}
+          cache-on-failure: true
+
+      # R CMD check reads README.md only with pandoc.
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          use-public-rspm: true
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      # miniextendr_build() runs autoconf before configure.
+      - name: Install autoconf
+        run: |
+          if command -v autoconf >/dev/null 2>&1; then
+            autoconf --version | head -n 1
+          elif [ "$RUNNER_OS" = macOS ]; then
+            brew install autoconf
+          else
+            sudo apt-get update
+            sudo apt-get install -y autoconf
+          fi
+
+      # cargo-revendor vendors the release tarball. It is built from the
+      # miniextendr commit that dvs-rpkg/src/rust/Cargo.toml pins, so the
+      # vendor config it writes is the one that commit's configure reads, and
+      # a pin bump brings the matching cargo-revendor. Its own install root
+      # keeps it apart from ~/.cargo/bin, which rust-cache restores whole: a
+      # binary from an older pin must not shadow it.
+      - name: Read the miniextendr pin
+        id: miniextendr
+        run: |
+          rev=$(grep -o 'rev = "[0-9a-f]*"' dvs-rpkg/src/rust/Cargo.toml | head -1 | cut -d'"' -f2)
+          if [ "${#rev}" -ne 40 ]; then
+            echo "::error::no miniextendr rev in dvs-rpkg/src/rust/Cargo.toml"
+            exit 1
+          fi
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cargo-revendor binary
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo-revendor
+          key: cargo-revendor-${{ runner.os }}-${{ steps.miniextendr.outputs.rev }}
+
+      - name: Install cargo-revendor (miniextendr @ pin)
+        run: |
+          root="$HOME/.cargo-revendor"
+          if [ ! -x "$root/bin/cargo-revendor" ]; then
+            cargo install --git https://github.com/A2-ai/miniextendr \
+              --rev "${{ steps.miniextendr.outputs.rev }}" cargo-revendor --locked --root "$root"
+          fi
+          echo "$root/bin" >> "$GITHUB_PATH"
+
+      # The R library that dvs-rpkg/rproject.toml and rv.lock declare:
+      # minirextendr at its pinned commit and the package's R dependencies.
+      # rv uses the lockfile only when rproject.toml's r_version matches it,
+      # so the 4.5 job installs exactly what rv.lock lists, and the 4.4 and
+      # 4.6 jobs resolve afresh against the same repository.
+      - uses: a2-ai/setup-rv@v1.0.0
+        with:
+          version: "0.23.3"
+
+      - name: Set rproject.toml's r_version to the job's R
+        working-directory: dvs-rpkg
+        run: |
+          r="${{ matrix.config.r }}"
+          perl -i -pe 's|^r_version = "4\.[0-9\.]+"$|r_version = "'"$r"'"|' rproject.toml
+          grep -qx "r_version = \"$r\"" rproject.toml
+          cat rproject.toml
+
+      - name: rv plan
+        working-directory: dvs-rpkg
+        run: rv plan
+
+      # rv names the system packages its plan needs but installs none.
+      - name: Install missing system dependencies (Linux)
+        if: runner.os == 'Linux'
+        working-directory: dvs-rpkg
+        run: |
+          missing=$(rv plan --json | jq -r '.installed[].sys_deps[]? | select(.status == "absent") | .name' | sort -u)
+          if [ -z "$missing" ]; then
+            echo "All system dependencies are present"
+            exit 0
+          fi
+          echo "Missing system dependencies:"
+          echo "$missing"
+          sudo apt-get update
+          echo "$missing" | xargs sudo apt-get install -y
+
+      - name: rv sync
+        working-directory: dvs-rpkg
+        run: rv sync
+
+      # R CMD check runs outside dvs-rpkg/, where the .Rprofile that
+      # activates rv is not read. Point R at the library directly.
+      - name: Expose the rv library to R
+        working-directory: dvs-rpkg
+        run: |
+          lib=$(rv library)
+          case "$lib" in
+            /*) ;;
+            *) lib="$PWD/$lib" ;;
+          esac
+          test -d "$lib"
+          echo "R_LIBS_USER=$lib" >> "$GITHUB_ENV"
+          echo "R_LIBS_USER=$lib"
+
+      - name: Build the vendored tarball
+        run: just rpkg-build-tarball
+
+      # NOT_CRAN=true outside the CRAN mode, as r-lib's check-r-package sets
+      # it, so the tests that skip on CRAN (the gctorture ones) run.
+      - name: Check the vendored tarball
+        env:
+          AS_CRAN: ${{ inputs.as_cran && 'true' || 'false' }}
+          _R_CHECK_FORCE_SUGGESTS_: "false"
+        run: |
+          shopt -s nullglob
+          tarballs=(dist/dvs_*.tar.gz)
+          if [ "${#tarballs[@]}" -ne 1 ]; then
+            echo "::error::expected one dvs tarball in dist/, found: ${tarballs[*]}"
+            exit 1
+          fi
+          args=(--no-manual --output=check)
+          if [ "$AS_CRAN" = true ]; then
+            args+=(--as-cran)
+            export _R_CHECK_CRAN_INCOMING_REMOTE_=false
+          else
+            export _R_CHECK_CRAN_INCOMING_=false
+            export NOT_CRAN=true
+          fi
+          mkdir -p check
+          set +e
+          R CMD check "${args[@]}" "${tarballs[0]}"
+          rc=$?
+          set -e
+          log=check/dvs.Rcheck/00check.log
+          if [ ! -f "$log" ]; then
+            echo "::error::R CMD check left no 00check.log"
+            exit 1
+          fi
+          status=$(grep '^Status:' "$log" || echo "Status: unknown")
+          findings=$(awk '/^\* /{show = ($0 ~ /(NOTE|WARNING|ERROR)$/)} show' "$log")
+          {
+            echo "### ${{ matrix.config.os }}, R ${{ matrix.config.r }}, as_cran: $AS_CRAN"
+            echo
+            echo "$status"
+            if [ -n "$findings" ]; then
+              echo
+              echo '```'
+              echo "$findings"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$status"
+          if [ "$rc" -ne 0 ] || grep -Eq 'ERROR|WARNING|unknown' <<< "$status"; then
+            exit 1
+          fi
+
+      - name: Show testthat output
+        if: always()
+        run: |
+          echo ::group::Show testthat output
+          find check -name 'testthat.Rout*' -exec cat '{}' \; || true
+          echo ::endgroup::
+
+      - name: Upload check results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ format('{0}-{1}-r{2}-{3}-results', runner.os, runner.arch, matrix.config.r, strategy.job-index) }}
+          path: check
+          if-no-files-found: ignore
