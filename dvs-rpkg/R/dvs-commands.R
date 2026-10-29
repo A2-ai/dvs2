@@ -28,7 +28,7 @@ dvs_add <- function(
   glob = NULL,
   dry_run = NULL
 ) {
-  dvs_set_threads_impl(getOption("dvs.num_threads"))
+  apply_dvs_threads_option()
   progress_callback <- NULL
   # Only show a progress bar in interactive sessions; non-interactive callers
   # should prefer dvs-cli (see #118).
@@ -65,7 +65,7 @@ dvs_status <- function(
   glob = NULL,
   status = c("current", "absent", "stale", "modified", "unsynced")
 ) {
-  dvs_set_threads_impl(getOption("dvs.num_threads"))
+  apply_dvs_threads_option()
   status_data_frame <-
     dvs_status_impl(
       paths = paths,
@@ -139,7 +139,7 @@ dvs_get <- function(
   on_conflict = NULL,
   on_error = NULL
 ) {
-  dvs_set_threads_impl(getOption("dvs.num_threads"))
+  apply_dvs_threads_option()
   progress_callback <- NULL
   # Only show a progress bar in interactive sessions; non-interactive callers
   # should prefer dvs-cli (see #118).
@@ -147,14 +147,21 @@ dvs_get <- function(
     progress_callback <- ProgressBarCallback$new()
   }
 
-  raw <- dvs_get_impl(
-    paths = paths,
-    glob = glob,
-    recursive = recursive,
-    dry_run = dry_run,
-    on_conflict = on_conflict,
-    on_error = on_error %||% getOption("dvs.on_error", "return"),
-    progress_callback = progress_callback
+  # NULL is not given: the option applies, then "return". A bad option value
+  # is reported as the option.
+  on_error_option <- if (is.null(on_error)) "dvs.on_error"
+  raw <- rename_option_error(
+    dvs_get_impl(
+      paths = paths,
+      glob = glob,
+      recursive = recursive,
+      dry_run = dry_run,
+      on_conflict = on_conflict,
+      on_error = on_error %||% getOption("dvs.on_error", "return"),
+      progress_callback = progress_callback
+    ),
+    "on_error",
+    on_error_option
   )
   info <- raw$info
 

@@ -187,6 +187,12 @@ test_that("dvs_get raises a wrong argument as a dvs_error_argument", {
   expect_argument_error(quote(dvs_get(on_error = "bogus")), "on_error")
   withr::local_options(dvs.on_error = "bogus")
   expect_argument_error(quote(dvs_get()), "on_error")
+  # The value came from the option, so the message names it
+  cnd <- tryCatch(dvs_get(), error = identity)
+  expect_match(conditionMessage(cnd), "`options(dvs.on_error)` should be one of", fixed = TRUE)
+  # An on_error the user passed keeps its own name
+  cnd <- tryCatch(dvs_get(on_error = "bogus"), error = identity)
+  expect_match(conditionMessage(cnd), "'on_error' should be one of", fixed = TRUE)
 })
 
 test_that("dvs_get takes paths = NULL as no paths", {

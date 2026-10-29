@@ -257,6 +257,9 @@ test_that("a wrong argument type is a dvs_error_argument", {
   # The thread count comes from an option the user may set to NA
   withr::local_options(dvs.num_threads = NA)
   expect_argument_error(quote(dvs_status()), "threads")
+  # The user passed no `threads`, so the message names the option
+  cnd <- tryCatch(dvs_status(), error = identity)
+  expect_match(conditionMessage(cnd), "`options(dvs.num_threads)` must", fixed = TRUE)
 })
 
 test_that("set_dvs_threads raises a bad value as a dvs_error_argument", {
