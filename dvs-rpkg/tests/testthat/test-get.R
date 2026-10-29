@@ -187,6 +187,15 @@ test_that("dvs_get raises a wrong argument as a dvs_error_argument", {
   expect_argument_error(quote(dvs_get()), "on_error")
 })
 
+test_that("dvs_result_info refuses anything but a dvs result", {
+  expect_argument_error(quote(dvs_result_info(data.frame(a = 1))), "x")
+  expect_argument_error(quote(dvs_result_info(1)), "x")
+  expect_argument_error(quote(dvs_result_info(NA)), "x")
+  expect_argument_error(quote(dvs_result_info(NULL)), "x")
+  cnd <- tryCatch(dvs_result_info(data.frame(a = 1)), error = identity)
+  expect_equal(conditionMessage(cnd), "`x` is not a dvs result")
+})
+
 test_that("overwrite in dvs.toml is a configuration error", {
   new_dvs_test_repo()
   cat('\n[get]\non_conflict = "overwrite"\n', file = "dvs.toml", append = TRUE)

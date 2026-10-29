@@ -167,29 +167,6 @@ dvs_get <- function(
   result
 }
 
-#' Operation information for a dvs result
-#'
-#' The rows of a [dvs_get()] result describe each file. This returns what
-#' applies to the whole operation.
-#'
-#' @param x A result returned by [dvs_get()].
-#' @return A list: `command`, `outcome` (`"complete"`, `"aborted"`,
-#'   `"partial"` or `"failed"`), `did_as_asked` (`TRUE` unless a file failed
-#'   or `on_conflict = "abort"` held files back), `dry_run`, `on_conflict` and
-#'   its `source` (`"argument"`, `"env"`, `"config"` for dvs.toml, or
-#'   `"default"`), `counts` (a named list of row counts: `total`, `succeeded`
-#'   for the rows at their target, then one count per action, the same fields
-#'   as the CLI's JSON `counts`) and `problem` (an operation-level message, or
-#'   `NA` when there is none).
-#' @export
-dvs_result_info <- function(x) {
-  info <- attr(x, "dvs_info", exact = TRUE)
-  if (is.null(info)) {
-    stop("`x` is not a dvs result", call. = FALSE)
-  }
-  info
-}
-
 dvs_get_summary <- function(info, files = NULL) {
   counts <- info$counts
   phrases <- c(
