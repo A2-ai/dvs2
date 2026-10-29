@@ -23,7 +23,7 @@ connections = ["miniextendr-api/connections"]
 # so the R package stays in sync with the core with no git pin to bump.
 #
 # For a shippable, offline tarball, `cargo revendor --freeze` (run by
-# `just vendor` and by bootstrap.R before R CMD build) rewrites this path dep
+# `just vendor`) rewrites this path dep
 # to `vendor/dvs` so the sealed tarball carries the core source and resolves
 # without the monorepo. A path dep is not source-replaceable, which is why the
 # tarball path needs freeze. The frozen Cargo.toml is never committed: `just

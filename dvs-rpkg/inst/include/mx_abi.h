@@ -23,6 +23,8 @@
  *
  * 2. In R_init_<yourpkg>(), load C-callables:
  *
+ *      #include <R_ext/Rdynload.h>  // R_GetCCallable(), DllInfo
+ *
  *      typedef SEXP (*mx_wrap_fn)(mx_erased*);
  *      static mx_wrap_fn p_mx_wrap = NULL;
  *
@@ -47,7 +49,7 @@
 
 /* Suppress clang 21+'s -Wunknown-warning-option meta-warning for upstream R's
  * Boolean.h pragma. Out-of-PKG_CFLAGS scoped guard avoids R CMD check WARNING
- * on non-portable suppressor flags. See miniextendr issue #443. */
+ * on non-portable suppressor flags. See issue A2-ai/miniextendr#443. */
 #if defined(__clang__)
 #  pragma clang diagnostic push
 #  pragma clang diagnostic ignored "-Wunknown-warning-option"
@@ -131,6 +133,10 @@ static inline int mx_tag_eq(mx_tag a, mx_tag b) {
  * 4. Converting the result to SEXP
  */
 typedef SEXP (*mx_meth)(void *data, int argc, const SEXP *argv);
+
+/* Explicit borrowed-owner receiver: owner roots data and its sidecar slots
+ * for the whole call. Only fields declared with this signature use it. */
+typedef SEXP (*mx_owner_meth)(void *data, SEXP owner, int argc, const SEXP *argv);
 
 /* ============================================================================
  * Vtable and Erased Object Types

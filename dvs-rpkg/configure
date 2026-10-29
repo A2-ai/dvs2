@@ -592,11 +592,11 @@ PACKAGE_URL=''
 ac_unique_file="src/rust/lib.rs"
 ac_subst_vars='LTLIBOBJS
 LIBOBJS
+CARGO_NET_GIT_FETCH_WITH_CLI
 VENDOR_OUT_CARGO
+VENDOR_OUT_USER_SET
 VENDOR_OUT
 NATIVE_PKG_CPPFLAGS
-CDYLIB_EXT
-CDYLIB_PREFIX
 TAR_FORCE_LOCAL
 CARGO_STATICLIB_NAME
 CARGO_LIBDIR
@@ -605,6 +605,7 @@ CARGO_HOME
 ENV_RUSTFLAGS
 CARGO_PROFILE
 CARGO_TARGET_DIR_CARGO
+CARGO_TARGET_DIR_USER_SET
 CARGO_TARGET_DIR
 CARGO_BUILD_STD_FLAG
 IS_WASM_INSTALL
@@ -614,10 +615,12 @@ CYGPATH
 SED
 RUSTC
 CARGO
+BLAS_LAPACK_PKG_LIBS
 CARGO_FEATURES_FLAG
 CARGO_FEATURES
 CARGO_OFFLINE_FLAG
 IS_TARBALL_INSTALL
+SOURCE_IS_BUILT
 ABS_RPKG_SRCDIR
 ABS_TOP_SRCDIR
 host_os
@@ -680,7 +683,9 @@ CARGO_TARGET_DIR
 CARGO_PROFILE
 ENV_RUSTFLAGS
 CARGO_HOME
-CARGO_BUILD_TARGET'
+CARGO_BUILD_TARGET
+VENDOR_OUT
+CARGO_NET_GIT_FETCH_WITH_CLI'
 
 
 # Initialize some variables set by options.
@@ -1314,6 +1319,11 @@ Some influential environment variables:
               restricted environments where HOME is read-only)
   CARGO_BUILD_TARGET
               Cargo build target triple (e.g. aarch64-apple-darwin)
+  VENDOR_OUT  Shared vendor cache root (optional; entries are keyed by
+              vendor.tar.xz contents)
+  CARGO_NET_GIT_FETCH_WITH_CLI
+              Fetch cargo git deps via the system git CLI; "true" works around
+              in-tree rustls/CA issues (default true)
 
 Use these variables to override the choices made by 'configure' or to help
 it to find libraries and programs with nonstandard names/locations.
@@ -2029,10 +2039,10 @@ if grep -Eq '^(Packaged|Built):' "$abs_top_srcdir/DESCRIPTION" 2>/dev/null; then
   SOURCE_IS_BUILT=true
 fi
 
+
 if test -f "$abs_top_srcdir/inst/vendor.tar.xz" \
    && test "$SOURCE_IS_GIT" = "true" \
-   && test "$SOURCE_IS_BUILT" = "false" \
-   && test -z "${MINIEXTENDR_BOOTSTRAP+x}"; then
+   && test "$SOURCE_IS_BUILT" = "false"; then
   as_fn_error $? "leaked vendor tarball detected in a git-tracked source tree.
 
   inst/vendor.tar.xz is present AND this is a git working tree, so configure
@@ -2040,31 +2050,16 @@ if test -f "$abs_top_srcdir/inst/vendor.tar.xz" \
   ignoring any local source edits. This is almost always a leftover from an
   interrupted build.
 
-  Remove it before building from source:
-    rm -f inst/vendor.tar.xz
+  Recover with, in R:
+    minirextendr::miniextendr_clean_vendor_leak(\"$abs_top_srcdir\")
+  It removes the archive and, if vendoring rewrote src/rust/Cargo.toml
+  (cargo revendor --freeze), restores it from src/rust/.Cargo.toml.prefreeze.
+  src/rust/Cargo.lock is left as is: cargo re-resolves it on the next
+  build from source (or restore it with git). Without a snapshot, restore the
+  original dependency paths and patch entries by hand (git diff).
 
-  Or run miniextendr_clean_vendor_leak, or minirextendr::miniextendr_doctor
-  to diagnose." "$LINENO" 5
-fi
-
-if test ! -f "$abs_top_srcdir/inst/vendor.tar.xz" \
-   && test "$SOURCE_IS_GIT" = "false" \
-   && command -v cargo-revendor >/dev/null 2>&1; then
-  { printf '%s\n' "$as_me:${as_lineno-$LINENO}: auto-vendor: inst/vendor.tar.xz absent, running cargo-revendor" >&5
-printf '%s\n' "$as_me: auto-vendor: inst/vendor.tar.xz absent, running cargo-revendor" >&6;}
-  mkdir -p "$abs_top_srcdir/inst"
-  if (cd "$abs_top_srcdir" && cargo revendor \
-        --manifest-path src/rust/Cargo.toml \
-        --output vendor \
-        --compress inst/vendor.tar.xz \
-        --blank-md --source-marker --force) >&2; then
-    { printf '%s\n' "$as_me:${as_lineno-$LINENO}: auto-vendor: produced inst/vendor.tar.xz" >&5
-printf '%s\n' "$as_me: auto-vendor: produced inst/vendor.tar.xz" >&6;}
-  else
-    { printf '%s\n' "$as_me:${as_lineno-$LINENO}: WARNING: auto-vendor: cargo-revendor failed; falling through to source mode" >&5
-printf '%s\n' "$as_me: WARNING: auto-vendor: cargo-revendor failed; falling through to source mode" >&2;}
-    rm -f "$abs_top_srcdir/inst/vendor.tar.xz"
-  fi
+  Removing inst/vendor.tar.xz alone does not repair a frozen manifest.
+  minirextendr::miniextendr_doctor(\"$abs_top_srcdir\") reports both." "$LINENO" 5
 fi
 
 if test -f "$abs_top_srcdir/inst/vendor.tar.xz"; then
@@ -2108,6 +2103,12 @@ if test -n "$CARGO_FEATURES"; then
 else
   CARGO_FEATURES_FLAG=""
 fi
+
+
+case ",$CARGO_FEATURES," in
+  *,blas-lapack,*) BLAS_LAPACK_PKG_LIBS='$(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)' ;;
+  *)               BLAS_LAPACK_PKG_LIBS="" ;;
+esac
 
 
 if test -n "$ac_tool_prefix"; then
@@ -2465,6 +2466,13 @@ if test "$RUSTC_MAJOR" -lt "$MIN_RUSTC_MAJOR" || \
   as_fn_error $? "rustc $MIN_RUSTC_MAJOR.$MIN_RUSTC_MINOR+ required for Rust edition 2024, found $RUSTC_VERSION_NUM" "$LINENO" 5
 fi
 
+if test "$IS_TARBALL_INSTALL" != "true"; then
+  test -f "${srcdir}/tools/dev-bootstrap.R" || \
+    as_fn_error $? "tools/dev-bootstrap.R not found. It ships with the package template; restore it, e.g. with minirextendr::upgrade_miniextendr_package()." "$LINENO" 5
+  "${R_HOME}/bin/Rscript" "${srcdir}/tools/dev-bootstrap.R" configure || \
+    as_fn_error $? "a path dependency outside the package is missing; see the message above" "$LINENO" 5
+fi
+
 
 : ${RUST_TOOLCHAIN=""}
 
@@ -2493,7 +2501,7 @@ if test "$is_wasm_install" = true; then
   if test ! -f "$srcdir/src/rust/wasm_registry.rs"; then
     as_fn_error $? "wasm32 install requires src/rust/wasm_registry.rs.
 Run 'R CMD INSTALL' (or minirextendr::miniextendr_build()) on the host first to
-regenerate it from the cdylib slice contents, then ship the source tree to the
+regenerate it from the linkme slice contents, then ship the source tree to the
 wasm builder." "$LINENO" 5
   fi
 fi
@@ -2504,10 +2512,21 @@ IS_WASM_INSTALL=$is_wasm_install
 CARGO_CMD="$CARGO $RUST_TOOLCHAIN"
 
 
-: ${CARGO_TARGET_DIR="$abs_top_srcdir/rust-target"}
+CARGO_TARGET_DIR_USER_SET=false
+if test -n "$CARGO_TARGET_DIR"; then
+  CARGO_TARGET_DIR_USER_SET=true
+  mkdir -p "$CARGO_TARGET_DIR" || as_fn_error $? "Cannot create CARGO_TARGET_DIR" "$LINENO" 5
+  CARGO_TARGET_DIR="$(cd "$CARGO_TARGET_DIR" && pwd)"
+else
+  CARGO_TARGET_DIR="$abs_top_srcdir/rust-target"
+fi
 
 
-CARGO_TARGET_DIR_CARGO="$abs_top_srcdir_cargo/rust-target"
+
+CARGO_TARGET_DIR_CARGO="$CARGO_TARGET_DIR"
+if test "x$CYGPATH" != "xno"; then
+  CARGO_TARGET_DIR_CARGO="$($CYGPATH -m "$CARGO_TARGET_DIR")"
+fi
 
 
 
@@ -2592,6 +2611,11 @@ then :
   { printf '%s\n' "$as_me:${as_lineno-$LINENO}: CARGO_FEATURES  = $CARGO_FEATURES" >&5
 printf '%s\n' "$as_me: CARGO_FEATURES  = $CARGO_FEATURES" >&6;}
 fi
+if test -n "$BLAS_LAPACK_PKG_LIBS"
+then :
+  { printf '%s\n' "$as_me:${as_lineno-$LINENO}: BLAS_LAPACK_PKG_LIBS  = $BLAS_LAPACK_PKG_LIBS" >&5
+printf '%s\n' "$as_me: BLAS_LAPACK_PKG_LIBS  = $BLAS_LAPACK_PKG_LIBS" >&6;}
+fi
 if test "$IS_WASM_INSTALL" = "true"
 then :
   { printf '%s\n' "$as_me:${as_lineno-$LINENO}: IS_WASM_INSTALL      = true (CC=emcc detected)" >&5
@@ -2615,21 +2639,24 @@ case "$host_os" in
 esac
 
 
-case "$host_os" in
-  darwin*)                  CDYLIB_PREFIX="lib"; CDYLIB_EXT="dylib" ;;
-  *mingw*|*msys*|*cygwin*)  CDYLIB_PREFIX="";    CDYLIB_EXT="dll" ;;
-  *)                        CDYLIB_PREFIX="lib"; CDYLIB_EXT="so" ;;
-esac
-
-
-
 NATIVE_PKG_CPPFLAGS=""
 
 
 
 
-VENDOR_OUT="$abs_top_srcdir/vendor"
-VENDOR_OUT_CARGO="$abs_top_srcdir_cargo/vendor"
+
+VENDOR_OUT_USER_SET=false
+if test -n "$VENDOR_OUT" && test "$IS_TARBALL_INSTALL" = "true"; then
+  VENDOR_OUT_USER_SET=true
+  VENDOR_OUT=$("${R_HOME}/bin/Rscript" "$abs_top_srcdir_cargo/tools/vendor-cache.R" prepare "$abs_top_srcdir_cargo" "$VENDOR_OUT") || as_fn_error $? "Failed to prepare shared vendor cache" "$LINENO" 5
+else
+  VENDOR_OUT="$abs_top_srcdir/vendor"
+fi
+VENDOR_OUT_CARGO="$VENDOR_OUT"
+if test "x$CYGPATH" != "xno"; then
+  VENDOR_OUT_CARGO="$($CYGPATH -m "$VENDOR_OUT")"
+fi
+
 
 
 
@@ -2684,6 +2711,9 @@ if test -z "$CARGO_ENV_RUST_TARGET"; then
 fi
 
 CARGO_ENV_RUST_TARGET_UPPER=`echo "$CARGO_ENV_RUST_TARGET" | tr 'a-z-' 'A-Z_'`
+
+
+: ${CARGO_NET_GIT_FETCH_WITH_CLI="true"}
 
 CARGO_ENV_MACOS_DEPLOY_TARGET=""
 CARGO_ENV_MACOS_DEPLOY_SOURCE=""
@@ -3492,11 +3522,16 @@ IS_TARBALL_INSTALL="$IS_TARBALL_INSTALL"
  SED="$SED"
  TAR_FORCE_LOCAL="$TAR_FORCE_LOCAL"
 IS_TARBALL_INSTALL="$IS_TARBALL_INSTALL"
+ VENDOR_OUT_USER_SET="$VENDOR_OUT_USER_SET"
+ R_HOME="$R_HOME"
+ abs_top_srcdir_cargo="$abs_top_srcdir_cargo"
  MONOREPO_ROOT="$MONOREPO_ROOT"
  MONOREPO_ROOT_CARGO="$MONOREPO_ROOT_CARGO"
+ VENDOR_OUT="$VENDOR_OUT"
  VENDOR_OUT_CARGO="$VENDOR_OUT_CARGO"
  CARGO_TARGET_DIR_CARGO="$CARGO_TARGET_DIR_CARGO"
  CARGO_ENV_MACOS_DEPLOY_TARGET="$CARGO_ENV_MACOS_DEPLOY_TARGET"
+ CARGO_NET_GIT_FETCH_WITH_CLI="$CARGO_NET_GIT_FETCH_WITH_CLI"
  CARGO_ENV_WIN_LINKER="$CARGO_ENV_WIN_LINKER"
  CARGO_ENV_RUST_TARGET="$CARGO_ENV_RUST_TARGET"
  CARGO_ENV_RUST_TARGET_UPPER="$CARGO_ENV_RUST_TARGET_UPPER"
@@ -3506,7 +3541,6 @@ IS_TARBALL_INSTALL="$IS_TARBALL_INSTALL"
  CARGO_PROFILE="$CARGO_PROFILE"
  CARGO_ENV_ABI_CFLAGS="$CARGO_ENV_ABI_CFLAGS"
  CARGO_ENV_ABI_CXXFLAGS="$CARGO_ENV_ABI_CXXFLAGS"
- SED="$SED"
 IS_TARBALL_INSTALL="$IS_TARBALL_INSTALL"
  R_HOME="$R_HOME"
 CARGO_CMD="$CARGO_CMD" CARGO_OFFLINE_FLAG="$CARGO_OFFLINE_FLAG" SED="$SED"
@@ -3978,7 +4012,7 @@ printf '%s\n' "$as_me: executing $ac_file commands" >&6;}
           ;;
       esac
     fi
-    echo 'CARGO_NET_GIT_FETCH_WITH_CLI = "true"'
+    echo "CARGO_NET_GIT_FETCH_WITH_CLI = \"$CARGO_NET_GIT_FETCH_WITH_CLI\""
     if test -n "$CARGO_ENV_R_AR" && test "$CARGO_ENV_R_AR" != "ar"; then
       echo "AR_$CARGO_ENV_RUST_TARGET = \"$CARGO_ENV_R_AR\""
     fi
@@ -3999,26 +4033,32 @@ printf '%s\n' "$as_me: executing $ac_file commands" >&6;}
   }
 
   if test "$IS_TARBALL_INSTALL" = "true"; then
+                            if test ! -r "$VENDOR_OUT/.cargo-config.toml"; then
+      echo "configure: error: inst/vendor.tar.xz has no vendor/.cargo-config.toml, so the" >&2
+      echo "  vendored sources cannot be mapped for an offline build. Rebuild the archive" >&2
+      echo "  with cargo-revendor (minirextendr::miniextendr_vendor() runs it), then" >&2
+      echo "  rebuild the package tarball." >&2
+      exit 1
+    fi
     {
       echo "# Autogenerated by configure — DO NOT EDIT"
-      echo "# Tarball install: redirect crates.io and the miniextendr git source"
-      echo "# to the unpacked inst/vendor.tar.xz."
+      echo "# Tarball install: the source replacements cargo-revendor recorded in"
+      echo "# vendor/.cargo-config.toml, redirected to the unpacked inst/vendor.tar.xz."
       echo ""
       emit_env_block
-      echo "[source.crates-io]"
-      echo 'replace-with = "vendored-sources"'
-      echo ""
-                        for _url in $("$SED" -n 's/.*git = "\(https:\/\/[^"]*\)".*/\1/p' src/rust/Cargo.toml | sort -u); do
-        echo "[source.\"git+$_url\"]"
-        echo "git = \"$_url\""
-        echo 'replace-with = "vendored-sources"'
-        echo ""
-      done
-      echo "[source.vendored-sources]"
-      echo "directory = \"$VENDOR_OUT_CARGO\""
+                  while IFS= read -r _line || test -n "$_line"; do
+        case "$_line" in
+          'directory = '*) printf '%s\n' "directory = \"$VENDOR_OUT_CARGO\"" ;;
+          *) printf '%s\n' "$_line" ;;
+        esac
+      done < "$VENDOR_OUT/.cargo-config.toml"
       echo ""
       echo "[build]"
       echo "target-dir = \"$CARGO_TARGET_DIR_CARGO\""
+      if test "$VENDOR_OUT_USER_SET" = "true"; then
+        echo ""
+        "$R_HOME/bin/Rscript" "$abs_top_srcdir_cargo/tools/vendor-cache.R" config "$abs_top_srcdir_cargo" "$VENDOR_OUT_CARGO" || exit 1
+      fi
     } > "$RPKG_CFG"
     echo "configure: wrote $RPKG_CFG (tarball mode)"
 
