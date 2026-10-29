@@ -17,8 +17,10 @@ or \code{on_conflict = "abort"} held files back), \code{dry_run}, \code{on_confl
 its \code{source} (\code{"argument"}, \code{"env"}, \code{"config"} for dvs.toml, or
 \code{"default"}), \code{counts} (a named list of row counts: \code{total}, \code{succeeded}
 for the rows at their target, then one count per action, the same fields
-as the CLI's JSON \code{counts}) and \code{problem} (an operation-level message, or
-\code{NA} when there is none).
+as the CLI's JSON \code{counts}), \code{problem} (an operation-level message, or
+\code{NA} when there is none) and \code{summary} (the summary the CLI prints, with
+a second line \verb{on_conflict = <policy> (<source>)} when the policy acted
+on a file with local changes or no record, or the problem's message).
 }
 \description{
 The rows of a \code{\link[=dvs_get]{dvs_get()}} result describe each file. This returns what

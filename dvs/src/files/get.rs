@@ -283,6 +283,53 @@ impl GetReport {
         }
     }
 
+    /// The summary people read: the outcome in words with the non-zero
+    /// counts, as the CLI prints it under the file lines and R prints it above
+    /// a result. When the policy acted, that is when a file with local changes
+    /// or no record was skipped, held back or replaced, a second line names
+    /// it: `on_conflict = <policy> (<source>)`. A report with a `problem`
+    /// says nothing more than the problem, which callers print instead.
+    pub fn summary(&self) -> String {
+        let c = &self.counts;
+        let what = match self.outcome {
+            GetOutcome::Complete
+                if c.restored + c.replaced + c.would_restore + c.would_replace == 0 =>
+            {
+                format!("nothing to do, {} already current", c.unchanged)
+            }
+            GetOutcome::Complete => counts_phrase(c),
+            GetOutcome::Aborted => {
+                let mut reasons = conflict_reasons(&self.files);
+                if c.failed > 0 {
+                    reasons.push(format!(
+                        "{} cannot be retrieved",
+                        plural(c.failed, "file", "files")
+                    ));
+                }
+                let dry = if self.dry_run { "would be " } else { "" };
+                format!("aborted, nothing {dry}changed: {}", reasons.join("; "))
+            }
+            GetOutcome::Partial | GetOutcome::Failed | GetOutcome::Cancelled => {
+                format!("{}: {}", self.outcome.as_str(), counts_phrase(c))
+            }
+        };
+        let mut line = what;
+        if let Some(first) = line.get(..1) {
+            line.replace_range(..1, &first.to_uppercase());
+        }
+        let policy_acted = self
+            .files
+            .iter()
+            .any(|r| matches!(r.before, Before::Modified | Before::Unknown));
+        if policy_acted {
+            line.push_str(&format!(
+                "\non_conflict = {} ({})",
+                self.on_conflict, self.source
+            ));
+        }
+        line
+    }
+
     /// Whether get did as asked. A skip the policy asked for counts as done.
     pub fn verdict(&self) -> GetVerdict {
         if self.outcome == GetOutcome::Cancelled {
@@ -295,6 +342,61 @@ impl GetReport {
             GetVerdict::Done
         }
     }
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// The non-zero counts, in a fixed order: "restored 2, 3 already current".
+fn counts_phrase(c: &GetCounts) -> String {
+    let parts = [
+        (c.restored, "restored {}"),
+        (c.replaced, "replaced {}"),
+        (c.would_restore, "would restore {}"),
+        (c.would_replace, "would replace {}"),
+        (c.unchanged, "{} already current"),
+        (c.skipped, "skipped {}"),
+        (c.not_run, "{} held back"),
+        (c.cancelled, "cancelled {}"),
+        (c.failed, "{} failed"),
+    ];
+    let out: Vec<String> = parts
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, f)| f.replace("{}", &n.to_string()))
+        .collect();
+    if out.is_empty() {
+        "nothing to do".to_string()
+    } else {
+        out.join(", ")
+    }
+}
+
+/// Why conflicts stopped things, separating edits from files with no record.
+fn conflict_reasons(files: &[GetRow]) -> Vec<String> {
+    let count = |b: Before| {
+        files
+            .iter()
+            .filter(|r| r.is_conflict() && r.before == b)
+            .count()
+    };
+    let (modified, unknown) = (count(Before::Modified), count(Before::Unknown));
+    let mut reasons = Vec::new();
+    if modified > 0 {
+        reasons.push(format!(
+            "{} local changes",
+            plural(modified, "file has", "files have")
+        ));
+    }
+    if unknown > 0 {
+        reasons.push(format!(
+            "{} from the tracked version and dvs has no record of writing {}",
+            plural(unknown, "file differs", "files differ"),
+            if unknown == 1 { "it" } else { "them" }
+        ));
+    }
+    reasons
 }
 
 /// How a get ended, for exit codes and R's `on_error`.
@@ -2008,5 +2110,55 @@ mod tests {
         let json = |code: GetCode| serde_json::to_value(code).unwrap();
         assert_eq!(json(GetCode::LocalChanges), "local_changes");
         assert_eq!(json(GetCode::Shared(ErrorCode::IoError)), "io_error");
+    }
+
+    /// A report with no rows, its outcome and counts set by hand.
+    fn summary_report(outcome: GetOutcome, counts: GetCounts) -> GetReport {
+        let mut report = GetReport::problem(
+            ErrorCode::OperationFailed,
+            "",
+            false,
+            OnConflict::Abort,
+            SettingSource::Default,
+        );
+        report.problem = None;
+        report.outcome = outcome;
+        report.counts = counts;
+        report
+    }
+
+    #[test]
+    fn aborted_summary_names_files_that_cannot_be_retrieved() {
+        let mut report = summary_report(
+            GetOutcome::Aborted,
+            GetCounts {
+                failed: 1,
+                ..GetCounts::default()
+            },
+        );
+        assert!(report.summary().contains("1 file cannot be retrieved"));
+        report.counts.failed = 2;
+        assert!(report.summary().contains("2 files cannot be retrieved"));
+    }
+
+    #[test]
+    fn summary_lists_the_non_zero_counts_in_order() {
+        let report = summary_report(
+            GetOutcome::Cancelled,
+            GetCounts {
+                restored: 1,
+                cancelled: 2,
+                ..GetCounts::default()
+            },
+        );
+        assert_eq!(report.summary(), "Cancelled: restored 1, cancelled 2");
+        let report = summary_report(
+            GetOutcome::Complete,
+            GetCounts {
+                unchanged: 3,
+                ..GetCounts::default()
+            },
+        );
+        assert_eq!(report.summary(), "Nothing to do, 3 already current");
     }
 }

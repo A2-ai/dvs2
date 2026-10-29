@@ -31,113 +31,10 @@ fn label(action: Action) -> &'static str {
     }
 }
 
-fn plural(n: usize, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
-}
-
-/// The non-zero counts, in a fixed order: "restored 2, 3 already current".
-fn counts_phrase(report: &GetReport) -> String {
-    let c = &report.counts;
-    let parts = [
-        (c.restored, "restored {}"),
-        (c.replaced, "replaced {}"),
-        (c.would_restore, "would restore {}"),
-        (c.would_replace, "would replace {}"),
-        (c.unchanged, "{} already current"),
-        (c.skipped, "skipped {}"),
-        (c.not_run, "{} held back"),
-        (c.cancelled, "cancelled {}"),
-        (c.failed, "{} failed"),
-    ];
-    let out: Vec<String> = parts
-        .iter()
-        .filter(|(n, _)| *n > 0)
-        .map(|(n, f)| f.replace("{}", &n.to_string()))
-        .collect();
-    if out.is_empty() {
-        "nothing to do".to_string()
-    } else {
-        out.join(", ")
-    }
-}
-
 /// Rows listed one per line: every file that changed or needs attention.
 /// Cancelled files are only counted, as add and status do.
 fn is_listed(row: &GetRow) -> bool {
     !matches!(row.action, Action::Unchanged | Action::Cancelled)
-}
-
-/// Why conflicts stopped things, separating edits from files with no record.
-fn conflict_reasons(report: &GetReport) -> Vec<String> {
-    let count = |b: Before| {
-        report
-            .files
-            .iter()
-            .filter(|r| r.is_conflict() && r.before == b)
-            .count()
-    };
-    let (modified, unknown) = (count(Before::Modified), count(Before::Unknown));
-    let mut reasons = Vec::new();
-    if modified > 0 {
-        reasons.push(format!(
-            "{} local changes",
-            plural(modified, "file has", "files have")
-        ));
-    }
-    if unknown > 0 {
-        reasons.push(format!(
-            "{} from the tracked version and dvs has no record of writing {}",
-            plural(unknown, "file differs", "files differ"),
-            if unknown == 1 { "it" } else { "them" }
-        ));
-    }
-    reasons
-}
-
-fn summary(report: &GetReport) -> String {
-    let c = &report.counts;
-    let what = match report.outcome {
-        GetOutcome::Complete
-            if c.restored + c.replaced + c.would_restore + c.would_replace == 0 =>
-        {
-            format!("nothing to do, {} already current", c.unchanged)
-        }
-        GetOutcome::Complete => counts_phrase(report),
-        GetOutcome::Aborted => {
-            let mut reasons = conflict_reasons(report);
-            if c.failed > 0 {
-                reasons.push(format!(
-                    "{} cannot be retrieved",
-                    plural(c.failed, "file", "files")
-                ));
-            }
-            let dry = if report.dry_run { "would be " } else { "" };
-            format!("aborted, nothing {dry}changed: {}", reasons.join("; "))
-        }
-        GetOutcome::Partial | GetOutcome::Failed | GetOutcome::Cancelled => {
-            format!("{}: {}", report.outcome.as_str(), counts_phrase(report))
-        }
-    };
-    let mut line = what;
-    if let Some(first) = line.get(..1) {
-        line.replace_range(..1, &first.to_uppercase());
-    }
-    // The policy only matters when it decided something: a file with local
-    // changes or no record was skipped, held back or replaced
-    if policy_acted(report) {
-        line.push_str(&format!(
-            "\non_conflict = {} ({})",
-            report.on_conflict, report.source
-        ));
-    }
-    line
-}
-
-fn policy_acted(report: &GetReport) -> bool {
-    report
-        .files
-        .iter()
-        .any(|r| matches!(r.before, Before::Modified | Before::Unknown))
 }
 
 /// Print the report for people: one line per file that changed or needs
@@ -178,7 +75,7 @@ pub fn print_human(report: &GetReport) {
         }
     }
     // Set apart from the file lines, like add's
-    let summary = format!("{}{}", if listed { "\n" } else { "" }, summary(report));
+    let summary = format!("{}{}", if listed { "\n" } else { "" }, report.summary());
     if report.outcome == GetOutcome::Complete {
         println!("{summary}");
     } else {
@@ -253,31 +150,4 @@ pub fn to_json(report: &GetReport) -> serde_json::Value {
             .map(|p| crate::output::error_json(p.code, p.message.as_str())),
         "files": report.files,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use dvs::GetCounts;
-    use dvs::config::{OnConflict, SettingSource};
-
-    #[test]
-    fn aborted_summary_names_files_that_cannot_be_retrieved() {
-        let mut report = GetReport::problem(
-            ErrorCode::OperationFailed,
-            "",
-            false,
-            OnConflict::Abort,
-            SettingSource::Default,
-        );
-        report.problem = None;
-        report.outcome = GetOutcome::Aborted;
-        report.counts = GetCounts {
-            failed: 1,
-            ..GetCounts::default()
-        };
-        assert!(summary(&report).contains("1 file cannot be retrieved"));
-        report.counts.failed = 2;
-        assert!(summary(&report).contains("2 files cannot be retrieved"));
-    }
 }

@@ -531,7 +531,9 @@ restores every tracked file in the project.)
 Human output lists each file that changed or needs attention, then, after a blank line, a summary. Under it,
 `on_conflict = <policy> (<source>)` appears on its own line only when the policy acted, that is when a file
 with local changes or no record was skipped, held back or replaced. Then come the commands to keep or discard
-local changes.
+local changes. The library builds the summary (`GetReport::summary`). R shows the same lines above a
+printed `dvs_get()` result and in its `on_error` warning or error, and returns them as `summary` in
+`dvs_result_info()`.
 
 `--json` prints one envelope (this replaced the earlier bare array). When `get` cannot start (not in a project,
 invalid configuration) it is the shared error envelope, without `on_conflict`/`source`.

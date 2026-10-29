@@ -204,63 +204,9 @@ dvs_get <- function(
   result
 }
 
-dvs_get_summary <- function(info, files = NULL) {
-  counts <- info$counts
-  phrases <- c(
-    restored = "restored %d",
-    replaced = "replaced %d",
-    would_restore = "would restore %d",
-    would_replace = "would replace %d",
-    unchanged = "%d already current",
-    skipped = "skipped %d",
-    not_run = "%d held back",
-    cancelled = "cancelled %d",
-    failed = "%d failed"
-  )
-  parts <- character(0)
-  for (name in names(phrases)) {
-    n <- counts[[name]]
-    if (!is.null(n) && n > 0) {
-      parts <- c(parts, sprintf(phrases[[name]], n))
-    }
-  }
-  what <- if (!is.na(info$problem)) {
-    info$problem
-  } else if (info$outcome == "aborted") {
-    reasons <- character(0)
-    if (!is.null(files) && "code" %in% names(files)) {
-      n_conflicts <- sum(files$code %in% c("local_changes", "unknown_local"))
-      if (n_conflicts > 0) {
-        reasons <- sprintf("%d with local changes or no record", n_conflicts)
-      }
-      if (counts$failed > 0) {
-        reasons <- c(reasons, sprintf(
-          "%d %s cannot be retrieved",
-          counts$failed,
-          if (counts$failed == 1) "file" else "files"
-        ))
-      }
-    } else {
-      reasons <- parts
-    }
-    sprintf(
-      "nothing %schanged (%s)",
-      if (isTRUE(info$dry_run)) "would be " else "",
-      paste(reasons, collapse = ", ")
-    )
-  } else if (length(parts) == 0) {
-    "nothing to do"
-  } else {
-    paste(parts, collapse = ", ")
-  }
-  policy <- sprintf("; on_conflict = %s (%s)", info$on_conflict, info$source)
-  sprintf(
-    "dvs get%s: %s, %s%s",
-    if (isTRUE(info$dry_run)) " (dry run)" else "",
-    info$outcome,
-    what,
-    policy
-  )
+# The lines of `text` as comments above a printed result.
+comment_lines <- function(text) {
+  paste0("# ", strsplit(text, "\n", fixed = TRUE)[[1L]])
 }
 
 # Rows that need attention, as short lines for print and conditions. Files
@@ -283,7 +229,7 @@ dvs_get_attention <- function(files, max = 5L) {
 signal_incomplete <- function(result, on_error, call) {
   message <- paste(
     c(
-      dvs_get_summary(dvs_result_info(result), result),
+      dvs_result_info(result)$summary,
       dvs_get_attention(result),
       "See the `code`, `message` and `hint` columns of `cnd$result`."
     ),
@@ -304,18 +250,14 @@ print.dvs_get_result <- function(x, ...) {
     n_request <- info$counts$total
     as_returned <- c("local_path", "satisfied", "code", "message", "hint")
     if (nrow(x) == n_request && all(as_returned %in% names(x))) {
-      cat("# ", dvs_get_summary(info, x), "\n", sep = "")
+      cat(comment_lines(info$summary), sep = "\n")
       attention <- dvs_get_attention(x)
       if (length(attention) > 0) {
-        cat(paste0("# ", gsub("\n", "\n# ", attention, fixed = TRUE)), sep = "\n")
+        cat(comment_lines(paste(attention, collapse = "\n")), sep = "\n")
       }
     } else {
       # Filtered or columns selected: the info describes the whole request.
-      cat(
-        "# ", nrow(x), " of ", n_request, " rows from: ",
-        dvs_get_summary(info), "\n",
-        sep = ""
-      )
+      cat(sprintf("# %d of %d rows from:", nrow(x), n_request), comment_lines(info$summary), sep = "\n")
     }
   }
   NextMethod()
