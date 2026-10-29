@@ -363,12 +363,14 @@ pub(crate) fn dvs_status(
 /// @title Materialize the audit log as a data frame
 /// @description
 /// Reads the audit log of the DVS repository containing the working
-/// directory and returns one row per entry. The column structure is inherited
-/// directly from `dvs::audit::AuditEntry`'s serde representation, so the rpkg
-/// never reaches into the dvs crate's internal types. The `action` enum
-/// currently surfaces as a nested list-column. Flattening it through serde
-/// without re-encoding dvs internals is tracked as miniextendr#1056, with a
-/// builder-based alternative in miniextendr#1055.
+/// directory and returns one row per entry: `operation_id`, `timestamp`
+/// (POSIXct, UTC) and `user`, then the entry's action flattened into
+/// columns. `action_variant` is `"init"` or `"add"`. The other `action_`
+/// columns hold that action's fields, for an add `action_file_path`,
+/// `action_file_hashes_blake3`, `action_compression` and `action_message`,
+/// and are `NA` where the action has no such field. The columns follow
+/// `dvs::audit::AuditEntry`'s serde representation, so the rpkg never
+/// reaches into the dvs crate's internal types.
 ///
 /// @param paths Character vector of repo-root-relative file paths recorded at
 ///   add time. The filter keeps only `add` entries for those files. An empty
@@ -389,7 +391,14 @@ pub(crate) fn dvs_audit_log(
     // serializer, so the structure is inherited through serde. vec_to_dataframe
     // returns an empty data frame when the filter matches nothing.
     let entries = config.backend().get_audit_entries(&paths)?;
-    Ok(miniextendr_api::serde::vec_to_dataframe(&entries)?)
+    let frame = miniextendr_api::serde::vec_to_dataframe_flatten_enums(&entries, &["action"])?;
+    if entries.is_empty() {
+        return Ok(frame);
+    }
+    // The log keeps unix seconds. Report them as POSIXct, as the CLI reports
+    // RFC 3339 times. Rooted until the frame holds the column.
+    let timestamp = Preserved::new(entries.iter().map(|e| e.timestamp).collect::<Vec<_>>());
+    Ok(frame.with_column("timestamp", timestamp.as_sexp()))
 }
 
 // region: status rows
