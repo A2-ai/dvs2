@@ -47,14 +47,14 @@ connections = ["miniextendr-api/connections"]
 # (vendor/.cargo-config.toml's `[source."git+<url>"]`), the form configure
 # writes in tarball mode. freeze leaves it as git.
 [dependencies]
-miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", rev = "3861312ff2ab4fcd74a9a9032a11541b89529356", features = ["serde", "jiff", "log"] }
+miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", rev = "1c81fcd57cf0a7b4a0b9f44fa41fbb8f39d38d54", features = ["serde", "jiff", "log"] }
 dvs = { path = "../../../dvs", package = "dvs" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.149"
 anyhow = "1.0.100"
 
 [build-dependencies]
-miniextendr-lint = { git = "https://github.com/A2-ai/miniextendr", rev = "3861312ff2ab4fcd74a9a9032a11541b89529356" }
+miniextendr-lint = { git = "https://github.com/A2-ai/miniextendr", rev = "1c81fcd57cf0a7b4a0b9f44fa41fbb8f39d38d54" }
 
 [profile.dev]
 codegen-units = 1
