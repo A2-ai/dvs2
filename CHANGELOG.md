@@ -9,6 +9,7 @@
 - R package: `NA` is never a value. An `NA` in any argument raises an error that says it must not be `NA`, also among several values, as in `on_error = c("return", NA)`. An `NA` `message`, `group`, `root_dir` or `metadata_folder_name` meant the argument was not given. Use `NULL` or leave the argument out.
 - R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
 - R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
+- R package: `format_byte_size(TRUE)` and `format_byte_size(FALSE)` are errors, as `set_dvs_threads(TRUE)` is. They returned `"1 B"` and `"0 B"`.
 
 ### Added
 
