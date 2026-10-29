@@ -447,6 +447,28 @@ impl From<&dvs::StatusFacts> for StatusRow {
 
 // endregion
 
+/// Valid `on_conflict` choices for [`dvs_get`].
+#[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
+#[match_arg(rename_all = "lower")]
+pub enum OnConflictChoice {
+    /// Change no files if any requested file has a conflict.
+    Abort,
+    /// Leave conflicting files as they are and get the rest.
+    Skip,
+    /// Replace conflicting files.
+    Overwrite,
+}
+
+impl From<OnConflictChoice> for OnConflict {
+    fn from(c: OnConflictChoice) -> Self {
+        match c {
+            OnConflictChoice::Abort => OnConflict::Abort,
+            OnConflictChoice::Skip => OnConflict::Skip,
+            OnConflictChoice::Overwrite => OnConflict::Overwrite,
+        }
+    }
+}
+
 /// @title Retrieve files from DVS storage into the working directory
 /// @description
 /// Fetches the specified files from DVS storage and writes them
@@ -481,13 +503,11 @@ pub(crate) fn dvs_get(
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
-    #[miniextendr(default = "NULL")] on_conflict: Option<String>,
+    #[miniextendr(match_arg)] on_conflict: Option<OnConflictChoice>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<GetResult> {
     let dry_run = dry_run.unwrap_or(false);
-    let explicit: Option<OnConflict> = on_conflict
-        .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
-        .transpose()?;
+    let explicit = on_conflict.map(OnConflict::from);
     if glob.is_some() && recursive.unwrap_or(false) {
         return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
     }
