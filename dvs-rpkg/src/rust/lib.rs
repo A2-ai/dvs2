@@ -17,7 +17,7 @@ use miniextendr_api::list::List;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
 use miniextendr_api::time::OffsetDateTime;
-use miniextendr_api::{DataFrame, MatchArg, SEXP, miniextendr};
+use miniextendr_api::{BuiltDataFrame, MatchArg, SEXP, miniextendr};
 
 use anyhow::{Result, anyhow};
 use serde::Serialize;
@@ -163,7 +163,7 @@ pub(crate) fn dvs_init(
     #[miniextendr(default = "NULL")] group: Option<String>,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
     #[miniextendr(match_arg, default = "\"zstd\"")] compression: CompressionChoice,
-) -> Result<DataFrame> {
+) -> Result<BuiltDataFrame> {
     let root_dir = match root_dir {
         Some(d) => d,
         None => std::env::current_dir()?,
@@ -211,7 +211,7 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<DataFrame> {
+) -> Result<BuiltDataFrame> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
@@ -314,7 +314,7 @@ pub(crate) fn dvs_status(
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
-) -> Result<DataFrame> {
+) -> Result<BuiltDataFrame> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -390,7 +390,7 @@ pub(crate) fn dvs_status(
 #[miniextendr(r_name = "dvs_audit_log_impl")]
 pub(crate) fn dvs_audit_log(
     #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
-) -> Result<DataFrame> {
+) -> Result<BuiltDataFrame> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
 
