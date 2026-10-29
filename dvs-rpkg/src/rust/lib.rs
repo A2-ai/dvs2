@@ -563,21 +563,6 @@ impl From<&GetRow> for GetFileRow {
 fn get_result_list(report: &GetReport) -> Result<NamedListBuilder> {
     let rows: Vec<GetFileRow> = report.files.iter().map(GetFileRow::from).collect();
 
-    let c = &report.counts;
-    let mut counts = NamedListBuilder::with_capacity(8);
-    for (name, n) in [
-        ("restored", c.restored),
-        ("replaced", c.replaced),
-        ("unchanged", c.unchanged),
-        ("skipped", c.skipped),
-        ("not_run", c.not_run),
-        ("failed", c.failed),
-        ("would_restore", c.would_restore),
-        ("would_replace", c.would_replace),
-    ] {
-        counts.push(name, n as i32);
-    }
-
     let mut info = NamedListBuilder::with_capacity(8);
     info.push("command", "get");
     info.push("outcome", report.outcome.as_str());
@@ -585,7 +570,11 @@ fn get_result_list(report: &GetReport) -> Result<NamedListBuilder> {
     info.push("dry_run", report.dry_run);
     info.push("on_conflict", report.on_conflict.as_str());
     info.push("source", report.source.as_str());
-    info.push("counts", counts);
+    // GetCounts through serde, the same fields as the CLI's JSON `counts`.
+    info.push(
+        "counts",
+        miniextendr_api::serde::AsSerialize(&report.counts),
+    );
     info.push(
         "problem",
         report.problem.as_ref().map(|p| p.message.clone()),

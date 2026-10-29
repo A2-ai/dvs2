@@ -189,9 +189,10 @@ dvs_get <- function(
 #'   `"partial"` or `"failed"`), `did_as_asked` (`TRUE` unless a file failed
 #'   or `on_conflict = "abort"` held files back), `dry_run`, `on_conflict` and
 #'   its `source` (`"argument"`, `"env"`, `"config"` for dvs.toml, or
-#'   `"default"`), `counts` (a named
-#'   list of row counts per action) and `problem` (an operation-level message,
-#'   or `NA` when there is none).
+#'   `"default"`), `counts` (a named list of row counts: `total`, `succeeded`
+#'   for the rows at their target, then one count per action, the same fields
+#'   as the CLI's JSON `counts`) and `problem` (an operation-level message, or
+#'   `NA` when there is none).
 #' @export
 dvs_result_info <- function(x) {
   info <- attr(x, "dvs_info", exact = TRUE)
@@ -211,6 +212,7 @@ dvs_get_summary <- function(info, files = NULL) {
     unchanged = "%d already current",
     skipped = "skipped %d",
     not_run = "%d held back",
+    cancelled = "cancelled %d",
     failed = "%d failed"
   )
   parts <- character(0)
@@ -297,7 +299,7 @@ signal_incomplete <- function(result, on_error, call) {
 print.dvs_get_result <- function(x, ...) {
   info <- attr(x, "dvs_info", exact = TRUE)
   if (!is.null(info)) {
-    n_request <- sum(unlist(info$counts))
+    n_request <- info$counts$total
     as_returned <- c("local_path", "satisfied", "code", "message", "hint")
     if (nrow(x) == n_request && all(as_returned %in% names(x))) {
       cat("# ", dvs_get_summary(info, x), "\n", sep = "")
