@@ -6,7 +6,7 @@
 \usage{
 dvs_status(
   paths = character(0),
-  recursive = NULL,
+  recursive = FALSE,
   glob = NULL,
   status = c("current", "absent", "stale", "modified", "unsynced")
 )
@@ -16,7 +16,7 @@ dvs_status(
 \code{NULL} is the same as \code{character(0)}.}
 
 \item{recursive}{If \code{TRUE}, directory inputs include all descendants;
-if \code{FALSE} or \code{NULL} (default), only direct children of the directory
+if \code{FALSE} or \code{NULL}, only direct children of the directory
 are returned. The flag only constrains descendants of paths passed
 explicitly — when \code{paths} is empty, every tracked file is returned
 regardless of nesting depth, and \code{recursive} has no effect.}

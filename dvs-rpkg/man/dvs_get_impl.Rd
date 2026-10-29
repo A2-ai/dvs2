@@ -25,7 +25,7 @@ target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} 
 match recursively across subdirectories. Mutually exclusive with \code{recursive}.}
 
 \item{recursive}{If \code{TRUE}, directory inputs include all descendants;
-if \code{FALSE} or \code{NULL} (default), only direct children of the directory
+if \code{FALSE} or \code{NULL}, only direct children of the directory
 are returned. With no explicit \code{paths} the directory is the working
 directory. Mutually exclusive with \code{glob}.}
 
