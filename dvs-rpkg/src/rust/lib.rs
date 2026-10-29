@@ -14,8 +14,9 @@ use miniextendr_api::dataframe::IntoDataFrame;
 use miniextendr_api::externalptr::ExternalPtr;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
+use miniextendr_api::serde::AsSerialize;
 use miniextendr_api::{
-    BuiltDataFrame, DataFrameRow, MatchArg, NamedListBuilder, Preserved, miniextendr,
+    BuiltDataFrame, DataFrameRow, IntoList, MatchArg, PreferList, Preserved, miniextendr,
 };
 
 use anyhow::{Result, anyhow};
@@ -24,8 +25,8 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileProgress, GetOptions, GetReport, GetRow, GetVerdict, OperationContext,
-    PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
+    Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
+    OperationContext, PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -463,7 +464,7 @@ pub(crate) fn dvs_get(
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] on_conflict: Option<String>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<NamedListBuilder> {
+) -> Result<GetResult> {
     let dry_run = dry_run.unwrap_or(false);
     let explicit: Option<OnConflict> = on_conflict
         .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
@@ -515,7 +516,15 @@ pub(crate) fn dvs_get(
             &OperationContext::new(),
         )
     };
-    get_result_list(&report)
+    Ok(GetResult {
+        files: report
+            .files
+            .iter()
+            .map(GetFileRow::from)
+            .collect::<Vec<_>>()
+            .into_dataframe()?,
+        info: GetInfo::from(&report),
+    })
 }
 
 /// Raises the classed `dvs_config_error`.
@@ -559,31 +568,42 @@ impl From<&GetRow> for GetFileRow {
     }
 }
 
-/// `list(files = <data.frame with a fixed schema>, info = <list>)`.
-fn get_result_list(report: &GetReport) -> Result<NamedListBuilder> {
-    let rows: Vec<GetFileRow> = report.files.iter().map(GetFileRow::from).collect();
+/// What `dvs_get_impl()` returns, `list(files, info)`. R adds the classes.
+#[derive(IntoList, PreferList)]
+struct GetResult {
+    files: BuiltDataFrame,
+    info: GetInfo,
+}
 
-    let mut info = NamedListBuilder::with_capacity(8);
-    info.push("command", "get");
-    info.push("outcome", report.outcome.as_str());
-    info.push("did_as_asked", report.verdict() == GetVerdict::Done);
-    info.push("dry_run", report.dry_run);
-    info.push("on_conflict", report.on_conflict.as_str());
-    info.push("source", report.source.as_str());
-    // GetCounts through serde, the same fields as the CLI's JSON `counts`.
-    info.push(
-        "counts",
-        miniextendr_api::serde::AsSerialize(&report.counts),
-    );
-    info.push(
-        "problem",
-        report.problem.as_ref().map(|p| p.message.clone()),
-    );
+/// The list `dvs_result_info()` returns for a `dvs_get()` result. The fields
+/// are the list's entries, in order.
+#[derive(IntoList, PreferList)]
+struct GetInfo {
+    command: &'static str,
+    outcome: &'static str,
+    did_as_asked: bool,
+    dry_run: bool,
+    on_conflict: &'static str,
+    source: &'static str,
+    /// GetCounts through serde, the same fields as the CLI's JSON `counts`.
+    counts: AsSerialize<GetCounts>,
+    /// The operation-level problem's message, `NA` when there is none.
+    problem: Option<String>,
+}
 
-    let mut result = NamedListBuilder::with_capacity(2);
-    result.push("files", rows.into_dataframe()?);
-    result.push("info", info);
-    Ok(result)
+impl From<&GetReport> for GetInfo {
+    fn from(report: &GetReport) -> Self {
+        GetInfo {
+            command: "get",
+            outcome: report.outcome.as_str(),
+            did_as_asked: report.verdict() == GetVerdict::Done,
+            dry_run: report.dry_run,
+            on_conflict: report.on_conflict.as_str(),
+            source: report.source.as_str(),
+            counts: AsSerialize(report.counts.clone()),
+            problem: report.problem.as_ref().map(|p| p.message.clone()),
+        }
+    }
 }
 
 /// @title Set the number of threads used by DVS parallel operations
