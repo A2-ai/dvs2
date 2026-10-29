@@ -12,12 +12,11 @@ use std::sync::mpsc::SyncSender;
 
 use miniextendr_api::dataframe::IntoDataFrame;
 use miniextendr_api::externalptr::ExternalPtr;
-use miniextendr_api::gc_protect::ProtectScope;
-use miniextendr_api::into_r::IntoR;
-use miniextendr_api::list::List;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
-use miniextendr_api::{BuiltDataFrame, DataFrameRow, MatchArg, Preserved, SEXP, miniextendr};
+use miniextendr_api::{
+    BuiltDataFrame, DataFrameRow, MatchArg, NamedListBuilder, Preserved, miniextendr,
+};
 
 use anyhow::{Result, anyhow};
 use dvs::config::{Config, ConfigError, OnConflict};
@@ -464,7 +463,7 @@ pub(crate) fn dvs_get(
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] on_conflict: Option<String>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<List> {
+) -> Result<NamedListBuilder> {
     let dry_run = dry_run.unwrap_or(false);
     let explicit: Option<OnConflict> = on_conflict
         .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
@@ -516,7 +515,7 @@ pub(crate) fn dvs_get(
             &OperationContext::new(),
         )
     };
-    Ok(get_result_list(&report))
+    get_result_list(&report)
 }
 
 /// Raises the classed `dvs_config_error`.
@@ -524,121 +523,78 @@ fn config_error(message: &str) -> ! {
     miniextendr_api::error!(class = "dvs_config_error", "{message}")
 }
 
-/// `list(files = <data.frame with a fixed schema>, info = <list>)`.
-fn get_result_list(report: &GetReport) -> List {
-    fn strs<'a>(
-        rows: &'a [GetRow],
-        f: impl Fn(&'a GetRow) -> Option<String>,
-    ) -> Vec<Option<String>> {
-        rows.iter().map(f).collect()
-    }
-    let rows = &report.files;
-    // SAFETY: called on the R main thread from a #[miniextendr] function.
-    // Every SEXP is protected as soon as it is allocated, before the next one.
-    let scope = unsafe { ProtectScope::new() };
-    let protect = |sexp: SEXP| unsafe { scope.protect_raw(sexp) };
-    let named = |pairs: Vec<(&'static str, SEXP)>| protect(List::from_raw_pairs(pairs).into_sexp());
+/// One row of the `files` frame of a `dvs_get()` result.
+#[derive(DataFrameRow)]
+struct GetFileRow {
+    path: String,
+    local_path: String,
+    before: String,
+    action: String,
+    satisfied: bool,
+    size: Option<f64>,
+    target_hash: Option<String>,
+    local_hash: Option<String>,
+    stored_copy: Option<String>,
+    code: Option<String>,
+    message: Option<String>,
+    hint: Option<String>,
+}
 
-    let mut columns: Vec<(&'static str, SEXP)> = Vec::with_capacity(12);
-    let mut column = |name: &'static str, values: SEXP| columns.push((name, protect(values)));
-    column(
-        "path",
-        strs(rows, |r| Some(r.path.to_string_lossy().into_owned())).into_sexp(),
-    );
-    column(
-        "local_path",
-        strs(rows, |r| Some(r.local_path.to_string_lossy().into_owned())).into_sexp(),
-    );
-    column(
-        "before",
-        strs(rows, |r| Some(r.before.as_str().to_string())).into_sexp(),
-    );
-    column(
-        "action",
-        strs(rows, |r| Some(r.action.as_str().to_string())).into_sexp(),
-    );
-    column(
-        "satisfied",
-        rows.iter()
-            .map(|r| r.satisfied)
-            .collect::<Vec<bool>>()
-            .into_sexp(),
-    );
-    column(
-        "size",
-        rows.iter()
-            .map(|r| r.size.map(|s| s as f64))
-            .collect::<Vec<Option<f64>>>()
-            .into_sexp(),
-    );
-    column(
-        "target_hash",
-        strs(rows, |r| r.target_hash.clone()).into_sexp(),
-    );
-    column(
-        "local_hash",
-        strs(rows, |r| r.local_hash.clone()).into_sexp(),
-    );
-    column(
-        "stored_copy",
-        strs(rows, |r| r.stored_copy.map(|c| c.as_str().to_string())).into_sexp(),
-    );
-    column(
-        "code",
-        strs(rows, |r| r.code.map(|c| c.as_str().to_string())).into_sexp(),
-    );
-    column("message", strs(rows, |r| r.message.clone()).into_sexp());
-    column("hint", strs(rows, |r| r.hint.clone()).into_sexp());
-    let files = protect(
-        List::from_raw_pairs(columns)
-            .set_data_frame_class()
-            .set_row_names_int(rows.len())
-            .into_sexp(),
-    );
+impl From<&GetRow> for GetFileRow {
+    fn from(r: &GetRow) -> Self {
+        GetFileRow {
+            path: r.path.to_string_lossy().into_owned(),
+            local_path: r.local_path.to_string_lossy().into_owned(),
+            before: r.before.as_str().to_string(),
+            action: r.action.as_str().to_string(),
+            satisfied: r.satisfied,
+            size: r.size.map(|s| s as f64),
+            target_hash: r.target_hash.clone(),
+            local_hash: r.local_hash.clone(),
+            stored_copy: r.stored_copy.map(|c| c.as_str().to_string()),
+            code: r.code.map(|c| c.as_str().to_string()),
+            message: r.message.clone(),
+            hint: r.hint.clone(),
+        }
+    }
+}
+
+/// `list(files = <data.frame with a fixed schema>, info = <list>)`.
+fn get_result_list(report: &GetReport) -> Result<NamedListBuilder> {
+    let rows: Vec<GetFileRow> = report.files.iter().map(GetFileRow::from).collect();
 
     let c = &report.counts;
-    let mut counts: Vec<(&'static str, SEXP)> = Vec::with_capacity(8);
-    let mut count =
-        |name: &'static str, n: usize| counts.push((name, protect((n as i32).into_sexp())));
-    count("restored", c.restored);
-    count("replaced", c.replaced);
-    count("unchanged", c.unchanged);
-    count("skipped", c.skipped);
-    count("not_run", c.not_run);
-    count("failed", c.failed);
-    count("would_restore", c.would_restore);
-    count("would_replace", c.would_replace);
-    let counts = named(counts);
+    let mut counts = NamedListBuilder::with_capacity(8);
+    for (name, n) in [
+        ("restored", c.restored),
+        ("replaced", c.replaced),
+        ("unchanged", c.unchanged),
+        ("skipped", c.skipped),
+        ("not_run", c.not_run),
+        ("failed", c.failed),
+        ("would_restore", c.would_restore),
+        ("would_replace", c.would_replace),
+    ] {
+        counts.push(name, n as i32);
+    }
 
-    let mut info: Vec<(&'static str, SEXP)> = Vec::with_capacity(9);
-    let mut field = |name: &'static str, value: SEXP| info.push((name, protect(value)));
-    field("command", "get".to_string().into_sexp());
-    field("outcome", report.outcome.as_str().to_string().into_sexp());
-    field(
-        "did_as_asked",
-        (report.verdict() == GetVerdict::Done).into_sexp(),
-    );
-    field("dry_run", report.dry_run.into_sexp());
-    field(
-        "on_conflict",
-        report.on_conflict.as_str().to_string().into_sexp(),
-    );
-    field("source", report.source.as_str().to_string().into_sexp());
-    field("counts", counts);
-    field(
+    let mut info = NamedListBuilder::with_capacity(8);
+    info.push("command", "get");
+    info.push("outcome", report.outcome.as_str());
+    info.push("did_as_asked", report.verdict() == GetVerdict::Done);
+    info.push("dry_run", report.dry_run);
+    info.push("on_conflict", report.on_conflict.as_str());
+    info.push("source", report.source.as_str());
+    info.push("counts", counts);
+    info.push(
         "problem",
-        report
-            .problem
-            .as_ref()
-            .map(|p| p.message.clone())
-            .into_sexp(),
+        report.problem.as_ref().map(|p| p.message.clone()),
     );
-    let info = named(info);
 
-    let mut result: Vec<(&'static str, SEXP)> = Vec::with_capacity(2);
-    result.push(("files", files));
-    result.push(("info", info));
-    List::from_raw_pairs(result)
+    let mut result = NamedListBuilder::with_capacity(2);
+    result.push("files", rows.into_dataframe()?);
+    result.push("info", info);
+    Ok(result)
 }
 
 /// @title Set the number of threads used by DVS parallel operations
