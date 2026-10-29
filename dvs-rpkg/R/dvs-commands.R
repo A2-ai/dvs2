@@ -66,6 +66,10 @@ dvs_status <- function(
   status = c("current", "absent", "stale", "modified", "unsynced")
 ) {
   apply_dvs_threads_option()
+  # An empty filter is no filter, as NULL is.
+  if (is.character(status) && length(status) == 0L) {
+    status <- NULL
+  }
   status_data_frame <-
     dvs_status_impl(
       paths = paths,

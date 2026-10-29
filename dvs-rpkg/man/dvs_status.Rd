@@ -27,8 +27,8 @@ target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} 
 match recursively across subdirectories. Mutually exclusive with \code{recursive}.}
 
 \item{status}{Character vector of statuses to include. Valid values are
-\code{"current"}, \code{"absent"}, \code{"stale"}, \code{"modified"}, and \code{"unsynced"}. When empty (default), all
-statuses are shown.}
+\code{"current"}, \code{"absent"}, \code{"stale"}, \code{"modified"}, and \code{"unsynced"}. \code{NULL},
+\code{character(0)} and the default show every status.}
 }
 \description{
 Reports the sync status of DVS-managed files. By default all statuses

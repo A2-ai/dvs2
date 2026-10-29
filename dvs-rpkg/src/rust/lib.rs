@@ -311,8 +311,8 @@ impl From<StatusChoice> for Status {
 ///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
 ///   match recursively across subdirectories. Mutually exclusive with `recursive`.
 /// @param status Character vector of statuses to include. Valid values are
-///   `"current"`, `"absent"`, `"stale"`, `"modified"`, and `"unsynced"`. When empty (default), all
-///   statuses are shown.
+///   `"current"`, `"absent"`, `"stale"`, `"modified"`, and `"unsynced"`. `NULL`,
+///   `character(0)` and the default show every status.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_status_impl", internal, call = caller)]
 pub(crate) fn dvs_status(

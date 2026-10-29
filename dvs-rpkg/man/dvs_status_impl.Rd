@@ -28,8 +28,8 @@ target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} 
 match recursively across subdirectories. Mutually exclusive with \code{recursive}.}
 
 \item{status}{Character vector of statuses to include. Valid values are
-\code{"current"}, \code{"absent"}, \code{"stale"}, \code{"modified"}, and \code{"unsynced"}. When empty (default), all
-statuses are shown.}
+\code{"current"}, \code{"absent"}, \code{"stale"}, \code{"modified"}, and \code{"unsynced"}. \code{NULL},
+\code{character(0)} and the default show every status.}
 
 \item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }
