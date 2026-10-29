@@ -18,7 +18,8 @@ dvs_init_impl(
 
 \item{root_dir}{Repository root directory. Defaults to the current working directory.}
 
-\item{group}{Unix group name to set on stored files for shared access.}
+\item{group}{Unix group name to set on stored files for shared access.
+\code{NULL} uses your primary group.}
 
 \item{metadata_folder_name}{Name of the metadata folder. Defaults to \code{.dvs}.}
 

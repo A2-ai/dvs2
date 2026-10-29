@@ -148,6 +148,7 @@ impl From<CompressionChoice> for Compression {
 /// @param storage_path Path to the storage directory where file contents are kept.
 /// @param root_dir Repository root directory. Defaults to the current working directory.
 /// @param group Unix group name to set on stored files for shared access.
+///   `NULL` uses your primary group.
 /// @param metadata_folder_name Name of the metadata folder. Defaults to `.dvs`.
 /// @param compression Compression method for stored files. One of `"zstd"`
 ///   (default) or `"none"`.
@@ -748,7 +749,15 @@ pub(crate) fn dvs_set_threads(
 }
 
 /// @title Format a byte count as a human-readable size string
+/// @description
+/// Formats a size the way the dvs CLI prints it. The size columns of
+/// [dvs_add()], [dvs_status()] and [dvs_get()] print this way in a tibble.
+///
 /// @param size_bytes non-negative integer representing file sizes in bytes.
+/// @return A string. Below 1024 bytes it is the count with `B`, as in
+///   `"512 B"`. From 1024 bytes up it has one decimal and the largest unit
+///   that fits: `KB`, `MB`, `GB` or `TB`. The units are powers of 1024, so
+///   `format_byte_size(1e6)` is `"976.6 KB"`.
 #[miniextendr]
 pub fn format_byte_size(#[miniextendr(no_na)] size_bytes: u64) -> String {
     dvs::format_size(size_bytes)

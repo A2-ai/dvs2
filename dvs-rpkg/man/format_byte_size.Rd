@@ -9,6 +9,13 @@ format_byte_size(size_bytes)
 \arguments{
 \item{size_bytes}{non-negative integer representing file sizes in bytes.}
 }
+\value{
+A string. Below 1024 bytes it is the count with \code{B}, as in
+\code{"512 B"}. From 1024 bytes up it has one decimal and the largest unit
+that fits: \code{KB}, \code{MB}, \code{GB} or \code{TB}. The units are powers of 1024, so
+\code{format_byte_size(1e6)} is \code{"976.6 KB"}.
+}
 \description{
-Format a byte count as a human-readable size string
+Formats a size the way the dvs CLI prints it. The size columns of
+\code{\link[=dvs_add]{dvs_add()}}, \code{\link[=dvs_status]{dvs_status()}} and \code{\link[=dvs_get]{dvs_get()}} print this way in a tibble.
 }
