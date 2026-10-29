@@ -154,7 +154,7 @@ impl From<CompressionChoice> for Compression {
 ///   `compression`, `metadata_folder_name`, `backend_path`, `backend_group`.
 ///   An optional config field that was not set comes back as `NA`.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_init_impl")]
+#[miniextendr(r_name = "dvs_init_impl", internal, call = caller)]
 pub(crate) fn dvs_init(
     storage_path: PathBuf,
     #[miniextendr(default = "NULL")] root_dir: Option<PathBuf>,
@@ -202,7 +202,7 @@ pub(crate) fn dvs_init(
 /// @param dry_run If `TRUE`, report what would be added without modifying anything.
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_add_impl")]
+#[miniextendr(r_name = "dvs_add_impl", internal, call = caller)]
 pub(crate) fn dvs_add(
     #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] message: Option<String>,
@@ -306,7 +306,7 @@ impl From<StatusChoice> for Status {
 ///   `"current"`, `"absent"`, `"stale"`, `"modified"`, and `"unsynced"`. When empty (default), all
 ///   statuses are shown.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_status_impl")]
+#[miniextendr(r_name = "dvs_status_impl", internal, call = caller)]
 pub(crate) fn dvs_status(
     #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
@@ -371,7 +371,7 @@ pub(crate) fn dvs_status(
 ///   vector (the default) returns the whole log, including `init` entries. A
 ///   non-empty filter drops all `init` entries.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_audit_log_impl")]
+#[miniextendr(r_name = "dvs_audit_log_impl", internal, call = caller)]
 pub(crate) fn dvs_audit_log(
     #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
 ) -> Result<BuiltDataFrame> {
@@ -497,7 +497,7 @@ impl From<OnConflictChoice> for OnConflict {
 ///   files and get the rest) or `"overwrite"` (replace them; local changes are lost).
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_get_impl")]
+#[miniextendr(r_name = "dvs_get_impl", internal, call = caller)]
 pub(crate) fn dvs_get(
     #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
@@ -671,7 +671,7 @@ impl From<&GetReport> for GetInfo {
 ///
 /// @param threads Integer number of threads, or `NULL` to reset.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_set_threads_impl")]
+#[miniextendr(r_name = "dvs_set_threads_impl", internal, call = caller)]
 pub(crate) fn dvs_set_threads(#[miniextendr(default = "NULL")] threads: Option<usize>) {
     set_num_threads(threads.unwrap_or(0));
 }

@@ -9,7 +9,8 @@ dvs_init_impl(
   root_dir = NULL,
   group = NULL,
   metadata_folder_name = NULL,
-  compression = c("zstd", "none")
+  compression = c("zstd", "none"),
+  .call = NULL
 )
 }
 \arguments{
@@ -23,6 +24,8 @@ dvs_init_impl(
 
 \item{compression}{Compression method for stored files. One of \code{"zstd"}
 (default) or \code{"none"}.}
+
+\item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }
 \value{
 A single-row data frame describing the resulting configuration:

@@ -4,13 +4,15 @@
 \alias{dvs_audit_log_impl}
 \title{Materialize the audit log as a data frame}
 \usage{
-dvs_audit_log_impl(paths = character(0))
+dvs_audit_log_impl(paths = character(0), .call = NULL)
 }
 \arguments{
 \item{paths}{Character vector of repo-root-relative file paths recorded at
 add time. The filter keeps only \code{add} entries for those files. An empty
 vector (the default) returns the whole log, including \code{init} entries. A
 non-empty filter drops all \code{init} entries.}
+
+\item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }
 \description{
 Reads the audit log of the DVS repository containing the working

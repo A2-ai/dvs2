@@ -244,4 +244,6 @@ test_that("a wrong argument type is a dvs_error_argument", {
   expect_s3_class(cnd, "dvs_error_argument")
   expect_s3_class(cnd, "dvs_error")
   expect_equal(cnd$param, "glob")
+  # The condition names the call the user wrote, not dvs_status_impl().
+  expect_identical(conditionCall(cnd), quote(dvs_status(glob = 1)))
 })
