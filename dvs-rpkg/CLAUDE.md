@@ -128,9 +128,9 @@ set_dvs_log_level("off")     # restore default (silent)
 
 ### Key Dependencies
 
-- **miniextendr** (git: A2-ai/miniextendr) — Rust-to-R FFI framework with serde support, `log` feature enabled for R-console log routing
-- **dvs** (path: `../dvs`) — core DVS library (patched in Cargo.toml)
-- **R imports**: jsonlite
+- **miniextendr** (git: A2-ai/miniextendr, pinned by `rev`): the Rust-to-R FFI framework. The `serde`, `time` and `log` features are on. `log` routes log records to the R console.
+- **dvs** (path dependency `../../../dvs` in `src/rust/Cargo.toml`): the core DVS library
+- **R imports**: cli, pillar, tibble
 - **Rust requires**: rustc >= 1.85.0
 
 ### Vendoring
@@ -172,6 +172,7 @@ Defined in `src/rust/lib.rs` with `#[miniextendr]` unless noted:
 | `set_dvs_threads` | Set the `dvs.num_threads` option (R side, `R/dvs-options.R`) | Previous value, invisibly |
 | `set_dvs_log_level` | Set the Rust log level | NULL |
 | `format_byte_size` | Human-readable byte size | String |
+| `dvs_result_info` | What applies to a whole `dvs_get()` result: outcome, policy, counts (R side, `R/dvs-commands.R`) | List |
 | `new_dvs_bytes` | Construct a `dvs_bytes` vector (R side, `R/pillar.R`) | `dvs_bytes` numeric |
 
 This table is a high-level index only. The authoritative parameter signatures live in the `#[miniextendr]` definitions in `src/rust/lib.rs` and the R help pages (`?dvs_get` and `man/*.Rd`).
@@ -182,7 +183,7 @@ Results are returned as DataFrames via miniextendr's serde columnar conversion (
 
 | Variable | Effect |
 |----------|--------|
-| `CARGO_PROFILE` | `release` (default) or `debug` |
+| `CARGO_PROFILE` | `release` (default) or `dev`. `debug` is read as `dev` with a warning |
 | `CARGO_FEATURES` | Comma-separated cargo features (e.g., `nonapi`) |
 | `RUST_TOOLCHAIN` | e.g., `+stable`, `+nightly` |
 | `DVS_AUTO_FEATURES` | Escape hatch for `tools/detect-features.R`; inject features without setting `CARGO_FEATURES` (which would skip the script entirely) |
