@@ -252,3 +252,21 @@ test_that("a wrong argument type is a dvs_error_argument", {
   withr::local_options(dvs.num_threads = NA)
   expect_argument_error(quote(dvs_status()), "threads")
 })
+
+test_that("set_dvs_threads raises a bad value as a dvs_error_argument", {
+  withr::local_options(dvs.num_threads = NULL)
+  expect_argument_error(quote(set_dvs_threads(NA)), "threads")
+  expect_argument_error(quote(set_dvs_threads(-1)), "threads")
+  expect_argument_error(quote(set_dvs_threads(2.5)), "threads")
+  expect_argument_error(quote(set_dvs_threads("4")), "threads")
+  expect_argument_error(quote(set_dvs_threads(TRUE)), "threads")
+  expect_argument_error(quote(set_dvs_threads(c(1, 2))), "threads")
+  expect_null(getOption("dvs.num_threads"))
+
+  expect_null(set_dvs_threads(2))
+  expect_identical(getOption("dvs.num_threads"), 2L)
+  expect_identical(set_dvs_threads(0), 2L)
+  expect_identical(getOption("dvs.num_threads"), 0L)
+  expect_identical(set_dvs_threads(NULL), 0L)
+  expect_null(getOption("dvs.num_threads"))
+})

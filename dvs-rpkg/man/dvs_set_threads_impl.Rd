@@ -7,12 +7,14 @@
 dvs_set_threads_impl(threads = NULL, .call = NULL)
 }
 \arguments{
-\item{threads}{Integer number of threads, or \code{NULL} to reset.}
+\item{threads}{A whole number of threads, \code{0} or \code{NULL} for automatic
+detection.}
 
 \item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }
 \description{
 Controls the thread pool size for add, get, and status operations.
-Pass \code{NULL} to revert to automatic detection.
+Pass \code{NULL} or \code{0} to revert to automatic detection, as \verb{--threads 0} does
+in the CLI.
 }
 \keyword{internal}
