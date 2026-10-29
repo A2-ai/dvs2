@@ -31,9 +31,21 @@ just rpkg-clippy             # cargo clippy
 just rpkg-test               # cargo test + R tests
 just rpkg-fmt                # cargo fmt
 
-# R package development
+# R package development (none of these vendor)
+just rpkg-dev                # minirextendr::miniextendr_build(): configure, wrappers, roxygen2, install
 just rpkg-install            # R CMD INSTALL (compiles Rust + generates R wrappers)
 just rpkg-document           # devtools::document() (regenerates NAMESPACE + man pages)
+just rpkg-doctor             # minirextendr::miniextendr_doctor()
+
+# Release tarball (the only step that vendors)
+just install-revendor        # cargo-revendor at the pinned miniextendr commit
+just rpkg-build-tarball      # dist/dvs_<version>.tar.gz, offline-installable
+just rpkg-check-cran         # R CMD check --as-cran on that tarball
+just rpkg-reference          # HTML reference manual from man/, copied to dist/reference
+
+# Scaffold
+just rpkg-sync               # rv plan + sync of the pinned minirextendr (rv.lock)
+just rpkg-upgrade            # upgrade_miniextendr_package(configure_ac = TRUE)
 
 # Combined targets
 just build-all               # Build dvs + dvs-rpkg
@@ -52,8 +64,12 @@ bash ./configure
 # source/network otherwise.
 
 # Build and install the R package
-R CMD build .
 R CMD INSTALL .
+# Do not ship `R CMD build .` output. It does not run bootstrap.R, so the
+# tarball lacks ../../../dvs and its configure stops ("Path dependencies
+# outside the package directory are missing"). devtools::build() stages the
+# core crate.
+# Release tarballs come from `just rpkg-build-tarball`.
 
 # Dev workflow (in R console)
 devtools::load_all()           # Build Rust + load package
@@ -77,10 +93,9 @@ Always run `./configure` (or `just rpkg-configure`) before any R CMD operation. 
 
 1. **Rust core** (`../dvs/`) — standalone crate: init, add, get, status operations
 2. **FFI layer** (`src/rust/lib.rs`) — exported functions using `#[miniextendr]` proc-macro
-3. **cdylib build** — compiled with linkme `#[distributed_slice]` entries for R API discovery
-4. **R wrapper generation** — cdylib is loaded in R, `miniextendr_write_wrappers()` auto-generates `R/dvs-wrappers.R`
-5. **Static library link** — Rust staticlib + C stub → `dvs.so`/`dvs.dll`
-6. **R calls** — user calls R functions → `.Call()` → C entry points → Rust functions
+3. **Static library link**: Rust staticlib + C stub give `dvs.so`/`dvs.dll`. `stub.c` force-loads the linkme `#[distributed_slice]` entries.
+4. **R wrapper generation**: `tools/write-wrappers.R` loads the linked `dvs.so` and writes `R/dvs-wrappers.R` and `src/rust/wasm_registry.rs` when their content changed. There is no separate cdylib build.
+5. **R calls**: R functions call `.Call()`, which reaches the C entry points and the Rust functions.
 
 ### Build System
 
@@ -88,12 +103,12 @@ The build uses autoconf (`configure.ac`) + Cargo with two install modes, selecte
 
 | Mode | Trigger | Behavior |
 |------|---------|----------|
-| **Source** | `inst/vendor.tar.xz` absent | Cargo resolves deps over the network; in monorepo, `[patch]` paths route to workspace siblings (e.g. `../dvs`) |
-| **Tarball** | `inst/vendor.tar.xz` present | Offline; configure unpacks the tarball and writes a vendored cargo source replacement |
+| **Source** | `inst/vendor.tar.xz` absent | Cargo resolves registry and git deps over the network. `dvs` is the path dep `../../../dvs`, or the copy `bootstrap.R` staged under `src/rust/vendor/` for a pkgbuild-built tarball |
+| **Tarball** | `inst/vendor.tar.xz` present | Offline. configure unpacks the archive and writes the source replacements cargo-revendor recorded in `vendor/.cargo-config.toml`. The install stops if the build would write different wrappers than the tarball shipped |
 
-`Makevars.in` is a template — `configure` generates `src/Makevars`. The build produces two libraries:
-- **staticlib** — linked into the final R shared object
-- **cdylib** — temporary, used only for R wrapper generation (deleted after)
+`Makevars.in` is a template. `configure` generates `src/Makevars`. The build links one staticlib into the R shared object, then writes the wrappers from that shared object.
+
+`bootstrap.R` runs only under pkgbuild (devtools, rcmdcheck, rv with `directory`, pak), never under plain `R CMD build` or `R CMD INSTALL`. It never vendors. It stages `../../../dvs` under `src/rust/vendor/` through `tools/dev-bootstrap.R`, so the built tarball installs outside the monorepo. `configure` stops with a message naming the missing path dependency when neither the sibling nor a staged copy is there (for example `rv add dvs --path dvs-rpkg`).
 
 ### Logging
 
@@ -113,36 +128,34 @@ set_dvs_log_level("off")     # restore default (silent)
 
 ### Key Dependencies
 
-- **miniextendr** (git: A2-ai/miniextendr) — Rust-to-R FFI framework with serde support, `log` feature enabled for R-console log routing
-- **dvs** (path: `../dvs`) — core DVS library (patched in Cargo.toml)
-- **R imports**: jsonlite
+- **miniextendr** (git: A2-ai/miniextendr, pinned by `rev`): the Rust-to-R FFI framework. The `serde`, `time` and `log` features are on. `log` routes log records to the R console.
+- **dvs** (path dependency `../../../dvs` in `src/rust/Cargo.toml`): the core DVS library
+- **R imports**: cli, pillar, tibble
 - **Rust requires**: rustc >= 1.85.0
 
 ### Vendoring
 
-Rust dependencies are vendored via `cargo-revendor`. To update `vendor/` and `inst/vendor.tar.xz`:
+Vendoring belongs to the release tarball only. `just rpkg-build-tarball` (`minirextendr::miniextendr_build_tarball()`) runs cargo-revendor, which writes `vendor/` and `inst/vendor.tar.xz` and freezes `src/rust/Cargo.toml` to `vendor/dvs`. It builds the tarball and restores all of it on exit. No development build vendors.
 
-```bash
-just vendor                  # From repo root — vendors, strips, freezes, compresses
-```
-
-The `vendor/` directory is auto-generated — don't commit manual changes to it.
+Never commit `inst/vendor.tar.xz`, `vendor/` or a frozen `Cargo.toml`. A leftover `inst/vendor.tar.xz` switches every later build to offline tarball mode. `minirextendr::miniextendr_clean_vendor_leak()` repairs a tree that a bare `cargo revendor --freeze` left behind.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `src/rust/lib.rs` | All exported Rust functions (the API surface) |
-| `src/rust/Cargo.toml` | Rust deps, patches dvs crate to `../../../dvs` |
+| `src/rust/Cargo.toml` | Rust deps: dvs by path `../../../dvs`, miniextendr pinned by `rev` |
 | `R/dvs-wrappers.R` | Auto-generated R wrappers (**do not edit**) |
 | `R/dvs-package.R` | Package declaration, `@useDynLib dvs` |
-| `configure.ac` | Autoconf build config (~477 lines) |
-| `src/Makevars.in` | Build recipe template (~131 lines) |
+| `configure.ac` | Autoconf build config (template from minirextendr) |
+| `src/Makevars.in` | Build recipe template (from minirextendr) |
 | `src/rust/cargo-config.toml.in` | Cargo config template for offline/CRAN builds |
-| `bootstrap.R` | Pre-configure script for devtools workflows |
+| `bootstrap.R` | pkgbuild pre-build step: stages `../../../dvs` (`tools/dev-bootstrap.R`) |
+| `tools/write-wrappers.R` | Writes `R/dvs-wrappers.R` from the linked `dvs.so` |
+| `rproject.toml`, `rv.lock` | rv project. Pins minirextendr to the same commit as the Cargo `rev` |
 | `DESCRIPTION` | R package metadata |
 | `NAMESPACE` | R exports (regenerated by `devtools::document()`) |
-| `justfile` (root) | `just vendor` — re-vendors deps and creates `inst/vendor.tar.xz` |
+| `justfile` (root) | `rpkg-*` recipes. `rpkg-build-tarball` is the only one that vendors |
 | `src/stub.c` | C linker stub |
 
 ## Exported R Functions
@@ -159,6 +172,7 @@ Defined in `src/rust/lib.rs` with `#[miniextendr]` unless noted:
 | `set_dvs_threads` | Set the `dvs.num_threads` option (R side, `R/dvs-options.R`) | Previous value, invisibly |
 | `set_dvs_log_level` | Set the Rust log level | NULL |
 | `format_byte_size` | Human-readable byte size | String |
+| `dvs_result_info` | What applies to a whole `dvs_get()` result: outcome, policy, counts (R side, `R/dvs-commands.R`) | List |
 | `new_dvs_bytes` | Construct a `dvs_bytes` vector (R side, `R/pillar.R`) | `dvs_bytes` numeric |
 
 This table is a high-level index only. The authoritative parameter signatures live in the `#[miniextendr]` definitions in `src/rust/lib.rs` and the R help pages (`?dvs_get` and `man/*.Rd`).
@@ -169,7 +183,7 @@ Results are returned as DataFrames via miniextendr's serde columnar conversion (
 
 | Variable | Effect |
 |----------|--------|
-| `CARGO_PROFILE` | `release` (default) or `debug` |
+| `CARGO_PROFILE` | `release` (default) or `dev`. `debug` is read as `dev` with a warning |
 | `CARGO_FEATURES` | Comma-separated cargo features (e.g., `nonapi`) |
 | `RUST_TOOLCHAIN` | e.g., `+stable`, `+nightly` |
 | `DVS_AUTO_FEATURES` | Escape hatch for `tools/detect-features.R`; inject features without setting `CARGO_FEATURES` (which would skip the script entirely) |
@@ -189,7 +203,7 @@ just rpkg-install         # 2. Build + install (compiles Rust, generates R wrapp
 just rpkg-document        # 3. Regenerate NAMESPACE via roxygen2
 ```
 
-R wrappers are auto-generated during build. The build compiles a cdylib, loads it in R, calls `miniextendr_write_wrappers()`, then deletes the cdylib.
+R wrappers are auto-generated during build: `tools/write-wrappers.R` loads the linked `dvs.so` and writes `R/dvs-wrappers.R`. `just rpkg-dev` runs configure, the compile, roxygen2 and the install in that order.
 
 ## Testing
 

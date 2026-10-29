@@ -33,7 +33,10 @@ config.log
 # Claude Code session transcripts
 2026-*.txt
 dvsR/2026-*.txt
-.claude/
+# Local Claude Code state stays ignored. The miniextendr skills that
+# minirextendr::use_claude_skills() installs are tracked.
+/.claude/*
+!/.claude/skills/
 
 # Archived crates (server/daemon moved here)
 archived-crates.zip
@@ -51,7 +54,30 @@ testfile.bin
 # Downloaded sample datasets (just datasets)
 datasets/
 
+# Release tarballs (just rpkg-build-tarball)
+/dist/
+
 /AGENTS.md
 /MAINTAINER.md
 /specs.md
 /justfile
+/target/
+dvs-rpkg/src/rust/target/
+dvs-rpkg/rust-target/
+dvs-rpkg/src/rust/vendor/
+dvs-rpkg/src/rust/.Cargo.toml.dev
+dvs-rpkg/src/rust/.dev-bootstrap.rds
+dvs-rpkg/src/rust/.dev-vendor-backup-*/
+dvs-rpkg/vendor/
+dvs-rpkg/src/rust/.cargo/
+dvs-rpkg/src/Makevars
+dvs-rpkg/src/*-win.def
+dvs-rpkg/src/*-wrappers.R
+dvs-rpkg/R/*-wrappers.R
+dvs-rpkg/src/rust/wasm_registry.rs
+dvs-rpkg/config.log
+dvs-rpkg/config.status
+dvs-rpkg/configure~
+dvs-rpkg/autom4te.cache/
+.vscode/
+.idea/

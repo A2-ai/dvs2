@@ -23,6 +23,12 @@
 ^bootstrap\.R$
 ^\.gitignore$
 ^\.DS_Store$
+# rv project files. A shipped .Rprofile would activate an rv library at
+# install time, and rv/ holds the local library.
+^\.Rprofile$
+^rv$
+^rproject\.toml$
+^rv\.lock$
 
 # R CMD check output
 \.Rcheck$
@@ -50,3 +56,7 @@
 # Static libraries in vendored crates (R CMD check objects NOTE)
 ^vendor/.*\.a$
 ^vendor/.*\.lib$
+^CLAUDE\.md$
+^AGENTS\.md$
+^src/rust/\.Cargo\.toml\.prefreeze$
+^src/rust/\.dev-vendor-backup-

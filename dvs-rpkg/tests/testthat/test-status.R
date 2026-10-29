@@ -167,6 +167,23 @@ test_that("dvs_status returns POSIXct add_time and dvs_bytes size", {
   expect_equal(typeof(unclass(result$size)), "double")
 })
 
+test_that("dvs_status keeps add_time rooted while it builds the frame", {
+  skip_on_cran()
+  new_dvs_test_repo()
+  for (i in 1:3) writeLines(paste("row", i), sprintf("f%d.csv", i))
+  dvs_add(paths = file.path(getwd(), sprintf("f%d.csv", 1:3)))
+
+  # Every allocation collects garbage. An unrooted add_time vector is freed
+  # while the frame is built, and the column comes back as another object.
+  gctorture(TRUE)
+  on.exit(gctorture(FALSE), add = TRUE)
+  result <- dvs_status()
+  gctorture(FALSE)
+
+  expect_s3_class(result$add_time, "POSIXct")
+  expect_false(any(is.na(result$add_time)))
+})
+
 test_that("dvs_status keeps an unreadable record as an error row", {
   new_dvs_test_repo()
   write_theoph("t.csv")

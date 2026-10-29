@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+
+- R package: requires R 4.4 or later.
+
+### Added
+
+- R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
+- R package: `just rpkg-reference` builds the HTML reference manual in `dist/reference/`.
+
+### Fixed
+
+- R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
+
 ## 0.5.1
 
 ### Fixed

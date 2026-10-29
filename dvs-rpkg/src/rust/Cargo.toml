@@ -18,35 +18,37 @@ default = []
 nonapi = ["miniextendr-api/nonapi"]
 connections = ["miniextendr-api/connections"]
 
-# dvs is the in-repo core crate, depended on by path. Source and dev builds
-# (`just rpkg-install`, devtools, install_github) compile the live `../../../dvs`,
-# so the R package stays in sync with the core with no git pin to bump.
+# dvs is the in-repo core crate, depended on by path. Builds in the checkout
+# (`just rpkg-dev`, `just rpkg-install`, devtools) compile the live
+# `../../../dvs`, so the R package stays in sync with the core with no pin.
 #
-# For a shippable, offline tarball, `cargo revendor --freeze` (run by
-# `just vendor` and by bootstrap.R before R CMD build) rewrites this path dep
-# to `vendor/dvs` so the sealed tarball carries the core source and resolves
-# without the monorepo. A path dep is not source-replaceable, which is why the
-# tarball path needs freeze. The frozen Cargo.toml is never committed: `just
-# vendor` consumers restore it after the build (see dvs-rpkg/tests/install-*).
+# A tarball built by pkgbuild (devtools::build(), rv with `directory`) runs
+# bootstrap.R first, which copies the core crate under src/rust/vendor/ and
+# points this dependency there in the tarball, so it installs outside the
+# monorepo. Plain `R CMD build` skips bootstrap.R, and its tarball does not
+# install. `rv add dvs --path dvs-rpkg` hands over the subdirectory alone,
+# and configure stops with a message that names the missing dependency.
 #
-# miniextendr stays a git dep. As an external framework crate it resolves
-# offline via source replacement (vendor/.cargo-config.toml's
-# `[source."git+<url>"]`), the form configure writes in tarball mode. freeze
-# leaves it as git.
+# The release tarball (`just rpkg-build-tarball`) is the only build that
+# vendors. `cargo revendor --freeze` rewrites this path dep to `vendor/dvs`,
+# because a path dep is not source-replaceable, and minirextendr restores
+# this file after the build. The frozen Cargo.toml is never committed.
 #
-# Caveat: a consumer that extracts `dvs-rpkg/` alone with neither the `dvs`
-# sibling nor a bundled inst/vendor.tar.xz (e.g. `rv sync` or a bare
-# `install.packages()` of just the subdir) cannot source-build dvs.
-# install_github (whole-repo) and tarball installs are unaffected.
+# miniextendr stays a git dep, pinned by `rev`. Keep the `rev` of
+# miniextendr-api and miniextendr-lint and the minirextendr `commit` in
+# rproject.toml at the same commit (AGENTS.md, "Bump the miniextendr pin").
+# As an external framework crate it resolves offline via source replacement
+# (vendor/.cargo-config.toml's `[source."git+<url>"]`), the form configure
+# writes in tarball mode. freeze leaves it as git.
 [dependencies]
-miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", features = ["serde", "time", "log"] }
+miniextendr-api = { git = "https://github.com/A2-ai/miniextendr", rev = "1c81fcd57cf0a7b4a0b9f44fa41fbb8f39d38d54", features = ["serde", "time", "log"] }
 dvs = { path = "../../../dvs", package = "dvs" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.149"
 anyhow = "1.0.100"
 
 [build-dependencies]
-miniextendr-lint = { git = "https://github.com/A2-ai/miniextendr" }
+miniextendr-lint = { git = "https://github.com/A2-ai/miniextendr", rev = "1c81fcd57cf0a7b4a0b9f44fa41fbb8f39d38d54" }
 
 [profile.dev]
 codegen-units = 1

@@ -100,6 +100,31 @@ dvs-clean *ref:
 # R package (dvsR)
 # ============================================================================
 
+# Rscript with the rv library first: minirextendr comes from the commit that
+# rproject.toml and rv.lock pin, and devtools and roxygen2 from the user library.
+rpkg_rscript := 'R_LIBS="$(cd ' + rpkg_dir + ' && pwd)/$(cd ' + rpkg_dir + ' && rv library)" Rscript'
+
+# The rv library is built for the R version in rproject.toml. Another R
+# fails to load it with dlopen errors, and an rv library without
+# minirextendr would leave R_LIBS pointing nowhere, so an older minirextendr
+# from the user library would run instead. Stop before either happens.
+[private]
+rpkg-r-guard:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    want="$(sed -n 's/^r_version = "\(.*\)"$/\1/p' {{quote(rpkg_dir / "rproject.toml")}})"
+    have="$(Rscript -e 'cat(R.version$major, sub("[.].*", "", R.version$minor), sep = ".")')"
+    if [ "$want" != "$have" ]; then
+      echo "error: Rscript on PATH is R $have, rproject.toml wants R $want." >&2
+      echo "  Put R $want first on PATH (rig default $want), then run just rpkg-sync." >&2
+      exit 1
+    fi
+    lib="$(cd {{quote(rpkg_dir)}} && pwd)/$(cd {{quote(rpkg_dir)}} && rv library)"
+    if [ ! -f "$lib/minirextendr/DESCRIPTION" ]; then
+      echo "error: minirextendr is not in the rv library $lib. Run: just rpkg-sync" >&2
+      exit 1
+    fi
+
 # Sync the rv project library (rv reads rproject.toml from the cwd, in dvs-rpkg/)
 [working-directory: 'dvs-rpkg']
 rpkg-sync *args:
@@ -116,8 +141,13 @@ rpkg-build *args:
 rpkg-build-release *args:
     cargo build --manifest-path={{quote(rpkg_manifest)}} --release {{args}}
 
+# cargo test, the testthat suite against the checkout (devtools sets
+# NOT_CRAN, so the gctorture cases run), then the rv install from a local
+# path.
+[doc('Run the rpkg cargo tests, the testthat suite and the rv install test.')]
 rpkg-test *args:
     cargo test --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    Rscript -e 'devtools::test("{{rpkg_dir}}", stop_on_failure = TRUE)'
     bash {{quote(rpkg_dir / "tests/rv")}}
 
 rpkg-clippy *args:
@@ -129,18 +159,91 @@ rpkg-check *args:
 rpkg-fmt *args:
     cargo fmt --manifest-path={{quote(rpkg_manifest)}} {{args}}
 
+# Updates the registry dependencies. The miniextendr crates are pinned by
+# `rev` and do not move: see AGENTS.md, "Bump the miniextendr pin".
+[doc('Update the registry dependencies in the rpkg Cargo.lock (not the miniextendr pin).')]
 rpkg-update *args:
     cargo update --manifest-path={{quote(rpkg_manifest)}} {{args}}
+
+# minirextendr's development build: autoconf, configure, a compile that
+# writes R/dvs-wrappers.R from the linked library, roxygen2, then one
+# install. Nothing in it vendors.
+[doc('Build with minirextendr: configure, wrappers, roxygen2, install. No vendoring.')]
+rpkg-dev: rpkg-r-guard
+    {{rpkg_rscript}} -e 'minirextendr::miniextendr_build("{{rpkg_dir}}")'
 
 rpkg-document:
     Rscript -e 'devtools::document("{{rpkg_dir}}")'
 
+# R CMD INSTALL exits non-zero when the install fails. install.packages()
+# only warns, so the old recipe reported success for a failed build.
+[doc('R CMD INSTALL the package from the checkout.')]
 rpkg-install:
-    Rscript -e 'install.packages("{{rpkg_dir}}", repos = NULL, type = "source")'
+    R CMD INSTALL {{quote(rpkg_dir)}}
 alias install-rpkg := rpkg-install
+
+# The one recipe that vendors. miniextendr_build_tarball() refreshes the
+# wrappers, NAMESPACE and man/, seals every crate into inst/vendor.tar.xz
+# with cargo-revendor, builds dist/dvs_<version>.tar.gz, and restores the
+# source tree (Cargo.toml, Cargo.lock, vendor/, the archive) on exit.
+# Needs cargo-revendor at the pin: `just install-revendor`. dist/ must
+# exist: pkgbuild writes to a dest_path that does not exist as a file.
+[doc('Build the vendored, offline release tarball into dist/.')]
+rpkg-build-tarball: rpkg-r-guard
+    mkdir -p dist
+    {{rpkg_rscript}} -e 'minirextendr::miniextendr_build_tarball("{{rpkg_dir}}", dest_path = "dist")'
+
+# R CMD check points TMPDIR at a directory of its own and deletes it at the
+# end. An sccache server that the check's first compile starts keeps that
+# TMPDIR, and every later Rust build on the machine then fails with
+# "sccache: Failed to create temp dir" until the server stops. Start the
+# server here, outside the check. A server that is already running is left
+# as it is: stopping it would break builds in progress elsewhere. A stale one
+# needs `sccache --stop-server`.
+[private]
+rpkg-sccache-server:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v sccache >/dev/null 2>&1; then
+      sccache --start-server >/dev/null 2>&1 || true
+    fi
+
+# R CMD check --as-cran --no-manual on that vendored tarball. Fails on a
+# WARNING. The remote part of the CRAN incoming check is off: CRAN has a
+# package named DVS, and "Conflicting package names" is an ERROR on every run.
+[doc('R CMD check --as-cran the vendored release tarball.')]
+rpkg-check-cran: rpkg-r-guard rpkg-sccache-server
+    _R_CHECK_CRAN_INCOMING_REMOTE_=false {{rpkg_rscript}} -e 'minirextendr::miniextendr_check("{{rpkg_dir}}")'
+
+[doc('Diagnose the package with minirextendr::miniextendr_doctor().')]
+rpkg-doctor: rpkg-r-guard
+    {{rpkg_rscript}} -e 'minirextendr::miniextendr_doctor("{{rpkg_dir}}")'
+
+# The single-page HTML reference manual, built from man/ with base R's
+# tools::pkg2HTML() (R >= 4.4). It runs checkRd over man/ first and stops on a
+# finding, so it also lints the Rd files after rpkg-document. The script
+# writes dvs-rpkg/rust-target/doc/r/, which a clean install removes, so the
+# recipe copies the result to dist/reference/, next to the release tarball.
+[doc('Build the HTML reference manual and copy it to dist/reference.')]
+rpkg-reference:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    Rscript {{quote(rpkg_dir / "tools/build-html-reference.R")}}
+    rm -rf dist/reference
+    mkdir -p dist/reference
+    cp -R {{quote(rpkg_dir / "rust-target/doc/r")}}/. dist/reference/
+    echo "copied to dist/reference/dvs.html"
+
+# Refresh the scaffold, configure.ac, the agent skills and the git hook
+# sections from the pinned minirextendr. configure.ac's AC_INIT takes the
+# version from DESCRIPTION.
+[doc('Refresh the scaffold, skills and git hooks from the pinned minirextendr.')]
+rpkg-upgrade: rpkg-r-guard
+    {{rpkg_rscript}} -e 'minirextendr::upgrade_miniextendr_package("{{rpkg_dir}}", configure_ac = TRUE)'
 
 # Run the four install-* integration tests sequentially.
 # install-tarball requires cargo-revendor; it is skipped if not installed.
+[doc('Run the install-* integration tests.')]
 rpkg-test-install:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -151,35 +254,13 @@ rpkg-test-install:
     bash {{quote(rpkg_dir / "tests/install-devtools")}}
     bash {{quote(rpkg_dir / "tests/install-rv-github")}}
 
-# Install cargo-revendor (required for vendoring)
+# Install cargo-revendor at the miniextendr commit Cargo.toml pins. It is
+# what vendors the release tarball.
+[doc('Install cargo-revendor at the pinned miniextendr commit.')]
 install-revendor:
-    cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor
-
-# Vendor all dependencies for offline/CRAN builds
-# Vendors deps, strips fat, freezes manifest, compresses into inst/vendor.tar.xz
-#
-# --force bypasses cargo-revendor's cache: source-only edits to workspace
-# crates leave Cargo.lock untouched, so without --force the cache check
-# skips re-vendoring and ships a stale tarball.
-vendor:
-    cargo revendor \
-      --manifest-path {{rpkg_dir}}/src/rust/Cargo.toml \
-      --source-root . \
-      --output {{rpkg_dir}}/vendor \
-      --strip-all \
-      --freeze \
-      --compress {{rpkg_dir}}/inst/vendor.tar.xz \
-      --blank-md \
-      --source-marker \
-      --force \
-      -v
-
-# Vendor monorepo library crates for CRAN (use_vendor_lib)
-# Call this for each monorepo crate that your R package depends on.
-# Example: just vendor-lib dvs ../../../dvs
-vendor-lib crate dev_path:
-    Rscript -e 'args <- commandArgs(trailingOnly = TRUE); minirextendr::use_vendor_lib(args[[1]], dev_path = args[[2]], path = args[[3]])' "{{crate}}" "{{dev_path}}" "{{rpkg_dir}}"
-    cd {{rpkg_dir}} && autoconf -vif
+    cargo install --locked --git https://github.com/A2-ai/miniextendr \
+      --rev "$(grep -o 'rev = "[0-9a-f]*"' {{quote(rpkg_manifest)}} | head -1 | cut -d'"' -f2)" \
+      cargo-revendor
 
 # ============================================================================
 # Combined

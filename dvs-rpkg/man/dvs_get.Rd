@@ -59,7 +59,15 @@ In scripts and pipelines, use \code{on_error = "error"} (or set
 that was not updated.
 }
 \description{
-Fetches the specified files from DVS storage and writes them to their original paths in the working directory. With no \code{paths} or \code{glob}, \code{dvs_get()} scopes to the working directory: it restores the files directly under it, and \code{dvs_get(recursive = TRUE)} restores every tracked file beneath it at any depth.
+Fetches the specified files from DVS storage and writes them
+to their original paths in the working directory. With no \code{paths}
+or \code{glob}, \code{dvs_get()} scopes to the working directory: it restores
+the files directly under it, and \code{dvs_get(recursive = TRUE)} restores
+every tracked file beneath it at any depth.
+
+A working file that differs from the tracked version is replaced without
+asking only when dvs itself put it there (for example after switching git
+branches). Otherwise it is a conflict, handled by \code{on_conflict}.
 }
 \examples{
 \dontrun{

@@ -17,7 +17,7 @@ use miniextendr_api::list::List;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
 use miniextendr_api::time::OffsetDateTime;
-use miniextendr_api::{DataFrame, MatchArg, SEXP, miniextendr};
+use miniextendr_api::{BuiltDataFrame, MatchArg, Preserved, SEXP, miniextendr};
 
 use anyhow::{Result, anyhow};
 use serde::Serialize;
@@ -142,8 +142,8 @@ impl From<CompressionChoice> for Compression {
     }
 }
 
-/// Initialize a DVS repository in the given directory.
-///
+/// @title Initialize a DVS repository in the given directory
+/// @description
 /// Creates the `.dvs` metadata folder and configures storage for versioned files.
 ///
 /// @param storage_path Path to the storage directory where file contents are kept.
@@ -163,7 +163,7 @@ pub(crate) fn dvs_init(
     #[miniextendr(default = "NULL")] group: Option<String>,
     #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
     #[miniextendr(match_arg, default = "\"zstd\"")] compression: CompressionChoice,
-) -> Result<DataFrame> {
+) -> Result<BuiltDataFrame> {
     let root_dir = match root_dir {
         Some(d) => d,
         None => std::env::current_dir()?,
@@ -191,8 +191,8 @@ pub(crate) fn dvs_init(
     Ok(miniextendr_api::serde::vec_to_dataframe(&[config])?)
 }
 
-/// Add files to DVS-managed storage.
-///
+/// @title Add files to DVS-managed storage
+/// @description
 /// Hashes and copies the specified files into DVS storage.
 ///
 /// @param paths Character vector of file paths to add to DVS storage.
@@ -211,7 +211,7 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(default = "NULL")] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<DataFrame> {
+) -> Result<BuiltDataFrame> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
@@ -286,8 +286,8 @@ impl From<StatusChoice> for Status {
     }
 }
 
-/// Report the sync status of DVS-managed files.
-///
+/// @title Report the sync status of DVS-managed files
+/// @description
 /// Reports the sync status of DVS-managed files. By default all statuses
 /// are shown; pass a character vector
 /// of status names (e.g. `c("current", "absent")`) to restrict output.
@@ -314,7 +314,7 @@ pub(crate) fn dvs_status(
     #[miniextendr(default = "NULL")] recursive: Option<bool>,
     #[miniextendr(default = "NULL")] glob: Option<String>,
     #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
-) -> Result<DataFrame> {
+) -> Result<BuiltDataFrame> {
     let current_dir = std::env::current_dir()?;
 
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
@@ -362,18 +362,20 @@ pub(crate) fn dvs_status(
             })
         })
         .collect();
-    let add_time_sexp = add_times.into_sexp();
+    // Rooted until the frame holds it. Building the frame allocates, and
+    // `with_column` allocates the new frame before it stores the column.
+    let add_time = Preserved::new(add_times);
 
     Ok(miniextendr_api::serde::vec_to_dataframe(&views)?
         .drop("metadata_hashes_md5")
         .strip_prefix("metadata_hashes_")
         .strip_prefix("metadata_")
         .rename("blake3", "hash")
-        .with_column("add_time", add_time_sexp))
+        .with_column("add_time", add_time.as_sexp()))
 }
 
-/// Materialize the audit log as a data frame.
-///
+/// @title Materialize the audit log as a data frame
+/// @description
 /// Reads the audit log of the DVS repository containing the working
 /// directory and returns one row per entry. The column structure is inherited
 /// directly from `dvs::audit::AuditEntry`'s serde representation, so the rpkg
@@ -390,7 +392,7 @@ pub(crate) fn dvs_status(
 #[miniextendr(r_name = "dvs_audit_log_impl")]
 pub(crate) fn dvs_audit_log(
     #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
-) -> Result<DataFrame> {
+) -> Result<BuiltDataFrame> {
     let current_dir = std::env::current_dir()?;
     let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
 
@@ -456,8 +458,8 @@ impl<'a> From<&'a FileMetadata> for FileMetadataView<'a> {
 
 // endregion
 
-/// Retrieve files from DVS storage into the working directory.
-///
+/// @title Retrieve files from DVS storage into the working directory
+/// @description
 /// Fetches the specified files from DVS storage and writes them
 /// to their original paths in the working directory. With no `paths`
 /// or `glob`, `dvs_get()` scopes to the working directory: it restores
@@ -669,8 +671,8 @@ fn get_result_list(report: &GetReport) -> List {
     List::from_raw_pairs(result)
 }
 
-/// Set the number of threads used by DVS parallel operations.
-///
+/// @title Set the number of threads used by DVS parallel operations
+/// @description
 /// Controls the thread pool size for add, get, and status operations.
 /// Pass `NULL` to revert to automatic detection.
 ///
@@ -681,16 +683,14 @@ pub(crate) fn dvs_set_threads(#[miniextendr(default = "NULL")] threads: Option<u
     set_num_threads(threads.unwrap_or(0));
 }
 
-/// Format a byte count as a human-readable size string.
-///
+/// @title Format a byte count as a human-readable size string
 /// @param size_bytes non-negative integer representing file sizes in bytes.
 #[miniextendr]
 pub fn format_byte_size(size_bytes: u64) -> String {
     dvs::format_size(size_bytes)
 }
 
-/// Version of the bundled DVS Rust core crate
-///
+/// @title Version of the bundled DVS Rust core crate
 /// @return The version of the `dvs` Rust crate compiled into this package, as a
 ///   string (e.g. `"0.3.0"`).
 #[miniextendr]
@@ -698,8 +698,8 @@ pub fn dvs_version() -> String {
     dvs::VERSION.to_string()
 }
 
-/// Set the log level for DVS internals
-///
+/// @title Set the log level for DVS internals
+/// @description
 /// Controls which log messages from the DVS internals are routed to R's
 /// console. `error` and `warn` go to [stderr()]; `info`, `debug`, and `trace`
 /// go to stdout.
