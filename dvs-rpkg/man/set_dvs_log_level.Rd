@@ -10,19 +10,19 @@ set_dvs_log_level(level = c("off", "error", "warn", "info", "debug", "trace"))
 \item{level}{One of "off", "error", "warn", "info", "debug", "trace".}
 }
 \value{
-Called for its side effect; returns \code{NULL} invisibly.
+\code{NULL}, invisibly. It is called for its side effect.
 }
 \description{
 Controls which log messages from the DVS internals are routed to R's
-console. \code{error} and \code{warn} go to \code{\link[=stderr]{stderr()}}; \code{info}, \code{debug}, and \code{trace}
+console. \code{error} and \code{warn} go to \code{\link[=stderr]{stderr()}}. \code{info}, \code{debug} and \code{trace}
 go to stdout.
 
 The R package does not consult the \code{RUST_LOG} environment variable.
-\verb{RUST_LOG=dvs=<level>} only affects the \code{dvs} CLI binary; in R you must
-call \code{set_dvs_log_level()}.
+\verb{RUST_LOG=dvs=<level>} only affects the \code{dvs} CLI binary. In R, call
+\code{set_dvs_log_level()}.
 
-Default at package load: \code{"off"} — no log output is produced until this
-function is called.
+The level is \code{"off"} when the package loads, so there is no log output
+until this function is called.
 }
 \examples{
 \dontrun{

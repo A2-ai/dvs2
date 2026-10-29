@@ -3,8 +3,7 @@
 #' A thin constructor used by [dvs_add()], [dvs_status()] and [dvs_get()] to
 #' tag byte-size columns so that pillar renders them as human-readable sizes
 #' in tibble output. Stored as `double` to safely represent file sizes up to
-#' `2^53` bytes — `integer` in R is 32 bits and would silently overflow at
-#' ~2 GB.
+#' `2^53` bytes. An R `integer` is 32 bits and would overflow at about 2 GB.
 #'
 #' @param x atomic numeric / integer / logical vector (incl. `NA`). `NULL`
 #'   raises a `dvs_error_argument` condition.

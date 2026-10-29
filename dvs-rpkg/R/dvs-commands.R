@@ -118,13 +118,13 @@ dvs_audit_log <- function(paths = character(0)) {
 }
 
 #' @inherit dvs_get_impl title description params
-#' @param recursive If `TRUE`, directory inputs include all descendants;
-#'   otherwise only direct children of the directory. With no explicit `paths`
+#' @param recursive If `TRUE`, directory inputs include all descendants.
+#'   Otherwise only direct children of the directory. With no explicit `paths`
 #'   the directory is the working directory. Mutually exclusive with `glob`.
 #' @param dry_run If `TRUE`, report what would happen without writing files.
-#' @param on_error What to do when get did not do as asked (a file failed, or
-#'   `on_conflict = "abort"` held files back; files left by
-#'   `on_conflict = "skip"` count as done): `"return"` only returns the
+#' @param on_error What to do when get did not do as asked, that is when a
+#'   file failed or `on_conflict = "abort"` held files back. Files left by
+#'   `on_conflict = "skip"` count as done. `"return"` only returns the
 #'   result, `"warn"` also warns and `"error"` raises an error. `NULL` (the
 #'   default) takes the `dvs.on_error` option, and `"return"` when it is unset.
 #'   The condition has class `dvs_get_incomplete` and carries the result as
@@ -139,8 +139,8 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   milliseconds spent on the file, `NA` when it was never hashed or
 #'   copied). [dvs_result_info()] returns
 #'   the outcome and the policy that applied. Outside a dvs project it raises an
-#'   error; configuration errors (for example `on_conflict = "overwrite"` in
-#'   dvs.toml) raise a `dvs_config_error`.
+#'   error. A configuration error, for example `on_conflict = "overwrite"`
+#'   in dvs.toml, raises a `dvs_config_error`.
 #'
 #'   In a dry run, `satisfied` is the prediction: `TRUE` when the file would be
 #'   at its tracked version afterwards.

@@ -23,8 +23,8 @@ does not cross a path separator, so \verb{*.csv} matches \code{a.csv} but not
 \code{sub/a.csv}. Use \verb{**/*.csv} to match at any depth. Mutually exclusive
 with \code{recursive}.}
 
-\item{recursive}{If \code{TRUE}, directory inputs include all descendants;
-otherwise only direct children of the directory. With no explicit \code{paths}
+\item{recursive}{If \code{TRUE}, directory inputs include all descendants.
+Otherwise only direct children of the directory. With no explicit \code{paths}
 the directory is the working directory. Mutually exclusive with \code{glob}.}
 
 \item{dry_run}{If \code{TRUE}, report what would happen without writing files.}
@@ -32,11 +32,12 @@ the directory is the working directory. Mutually exclusive with \code{glob}.}
 \item{on_conflict}{\code{NULL} (use \code{DVS_GET_ON_CONFLICT}, then \verb{[get] on_conflict}
 in dvs.toml, then \code{"abort"}), or one of \code{"abort"} (change no files if any
 requested file has local changes or another problem), \code{"skip"} (leave those
-files and get the rest) or \code{"overwrite"} (replace them; local changes are lost).}
+files and get the rest) or \code{"overwrite"} (replace them, and lose the
+local changes).}
 
-\item{on_error}{What to do when get did not do as asked (a file failed, or
-\code{on_conflict = "abort"} held files back; files left by
-\code{on_conflict = "skip"} count as done): \code{"return"} only returns the
+\item{on_error}{What to do when get did not do as asked, that is when a
+file failed or \code{on_conflict = "abort"} held files back. Files left by
+\code{on_conflict = "skip"} count as done. \code{"return"} only returns the
 result, \code{"warn"} also warns and \code{"error"} raises an error. \code{NULL} (the
 default) takes the \code{dvs.on_error} option, and \code{"return"} when it is unset.
 The condition has class \code{dvs_get_incomplete} and carries the result as
@@ -53,8 +54,8 @@ and always the same columns: \code{path}, \code{local_path}, \code{before} (\cod
 milliseconds spent on the file, \code{NA} when it was never hashed or
 copied). \code{\link[=dvs_result_info]{dvs_result_info()}} returns
 the outcome and the policy that applied. Outside a dvs project it raises an
-error; configuration errors (for example \code{on_conflict = "overwrite"} in
-dvs.toml) raise a \code{dvs_config_error}.
+error. A configuration error, for example \code{on_conflict = "overwrite"}
+in dvs.toml, raises a \code{dvs_config_error}.
 
 In a dry run, \code{satisfied} is the prediction: \code{TRUE} when the file would be
 at its tracked version afterwards.

@@ -15,10 +15,10 @@ dvs_status(
 \item{paths}{Files or directories to report, relative to the working
 directory. \code{NULL} is the same as \code{character(0)}.}
 
-\item{recursive}{If \code{TRUE}, directory inputs include all descendants;
-if \code{FALSE} or \code{NULL}, only direct children of the directory
-are returned. The flag only constrains descendants of paths passed
-explicitly — when \code{paths} is empty, every tracked file is returned
+\item{recursive}{If \code{TRUE}, directory inputs include all descendants.
+If \code{FALSE} or \code{NULL}, only direct children of the directory are
+returned. The flag only constrains descendants of paths passed
+explicitly. When \code{paths} is empty, every tracked file is returned
 regardless of nesting depth, and \code{recursive} has no effect.}
 
 \item{glob}{A glob that selects tracked files, such as \code{"*.csv"}. It
@@ -54,8 +54,8 @@ dvs does not track are not listed. A row whose metadata cannot be read has
 }
 \description{
 Reports the sync status of DVS-managed files. By default all statuses
-are shown; pass a character vector
-of status names (e.g. \code{c("current", "absent")}) to restrict output.
+are shown. Pass a character vector of status names, such as
+\code{c("current", "absent")}, to show only those.
 A file whose status cannot be read is always kept, with status \code{"error"},
 the kind of failure in \code{code} and the reason in \code{error}.
 }
