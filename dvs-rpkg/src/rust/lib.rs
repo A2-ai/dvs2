@@ -5,30 +5,28 @@
 mod cli_progress;
 mod test_support;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::SyncSender;
 
+use miniextendr_api::dataframe::IntoDataFrame;
 use miniextendr_api::externalptr::ExternalPtr;
 use miniextendr_api::gc_protect::ProtectScope;
 use miniextendr_api::into_r::IntoR;
 use miniextendr_api::list::List;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
-use miniextendr_api::time::OffsetDateTime;
-use miniextendr_api::{BuiltDataFrame, MatchArg, Preserved, SEXP, miniextendr};
+use miniextendr_api::{BuiltDataFrame, DataFrameRow, MatchArg, Preserved, SEXP, miniextendr};
 
 use anyhow::{Result, anyhow};
-use serde::Serialize;
-
 use dvs::config::{Config, ConfigError, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileMetadata, FileProgress, GetOptions, GetReport, GetRow, GetVerdict, Hashes,
-    OperationContext, PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
+    Compression, FileProgress, GetOptions, GetReport, GetRow, GetVerdict, OperationContext,
+    PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -348,29 +346,18 @@ pub(crate) fn dvs_status(
         });
     }
 
-    // Serialize through a local view that omits `add_time` from the serde
-    // path — jiff's `Timestamp` serde format is RFC 3339, and stringifying
-    // into a character column only to throw it away when appending the
-    // POSIXct column below is wasted work. The jiff timestamps are instead
-    // passed straight through to `time::OffsetDateTime` → POSIXct.
-    let views: Vec<FileStatusView<'_>> = statuses.iter().map(FileStatusView::from).collect();
-    let add_times: Vec<Option<OffsetDateTime>> = statuses
-        .iter()
-        .map(|s| {
-            s.metadata.as_ref().and_then(|m| {
-                OffsetDateTime::from_unix_timestamp_nanos(m.add_time.as_nanosecond()).ok()
-            })
-        })
-        .collect();
-    // Rooted until the frame holds it. Building the frame allocates, and
-    // `with_column` allocates the new frame before it stores the column.
-    let add_time = Preserved::new(add_times);
-
-    Ok(miniextendr_api::serde::vec_to_dataframe(&views)?
-        .drop("metadata_hashes_md5")
-        .strip_prefix("metadata_hashes_")
-        .strip_prefix("metadata_")
-        .rename("blake3", "hash")
+    // DataFrameRow has no datetime columns, so add_time joins as a POSIXct
+    // vector converted from the jiff timestamps. Rooted until the frame holds
+    // it: with_column allocates the new frame before it stores the column.
+    let add_time = Preserved::new(
+        statuses
+            .iter()
+            .map(|s| s.metadata.as_ref().map(|m| m.add_time))
+            .collect::<Vec<Option<_>>>(),
+    );
+    let rows: Vec<StatusRow> = statuses.iter().map(StatusRow::from).collect();
+    Ok(rows
+        .into_dataframe()?
         .with_column("add_time", add_time.as_sexp()))
 }
 
@@ -406,52 +393,35 @@ pub(crate) fn dvs_audit_log(
     Ok(miniextendr_api::serde::vec_to_dataframe(&entries)?)
 }
 
-// region: status serde view (skips add_time)
+// region: status rows
 
-/// Serialize-only view of a status row whose [`FileMetadata`] view
-/// omits `add_time`. The caller appends `add_time` as a POSIXct column
-/// directly from the original `jiff::Timestamp` values.
-#[derive(Serialize)]
-struct FileStatusView<'a> {
-    path: &'a Path,
+/// One row of the `dvs_status()` frame, without `add_time`. The columns are
+/// fixed: a row without metadata, or without a message or error, fills them
+/// with `NA`.
+#[derive(DataFrameRow)]
+struct StatusRow {
+    path: String,
     status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    metadata: Option<FileMetadataView<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<&'a str>,
+    hash: Option<String>,
+    size: Option<f64>,
+    created_by: Option<String>,
+    compression: Option<String>,
+    message: Option<String>,
+    error: Option<String>,
 }
 
-#[derive(Serialize)]
-struct FileMetadataView<'a> {
-    hashes: &'a Hashes,
-    size: u64,
-    created_by: &'a str,
-    // `add_time` deliberately omitted — surfaced as a POSIXct column at the
-    // DataFrame boundary, not stringified into the serde output.
-    compression: &'a Compression,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<&'a str>,
-}
-
-impl<'a> From<&'a dvs::StatusFacts> for FileStatusView<'a> {
-    fn from(row: &'a dvs::StatusFacts) -> Self {
-        FileStatusView {
-            path: row.path.as_path(),
+impl From<&dvs::StatusFacts> for StatusRow {
+    fn from(row: &dvs::StatusFacts) -> Self {
+        let metadata = row.metadata.as_ref();
+        StatusRow {
+            path: row.path.to_string_lossy().into_owned(),
             status: row.status_name(),
-            metadata: row.metadata.as_ref().map(FileMetadataView::from),
-            error: row.error.as_deref(),
-        }
-    }
-}
-
-impl<'a> From<&'a FileMetadata> for FileMetadataView<'a> {
-    fn from(m: &'a FileMetadata) -> Self {
-        FileMetadataView {
-            hashes: &m.hashes,
-            size: m.size,
-            created_by: &m.created_by,
-            compression: &m.compression,
-            message: m.message.as_deref(),
+            hash: metadata.map(|m| m.hashes.blake3.clone()),
+            size: metadata.map(|m| m.size as f64),
+            created_by: metadata.map(|m| m.created_by.clone()),
+            compression: metadata.map(|m| m.compression.to_string()),
+            message: metadata.and_then(|m| m.message.clone()),
+            error: row.error.clone(),
         }
     }
 }

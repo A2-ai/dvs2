@@ -128,7 +128,7 @@ set_dvs_log_level("off")     # restore default (silent)
 
 ### Key Dependencies
 
-- **miniextendr** (git: A2-ai/miniextendr, pinned by `rev`): the Rust-to-R FFI framework. The `serde`, `time` and `log` features are on. `log` routes log records to the R console.
+- **miniextendr** (git: A2-ai/miniextendr, pinned by `rev`): the Rust-to-R FFI framework. The `serde`, `jiff` and `log` features are on. `log` routes log records to the R console.
 - **dvs** (path dependency `../../../dvs` in `src/rust/Cargo.toml`): the core DVS library
 - **R imports**: cli, pillar, tibble
 - **Rust requires**: rustc >= 1.85.0
