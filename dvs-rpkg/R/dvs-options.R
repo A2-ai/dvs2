@@ -6,10 +6,23 @@
 #'
 #' Can also be set via `.Rprofile` or temporarily with [withr::with_options()].
 #'
-#' @param threads A whole number of threads to use. `NULL` or `0` reverts to
-#'   the default, automatic detection, as `--threads 0` does in the CLI. A
-#'   value that is not a whole number of zero or more, `NA` included, raises a
-#'   `dvs_error_argument` condition.
+#' @param threads A whole number of threads, or `NULL` or `0` to set no
+#'   thread count. `NA`, a negative or fractional number, `TRUE`, `FALSE`, a
+#'   string or more than one value raises a `dvs_error_argument` condition.
+#'
+#' @details
+#' Each add, get and status operation takes its thread count from the first
+#' rule that applies:
+#'
+#' 1. A thread count set here or in the `dvs.num_threads` option: that many
+#'    threads, at most 32.
+#' 2. The `DVS_NUM_THREADS` environment variable, when it is a whole number
+#'    above 0: that many threads, at most 32. Any other value is ignored.
+#' 3. Otherwise 4 threads per CPU, at most 16.
+#'
+#' An operation never uses more threads than it has files. `NULL` and `0` set
+#' no thread count, so the operation falls through to `DVS_NUM_THREADS` or to
+#' 4 threads per CPU. `--threads 0` in the CLI does the same.
 #'
 #' @return The previous value of `dvs.num_threads` (invisibly).
 #'
