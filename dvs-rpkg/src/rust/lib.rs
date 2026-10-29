@@ -289,8 +289,8 @@ impl From<StatusChoice> for Status {
 /// Reports the sync status of DVS-managed files. By default all statuses
 /// are shown; pass a character vector
 /// of status names (e.g. `c("current", "absent")`) to restrict output.
-/// A file whose status cannot be read is always kept, with status `"error"`
-/// and the reason in `error`.
+/// A file whose status cannot be read is always kept, with status `"error"`,
+/// the kind of failure in `code` and the reason in `error`.
 ///
 /// @param paths Character vector of file or directory paths to check status for.
 /// @param recursive If `TRUE`, directory inputs include all descendants;
@@ -398,8 +398,8 @@ pub(crate) fn dvs_audit_log(
 // region: status rows
 
 /// One row of the `dvs_status()` frame. The columns are fixed: a row without
-/// metadata, or without a message or error, fills them with `NA`. `add_time`
-/// is a POSIXct column in UTC.
+/// metadata, or without a message, code or error, fills them with `NA`.
+/// `add_time` is a POSIXct column in UTC.
 #[derive(DataFrameRow)]
 struct StatusRow {
     path: String,
@@ -409,22 +409,37 @@ struct StatusRow {
     created_by: Option<String>,
     compression: Option<String>,
     message: Option<String>,
+    code: Option<String>,
     error: Option<String>,
     add_time: Option<miniextendr_api::jiff::Timestamp>,
 }
 
 impl From<&dvs::StatusFacts> for StatusRow {
     fn from(row: &dvs::StatusFacts) -> Self {
-        let metadata = row.metadata.as_ref();
+        // No `..`: a field added to StatusFacts does not compile here until it
+        // has a column or is left out by name. `status_name()` reads `status`.
+        // The frame leaves out `working` and `baseline`, the details of the
+        // local copy.
+        let dvs::StatusFacts {
+            path,
+            status: _,
+            metadata,
+            working: _,
+            baseline: _,
+            code,
+            error,
+        } = row;
+        let metadata = metadata.as_ref();
         StatusRow {
-            path: row.path.to_string_lossy().into_owned(),
+            path: path.to_string_lossy().into_owned(),
             status: row.status_name(),
             hash: metadata.map(|m| m.hashes.blake3.clone()),
             size: metadata.map(|m| m.size as f64),
             created_by: metadata.map(|m| m.created_by.clone()),
             compression: metadata.map(|m| m.compression.to_string()),
             message: metadata.and_then(|m| m.message.clone()),
-            error: row.error.clone(),
+            code: code.map(|c| c.as_str().to_string()),
+            error: error.clone(),
             add_time: metadata.map(|m| m.add_time),
         }
     }
