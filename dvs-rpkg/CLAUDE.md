@@ -172,12 +172,12 @@ Defined in `src/rust/lib.rs` with `#[miniextendr]` unless noted:
 | `set_dvs_threads` | Set the `dvs.num_threads` option (R side, `R/dvs-options.R`) | Previous value, invisibly |
 | `set_dvs_log_level` | Set the Rust log level | NULL |
 | `format_byte_size` | Human-readable byte size | String |
-| `dvs_result_info` | What applies to a whole `dvs_get()` result: outcome, policy, counts (R side, `R/dvs-commands.R`) | List |
+| `dvs_result_info` | What applies to a whole `dvs_get()` result: outcome, policy, counts | List |
 | `new_dvs_bytes` | Construct a `dvs_bytes` vector (R side, `R/pillar.R`) | `dvs_bytes` numeric |
 
 This table is a high-level index only. The authoritative parameter signatures live in the `#[miniextendr]` definitions in `src/rust/lib.rs` and the R help pages (`?dvs_get` and `man/*.Rd`).
 
-`dvs_status()` and the `dvs_get()` file rows come from `#[derive(DataFrameRow)]` row types, so their columns are fixed. `dvs_init()` and `dvs_add()` go through miniextendr's serde conversion (`vec_to_dataframe`), so their columns follow the rows: `dvs_add()` has `code` and `error` only when a file failed. `dvs_audit_log()` uses `vec_to_dataframe_flatten_enums` to spread each entry's action into `action_*` columns. Errors propagate as `anyhow::Result<T>` converted to R error objects.
+`dvs_status()` and the `dvs_get()` file rows come from `#[derive(DataFrameRow)]` row types, so their columns are fixed. `dvs_init()` and `dvs_add()` go through miniextendr's serde conversion (`vec_to_dataframe`), so their columns follow the rows: `dvs_add()` has `code` and `error` only when a file failed. `dvs_audit_log()` uses `vec_to_dataframe_flatten_enums` to spread each entry's action into `action_*` columns. Errors propagate as `anyhow::Result<T>` converted to R error objects. A wrong argument raises a `dvs_error_argument` condition, also a `dvs_error`, that names the user's call. `NULL` in an optional argument means "not given", and the dvs default applies. `character(0)` in `paths` or `status` is the same as `NULL`. `NA` is never a value: every argument that can hold one carries `#[miniextendr(no_na)]` or a `match_arg` check, so an `NA` raises `dvs_error_argument`. A new argument gets `no_na` too. The exception is the `DataFrame` argument of `dvs_result_info()`: its type already refuses `NA`, and `no_na` there would refuse the `NA` cells a result holds. A dvs.toml that does not load raises a `dvs_config_error`.
 
 ## Environment Variables
 

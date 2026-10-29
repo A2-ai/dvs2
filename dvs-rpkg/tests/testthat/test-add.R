@@ -94,6 +94,13 @@ test_that("dvs_add with glob picks up matching files", {
   expect_setequal(basename(result$path), c("data_a.csv", "data_b.csv"))
 })
 
+test_that("dvs_add takes paths = NULL as no paths", {
+  new_dvs_test_repo()
+  write_theoph_shuffled("data_a.csv", seed = 7)
+  result <- dvs_add(paths = NULL, glob = "*.csv")
+  expect_equal(basename(result$path), "data_a.csv")
+})
+
 test_that("dvs_add accepts a message without error", {
   new_dvs_test_repo()
   write_theoph("t.csv")
@@ -182,4 +189,23 @@ test_that("the progress bar path keeps cli's config rooted", {
 
   expect_equal(nrow(result), 3L)
   expect_true(all(result$outcome == "copied"))
+})
+
+test_that("dvs_add raises a wrong argument as a dvs_error_argument", {
+  new_dvs_test_repo()
+  expect_argument_error(quote(dvs_add(paths = NA_character_)), "paths")
+  expect_argument_error(quote(dvs_add("t.csv", dry_run = NA)), "dry_run")
+  # Neither paths nor glob: the CLI requires one of them too
+  expect_argument_error(quote(dvs_add()), "paths")
+  expect_argument_error(quote(dvs_add(paths = NULL)), "paths")
+  cnd <- tryCatch(dvs_add(), error = identity)
+  expect_equal(conditionMessage(cnd), "`paths` or `glob` is required")
+})
+
+test_that("dvs_add takes NULL as no message and refuses NA", {
+  new_dvs_test_repo()
+  write_theoph("t.csv")
+  expect_argument_error(quote(dvs_add("t.csv", message = NA_character_)), "message")
+  dvs_add(paths = file.path(getwd(), "t.csv"), message = NULL)
+  expect_true(is.na(dvs_status()$message))
 })

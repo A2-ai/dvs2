@@ -6,6 +6,9 @@
 
 - R package: requires R 4.4 or later.
 - R package: `dvs_audit_log()` spreads each entry's action into columns: `action_variant` ("init" or "add") and one `action_<field>` column per field that the actions carry, `NA` where an action has none. The action was a list-column. `timestamp` is a date-time (UTC), not unix seconds.
+- R package: `NA` is never a value. An `NA` in any argument raises an error that says it must not be `NA`. An `NA` `message`, `group`, `root_dir` or `metadata_folder_name` meant the argument was not given. Use `NULL` or leave the argument out.
+- R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
+- R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
 
 ### Added
 
@@ -14,12 +17,17 @@
 - R package: `dvs_status()` has a `code` column, the kind of failure of a row that failed, as in the CLI's JSON.
 - R package: `dvs_get()` has a `duration_ms` column.
 - R package: the counts of `dvs_result_info()` include `total`, `succeeded` and `cancelled`, as in the CLI's JSON.
+- R package: a wrong argument raises a `dvs_error_argument` condition, also a `dvs_error`, with the argument in `param` and the call the user wrote. A `dvs.toml` that does not load raises a `dvs_config_error`, also a `dvs_error`, in every command. One `dvs_error` handler catches them all.
+- R package: a bad `dvs.num_threads` or `dvs.on_error` option raises the same `dvs_error_argument`, and the message names the option.
 
 ### Fixed
 
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
 - R package: `dvs_status()` had no `message` column when the first file had no message. It now returns the same columns for every repository, also one with no tracked files.
 - R package: `dvs_status()` with a repeated `status` choice could show every status.
+- R package: `NULL` in an optional argument means the default, as leaving it out does. `paths = NULL` raised an error, and `dvs_get(on_error = NULL)` skipped the `dvs.on_error` option.
+- R package: `character(0)` in `paths` or `status` means the default. `dvs_status(status = character(0))` raised an error.
+- R package: `dvs_status(paths = NA)` reported on the working directory.
 
 ## 0.5.1
 

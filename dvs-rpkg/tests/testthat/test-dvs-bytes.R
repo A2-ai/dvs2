@@ -9,9 +9,8 @@ test_that("new_dvs_bytes stores as double so >2 GB sizes don't overflow", {
   expect_false(is.na(unclass(big)))
 })
 
-test_that("new_dvs_bytes handles NA, NULL and zero-length input", {
-  expect_equal(length(new_dvs_bytes(NULL)), 0L)
-  expect_s3_class(new_dvs_bytes(NULL), "dvs_bytes")
+test_that("new_dvs_bytes handles NA and zero-length input, and refuses NULL", {
+  expect_argument_error(quote(new_dvs_bytes(NULL)), "x")
   expect_equal(length(new_dvs_bytes(integer(0))), 0L)
   expect_true(is.na(unclass(new_dvs_bytes(NA_real_))))
 })
@@ -31,6 +30,7 @@ test_that("2.5 GiB u64 from Rust survives the trip to dvs_bytes and formats corr
 
   expect_match(format_byte_size(size_bytes), "2\\.5")
   expect_match(format_byte_size(size_bytes), "GB")
+  expect_argument_error(quote(format_byte_size(NA_real_)), "size_bytes")
 })
 
 test_that("dvs_bytes + and - preserve class", {

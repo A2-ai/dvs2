@@ -10,11 +10,14 @@ dvs_get_impl(
   recursive = NULL,
   dry_run = NULL,
   on_conflict = NULL,
-  progress_callback = NULL
+  on_error = c("return", "warn", "error"),
+  progress_callback = NULL,
+  .call = NULL
 )
 }
 \arguments{
-\item{paths}{Character vector of file paths to retrieve from DVS storage.}
+\item{paths}{Character vector of file paths to retrieve from DVS storage.
+\code{NULL} is the same as \code{character(0)}.}
 
 \item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).
 Globs use a literal path separator: \verb{*.csv} only matches files in the
@@ -22,7 +25,7 @@ target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} 
 match recursively across subdirectories. Mutually exclusive with \code{recursive}.}
 
 \item{recursive}{If \code{TRUE}, directory inputs include all descendants;
-if \code{FALSE} or \code{NULL} (default), only direct children of the directory
+if \code{FALSE} or \code{NULL}, only direct children of the directory
 are returned. With no explicit \code{paths} the directory is the working
 directory. Mutually exclusive with \code{glob}.}
 
@@ -33,7 +36,13 @@ in dvs.toml, then \code{"abort"}), or one of \code{"abort"} (change no files if 
 requested file has local changes or another problem), \code{"skip"} (leave those
 files and get the rest) or \code{"overwrite"} (replace them; local changes are lost).}
 
+\item{on_error}{What \code{dvs_get()} does when get did not do as asked:
+\code{"return"}, \code{"warn"} or \code{"error"}. The result carries the matched choice
+back to R, which acts on it.}
+
 \item{progress_callback}{Optional handle to enable progress bar display.}
+
+\item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }
 \description{
 Fetches the specified files from DVS storage and writes them

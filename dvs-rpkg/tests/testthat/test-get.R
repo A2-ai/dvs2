@@ -159,11 +159,15 @@ test_that("on_error controls signalling, and conditions carry the result", {
   writeLines("my edit", "t.csv")
   expect_silent(res <- dvs_get("t.csv"))
   expect_warning(dvs_get("t.csv", on_error = "warn"), class = "dvs_get_incomplete")
+  # A unique prefix matches, as with match.arg()
+  expect_warning(dvs_get("t.csv", on_error = "w"), class = "dvs_get_incomplete")
   cnd <- tryCatch(dvs_get("t.csv", on_error = "error"), dvs_get_incomplete = identity)
   expect_s3_class(cnd, "dvs_error")
   expect_equal(cnd$result$code, "local_changes")
   withr::local_options(dvs.on_error = "error")
   expect_error(dvs_get("t.csv"), class = "dvs_get_incomplete")
+  # NULL is not given, so the option applies as it does when on_error is missing
+  expect_error(dvs_get("t.csv", on_error = NULL), class = "dvs_get_incomplete")
 
   # The default only returns, so options(warn = 2) cannot prevent assignment
   withr::local_options(dvs.on_error = NULL, warn = 2)
@@ -171,10 +175,59 @@ test_that("on_error controls signalling, and conditions carry the result", {
   expect_equal(res$code, "local_changes")
 })
 
+test_that("dvs_get raises a wrong argument as a dvs_error_argument", {
+  new_dvs_test_repo()
+  expect_argument_error(quote(dvs_get(paths = 1)), "paths")
+  # NA is no path. Read as "", it would select the working directory.
+  expect_argument_error(quote(dvs_get(paths = NA_character_)), "paths")
+  expect_argument_error(quote(dvs_get(glob = NA_character_)), "glob")
+  expect_argument_error(quote(dvs_get(recursive = NA)), "recursive")
+  expect_argument_error(quote(dvs_get(dry_run = "yes")), "dry_run")
+  expect_argument_error(quote(dvs_get(on_conflict = "bogus")), "on_conflict")
+  expect_argument_error(quote(dvs_get(on_error = "bogus")), "on_error")
+  withr::local_options(dvs.on_error = "bogus")
+  expect_argument_error(quote(dvs_get()), "on_error")
+  # The value came from the option, so the message names it
+  cnd <- tryCatch(dvs_get(), error = identity)
+  expect_match(conditionMessage(cnd), "`options(dvs.on_error)` should be one of", fixed = TRUE)
+  # An on_error the user passed keeps its own name
+  cnd <- tryCatch(dvs_get(on_error = "bogus"), error = identity)
+  expect_match(conditionMessage(cnd), "'on_error' should be one of", fixed = TRUE)
+})
+
+test_that("dvs_get takes paths = NULL as no paths", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add("a.csv")
+  unlink("a.csv")
+  res <- dvs_get(paths = NULL, dry_run = TRUE)
+  expect_equal(res$path, "a.csv")
+  expect_equal(res$action, "would_restore")
+})
+
+test_that("dvs_result_info refuses anything but a dvs result", {
+  expect_argument_error(quote(dvs_result_info(data.frame(a = 1))), "x")
+  expect_argument_error(quote(dvs_result_info(1)), "x")
+  expect_argument_error(quote(dvs_result_info(NA)), "x")
+  expect_argument_error(quote(dvs_result_info(NULL)), "x")
+  cnd <- tryCatch(dvs_result_info(data.frame(a = 1)), error = identity)
+  expect_equal(conditionMessage(cnd), "`x` is not a dvs result")
+})
+
 test_that("overwrite in dvs.toml is a configuration error", {
   new_dvs_test_repo()
   cat('\n[get]\non_conflict = "overwrite"\n', file = "dvs.toml", append = TRUE)
   expect_error(dvs_get(), class = "dvs_config_error")
+  expect_error(dvs_get(), class = "dvs_error")
+})
+
+test_that("every command raises a dvs.toml that does not load as a dvs_config_error", {
+  new_dvs_test_repo()
+  cat("[[[broken\n", file = "dvs.toml", append = TRUE)
+  expect_error(dvs_get(), class = "dvs_config_error")
+  expect_error(dvs_status(), class = "dvs_config_error")
+  expect_error(dvs_add("t.csv"), class = "dvs_config_error")
+  expect_error(dvs_audit_log(), class = "dvs_config_error")
 })
 
 test_that("printing shows the outcome, what needs attention, and survives subsetting", {
@@ -214,7 +267,8 @@ test_that("the dvs_get result survives a collection at every allocation", {
   raw <- dvs_get_impl(paths = c("a.csv", "missing.csv"), on_conflict = "skip")
   gctorture(FALSE)
 
-  expect_named(raw, c("files", "info"))
+  expect_named(raw, c("files", "info", "on_error"))
+  expect_identical(raw$on_error, "return")
   expect_equal(names(raw$files), get_columns)
   expect_equal(raw$files$action, c("restored", "failed"))
   expect_identical(raw$info$counts$restored, 1L)

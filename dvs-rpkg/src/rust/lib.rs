@@ -10,13 +10,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::SyncSender;
 
-use miniextendr_api::dataframe::IntoDataFrame;
+use miniextendr_api::dataframe::{DataFrame, IntoDataFrame};
 use miniextendr_api::externalptr::ExternalPtr;
 use miniextendr_api::optionals::log_impl::log;
 use miniextendr_api::pump::WorkerPump;
 use miniextendr_api::serde::AsSerialize;
 use miniextendr_api::{
-    BuiltDataFrame, DataFrameRow, IntoList, MatchArg, PreferList, Preserved, miniextendr,
+    BuiltDataFrame, DataFrameRow, IntoList, MatchArg, PreferList, Preserved, SEXP, SexpExt,
+    miniextendr,
 };
 
 use anyhow::{Result, anyhow};
@@ -154,12 +155,12 @@ impl From<CompressionChoice> for Compression {
 ///   `compression`, `metadata_folder_name`, `backend_path`, `backend_group`.
 ///   An optional config field that was not set comes back as `NA`.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_init_impl")]
+#[miniextendr(r_name = "dvs_init_impl", internal, call = caller)]
 pub(crate) fn dvs_init(
-    storage_path: PathBuf,
-    #[miniextendr(default = "NULL")] root_dir: Option<PathBuf>,
-    #[miniextendr(default = "NULL")] group: Option<String>,
-    #[miniextendr(default = "NULL")] metadata_folder_name: Option<String>,
+    #[miniextendr(no_na)] storage_path: PathBuf,
+    #[miniextendr(default = "NULL", no_na)] root_dir: Option<PathBuf>,
+    #[miniextendr(default = "NULL", no_na)] group: Option<String>,
+    #[miniextendr(default = "NULL", no_na)] metadata_folder_name: Option<String>,
     #[miniextendr(match_arg, default = "\"zstd\"")] compression: CompressionChoice,
 ) -> Result<BuiltDataFrame> {
     let root_dir = match root_dir {
@@ -193,7 +194,8 @@ pub(crate) fn dvs_init(
 /// @description
 /// Hashes and copies the specified files into DVS storage.
 ///
-/// @param paths Character vector of file paths to add to DVS storage.
+/// @param paths Character vector of file paths to add to DVS storage. `NULL`
+///   is the same as `character(0)`.
 /// @param message Optional commit message describing why the files were added.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 ///   Globs use a literal path separator: `*.csv` only matches files in the
@@ -202,16 +204,21 @@ pub(crate) fn dvs_init(
 /// @param dry_run If `TRUE`, report what would be added without modifying anything.
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_add_impl")]
+#[miniextendr(r_name = "dvs_add_impl", internal, call = caller)]
 pub(crate) fn dvs_add(
-    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
-    #[miniextendr(default = "NULL")] message: Option<String>,
-    #[miniextendr(default = "NULL")] glob: Option<String>,
-    #[miniextendr(default = "NULL")] dry_run: Option<bool>,
+    #[miniextendr(default = "character(0)", no_na)] paths: Option<Vec<PathBuf>>,
+    #[miniextendr(default = "NULL", no_na)] message: Option<String>,
+    #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
+    #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<BuiltDataFrame> {
-    let current_dir = std::env::current_dir()?;
-    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+    let paths = paths.unwrap_or_default();
+    // The CLI requires paths unless --glob is given. With neither, the library
+    // would refuse the working directory as a directory.
+    if paths.is_empty() && glob.is_none() {
+        miniextendr_api::arg_error!(param = "paths", "`paths` or `glob` is required");
+    }
+    let config = find_config()?;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
     let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
@@ -293,8 +300,9 @@ impl From<StatusChoice> for Status {
 /// the kind of failure in `code` and the reason in `error`.
 ///
 /// @param paths Character vector of file or directory paths to check status for.
+///   `NULL` is the same as `character(0)`.
 /// @param recursive If `TRUE`, directory inputs include all descendants;
-///   if `FALSE` or `NULL` (default), only direct children of the directory
+///   if `FALSE` or `NULL`, only direct children of the directory
 ///   are returned. The flag only constrains descendants of paths passed
 ///   explicitly — when `paths` is empty, every tracked file is returned
 ///   regardless of nesting depth, and `recursive` has no effect.
@@ -303,19 +311,17 @@ impl From<StatusChoice> for Status {
 ///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
 ///   match recursively across subdirectories. Mutually exclusive with `recursive`.
 /// @param status Character vector of statuses to include. Valid values are
-///   `"current"`, `"absent"`, `"stale"`, `"modified"`, and `"unsynced"`. When empty (default), all
-///   statuses are shown.
+///   `"current"`, `"absent"`, `"stale"`, `"modified"`, and `"unsynced"`. `NULL`,
+///   `character(0)` and the default show every status.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_status_impl")]
+#[miniextendr(r_name = "dvs_status_impl", internal, call = caller)]
 pub(crate) fn dvs_status(
-    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
-    #[miniextendr(default = "NULL")] recursive: Option<bool>,
-    #[miniextendr(default = "NULL")] glob: Option<String>,
+    #[miniextendr(default = "character(0)", no_na)] paths: Option<Vec<PathBuf>>,
+    #[miniextendr(default = "NULL", no_na)] recursive: Option<bool>,
+    #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
     #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
 ) -> Result<BuiltDataFrame> {
-    let current_dir = std::env::current_dir()?;
-
-    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+    let config = find_config()?;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
     if glob.is_some() && recursive.unwrap_or(false) {
@@ -328,6 +334,7 @@ pub(crate) fn dvs_status(
             .iter()
             .all(|choice| status.iter().any(|c| c.to_choice() == *choice));
 
+    let paths = paths.unwrap_or_default();
     let filter = if paths.is_empty() {
         None
     } else {
@@ -368,15 +375,14 @@ pub(crate) fn dvs_status(
 ///
 /// @param paths Character vector of repo-root-relative file paths recorded at
 ///   add time. The filter keeps only `add` entries for those files. An empty
-///   vector (the default) returns the whole log, including `init` entries. A
-///   non-empty filter drops all `init` entries.
+///   vector (the default) or `NULL` returns the whole log, including `init`
+///   entries. A non-empty filter drops all `init` entries.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_audit_log_impl")]
+#[miniextendr(r_name = "dvs_audit_log_impl", internal, call = caller)]
 pub(crate) fn dvs_audit_log(
-    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
+    #[miniextendr(default = "character(0)", no_na)] paths: Option<Vec<PathBuf>>,
 ) -> Result<BuiltDataFrame> {
-    let current_dir = std::env::current_dir()?;
-    let config = Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))??;
+    let config = find_config()?;
 
     // An empty `paths` slice returns the whole audit log. A non-empty filter
     // keeps only `add` entries recording one of those repo-root-relative paths
@@ -384,7 +390,9 @@ pub(crate) fn dvs_audit_log(
     // dvs crate's own serde impls and handed straight to the dataframe
     // serializer, so the structure is inherited through serde. vec_to_dataframe
     // returns an empty data frame when the filter matches nothing.
-    let entries = config.backend().get_audit_entries(&paths)?;
+    let entries = config
+        .backend()
+        .get_audit_entries(&paths.unwrap_or_default())?;
     let frame = miniextendr_api::serde::vec_to_dataframe_flatten_enums(&entries, &["action"])?;
     if entries.is_empty() {
         return Ok(frame);
@@ -447,6 +455,40 @@ impl From<&dvs::StatusFacts> for StatusRow {
 
 // endregion
 
+/// Valid `on_conflict` choices for [`dvs_get`].
+#[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
+#[match_arg(rename_all = "lower")]
+pub enum OnConflictChoice {
+    /// Change no files if any requested file has a conflict.
+    Abort,
+    /// Leave conflicting files as they are and get the rest.
+    Skip,
+    /// Replace conflicting files.
+    Overwrite,
+}
+
+/// Valid `on_error` choices for [`dvs_get`]. The R side acts on the choice.
+#[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
+#[match_arg(rename_all = "lower")]
+pub enum OnErrorChoice {
+    /// Only return the result.
+    Return,
+    /// Also warn.
+    Warn,
+    /// Raise an error.
+    Error,
+}
+
+impl From<OnConflictChoice> for OnConflict {
+    fn from(c: OnConflictChoice) -> Self {
+        match c {
+            OnConflictChoice::Abort => OnConflict::Abort,
+            OnConflictChoice::Skip => OnConflict::Skip,
+            OnConflictChoice::Overwrite => OnConflict::Overwrite,
+        }
+    }
+}
+
 /// @title Retrieve files from DVS storage into the working directory
 /// @description
 /// Fetches the specified files from DVS storage and writes them
@@ -460,12 +502,13 @@ impl From<&dvs::StatusFacts> for StatusRow {
 /// branches). Otherwise it is a conflict, handled by `on_conflict`.
 ///
 /// @param paths Character vector of file paths to retrieve from DVS storage.
+///   `NULL` is the same as `character(0)`.
 /// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
 ///   Globs use a literal path separator: `*.csv` only matches files in the
 ///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
 ///   match recursively across subdirectories. Mutually exclusive with `recursive`.
 /// @param recursive If `TRUE`, directory inputs include all descendants;
-///   if `FALSE` or `NULL` (default), only direct children of the directory
+///   if `FALSE` or `NULL`, only direct children of the directory
 ///   are returned. With no explicit `paths` the directory is the working
 ///   directory. Mutually exclusive with `glob`.
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
@@ -473,37 +516,34 @@ impl From<&dvs::StatusFacts> for StatusRow {
 ///   in dvs.toml, then `"abort"`), or one of `"abort"` (change no files if any
 ///   requested file has local changes or another problem), `"skip"` (leave those
 ///   files and get the rest) or `"overwrite"` (replace them; local changes are lost).
+/// @param on_error What `dvs_get()` does when get did not do as asked:
+///   `"return"`, `"warn"` or `"error"`. The result carries the matched choice
+///   back to R, which acts on it.
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_get_impl")]
+#[miniextendr(r_name = "dvs_get_impl", internal, call = caller)]
 pub(crate) fn dvs_get(
-    #[miniextendr(default = "character(0)")] paths: Vec<PathBuf>,
-    #[miniextendr(default = "NULL")] glob: Option<String>,
-    #[miniextendr(default = "NULL")] recursive: Option<bool>,
-    #[miniextendr(default = "NULL")] dry_run: Option<bool>,
-    #[miniextendr(default = "NULL")] on_conflict: Option<String>,
+    #[miniextendr(default = "character(0)", no_na)] paths: Option<Vec<PathBuf>>,
+    #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
+    #[miniextendr(default = "NULL", no_na)] recursive: Option<bool>,
+    #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
+    #[miniextendr(match_arg)] on_conflict: Option<OnConflictChoice>,
+    #[miniextendr(match_arg)] on_error: OnErrorChoice,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<GetResult> {
     let dry_run = dry_run.unwrap_or(false);
-    let explicit: Option<OnConflict> = on_conflict
-        .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
-        .transpose()?;
+    let explicit = on_conflict.map(OnConflict::from);
     if glob.is_some() && recursive.unwrap_or(false) {
         return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
     }
-    let current_dir = std::env::current_dir()?;
-    let config =
-        match Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))? {
-            Err(e) => config_error(&e.to_string()),
-            Ok(c) => c,
-        };
+    let config = find_config()?;
     let (policy, source) = match config.get_on_conflict(explicit) {
         Ok(p) => p,
         Err(ConfigError(message)) => config_error(&message),
     };
     let dvs_paths = DvsPaths::from_cwd(&config)?;
     let selection = select_paths_for_get(
-        paths,
+        paths.unwrap_or_default(),
         glob.as_deref(),
         &dvs_paths,
         recursive.unwrap_or(false),
@@ -543,12 +583,24 @@ pub(crate) fn dvs_get(
             .collect::<Vec<_>>()
             .into_dataframe()?,
         info: GetInfo::from(&report),
+        on_error: on_error.to_choice(),
     })
 }
 
-/// Raises the classed `dvs_config_error`.
+/// The config of the dvs project that holds the working directory. Outside a
+/// project it is an error. A dvs.toml that does not load raises a
+/// `dvs_config_error`.
+fn find_config() -> Result<Config> {
+    let current_dir = std::env::current_dir()?;
+    match Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))? {
+        Ok(config) => Ok(config),
+        Err(e) => config_error(&e.to_string()),
+    }
+}
+
+/// Raises a `dvs_config_error`, one of the `dvs_error` family.
 fn config_error(message: &str) -> ! {
-    miniextendr_api::error!(class = "dvs_config_error", "{message}")
+    miniextendr_api::error!(class = ["dvs_config_error", "dvs_error"], "{message}")
 }
 
 /// One row of the `files` frame of a `dvs_get()` result.
@@ -606,11 +658,13 @@ impl From<&GetRow> for GetFileRow {
     }
 }
 
-/// What `dvs_get_impl()` returns, `list(files, info)`. R adds the classes.
+/// What `dvs_get_impl()` returns, `list(files, info, on_error)`. R adds the
+/// classes and acts on `on_error`.
 #[derive(IntoList, PreferList)]
 struct GetResult {
     files: BuiltDataFrame,
     info: GetInfo,
+    on_error: &'static str,
 }
 
 /// The list `dvs_result_info()` returns for a `dvs_get()` result. The fields
@@ -644,22 +698,59 @@ impl From<&GetReport> for GetInfo {
     }
 }
 
+/// @title Operation information for a dvs result
+/// @description
+/// The rows of a [dvs_get()] result describe each file. This returns what
+/// applies to the whole operation.
+///
+/// @param x A result returned by [dvs_get()]. Anything else raises a
+///   `dvs_error_argument` condition.
+/// @return A list: `command`, `outcome` (`"complete"`, `"aborted"`,
+///   `"partial"` or `"failed"`), `did_as_asked` (`TRUE` unless a file failed
+///   or `on_conflict = "abort"` held files back), `dry_run`, `on_conflict` and
+///   its `source` (`"argument"`, `"env"`, `"config"` for dvs.toml, or
+///   `"default"`), `counts` (a named list of row counts: `total`, `succeeded`
+///   for the rows at their target, then one count per action, the same fields
+///   as the CLI's JSON `counts`) and `problem` (an operation-level message, or
+///   `NA` when there is none).
+#[miniextendr]
+pub fn dvs_result_info(x: DataFrame) -> SEXP {
+    // dvs_get() sets this attribute on its result.
+    match x.as_sexp().get_attr_opt(SEXP::symbol("dvs_info")) {
+        Some(info) => info,
+        None => miniextendr_api::arg_error!(param = "x", "`x` is not a dvs result"),
+    }
+}
+
 /// @title Set the number of threads used by DVS parallel operations
 /// @description
 /// Controls the thread pool size for add, get, and status operations.
-/// Pass `NULL` to revert to automatic detection.
+/// `NULL` or `0` sets no thread count. [set_dvs_threads()] gives the rule
+/// that then applies.
 ///
-/// @param threads Integer number of threads, or `NULL` to reset.
+/// @param threads A whole number of threads, or `0` or `NULL` for none.
 /// @keywords internal
-#[miniextendr(r_name = "dvs_set_threads_impl")]
-pub(crate) fn dvs_set_threads(#[miniextendr(default = "NULL")] threads: Option<usize>) {
+#[miniextendr(r_name = "dvs_set_threads_impl", internal, call = caller)]
+pub(crate) fn dvs_set_threads(
+    // usize reads TRUE as 1. A thread count is a number, and a bare NA is a
+    // logical too.
+    #[miniextendr(
+        default = "NULL",
+        no_na,
+        not_inherits(
+            "logical",
+            message = "`threads` must be a number, not TRUE, FALSE or NA"
+        )
+    )]
+    threads: Option<usize>,
+) {
     set_num_threads(threads.unwrap_or(0));
 }
 
 /// @title Format a byte count as a human-readable size string
 /// @param size_bytes non-negative integer representing file sizes in bytes.
 #[miniextendr]
-pub fn format_byte_size(size_bytes: u64) -> String {
+pub fn format_byte_size(#[miniextendr(no_na)] size_bytes: u64) -> String {
     dvs::format_size(size_bytes)
 }
 

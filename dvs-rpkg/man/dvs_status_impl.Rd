@@ -8,14 +8,16 @@ dvs_status_impl(
   paths = character(0),
   recursive = NULL,
   glob = NULL,
-  status = c("current", "absent", "stale", "modified", "unsynced")
+  status = c("current", "absent", "stale", "modified", "unsynced"),
+  .call = NULL
 )
 }
 \arguments{
-\item{paths}{Character vector of file or directory paths to check status for.}
+\item{paths}{Character vector of file or directory paths to check status for.
+\code{NULL} is the same as \code{character(0)}.}
 
 \item{recursive}{If \code{TRUE}, directory inputs include all descendants;
-if \code{FALSE} or \code{NULL} (default), only direct children of the directory
+if \code{FALSE} or \code{NULL}, only direct children of the directory
 are returned. The flag only constrains descendants of paths passed
 explicitly — when \code{paths} is empty, every tracked file is returned
 regardless of nesting depth, and \code{recursive} has no effect.}
@@ -26,8 +28,10 @@ target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} 
 match recursively across subdirectories. Mutually exclusive with \code{recursive}.}
 
 \item{status}{Character vector of statuses to include. Valid values are
-\code{"current"}, \code{"absent"}, \code{"stale"}, \code{"modified"}, and \code{"unsynced"}. When empty (default), all
-statuses are shown.}
+\code{"current"}, \code{"absent"}, \code{"stale"}, \code{"modified"}, and \code{"unsynced"}. \code{NULL},
+\code{character(0)} and the default show every status.}
+
+\item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }
 \description{
 Reports the sync status of DVS-managed files. By default all statuses

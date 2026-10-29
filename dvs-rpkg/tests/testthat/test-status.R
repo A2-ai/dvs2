@@ -34,6 +34,18 @@ test_that("dvs_status() with no filter shows all three statuses", {
   expect_setequal(result$status, c("current", "absent", "modified"))
 })
 
+test_that("dvs_status takes status = character(0) as no filter", {
+  new_dvs_test_repo()
+  plant_three_statuses()
+  expect_equal(dvs_status(status = character(0)), dvs_status())
+})
+
+test_that("dvs_status takes paths = NULL as no paths", {
+  new_dvs_test_repo()
+  plant_three_statuses()
+  expect_equal(dvs_status(paths = NULL), dvs_status())
+})
+
 test_that("dvs_status(status = 'current') returns only current", {
   new_dvs_test_repo()
   plant_three_statuses()
@@ -236,4 +248,40 @@ test_that("dvs_status keeps an unreadable record as an error row", {
   expect_equal(result$status, "error")
   expect_equal(result$code, "bad_metadata")
   expect_false(is.na(result$error))
+})
+
+test_that("a wrong argument type is a dvs_error_argument", {
+  new_dvs_test_repo()
+  cnd <- tryCatch(dvs_status(glob = 1), error = identity)
+  expect_s3_class(cnd, "dvs_error_argument")
+  expect_s3_class(cnd, "dvs_error")
+  expect_equal(cnd$param, "glob")
+  # The condition names the call the user wrote, not dvs_status_impl().
+  expect_identical(conditionCall(cnd), quote(dvs_status(glob = 1)))
+  expect_argument_error(quote(dvs_status(paths = NA_character_)), "paths")
+  expect_argument_error(quote(dvs_status(recursive = NA)), "recursive")
+  # The thread count comes from an option the user may set to NA
+  withr::local_options(dvs.num_threads = NA)
+  expect_argument_error(quote(dvs_status()), "threads")
+  # The user passed no `threads`, so the message names the option
+  cnd <- tryCatch(dvs_status(), error = identity)
+  expect_match(conditionMessage(cnd), "`options(dvs.num_threads)` must", fixed = TRUE)
+})
+
+test_that("set_dvs_threads raises a bad value as a dvs_error_argument", {
+  withr::local_options(dvs.num_threads = NULL)
+  expect_argument_error(quote(set_dvs_threads(NA)), "threads")
+  expect_argument_error(quote(set_dvs_threads(-1)), "threads")
+  expect_argument_error(quote(set_dvs_threads(2.5)), "threads")
+  expect_argument_error(quote(set_dvs_threads("4")), "threads")
+  expect_argument_error(quote(set_dvs_threads(TRUE)), "threads")
+  expect_argument_error(quote(set_dvs_threads(c(1, 2))), "threads")
+  expect_null(getOption("dvs.num_threads"))
+
+  expect_null(set_dvs_threads(2))
+  expect_identical(getOption("dvs.num_threads"), 2L)
+  expect_identical(set_dvs_threads(0), 2L)
+  expect_identical(getOption("dvs.num_threads"), 0L)
+  expect_identical(set_dvs_threads(NULL), 0L)
+  expect_null(getOption("dvs.num_threads"))
 })

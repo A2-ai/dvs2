@@ -11,6 +11,13 @@ test_that("dvs_audit_log returns the init and add entries", {
   expect_gte(nrow(log), 2L)
 })
 
+test_that("dvs_audit_log takes paths = NULL as no filter", {
+  new_dvs_test_repo()
+  write_theoph("theoph.csv")
+  dvs_add(paths = "theoph.csv")
+  expect_equal(dvs_audit_log(paths = NULL), dvs_audit_log())
+})
+
 test_that("dvs_audit_log filters to the add entry for the given path", {
   new_dvs_test_repo()
   write_theoph("theoph.csv")
@@ -46,4 +53,9 @@ test_that("dvs_audit_log flattens the action into columns with a POSIXct timesta
   expect_equal(log$action_file_path, c(NA, "a.csv"))
   expect_equal(log$action_message, c(NA, "why"))
   expect_false("action" %in% names(log))
+})
+
+test_that("dvs_audit_log raises an NA path as a dvs_error_argument", {
+  new_dvs_test_repo()
+  expect_argument_error(quote(dvs_audit_log(paths = NA_character_)), "paths")
 })

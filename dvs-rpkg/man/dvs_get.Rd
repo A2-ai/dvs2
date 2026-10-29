@@ -10,11 +10,12 @@ dvs_get(
   recursive = FALSE,
   dry_run = FALSE,
   on_conflict = NULL,
-  on_error = getOption("dvs.on_error", "return")
+  on_error = NULL
 )
 }
 \arguments{
-\item{paths}{Character vector of file paths to retrieve from DVS storage.}
+\item{paths}{Character vector of file paths to retrieve from DVS storage.
+\code{NULL} is the same as \code{character(0)}.}
 
 \item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).
 Globs use a literal path separator: \verb{*.csv} only matches files in the
@@ -34,9 +35,10 @@ files and get the rest) or \code{"overwrite"} (replace them; local changes are l
 
 \item{on_error}{What to do when get did not do as asked (a file failed, or
 \code{on_conflict = "abort"} held files back; files left by
-\code{on_conflict = "skip"} count as done): \code{"return"} (the default) only
-returns the result, \code{"warn"} also warns and \code{"error"} raises an error. The
-condition has class \code{dvs_get_incomplete} and carries the result as
+\code{on_conflict = "skip"} count as done): \code{"return"} only returns the
+result, \code{"warn"} also warns and \code{"error"} raises an error. \code{NULL} (the
+default) takes the \code{dvs.on_error} option, and \code{"return"} when it is unset.
+The condition has class \code{dvs_get_incomplete} and carries the result as
 \code{cnd$result}. Pipelines can set \code{options(dvs.on_error = "error")}.}
 }
 \value{

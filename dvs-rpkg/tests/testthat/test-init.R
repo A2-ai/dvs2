@@ -140,3 +140,19 @@ test_that("dvs_init respects metadata_folder_name", {
   )
   expect_true(dir.exists(file.path(repo, "custom_meta")))
 })
+
+test_that("dvs_init raises a wrong argument as a dvs_error_argument", {
+  withr::local_dir(withr::local_tempdir())
+  expect_argument_error(quote(dvs_init(storage_path = NA_character_)), "storage_path")
+  expect_argument_error(quote(dvs_init(tempfile(), compression = "bogus")), "compression")
+  # NULL means not given. NA is no value, so root_dir = NA does not mean the
+  # working directory.
+  expect_argument_error(quote(dvs_init(tempfile(), root_dir = NA_character_)), "root_dir")
+  expect_argument_error(quote(dvs_init(tempfile(), group = NA_character_)), "group")
+  expect_argument_error(
+    quote(dvs_init(tempfile(), metadata_folder_name = NA_character_)),
+    "metadata_folder_name"
+  )
+  expect_false(dir.exists(".dvs"))
+  expect_false(file.exists("dvs.toml"))
+})
