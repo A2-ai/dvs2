@@ -799,9 +799,6 @@ pub fn dvs_version() -> String {
 /// Default at package load: `"off"` — no log output is produced until this
 /// function is called.
 ///
-/// @param level Character string giving the desired log level. The default
-///   is `"off"`.
-///
 /// @return Called for its side effect; returns `NULL` invisibly.
 ///
 /// @examples

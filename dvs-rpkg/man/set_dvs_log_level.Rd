@@ -7,8 +7,7 @@
 set_dvs_log_level(level = c("off", "error", "warn", "info", "debug", "trace"))
 }
 \arguments{
-\item{level}{Character string giving the desired log level. The default
-is \code{"off"}.}
+\item{level}{One of "off", "error", "warn", "info", "debug", "trace".}
 }
 \value{
 Called for its side effect; returns \code{NULL} invisibly.
