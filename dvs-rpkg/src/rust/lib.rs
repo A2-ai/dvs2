@@ -455,6 +455,18 @@ pub enum OnConflictChoice {
     Overwrite,
 }
 
+/// Valid `on_error` choices for [`dvs_get`]. The R side acts on the choice.
+#[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
+#[match_arg(rename_all = "lower")]
+pub enum OnErrorChoice {
+    /// Only return the result.
+    Return,
+    /// Also warn.
+    Warn,
+    /// Raise an error.
+    Error,
+}
+
 impl From<OnConflictChoice> for OnConflict {
     fn from(c: OnConflictChoice) -> Self {
         match c {
@@ -491,6 +503,9 @@ impl From<OnConflictChoice> for OnConflict {
 ///   in dvs.toml, then `"abort"`), or one of `"abort"` (change no files if any
 ///   requested file has local changes or another problem), `"skip"` (leave those
 ///   files and get the rest) or `"overwrite"` (replace them; local changes are lost).
+/// @param on_error What `dvs_get()` does when get did not do as asked:
+///   `"return"`, `"warn"` or `"error"`. The result carries the matched choice
+///   back to R, which acts on it.
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_get_impl", internal, call = caller)]
@@ -500,6 +515,7 @@ pub(crate) fn dvs_get(
     #[miniextendr(default = "NULL", no_na)] recursive: Option<bool>,
     #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
     #[miniextendr(match_arg)] on_conflict: Option<OnConflictChoice>,
+    #[miniextendr(match_arg)] on_error: OnErrorChoice,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
 ) -> Result<GetResult> {
     let dry_run = dry_run.unwrap_or(false);
@@ -554,6 +570,7 @@ pub(crate) fn dvs_get(
             .collect::<Vec<_>>()
             .into_dataframe()?,
         info: GetInfo::from(&report),
+        on_error: on_error.to_choice(),
     })
 }
 
@@ -628,11 +645,13 @@ impl From<&GetRow> for GetFileRow {
     }
 }
 
-/// What `dvs_get_impl()` returns, `list(files, info)`. R adds the classes.
+/// What `dvs_get_impl()` returns, `list(files, info, on_error)`. R adds the
+/// classes and acts on `on_error`.
 #[derive(IntoList, PreferList)]
 struct GetResult {
     files: BuiltDataFrame,
     info: GetInfo,
+    on_error: &'static str,
 }
 
 /// The list `dvs_result_info()` returns for a `dvs_get()` result. The fields

@@ -138,8 +138,6 @@ dvs_get <- function(
   on_conflict = NULL,
   on_error = getOption("dvs.on_error", "return")
 ) {
-  on_error <- match.arg(on_error, c("return", "warn", "error"))
-
   dvs_set_threads_impl(getOption("dvs.num_threads"))
   progress_callback <- NULL
   # Only show a progress bar in interactive sessions; non-interactive callers
@@ -154,6 +152,7 @@ dvs_get <- function(
     recursive = recursive,
     dry_run = dry_run,
     on_conflict = on_conflict,
+    on_error = on_error,
     progress_callback = progress_callback
   )
   info <- raw$info
@@ -162,8 +161,8 @@ dvs_get <- function(
   files$size <- new_dvs_bytes(files$size)
   result <- structure(files, class = c("dvs_get_result", class(files)), dvs_info = info)
 
-  if (on_error != "return" && !info$did_as_asked) {
-    signal_incomplete(result, on_error, sys.call())
+  if (raw$on_error != "return" && !info$did_as_asked) {
+    signal_incomplete(result, raw$on_error, sys.call())
   }
   result
 }
