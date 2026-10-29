@@ -547,23 +547,42 @@ struct GetFileRow {
     code: Option<String>,
     message: Option<String>,
     hint: Option<String>,
+    duration_ms: Option<f64>,
 }
 
 impl From<&GetRow> for GetFileRow {
-    fn from(r: &GetRow) -> Self {
+    fn from(row: &GetRow) -> Self {
+        // No `..`: a field added to GetRow does not compile here until it
+        // has a column.
+        let GetRow {
+            path,
+            local_path,
+            before,
+            action,
+            satisfied,
+            size,
+            target_hash,
+            local_hash,
+            stored_copy,
+            code,
+            message,
+            hint,
+            duration_ms,
+        } = row;
         GetFileRow {
-            path: r.path.to_string_lossy().into_owned(),
-            local_path: r.local_path.to_string_lossy().into_owned(),
-            before: r.before.as_str().to_string(),
-            action: r.action.as_str().to_string(),
-            satisfied: r.satisfied,
-            size: r.size.map(|s| s as f64),
-            target_hash: r.target_hash.clone(),
-            local_hash: r.local_hash.clone(),
-            stored_copy: r.stored_copy.map(|c| c.as_str().to_string()),
-            code: r.code.map(|c| c.as_str().to_string()),
-            message: r.message.clone(),
-            hint: r.hint.clone(),
+            path: path.to_string_lossy().into_owned(),
+            local_path: local_path.to_string_lossy().into_owned(),
+            before: before.as_str().to_string(),
+            action: action.as_str().to_string(),
+            satisfied: *satisfied,
+            size: size.map(|s| s as f64),
+            target_hash: target_hash.clone(),
+            local_hash: local_hash.clone(),
+            stored_copy: stored_copy.map(|c| c.as_str().to_string()),
+            code: code.map(|c| c.as_str().to_string()),
+            message: message.clone(),
+            hint: hint.clone(),
+            duration_ms: duration_ms.map(|d| d as f64),
         }
     }
 }

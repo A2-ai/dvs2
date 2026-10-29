@@ -106,7 +106,9 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   `"not_a_file"`, `"unsafe_path"`), `action` (`"restored"`, `"replaced"`,
 #'   `"unchanged"`, `"skipped"`, `"not_run"`, `"failed"`, `"would_restore"`,
 #'   `"would_replace"`), `satisfied`, `size`, `target_hash`, `local_hash`,
-#'   `stored_copy`, `code`, `message` and `hint`. [dvs_result_info()] returns
+#'   `stored_copy`, `code`, `message`, `hint` and `duration_ms` (the
+#'   milliseconds spent on the file, `NA` when it was never hashed or
+#'   copied). [dvs_result_info()] returns
 #'   the outcome and the policy that applied. Outside a dvs project it raises an
 #'   error; configuration errors (for example `on_conflict = "overwrite"` in
 #'   dvs.toml) raise a `dvs_config_error`.
