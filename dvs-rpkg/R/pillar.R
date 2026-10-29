@@ -6,10 +6,14 @@
 #' `2^53` bytes — `integer` in R is 32 bits and would silently overflow at
 #' ~2 GB.
 #'
-#' @param x atomic numeric / integer / logical vector (incl. `NA`)
+#' @param x atomic numeric / integer / logical vector (incl. `NA`). `NULL`
+#'   raises a `dvs_error_argument` condition.
 #' @return a `dvs_bytes` object inheriting from `numeric`
 #' @export
 new_dvs_bytes <- function(x) {
+  if (is.null(x)) {
+    .miniextendr_arg_error("x", "must not be NULL", sys.call())
+  }
   structure(as.double(x), class = c("dvs_bytes", "numeric"))
 }
 

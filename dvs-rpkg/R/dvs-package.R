@@ -6,7 +6,8 @@
 #' [dvs_status()], [dvs_get()], [dvs_result_info()], [set_dvs_threads()],
 #' [set_dvs_log_level()] or [format_byte_size()].
 #' An `NA` there raises a `dvs_error_argument` condition, also a `dvs_error`,
-#' that names the call. [new_dvs_bytes()] takes `NA` for an unknown size.
+#' that names the call. [new_dvs_bytes()] takes `NA` for an unknown size and
+#' refuses `NULL`.
 #' @keywords internal
 "_PACKAGE"
 

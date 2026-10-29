@@ -17,7 +17,8 @@ working directory, and \code{message = NULL} in \code{\link[=dvs_add]{dvs_add()}
 \code{\link[=dvs_status]{dvs_status()}}, \code{\link[=dvs_get]{dvs_get()}}, \code{\link[=dvs_result_info]{dvs_result_info()}}, \code{\link[=set_dvs_threads]{set_dvs_threads()}},
 \code{\link[=set_dvs_log_level]{set_dvs_log_level()}} or \code{\link[=format_byte_size]{format_byte_size()}}.
 An \code{NA} there raises a \code{dvs_error_argument} condition, also a \code{dvs_error},
-that names the call. \code{\link[=new_dvs_bytes]{new_dvs_bytes()}} takes \code{NA} for an unknown size.
+that names the call. \code{\link[=new_dvs_bytes]{new_dvs_bytes()}} takes \code{NA} for an unknown size and
+refuses \code{NULL}.
 }
 
 \author{
