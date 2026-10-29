@@ -39,6 +39,37 @@ test_that("an NA in any argument says it must not be NA", {
   refuses_na(quote(dvs_get(dry_run = NA)), "dry_run")
 })
 
+test_that("an NA among several values of a choice says it must not be NA", {
+  new_dvs_test_repo()
+  withr::local_options(dvs.num_threads = NULL, dvs.on_error = NULL)
+  refuses_na(quote(dvs_init(tempfile(), compression = c("zstd", NA))), "compression")
+  refuses_na(quote(dvs_status(status = c("current", NA))), "status")
+  refuses_na(quote(dvs_get(on_conflict = c("skip", NA))), "on_conflict")
+  refuses_na(quote(dvs_get(on_error = c("return", NA))), "on_error")
+  refuses_na(quote(dvs_get(on_error = factor(c("return", NA)))), "on_error")
+  refuses_na(quote(set_dvs_log_level(c("info", NA))), "level")
+})
+
+# Several values without an NA are refused for their length.
+refuses_length <- function(call, param) {
+  expect_argument_error(call, param)
+  cnd <- tryCatch(eval(call), error = identity)
+  expect_identical(conditionMessage(cnd), sprintf("'%s' must be of length 1", param))
+}
+
+test_that("several values of a choice without an NA say it must be of length 1", {
+  new_dvs_test_repo()
+  withr::local_options(dvs.num_threads = NULL, dvs.on_error = NULL)
+  refuses_length(quote(dvs_init(tempfile(), compression = c("none", "zstd"))), "compression")
+  refuses_length(quote(dvs_get(on_conflict = c("skip", "abort"))), "on_conflict")
+  refuses_length(quote(dvs_get(on_error = c("return", "error"))), "on_error")
+  refuses_length(quote(set_dvs_log_level(c("info", "warn"))), "level")
+
+  withr::local_options(dvs.on_error = c("return", "error"))
+  cnd <- tryCatch(dvs_get(), error = identity)
+  expect_identical(conditionMessage(cnd), "`options(dvs.on_error)` must be of length 1")
+})
+
 test_that("an NA in an option says the option must not be NA", {
   new_dvs_test_repo()
   withr::local_options(dvs.num_threads = NA_real_)
@@ -46,6 +77,10 @@ test_that("an NA in an option says the option must not be NA", {
   expect_identical(conditionMessage(cnd), "`options(dvs.num_threads)` must not be NA")
 
   withr::local_options(dvs.num_threads = NULL, dvs.on_error = NA_character_)
+  cnd <- tryCatch(dvs_get(), error = identity)
+  expect_identical(conditionMessage(cnd), "`options(dvs.on_error)` must not be NA")
+
+  withr::local_options(dvs.on_error = c("return", NA))
   cnd <- tryCatch(dvs_get(), error = identity)
   expect_identical(conditionMessage(cnd), "`options(dvs.on_error)` must not be NA")
 })
