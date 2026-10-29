@@ -6,7 +6,7 @@
 
 - R package: requires R 4.4 or later.
 - R package: `dvs_audit_log()` spreads each entry's action into columns: `action_variant` ("init" or "add") and one `action_<field>` column per field that the actions carry, `NA` where an action has none. The action was a list-column. `timestamp` is a date-time (UTC), not unix seconds.
-- R package: `NA` is never a value. An `NA` in any argument raises an error that says it must not be `NA`. An `NA` `message`, `group`, `root_dir` or `metadata_folder_name` meant the argument was not given. Use `NULL` or leave the argument out.
+- R package: `NA` is never a value. An `NA` in any argument raises an error that says it must not be `NA`, also among several values, as in `on_error = c("return", NA)`. An `NA` `message`, `group`, `root_dir` or `metadata_folder_name` meant the argument was not given. Use `NULL` or leave the argument out.
 - R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
 - R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
 
