@@ -1387,13 +1387,18 @@ mod tests {
 
         /// Write `content` at `name` and `dvs add` it.
         fn add(&self, name: &str, content: &[u8]) {
+            self.add_with(name, content, Compression::Zstd);
+        }
+
+        /// As `add`, with the project's compression set to `compression`.
+        fn add_with(&self, name: &str, content: &[u8], compression: Compression) {
             create_file(&self.root, name, content);
             let results = add_files(
                 vec![name.into()],
                 &self.paths,
                 self.backend(),
                 None,
-                Compression::Zstd,
+                compression,
                 false,
                 &OperationContext::new(),
             )
@@ -1495,6 +1500,28 @@ mod tests {
             (Before::Absent, Action::Restored, true)
         );
         assert_eq!(repo.read("a.csv"), b"a");
+    }
+
+    // The project's compression changed between two adds of the same content:
+    // the second file's metadata records the stored blob's, so it restores
+    #[test]
+    fn a_dedup_after_a_compression_change_is_restored() {
+        for (first, then) in [
+            (Compression::Zstd, Compression::None),
+            (Compression::None, Compression::Zstd),
+        ] {
+            let repo = TestRepo::new();
+            let content = "hello world ".repeat(1000).into_bytes();
+            repo.add_with("a.bin", &content, first);
+            repo.add_with("b.bin", &content, then);
+            let meta: FileMetadata = serde_json::from_slice(&repo.metadata_bytes("b.bin")).unwrap();
+            assert_eq!(meta.compression, first, "asked for {then}");
+
+            fs::remove_file(repo.root.join("b.bin")).unwrap();
+            let report = repo.get(&["b.bin"], OnConflict::Abort);
+            assert_eq!(row(&report, "b.bin").action, Action::Restored);
+            assert_eq!(repo.read("b.bin"), content);
+        }
     }
 
     // Spec 2
