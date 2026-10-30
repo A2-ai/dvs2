@@ -4,7 +4,7 @@
 # Re-run this later to check whether each known divergence still holds.
 #
 # Each case asserts the SPEC-CORRECT behavior. Line refs (Lnnn) are to
-# specs.md on main at 7ff0aa0.
+# specs.md on main at 370f448.
 #   Section A — clear CLI bugs (#216, #217, #240): FATAL. Flip to PASS once the
 #               CLI is fixed; the script's exit code = number of Section A failures.
 #   Section B — spec/CLI divergences (#218, #220): INFORMATIONAL. These are

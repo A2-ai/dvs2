@@ -3,7 +3,7 @@
 # Validate CLI-observable claims from specs.md "Internals" sections:
 #   Metadata file format (L670), Storage layout (L699),
 #   Compression (L713), Hash cache (L765).
-# Line refs (Lnnn) are to specs.md on main at 7ff0aa0.
+# Line refs (Lnnn) are to specs.md on main at 370f448.
 # Observes internals purely by running `dvs` and inspecting on-disk files.
 
 set -eu

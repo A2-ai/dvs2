@@ -2,7 +2,7 @@
 
 # Validate the Globbing claims in specs.md (L795-806) plus the glob mentions in
 # add (L425-426), get (L513), and status (L619). CLI only.
-# Line refs (Lnnn) are to specs.md on main at 7ff0aa0.
+# Line refs (Lnnn) are to specs.md on main at 370f448.
 #
 # Claims under test (Script 5 in ui/TODO.md):
 #   1. explicit files: glob ignored, files added/retrieved directly (L799)

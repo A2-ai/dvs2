@@ -3,7 +3,7 @@
 # Validate CLI-observable `dvs status` claims from specs.md (Script 4 in ui/TODO.md).
 # CLI only, verdict-based. Each claim prints expected vs actual and a PASS/FAIL,
 # ending with `=== SUMMARY: N pass, M fail ===`.
-# Line refs (Lnnn) are to specs.md on main at 7ff0aa0.
+# Line refs (Lnnn) are to specs.md on main at 370f448.
 
 set -eu
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR

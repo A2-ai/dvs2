@@ -3,7 +3,7 @@
 # Validate CLI-observable claims for `dvs get` against specs.md.
 # Each claim prints expected vs actual and a PASS/FAIL verdict via check().
 # Ends with: === SUMMARY: N pass, M fail ===
-# Line refs (Lnnn) are to specs.md on main at 7ff0aa0.
+# Line refs (Lnnn) are to specs.md on main at 370f448.
 #
 # Assigned claims (specs.md / ui/TODO.md "Script 3"):
 #   - get --help text matches spec block L504-524

@@ -3,7 +3,7 @@
 # Script 7 — validate_global.sh
 #
 # Validates cross-cutting CLI surface claims from specs.md (CLI only).
-# Line refs (Lnnn) are to specs.md on main at 7ff0aa0.
+# Line refs (Lnnn) are to specs.md on main at 370f448.
 #   - `dvs --help` lists every subcommand the spec documents (L31, L131-229, L270-666)
 #   - `--json` accepted by every subcommand that runs locally, before or after it (L13, L82)
 #   - a --json argument error is an envelope with command `cli`, exit 2 (L89-90, L216)
