@@ -9,9 +9,9 @@ use fs_err as fs;
 /// Each path should be relative to the repo_root already. Files are grouped by
 /// parent directory and a `/filename` entry is appended to the `.gitignore` in
 /// that directory. Files at the repo root use the root `.gitignore`.
-/// If no `.git` folder exists, this is a no-op.
+/// If neither `repo_root` nor a directory above it has a `.git`, this is a no-op.
 pub(crate) fn add_to_gitignore(repo_root: &Path, paths: &[PathBuf]) -> Result<()> {
-    if !repo_root.join(".git").exists() {
+    if !in_git_work_tree(repo_root) {
         return Ok(());
     }
 
@@ -69,6 +69,13 @@ pub(crate) fn add_to_gitignore(repo_root: &Path, paths: &[PathBuf]) -> Result<()
     Ok(())
 }
 
+/// Whether `dir` is in a git working tree: it or a directory above it has a
+/// `.git` (a folder, or a file in a worktree or submodule). A project can sit
+/// in a subfolder of the repository, as an RStudio project often does.
+fn in_git_work_tree(dir: &Path) -> bool {
+    dir.ancestors().any(|d| d.join(".git").exists())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,11 +105,43 @@ mod tests {
     }
 
     #[test]
+    fn test_project_in_a_subfolder_of_the_repo() {
+        let (_tmp, repo) = create_temp_git_repo();
+        let project = repo.join("analysis");
+        fs::create_dir(&project).unwrap();
+        let paths = vec![PathBuf::from("data.csv"), PathBuf::from("raw/dm.csv")];
+        add_to_gitignore(&project, &paths).unwrap();
+
+        // Each entry goes next to its file, inside the project
+        let root_content = fs::read_to_string(project.join(".gitignore")).unwrap();
+        assert_eq!(root_content, "/data.csv\n");
+        let raw_content = fs::read_to_string(project.join("raw/.gitignore")).unwrap();
+        assert_eq!(raw_content, "/dm.csv\n");
+        assert!(!repo.join(".gitignore").exists());
+    }
+
+    #[test]
+    fn test_git_file_marks_a_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(tmp.path()).unwrap();
+        fs::write(root.join(".git"), "gitdir: /elsewhere/.git/worktrees/w\n").unwrap();
+        add_to_gitignore(&root, &[PathBuf::from("data.csv")]).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join(".gitignore")).unwrap(),
+            "/data.csv\n"
+        );
+    }
+
+    #[test]
     fn test_no_op_without_git_folder() {
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
+        let root = fs::canonicalize(tmp.path()).unwrap();
+        // A temp dir inside some git repo cannot show the no-op
+        if in_git_work_tree(&root) {
+            return;
+        }
         let paths = vec![PathBuf::from("data.csv")];
-        add_to_gitignore(root, &paths).unwrap();
+        add_to_gitignore(&root, &paths).unwrap();
         assert!(!root.join(".gitignore").exists());
     }
 }
