@@ -122,7 +122,7 @@ impl ProgressBarCallback {
 
 // region: DVS operations
 
-/// Valid compression choices for [`dvs_init`].
+/// Valid compression choices for `dvs_init`.
 #[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
 #[match_arg(rename_all = "lower")]
 pub enum CompressionChoice {
@@ -265,7 +265,7 @@ pub(crate) fn dvs_add(
     Ok(miniextendr_api::serde::vec_to_dataframe(&results)?)
 }
 
-/// Valid status filter choices for [`dvs_status`].
+/// Valid status filter choices for `dvs_status`.
 ///
 /// Used with `match.arg(status, several.ok = TRUE)` in the R wrapper to let
 /// users select which file statuses to include.
@@ -470,7 +470,7 @@ impl From<&dvs::StatusFacts> for StatusRow {
 
 // endregion
 
-/// Valid `on_conflict` choices for [`dvs_get`].
+/// Valid `on_conflict` choices for `dvs_get`.
 #[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
 #[match_arg(rename_all = "lower")]
 pub enum OnConflictChoice {
@@ -482,7 +482,7 @@ pub enum OnConflictChoice {
     Overwrite,
 }
 
-/// Valid `on_error` choices for [`dvs_get`]. The R side acts on the choice.
+/// Valid `on_error` choices for `dvs_get`. The R side acts on the choice.
 #[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
 #[match_arg(rename_all = "lower")]
 pub enum OnErrorChoice {
