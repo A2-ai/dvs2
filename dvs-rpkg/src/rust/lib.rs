@@ -195,13 +195,17 @@ pub(crate) fn dvs_init(
 /// @description
 /// Hashes and copies the specified files into DVS storage.
 ///
-/// @param paths Character vector of file paths to add to DVS storage. `NULL`
-///   is the same as `character(0)`.
-/// @param message Optional commit message describing why the files were added.
-/// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
-///   Globs use a literal path separator: `*.csv` only matches files in the
-///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
-///   match recursively across subdirectories.
+/// @param paths Files to add, or directories to search with `glob`,
+///   relative to the working directory. `NULL` is the same as
+///   `character(0)`. `paths` or `glob` is required, and a directory needs
+///   `glob`.
+/// @param message A message stored with the files' metadata, such as why
+///   they were added.
+/// @param glob A glob that selects the files to add, such as `"*.csv"`. It
+///   runs from the working directory, or from each directory in `paths`. A
+///   file named in `paths` is added whether or not it matches. `*` does not
+///   cross a path separator, so `*.csv` matches `a.csv` but not
+///   `sub/a.csv`. Use `**/*.csv` to match at any depth.
 /// @param dry_run If `TRUE`, report what would be added without modifying anything.
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
@@ -300,20 +304,30 @@ impl From<StatusChoice> for Status {
 /// A file whose status cannot be read is always kept, with status `"error"`,
 /// the kind of failure in `code` and the reason in `error`.
 ///
-/// @param paths Character vector of file or directory paths to check status for.
-///   `NULL` is the same as `character(0)`.
+/// @param paths Files or directories to report, relative to the working
+///   directory. `NULL` is the same as `character(0)`.
 /// @param recursive If `TRUE`, directory inputs include all descendants;
 ///   if `FALSE` or `NULL`, only direct children of the directory
 ///   are returned. The flag only constrains descendants of paths passed
 ///   explicitly — when `paths` is empty, every tracked file is returned
 ///   regardless of nesting depth, and `recursive` has no effect.
-/// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
-///   Globs use a literal path separator: `*.csv` only matches files in the
-///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
-///   match recursively across subdirectories. Mutually exclusive with `recursive`.
-/// @param status Character vector of statuses to include. Valid values are
-///   `"current"`, `"absent"`, `"stale"`, `"modified"`, and `"unsynced"`. `NULL`,
-///   `character(0)` and the default show every status.
+/// @param glob A glob that selects tracked files, such as `"*.csv"`. It
+///   runs from the working directory, or from each directory in `paths`. `*`
+///   does not cross a path separator, so `*.csv` matches `a.csv` but not
+///   `sub/a.csv`. Use `**/*.csv` to match at any depth. Mutually exclusive
+///   with `recursive`.
+/// @param status The statuses to include, any of:
+///   * `"current"`: the local file matches the tracked version.
+///   * `"absent"`: the file is tracked but missing locally.
+///   * `"stale"`: the local file is what dvs last wrote or added there, and
+///     the tracked version has changed since, for example after a git pull.
+///     [dvs_get()] updates it.
+///   * `"modified"`: the local file differs from the tracked version and from
+///     what dvs last wrote or added there.
+///   * `"unsynced"`: the local file differs from the tracked version, and dvs
+///     has no record of what it last wrote there.
+///
+///   `NULL`, `character(0)` and the default show every status.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_status_impl", internal, call = caller)]
 pub(crate) fn dvs_status(
@@ -502,12 +516,13 @@ impl From<OnConflictChoice> for OnConflict {
 /// asking only when dvs itself put it there (for example after switching git
 /// branches). Otherwise it is a conflict, handled by `on_conflict`.
 ///
-/// @param paths Character vector of file paths to retrieve from DVS storage.
-///   `NULL` is the same as `character(0)`.
-/// @param glob Optional glob pattern to select files (e.g. `"data/*.csv"`).
-///   Globs use a literal path separator: `*.csv` only matches files in the
-///   target directory and will not match `subdir/file.csv`. Use `**/*.csv` to
-///   match recursively across subdirectories. Mutually exclusive with `recursive`.
+/// @param paths Tracked files or directories to retrieve, relative to the
+///   working directory. `NULL` is the same as `character(0)`.
+/// @param glob A glob that selects tracked files, such as `"*.csv"`. It
+///   runs from the working directory, or from each directory in `paths`. `*`
+///   does not cross a path separator, so `*.csv` matches `a.csv` but not
+///   `sub/a.csv`. Use `**/*.csv` to match at any depth. Mutually exclusive
+///   with `recursive`.
 /// @param recursive If `TRUE`, directory inputs include all descendants;
 ///   if `FALSE` or `NULL`, only direct children of the directory
 ///   are returned. With no explicit `paths` the directory is the working
@@ -753,7 +768,7 @@ pub(crate) fn dvs_set_threads(
 /// Formats a size the way the dvs CLI prints it. The size columns of
 /// [dvs_add()], [dvs_status()] and [dvs_get()] print this way in a tibble.
 ///
-/// @param size_bytes non-negative integer representing file sizes in bytes.
+/// @param size_bytes A size in bytes: one whole number, 0 or more.
 /// @return A string. Below 1024 bytes it is the count with `B`, as in
 ///   `"512 B"`. From 1024 bytes up it has one decimal and the largest unit
 ///   that fits: `KB`, `MB`, `GB` or `TB`. The units are powers of 1024, so

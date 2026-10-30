@@ -14,13 +14,14 @@ dvs_get(
 )
 }
 \arguments{
-\item{paths}{Character vector of file paths to retrieve from DVS storage.
-\code{NULL} is the same as \code{character(0)}.}
+\item{paths}{Tracked files or directories to retrieve, relative to the
+working directory. \code{NULL} is the same as \code{character(0)}.}
 
-\item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).
-Globs use a literal path separator: \verb{*.csv} only matches files in the
-target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} to
-match recursively across subdirectories. Mutually exclusive with \code{recursive}.}
+\item{glob}{A glob that selects tracked files, such as \code{"*.csv"}. It
+runs from the working directory, or from each directory in \code{paths}. \code{*}
+does not cross a path separator, so \verb{*.csv} matches \code{a.csv} but not
+\code{sub/a.csv}. Use \verb{**/*.csv} to match at any depth. Mutually exclusive
+with \code{recursive}.}
 
 \item{recursive}{If \code{TRUE}, directory inputs include all descendants;
 otherwise only direct children of the directory. With no explicit \code{paths}
