@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::{BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -17,6 +17,31 @@ use crate::{Compression, Hashes};
 const AUDIT_LOG_FILENAME: &str = "audit.log.jsonl";
 /// Only protects the current dvs process, not concurrent dvs processes
 static AUDIT_LOG_LOCK: Mutex<()> = Mutex::new(());
+/// The first bytes of every zstd frame
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
+/// The compression a blob in storage was stored with. A blob without the zstd
+/// magic number is stored as is. Content stored as is can start with the magic
+/// too (a `.zst` file): such a blob is as long as the source and hashes to the
+/// content hash, a compressed one is neither.
+fn stored_compression(blob_path: &Path, hashes: &Hashes, source_size: u64) -> Result<Compression> {
+    let mut head = Vec::with_capacity(ZSTD_MAGIC.len());
+    fs::File::open(blob_path)?
+        .take(ZSTD_MAGIC.len() as u64)
+        .read_to_end(&mut head)?;
+    if head != ZSTD_MAGIC {
+        return Ok(Compression::None);
+    }
+    if fs::metadata(blob_path)?.len() != source_size {
+        return Ok(Compression::Zstd);
+    }
+    let (blob_hashes, _) = Hashes::compute_from_path(blob_path, &[])?;
+    Ok(if blob_hashes.blake3 == hashes.blake3 {
+        Compression::None
+    } else {
+        Compression::Zstd
+    })
+}
 
 /// Resolve a group name to its GID.
 #[cfg(unix)]
@@ -236,10 +261,16 @@ impl LocalBackend {
         } = req;
         let blob_path = self.hash_to_path(hashes)?;
 
-        // Store the blob unless it is already present (dedup).
+        // Store the blob unless it is already present (dedup). The blob kept
+        // the compression it was stored with, which may not be the one asked
+        // for now: the metadata must record the blob's, or get cannot read it.
         let created = !blob_path.is_file();
-        let stored_size = if !created {
-            fs::metadata(&blob_path)?.len()
+        let (stored_size, compression) = if !created {
+            let source_size = fs::metadata(source)?.len();
+            (
+                fs::metadata(&blob_path)?.len(),
+                stored_compression(&blob_path, hashes, source_size)?,
+            )
         } else {
             if let Some(parent) = blob_path.parent() {
                 fs::create_dir_all(parent)?;
@@ -264,7 +295,7 @@ impl LocalBackend {
             if result.is_err() {
                 let _ = fs::remove_file(&tmp_path);
             }
-            result?
+            (result?, compression)
         };
 
         let entry = AuditEntry::new_add(
@@ -404,6 +435,85 @@ mod tests {
         let stored = storage.join("d4").join("1d8cd98f00b204e9800998ecf8427e");
         assert!(stored.is_file());
         assert_eq!(fs::read(&stored).unwrap(), b"test content");
+    }
+
+    /// Stores `content` from a file at `name` with `compression`, using its real hash.
+    fn store_content(
+        backend: &LocalBackend,
+        dir: &Path,
+        name: &str,
+        content: &[u8],
+        compression: Compression,
+    ) -> (Hashes, StoreResult) {
+        let source = dir.join(name);
+        fs::write(&source, content).unwrap();
+        let (hashes, _) = Hashes::compute_from_path(&source, &[]).unwrap();
+        let res = backend
+            .store(StoreRequest::new_local(
+                &hashes,
+                &source,
+                project_path(name),
+                compression,
+            ))
+            .unwrap();
+        (hashes, res)
+    }
+
+    // A dedup reports the compression the blob was stored with, not the one
+    // asked for: the project's setting changed between the two adds
+    #[test]
+    fn store_reports_the_stored_compression_on_dedup() {
+        let content = "hello world ".repeat(1000).into_bytes();
+        for (first, then) in [
+            (Compression::Zstd, Compression::None),
+            (Compression::None, Compression::Zstd),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let backend = LocalBackend::new(tmp.path().join("storage"), None).unwrap();
+            backend.init(Compression::Zstd).unwrap();
+
+            let (_, stored) = store_content(&backend, tmp.path(), "a.bin", &content, first);
+            assert!(stored.created);
+            let (hashes, dedup) = store_content(&backend, tmp.path(), "b.bin", &content, then);
+            assert!(!dedup.created);
+            assert_eq!(dedup.compression, first, "asked for {then}");
+
+            // The reported compression reads the blob back
+            let target = tmp.path().join("out.bin");
+            backend
+                .retrieve(RetrieveRequest::new_local(
+                    &hashes,
+                    &target,
+                    project_path("b.bin"),
+                    dedup.compression,
+                ))
+                .unwrap();
+            assert_eq!(fs::read(&target).unwrap(), content);
+
+            // The audit log records it too
+            let entries = backend
+                .get_audit_entries(&[PathBuf::from("b.bin")])
+                .unwrap();
+            let Action::Add { compression, .. } = &entries.last().unwrap().action else {
+                panic!("expected an add entry");
+            };
+            assert_eq!(*compression, first);
+        }
+    }
+
+    // Content that is itself zstd (a .zst file) stored as is is not taken for
+    // a compressed blob
+    #[test]
+    fn store_dedup_tells_a_zst_file_from_a_compressed_blob() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(tmp.path().join("storage"), None).unwrap();
+        backend.init(Compression::None).unwrap();
+        let zst = zstd::encode_all(&b"inner content"[..], 0).unwrap();
+        assert_eq!(zst[..4], ZSTD_MAGIC);
+
+        store_content(&backend, tmp.path(), "a.zst", &zst, Compression::None);
+        let (_, dedup) = store_content(&backend, tmp.path(), "b.zst", &zst, Compression::Zstd);
+        assert_eq!(dedup.compression, Compression::None);
     }
 
     #[test]
