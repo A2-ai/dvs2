@@ -118,7 +118,7 @@ pub enum Command {
     Status {
         /// Paths (files or directories) to check status for
         paths: Vec<PathBuf>,
-        /// Recursively include files in subdirectories for given directories
+        /// Recursively include files in subdirectories for given directories.
         /// Without this flag, directories return only their direct children.
         #[clap(long, short, conflicts_with = "glob")]
         recursive: bool,

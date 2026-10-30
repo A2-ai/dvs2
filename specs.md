@@ -615,7 +615,7 @@ Arguments:
   [PATHS]...  Paths (files or directories) to check status for
 
 Options:
-  -r, --recursive      Recursively include files in subdirectories for given directories Without this flag, directories return only their direct children
+  -r, --recursive      Recursively include files in subdirectories for given directories. Without this flag, directories return only their direct children
   -g, --glob <GLOB>    Only include the tracked files matching this glob, e.g. '*.csv'
       --current        Include the files that are current
       --absent         Include the files that are absent
