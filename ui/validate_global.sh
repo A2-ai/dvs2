@@ -10,6 +10,7 @@
 #   - multiple projects in one git repo: nearest dvs.toml wins (Glossary, init)
 #   - gitignore entry format `/<filename>`, no duplicate on re-add (Gitignore)
 #   - gitignore skipped when no `.git` folder, add still succeeds (Gitignore)
+#   - a project in a subfolder of a git repo gets its gitignore entries (Gitignore)
 #   - parallelism: DVS_NUM_THREADS honored (Parallelism) [count untestable via CLI]
 #
 # Each claim prints expected vs actual and a PASS/FAIL/UNTESTABLE verdict.
@@ -183,6 +184,20 @@ check "0" "$NOGIT_RC" "add succeeds in repo with no .git"
 # No .gitignore should have been written anywhere in the repo.
 NOGIT_GI_COUNT="$(find "$NOGIT_REPO" -name .gitignore | wc -l | tr -d ' ')"
 check "0" "$NOGIT_GI_COUNT" "no .gitignore written when no .git folder"
+
+# ──────────────────────────────────────────────────────────────────────────────
+say
+say "=== CLAIM 6b: a project in a subfolder of a git repo gets its entries ==="
+SUB_REPO="$(mktemp -d "${TMPDIR:-/tmp}/dvs_repo_cli_subfolder_XXX")"
+SUB_STORE="${SUB_REPO}_store"
+git -C "$SUB_REPO" init -q
+mkdir "$SUB_REPO/study" "$SUB_STORE"
+(cd "$SUB_REPO/study" && dvs init local "$SUB_STORE" >/dev/null)
+head -c 1024 /dev/urandom > "$SUB_REPO/study/c.bin"
+(cd "$SUB_REPO/study" && dvs add c.bin >/dev/null 2>&1)
+# Untracked paths git lists in the repository: the data file and the cache must not be there
+SUB_SEEN="$({ set +x; } 2>/dev/null; git -C "$SUB_REPO" status --porcelain -uall | grep -c -e 'c\.bin$' -e 'dvs\.db$' || true)"
+check "0" "$SUB_SEEN" "git sees neither study/c.bin nor study/.dvs/.cache/dvs.db"
 
 # ──────────────────────────────────────────────────────────────────────────────
 say
