@@ -30,6 +30,16 @@ match recursively across subdirectories. Mutually exclusive with \code{recursive
 \code{"current"}, \code{"absent"}, \code{"stale"}, \code{"modified"}, and \code{"unsynced"}. \code{NULL},
 \code{character(0)} and the default show every status.}
 }
+\value{
+A tibble with one row per tracked file and always the same
+columns: \code{path} (relative to the project root), \code{status}, \code{hash} (the
+blake3 hash of the tracked version), \code{size} (\code{dvs_bytes}, the size of the
+tracked version), \code{created_by} (who added it), \code{compression}, \code{message}
+(the message given at add, \code{NA} without one), \code{code} and \code{error} (\code{NA}
+unless \code{status} is \code{"error"}) and \code{add_time} (POSIXct, UTC). Files that
+dvs does not track are not listed. A row whose metadata cannot be read has
+\code{NA} in the metadata columns.
+}
 \description{
 Reports the sync status of DVS-managed files. By default all statuses
 are shown; pass a character vector

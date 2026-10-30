@@ -19,6 +19,22 @@ match recursively across subdirectories.}
 
 \item{dry_run}{If \code{TRUE}, report what would be added without modifying anything.}
 }
+\value{
+A tibble with one row per file: \code{path} (relative to the project
+root), \code{outcome}, \code{hash} (the blake3 hash), \code{size} (\code{dvs_bytes}),
+\code{stored_size} (\code{dvs_bytes}, the size of the copy in storage after
+compression) and \code{duration_ms} (the milliseconds spent on the file).
+\code{outcome} is \code{"copied"} when the file was stored and its metadata
+written, and \code{"present"} when dvs already tracked the file at this
+version. In a dry run it is what would happen, and \code{stored_size} is
+\code{size}.
+
+A file that fails does not stop the others. When one fails, the result
+also has the columns \code{code} (the kind of failure, for example
+\code{"io_error"}) and \code{error} (the reason). That row has \code{NA} in \code{outcome},
+\code{hash}, \code{size} and \code{stored_size}. A path that does not exist raises an
+error and adds nothing.
+}
 \description{
 Hashes and copies the specified files into DVS storage.
 }

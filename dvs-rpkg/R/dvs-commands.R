@@ -1,5 +1,10 @@
 #' @inherit dvs_init_impl title description
 #' @inherit dvs_init_impl params
+#' @return A one-row tibble with the configuration written to `dvs.toml`:
+#'   `compression` (`"zstd"` or `"none"`), `metadata_folder_name` (`NA` when
+#'   it was not given, so the folder is `.dvs`), `backend_path` (the absolute
+#'   path of the storage directory) and `backend_group` (`NA` when no group was
+#'   given and your primary group could not be found).
 #' @rdname dvs_init
 #' @export
 dvs_init <- function(
@@ -20,6 +25,20 @@ dvs_init <- function(
 }
 
 #' @inherit dvs_add_impl title description params
+#' @return A tibble with one row per file: `path` (relative to the project
+#'   root), `outcome`, `hash` (the blake3 hash), `size` (`dvs_bytes`),
+#'   `stored_size` (`dvs_bytes`, the size of the copy in storage after
+#'   compression) and `duration_ms` (the milliseconds spent on the file).
+#'   `outcome` is `"copied"` when the file was stored and its metadata
+#'   written, and `"present"` when dvs already tracked the file at this
+#'   version. In a dry run it is what would happen, and `stored_size` is
+#'   `size`.
+#'
+#'   A file that fails does not stop the others. When one fails, the result
+#'   also has the columns `code` (the kind of failure, for example
+#'   `"io_error"`) and `error` (the reason). That row has `NA` in `outcome`,
+#'   `hash`, `size` and `stored_size`. A path that does not exist raises an
+#'   error and adds nothing.
 #' @rdname dvs_add
 #' @export
 dvs_add <- function(
@@ -55,9 +74,15 @@ dvs_add <- function(
 }
 
 #' @inherit dvs_status_impl title description params
+#' @return A tibble with one row per tracked file and always the same
+#'   columns: `path` (relative to the project root), `status`, `hash` (the
+#'   blake3 hash of the tracked version), `size` (`dvs_bytes`, the size of the
+#'   tracked version), `created_by` (who added it), `compression`, `message`
+#'   (the message given at add, `NA` without one), `code` and `error` (`NA`
+#'   unless `status` is `"error"`) and `add_time` (POSIXct, UTC). Files that
+#'   dvs does not track are not listed. A row whose metadata cannot be read has
+#'   `NA` in the metadata columns.
 #' @rdname dvs_status
-#'
-#'
 #' @export
 dvs_status <- function(
   paths = character(0),
