@@ -1145,7 +1145,8 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
 }
 
 /// `dvs init <path>` predates backends: name the command that does it now. A
-/// bare name can be a backend typo or a directory, so the message covers both.
+/// bare name alone can be a backend typo or a directory, so the message covers
+/// both. With more words after it, it is most likely a mistyped backend.
 fn init_backend_error(args: &[String]) -> String {
     let first = args.first().map(String::as_str).unwrap_or_default();
     let looks_like_path =
@@ -1155,10 +1156,13 @@ fn init_backend_error(args: &[String]) -> String {
             "dvs init needs a backend before the storage path: did you mean `dvs init local {}`?",
             args.join(" ")
         )
+    } else if let [name] = args {
+        format!(
+            "unknown backend '{name}' for dvs init: use `dvs init local {name}` to store the data in the directory {name}, or `dvs init server <NAME> <URL>`"
+        )
     } else {
         format!(
-            "unknown backend '{first}' for dvs init: use `dvs init local {}` to store the data in the directory {first}, or `dvs init server <NAME> <URL>`",
-            args.join(" ")
+            "unknown backend '{first}' for dvs init: use `dvs init local <PATH>` (a directory) or `dvs init server <NAME> <URL>`"
         )
     }
 }
@@ -1310,6 +1314,21 @@ mod tests {
             init_backend_error(&["storage".into()]),
             "unknown backend 'storage' for dvs init: use `dvs init local storage` to store the data in the directory storage, or `dvs init server <NAME> <URL>`"
         );
+        // A mistyped backend before its arguments: the generic hint, not
+        // `dvs init local lcoal /srv/store`
+        for args in [
+            &["lcoal", "/srv/store"][..],
+            &["sevrer", "proj", "https://dvs.example.com"],
+        ] {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            assert_eq!(
+                init_backend_error(&args),
+                format!(
+                    "unknown backend '{}' for dvs init: use `dvs init local <PATH>` (a directory) or `dvs init server <NAME> <URL>`",
+                    args[0]
+                )
+            );
+        }
     }
 
     #[test]
