@@ -208,11 +208,13 @@ impl SettingSource {
     }
 }
 
-/// For people: names where the setting was made rather than "config".
+/// For people: names where the setting was made rather than "config". The
+/// CLI and R print the same summary, so an argument is "argument": a flag on
+/// the command line, or an argument of the R function.
 impl std::fmt::Display for SettingSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            SettingSource::Argument => "command line",
+            SettingSource::Argument => "argument",
             SettingSource::Env => GET_ON_CONFLICT_ENV,
             SettingSource::Config => "dvs.toml",
             SettingSource::Default => "default",

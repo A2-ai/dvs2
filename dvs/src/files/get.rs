@@ -1840,6 +1840,11 @@ mod tests {
         assert_eq!(row(&report, "b.csv").action, Action::Skipped);
         assert_eq!(report.outcome, GetOutcome::Partial);
         assert_eq!(report.verdict(), GetVerdict::Done);
+        // The summary R prints too: no "command line" for an R argument.
+        assert_eq!(
+            report.summary(),
+            "Partial: skipped 1\non_conflict = skip (argument)"
+        );
     }
 
     // Run from a subdirectory: paths in the report are from the project root
