@@ -180,10 +180,15 @@ check "1" "$GI_COUNT" "no duplicate /nested.bin entry after re-add"
 # ──────────────────────────────────────────────────────────────────────────────
 say
 say "=== CLAIM 6: no .git -> gitignore skipped, add still succeeds (L792-793) ==="
-NOGIT_REPO="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_nogit_XXX)"
-NOGIT_STORE="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_nogit"
+# Outside the dvs2 checkout: under ui/ the project would sit inside a git
+# working tree, and a .git above the project root counts.
+NOGIT_REPO="$(mktemp -d "${TMPDIR:-/tmp}/dvs_repo_cli_nogit_XXX")"
+NOGIT_STORE="${NOGIT_REPO}_store"
 mkdir "$NOGIT_STORE"
 # Deliberately NO `git init` here.
+NOGIT_IN_GIT=no
+git -C "$NOGIT_REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 && NOGIT_IN_GIT=yes
+check "no" "$NOGIT_IN_GIT" "precondition: the temp dir is not inside a git working tree"
 (cd "$NOGIT_REPO" && dvs init local "$NOGIT_STORE" >/dev/null)
 head -c 1024 /dev/urandom > "$NOGIT_REPO/b.bin"
 NOGIT_RC=0
@@ -192,6 +197,20 @@ check "0" "$NOGIT_RC" "add succeeds in repo with no .git"
 # No .gitignore should have been written anywhere in the repo.
 NOGIT_GI_COUNT="$(find "$NOGIT_REPO" -name .gitignore | wc -l | tr -d ' ')"
 check "0" "$NOGIT_GI_COUNT" "no .gitignore written when no .git folder"
+
+# ──────────────────────────────────────────────────────────────────────────────
+say
+say "=== CLAIM 6b: a project in a subfolder of a git repo gets its entries (L24, L792) ==="
+NEST_REPO="$(mktemp -d "${TMPDIR:-/tmp}/dvs_repo_cli_nested_XXX")"
+NEST_STORE="${NEST_REPO}_store"
+git -C "$NEST_REPO" init -q
+mkdir "$NEST_REPO/study" "$NEST_STORE"
+(cd "$NEST_REPO/study" && dvs init local "$NEST_STORE" >/dev/null)
+head -c 1024 /dev/urandom > "$NEST_REPO/study/c.bin"
+(cd "$NEST_REPO/study" && dvs add c.bin >/dev/null 2>&1)
+# Untracked paths git lists in the repository: the data file and the cache must not be there
+NEST_SEEN="$({ set +x; } 2>/dev/null; git -C "$NEST_REPO" status --porcelain -uall | grep -c -e 'c\.bin$' -e 'dvs\.db$' || true)"
+check "0" "$NEST_SEEN" "git sees neither study/c.bin nor study/.dvs/.cache/dvs.db"
 
 # ──────────────────────────────────────────────────────────────────────────────
 say
