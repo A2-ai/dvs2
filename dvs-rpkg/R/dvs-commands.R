@@ -63,6 +63,17 @@ dvs_add <- function(
     progress_callback = progress_callback
   )
 
+  # The columns come in the order the first row names them, so a first file
+  # that failed put `code` and `error` first. Keep one order.
+  columns <- c(
+    "path", "outcome", "hash", "size", "stored_size", "duration_ms",
+    "code", "error", "message"
+  )
+  result <- result[c(
+    intersect(columns, names(result)),
+    setdiff(names(result), columns)
+  )]
+
   if (!is.null(result$size)) {
     result$size <- new_dvs_bytes(result$size)
   }

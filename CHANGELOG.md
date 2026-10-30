@@ -25,6 +25,7 @@
 ### Fixed
 
 - `dvs init storage`, with a name that is not a path yet, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
+- R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
 - R package: `dvs_status()` had no `message` column when the first file had no message. It now returns the same columns for every repository, also one with no tracked files.
 - R package: `dvs_status()` with a repeated `status` choice could show every status.
