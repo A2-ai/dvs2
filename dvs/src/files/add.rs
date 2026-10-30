@@ -258,7 +258,7 @@ fn add_file(
 /// each row as soon as it is final. Once `ctx` is cancelled no new file
 /// starts: files in flight finish (upload and record together), the rest get
 /// a `cancelled` row and no record, except files whose add the server already
-/// recorded (see [`cancelled_before_start`]). A run that fails after a cancel
+/// recorded (see `cancelled_before_start`). A run that fails after a cancel
 /// still returns its (empty) cancelled report.
 pub fn add_files(
     files: Vec<PathBuf>,
