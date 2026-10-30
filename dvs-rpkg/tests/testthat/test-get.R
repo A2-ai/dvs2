@@ -239,10 +239,11 @@ test_that("printing shows the outcome, what needs attention, and survives subset
   file.remove("u.csv")
   res <- dvs_get(c("t.csv", "u.csv"))
   out <- capture.output(print(res))
-  expect_match(out[1], "aborted", fixed = TRUE)
+  expect_identical(out[1], "# Aborted, nothing changed: 1 file has local changes")
   # The whole result prints its summary, not the line for a subset.
   expect_false(grepl("rows from", out[1], fixed = TRUE))
-  expect_match(out[1], "on_conflict = abort (default)", fixed = TRUE)
+  # The policy decided something, so it is named, as in the CLI.
+  expect_identical(out[2], "# on_conflict = abort (default)")
   expect_false(grepl("NA", out[1], fixed = TRUE))
   # t.csv is listed with the command to keep it; u.csv is only held back
   expect_true(any(grepl("dvs add t.csv", out[-1], fixed = TRUE)))
@@ -293,11 +294,19 @@ test_that("dvs_get counts carry the core's fields", {
   expect_identical(counts$cancelled, 0L)
 })
 
-test_that("the get summary names cancelled files as the CLI does", {
-  info <- list(
-    command = "get", outcome = "cancelled", dry_run = FALSE,
-    on_conflict = "abort", source = "default", problem = NA_character_,
-    counts = list(total = 3L, restored = 1L, cancelled = 2L, failed = 0L)
+test_that("the summary is the one the CLI prints", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add("a.csv")
+  file.remove("a.csv")
+
+  info <- dvs_result_info(dvs_get(c("a.csv", "missing.csv"), on_conflict = "skip"))
+  expect_identical(info$summary, "Partial: restored 1, 1 failed")
+  # The policy decided nothing, so it is not named.
+  expect_identical(
+    dvs_result_info(dvs_get("a.csv"))$summary,
+    "Nothing to do, 1 already current"
   )
-  expect_match(dvs_get_summary(info), "restored 1, cancelled 2", fixed = TRUE)
+  out <- capture.output(print(dvs_get("a.csv", dry_run = TRUE)))
+  expect_identical(out[1], "# Nothing to do, 1 already current")
 })

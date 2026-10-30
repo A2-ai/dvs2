@@ -698,6 +698,8 @@ struct GetInfo {
     counts: AsSerialize<GetCounts>,
     /// The operation-level problem's message, `NA` when there is none.
     problem: Option<String>,
+    /// What the CLI prints as the summary, or the problem's message.
+    summary: String,
 }
 
 impl From<&GetReport> for GetInfo {
@@ -711,6 +713,10 @@ impl From<&GetReport> for GetInfo {
             source: report.source.as_str(),
             counts: AsSerialize(report.counts.clone()),
             problem: report.problem.as_ref().map(|p| p.message.clone()),
+            summary: match &report.problem {
+                Some(p) => p.message.clone(),
+                None => report.summary(),
+            },
         }
     }
 }
@@ -728,8 +734,10 @@ impl From<&GetReport> for GetInfo {
 ///   its `source` (`"argument"`, `"env"`, `"config"` for dvs.toml, or
 ///   `"default"`), `counts` (a named list of row counts: `total`, `succeeded`
 ///   for the rows at their target, then one count per action, the same fields
-///   as the CLI's JSON `counts`) and `problem` (an operation-level message, or
-///   `NA` when there is none).
+///   as the CLI's JSON `counts`), `problem` (an operation-level message, or
+///   `NA` when there is none) and `summary` (the summary the CLI prints, with
+///   a second line `on_conflict = <policy> (<source>)` when the policy acted
+///   on a file with local changes or no record, or the problem's message).
 #[miniextendr]
 pub fn dvs_result_info(x: DataFrame) -> SEXP {
     // dvs_get() sets this attribute on its result.
