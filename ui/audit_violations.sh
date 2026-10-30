@@ -3,8 +3,9 @@
 # Regression audit for the CLI spec violations found by the validate_*.sh sweep.
 # Re-run this later to check whether each known divergence still holds.
 #
-# Each case asserts the SPEC-CORRECT behavior.
-#   Section A — clear CLI bugs (#216, #217, #219): FATAL. Flip to PASS once the
+# Each case asserts the SPEC-CORRECT behavior. Line refs (Lnnn) are to
+# specs.md on main at 7ff0aa0.
+#   Section A — clear CLI bugs (#216, #217, #240): FATAL. Flip to PASS once the
 #               CLI is fixed; the script's exit code = number of Section A failures.
 #   Section B — spec/CLI divergences (#218, #220): INFORMATIONAL. These are
 #               likely resolved by editing specs.md, which this script cannot
@@ -32,7 +33,7 @@ fresh_project() {
   mkdir -p "$STORAGE"
   ( cd "$REPO" && git init -q )
   cd "$REPO"
-  dvs init "$STORAGE" >/dev/null
+  dvs init local "$STORAGE" >/dev/null
 }
 
 echo "######## Section A: CLI regression guards (fatal) ########"
@@ -61,30 +62,34 @@ ok=1
 verdict "$ok" "#217 'get data --glob \"*.bin\"' retrieves the files (like 'add')"
 
 # ── #219/#240 — add valid + unresolvable (missing) path refuses the batch ──
-note "#240 add valid + missing path refuses the whole batch (all-or-nothing, specs.md L146/L186)"
+# A missing path is an invalid input path (L384), and a batch refused for an
+# invalid input path exits 2 (L428).
+note "#240 add valid + missing path refuses the whole batch (all-or-nothing, specs.md L384/L428)"
 fresh_project
 head -c 1024 /dev/urandom > ok.bin
-rc=0; out="$(dvs add ok.bin missing.bin --json 2>&1)" || rc=$?
+rc=0; out="$(dvs add ok.bin missing.bin --json)" || rc=$?
+echo "observed: exit=$rc ok.bin sidecar=$([ -e .dvs/ok.bin.dvs ] && echo yes || echo no)"
 ok=1
 [ ! -e .dvs/ok.bin.dvs ] \
   && printf '%s' "$out" | grep -q 'missing.bin' \
-  && [ "$rc" -eq 1 ] && ok=0
-verdict "$ok" "#240 all-or-nothing: ok.bin NOT added, missing.bin named, exit 1"
+  && [ "$rc" -eq 2 ] && ok=0
+verdict "$ok" "#240 all-or-nothing: ok.bin NOT added, missing.bin named, exit 2"
 
 echo
 echo "######## Section B: spec divergences (informational) ########"
 
-# ── #218 — spec says status accepts --glob; CLI rejects it ──
+# ── #218 — spec says status accepts --glob (L797); the June CLI rejected it ──
 note "#218 status --glob"
 fresh_project
 out="$(dvs status --glob '*.bin' 2>&1)" || true
 if printf '%s' "$out" | grep -q 'unexpected argument'; then
-  echo "DIVERGES: #218 'status' rejects --glob, but specs.md L431 lists it (likely fix: edit spec)"
+  echo "DIVERGES: #218 'status' rejects --glob, but specs.md L797 lists it (likely fix: edit spec)"
 else
   echo "ALIGNED:  #218 'status' accepts --glob"
 fi
 
 # ── #220/#240 — get refuses the batch on an explicitly-requested unknown path ──
+# not_tracked is a known problem: on_conflict=abort writes nothing (L472), exit 1 (L569).
 note "#240 get valid + unknown path refuses the batch"
 fresh_project
 head -c 1024 /dev/urandom > f.bin
