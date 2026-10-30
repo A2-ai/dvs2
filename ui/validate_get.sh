@@ -29,6 +29,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/helpers.sh"
 set -xo pipefail
 
+# The on_conflict checks expect the default policy, so the environment must
+# not set one (precedence: flag > DVS_GET_ON_CONFLICT > dvs.toml > abort, L491).
+unset DVS_GET_ON_CONFLICT
+
 PASS=0
 FAIL=0
 check() {
