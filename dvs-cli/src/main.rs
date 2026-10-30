@@ -113,7 +113,7 @@ pub enum Command {
         #[clap(long)]
         dry_run: bool,
     },
-    /// Gets the status of each files in the current repository
+    /// Gets the status of each file in the current repository
     #[command(next_display_order = 100)]
     Status {
         /// Paths (files or directories) to check status for
