@@ -3,7 +3,7 @@
 # Validate CLI-observable `dvs status` claims from specs.md (Script 4 in ui/TODO.md).
 # CLI only, verdict-based. Each claim prints expected vs actual and a PASS/FAIL,
 # ending with `=== SUMMARY: N pass, M fail ===`.
-# Line refs (Lnnn) are to specs.md on main at 7ff0aa0.
+# Line refs (Lnnn) are to specs.md on main at 370f448.
 
 set -eu
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
@@ -97,7 +97,7 @@ say
 say "=== CLAIM: status --help matches spec (L609-632) ==="
 HELP="$(dvs status --help)"
 EXPECTED_HELP="$(cat <<'EOF'
-Gets the status of each files in the current repository
+Gets the status of each file in the current repository
 
 Usage: dvs status [OPTIONS] [PATHS]...
 
@@ -105,7 +105,7 @@ Arguments:
   [PATHS]...  Paths (files or directories) to check status for
 
 Options:
-  -r, --recursive      Recursively include files in subdirectories for given directories Without this flag, directories return only their direct children
+  -r, --recursive      Recursively include files in subdirectories for given directories. Without this flag, directories return only their direct children
   -g, --glob <GLOB>    Only include the tracked files matching this glob, e.g. '*.csv'
       --current        Include the files that are current
       --absent         Include the files that are absent

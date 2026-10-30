@@ -2,7 +2,7 @@
 
 # Validate CLI-observable `dvs add` claims from specs.md (Script 2 in ui/TODO.md).
 # Each claim prints expected vs actual and a PASS/FAIL verdict via check().
-# Line refs (Lnnn) are to specs.md on main at 7ff0aa0.
+# Line refs (Lnnn) are to specs.md on main at 370f448.
 
 set -eu
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR

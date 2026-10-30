@@ -3,7 +3,7 @@
 # Validate CLI spec claims for `dvs init` (specs.md).
 # Per claim: prints expected vs actual and a PASS/FAIL verdict, then a summary.
 # CLI only. The `dvs` binary is assumed already on PATH (do not reinstall).
-# Line refs (Lnnn) are to specs.md on main at 7ff0aa0.
+# Line refs (Lnnn) are to specs.md on main at 370f448.
 
 set -eu
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
