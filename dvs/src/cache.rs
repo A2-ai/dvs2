@@ -272,12 +272,12 @@ pub fn hashes_for_file(
 /// Try to open the hash cache, handling corruption gracefully.
 ///
 /// On failure, deletes the DB files and retries once.
-/// Also ensures the cache directory is gitignored.
+/// Also ensures the cache directory is gitignored, each time, so a cache made
+/// before the project was in a git repository gets its entry too.
 #[cfg(feature = "cache")]
 pub fn open_cache(paths: &DvsPaths) -> Result<HashCache> {
     let cache_dir = paths.cache_folder();
     let db_path = cache_dir.join("dvs.db");
-    let is_new = !cache_dir.exists();
 
     let cache = match HashCache::open(&db_path) {
         Ok(cache) => cache,
@@ -291,13 +291,12 @@ pub fn open_cache(paths: &DvsPaths) -> Result<HashCache> {
         }
     };
 
-    if is_new {
-        let relative = cache_dir
-            .strip_prefix(paths.repo_root())
-            .unwrap_or(&cache_dir)
-            .to_path_buf();
-        add_to_gitignore(paths.repo_root(), &[relative])?;
-    }
+    // Writes nothing when the entry is already there
+    let relative = cache_dir
+        .strip_prefix(paths.repo_root())
+        .unwrap_or(&cache_dir)
+        .to_path_buf();
+    add_to_gitignore(paths.repo_root(), &[relative])?;
 
     Ok(cache)
 }
@@ -417,5 +416,23 @@ mod tests {
 
         let result = cache.lookup("nonexistent.txt", &stat).unwrap();
         assert_eq!(result, None);
+    }
+
+    // A cache made before `git init` (or before the fix for projects in a
+    // subfolder of a repository) gets its entry the next time it is opened
+    #[cfg(feature = "cache")]
+    #[test]
+    fn open_cache_ignores_an_existing_cache() {
+        let (_tmp, root) = crate::testutil::create_temp_git_repo();
+        let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs").unwrap();
+        fs::create_dir_all(paths.cache_folder()).unwrap();
+        assert!(!root.join(".dvs/.gitignore").exists());
+
+        open_cache(&paths).unwrap();
+        open_cache(&paths).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join(".dvs/.gitignore")).unwrap(),
+            "/.cache\n"
+        );
     }
 }

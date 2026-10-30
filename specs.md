@@ -767,7 +767,7 @@ Example:
 `dvs` maintains a SQLite cache at `{metadata_folder}/.cache/dvs.db` to avoid re-hashing files that haven't
 changed. Both `add` and `get` populate the cache after a successful operation, so a subsequent `status`
 check benefits from cache hits. A cache hit is determined by matching the file's `mtime` and `size`. The cache directory is
-automatically added to `.gitignore` on creation. The cache is optional.
+added to `.gitignore` each time dvs opens the cache, when the entry is missing. The cache is optional.
 
 The same database holds the local baseline (`baseline(path, blake3, size)`): what dvs last wrote or added at
 each path. Unlike the hash cache, `status` never writes it. Deleting it is safe; a differing file then reports

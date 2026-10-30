@@ -25,6 +25,7 @@
 ### Fixed
 
 - A project in a subfolder of a git repository gets its `.gitignore` entries. dvs looked for `.git` only in the project root, so in that layout `add` ignored neither the data files nor `.dvs/.cache`, and git could commit them. Projects set up this way before the fix: re-adding the tracked files writes their entries. Check `git log --stat` for data already committed.
+- `.dvs/.cache` gets its `.gitignore` entry whenever the cache is opened, not only when it is created. A project used before `git init`, or set up in a subfolder of a repository before the fix above, kept its cache visible to git.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
