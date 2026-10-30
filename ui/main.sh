@@ -12,6 +12,7 @@ source "${SCRIPT_DIR}/helpers.sh"
 set -xo pipefail
 
 say "NOTE: \`just install-all\` should have been called prior to this so the dvs CLI binary on PATH and the installed dvs R package both reflect the current branch."
+say "NOTE: \`just datasets\` must have been run once. mkdatasetfiles reads datasets/chickweight.csv."
 
 DVS_REPO_CLI="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
 RUN_SUFFIX="${DVS_REPO_CLI##*_}"
@@ -95,6 +96,4 @@ EOF
 # diff -rN "${DVS_STORAGE_CLI}" "${DVS_STORAGE_RPKG}"
 
 
-
-w
 printf '\nCleanup: bash %s/cleanup.sh\n' "$SCRIPT_DIR"

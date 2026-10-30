@@ -96,7 +96,10 @@ say "--- S2 CLI: dvs add (RUST_LOG=dvs=info) ---"
 RUST_LOG=dvs=info dvs add data/derived/file_*.bin
 
 say "--- S2 CLI: dvs get (RUST_LOG=dvs=info) ---"
-RUST_LOG=dvs=info dvs get data/derived/file_*.bin
+# Delete the working files first. A get of current files does nothing and logs
+# nothing, so it would not exercise the get path.
+rm -f data/derived/file_*.bin
+RUST_LOG=dvs=info dvs get --glob 'data/derived/*.bin'
 
 cd "$DVS_REPO_R_S2"
 mkfiles 5 1K data/derived
@@ -109,6 +112,7 @@ set_dvs_log_level("info")
 cat("--- add ---\n")
 dvs_add(glob = "data/derived/*.bin") |> print(width = Inf)
 cat("--- get ---\n")
+unlink(Sys.glob("data/derived/*.bin"))
 dvs_get(glob = "data/derived/*.bin") |> print(width = Inf)
 EOF
 
@@ -118,6 +122,7 @@ RUST_LOG=dvs=debug Rscript - <<EOF
 library(dvs)
 setwd("$DVS_REPO_R_S2")
 # No set_dvs_log_level() call → still 'off' default → silence.
+unlink(Sys.glob("data/derived/*.bin"))
 dvs_get(glob = "data/derived/*.bin") |> invisible()
 cat("[asymmetry probe complete — if the line above this is silent, RUST_LOG was correctly ignored]\n")
 EOF
@@ -147,7 +152,8 @@ say "--- S3 CLI: dvs add (RUST_LOG=dvs=debug) ---"
 RUST_LOG=dvs=debug dvs add data/derived/file_*.bin
 
 say "--- S3 CLI: dvs get (RUST_LOG=dvs=debug) ---"
-RUST_LOG=dvs=debug dvs get data/derived/file_*.bin
+rm -f data/derived/file_*.bin
+RUST_LOG=dvs=debug dvs get --glob 'data/derived/*.bin'
 
 cd "$DVS_REPO_R_S3"
 mkfiles 5 1K data/derived
@@ -160,6 +166,7 @@ set_dvs_log_level("debug")
 cat("--- add ---\n")
 dvs_add(glob = "data/derived/*.bin") |> print(width = Inf)
 cat("--- get ---\n")
+unlink(Sys.glob("data/derived/*.bin"))
 dvs_get(glob = "data/derived/*.bin") |> print(width = Inf)
 EOF
 
@@ -286,7 +293,8 @@ say "--- S6 CLI: dvs add 30×1M, 4 threads (RUST_LOG=dvs=debug) ---"
 DVS_NUM_THREADS=4 RUST_LOG=dvs=debug dvs add data/derived/file_*.bin
 
 say "--- S6 CLI: dvs get 30×1M, 4 threads (RUST_LOG=dvs=debug) ---"
-DVS_NUM_THREADS=4 RUST_LOG=dvs=debug dvs get data/derived/file_*.bin
+rm -f data/derived/file_*.bin
+DVS_NUM_THREADS=4 RUST_LOG=dvs=debug dvs get --glob 'data/derived/*.bin'
 
 cd "$DVS_REPO_R_S6"
 mkfiles 30 1M data/derived
@@ -300,6 +308,7 @@ set_dvs_log_level("debug")
 cat("--- add ---\n")
 dvs_add(glob = "data/derived/*.bin") |> print(width = Inf)
 cat("--- get ---\n")
+unlink(Sys.glob("data/derived/*.bin"))
 dvs_get(glob = "data/derived/*.bin") |> print(width = Inf)
 EOF
 
@@ -408,6 +417,7 @@ dvs_init("$DVS_STORAGE_R_S8A")
 set_dvs_log_level("debug")
 cat("\n[S8 phase A: debug]\n")
 dvs_add(glob = "data/derived/*.bin") |> print(width = Inf)
+unlink(Sys.glob("data/derived/*.bin"))
 dvs_get(glob = "data/derived/*.bin") |> print(width = Inf)
 
 # ── Phase B: off — silent; only result frame printed ──
@@ -416,6 +426,7 @@ dvs_init("$DVS_STORAGE_R_S8B")
 set_dvs_log_level("off")
 cat("\n[S8 phase B: off — expect no log lines below]\n")
 dvs_add(glob = "data/derived/*.bin") |> print(width = Inf)
+unlink(Sys.glob("data/derived/*.bin"))
 dvs_get(glob = "data/derived/*.bin") |> print(width = Inf)
 
 # ── Phase C: warn. Only warnings. The unreadable file triggers one warn line ──
