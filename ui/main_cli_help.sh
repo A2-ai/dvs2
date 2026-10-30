@@ -3,14 +3,15 @@
 # CLI help-output ordering test.
 #
 # Goal: verify that `dvs <subcommand> --help` lists options in the order they
-# are declared in dvs-cli/src/main.rs.  The two `Cli`-level globals --json
-# and --threads carry display_order = 0 / 1, and each Command variant sets
-# next_display_order = 100 — so the globals always render at the top of
-# every subcommand's Options section, ahead of the locals.
+# are declared in dvs-cli/src/main.rs. The three `Cli`-level globals --json,
+# --emit-events and --threads carry `help_heading = "Global Options"`, so
+# clap prints them in their own section after each subcommand's local
+# Options. `init` is a group: its options live on `init local` and
+# `init server`.
 #
 # This script prints, for each subcommand:
-#   1. The expected option order — Cli globals first, then locals (in
-#      declaration order from main.rs).
+#   1. The expected order: arguments, then local options (in declaration
+#      order from main.rs), then the Global Options section.
 #   2. The actual `--help` output produced by the installed `dvs` binary.
 # The reader compares the two visually.
 #
@@ -35,11 +36,25 @@ echo "════════════════════════�
 
 echo
 echo "--- expected (main.rs Command enum, top to bottom; clap appends 'help') ---"
-echo "  init"
-echo "  add"
-echo "  status"
-echo "  get"
-echo "  help"
+echo "  Commands:"
+echo "    init"
+echo "    attach"
+echo "    add"
+echo "    status"
+echo "    get"
+echo "    info"
+echo "    availability"
+echo "    history"
+echo "    login"
+echo "    logout"
+echo "    help"
+echo "  Options:"
+echo "    -h, --help"
+echo "    -V, --version"
+echo "  Global Options:"
+echo "    --json"
+echo "    --emit-events"
+echo "    --threads"
 
 echo
 echo "--- actual ---"
@@ -55,18 +70,75 @@ echo "  dvs init --help"
 echo "════════════════════════════════════════════════════════════"
 
 echo
-echo "--- expected: Cli globals first, then locals ---"
-echo "  <PATH>"
-echo "  --json"
-echo "  --threads"
-echo "  --root-dir"
-echo "  --metadata-folder-name"
-echo "  --group"
-echo "  --no-compression"
+echo "--- expected: the two backends, then Global Options ---"
+echo "  Commands:"
+echo "    local"
+echo "    server"
+echo "    help"
+echo "  Options:"
+echo "    -h, --help"
+echo "  Global Options:"
+echo "    --json"
+echo "    --emit-events"
+echo "    --threads"
 
 echo
 echo "--- actual ---"
 dvs init --help
+
+# ============================================================================
+# dvs init local --help
+# ============================================================================
+
+echo
+echo "════════════════════════════════════════════════════════════"
+echo "  dvs init local --help"
+echo "════════════════════════════════════════════════════════════"
+
+echo
+echo "--- expected: locals, then Global Options ---"
+echo "  <PATH>"
+echo "  Options:"
+echo "    --root-dir"
+echo "    --metadata-folder-name"
+echo "    --group"
+echo "    --no-compression"
+echo "    -h, --help"
+echo "  Global Options:"
+echo "    --json"
+echo "    --emit-events"
+echo "    --threads"
+
+echo
+echo "--- actual ---"
+dvs init local --help
+
+# ============================================================================
+# dvs init server --help
+# ============================================================================
+
+echo
+echo "════════════════════════════════════════════════════════════"
+echo "  dvs init server --help"
+echo "════════════════════════════════════════════════════════════"
+
+echo
+echo "--- expected: locals, then Global Options ---"
+echo "  <NAME>"
+echo "  <URL>"
+echo "  Options:"
+echo "    --metadata-folder-name"
+echo "    --group"
+echo "    --no-compression"
+echo "    -h, --help"
+echo "  Global Options:"
+echo "    --json"
+echo "    --emit-events"
+echo "    --threads"
+
+echo
+echo "--- actual ---"
+dvs init server --help
 
 # ============================================================================
 # dvs add --help
@@ -78,13 +150,17 @@ echo "  dvs add --help"
 echo "════════════════════════════════════════════════════════════"
 
 echo
-echo "--- expected: Cli globals first, then locals ---"
-echo "  [PATHS]"
-echo "  --json"
-echo "  --threads"
-echo "  --glob"
-echo "  --message"
-echo "  --dry-run"
+echo "--- expected: locals, then Global Options ---"
+echo "  [PATHS]..."
+echo "  Options:"
+echo "    --glob"
+echo "    -m, --message"
+echo "    --dry-run"
+echo "    -h, --help"
+echo "  Global Options:"
+echo "    --json"
+echo "    --emit-events"
+echo "    --threads"
 
 echo
 echo "--- actual ---"
@@ -100,17 +176,22 @@ echo "  dvs status --help"
 echo "════════════════════════════════════════════════════════════"
 
 echo
-echo "--- expected: Cli globals first, then locals ---"
-echo "  [PATHS]"
-echo "  --json"
-echo "  --threads"
-echo "  --recursive"
-echo "  --current"
-echo "  --absent"
-echo "  --stale"
-echo "  --modified"
-echo "  --unsynced"
-echo "  --with-metadata"
+echo "--- expected: locals, then Global Options ---"
+echo "  [PATHS]..."
+echo "  Options:"
+echo "    -r, --recursive"
+echo "    -g, --glob"
+echo "    --current"
+echo "    --absent"
+echo "    --stale"
+echo "    --modified"
+echo "    --unsynced"
+echo "    --with-metadata"
+echo "    -h, --help"
+echo "  Global Options:"
+echo "    --json"
+echo "    --emit-events"
+echo "    --threads"
 
 echo
 echo "--- actual ---"
@@ -126,12 +207,19 @@ echo "  dvs get --help"
 echo "════════════════════════════════════════════════════════════"
 
 echo
-echo "--- expected: Cli globals first, then locals ---"
-echo "  [PATHS]"
-echo "  --json"
-echo "  --threads"
-echo "  --glob"
-echo "  --dry-run"
+echo "--- expected: locals, then Global Options ---"
+echo "  [PATHS]..."
+echo "  Options:"
+echo "    -g, --glob"
+echo "    -r, --recursive"
+echo "    --dry-run"
+echo "    --on-conflict"
+echo "    -f, --force"
+echo "    -h, --help"
+echo "  Global Options:"
+echo "    --json"
+echo "    --emit-events"
+echo "    --threads"
 
 echo
 echo "--- actual ---"

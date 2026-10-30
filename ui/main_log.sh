@@ -19,6 +19,19 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=ui/helpers.sh
 source "${SCRIPT_DIR}/helpers.sh"
 
+# S4, S7 and S8 phase C need a file that fails after the batch starts, so that
+# dvs logs one "Failed to add" warning. A nonexistent path no longer does that:
+# since #240 it refuses the whole batch before anything runs (S5 shows that).
+# lock_file makes a 1K file unreadable. The EXIT trap makes the locked files
+# readable again so cleanup.sh can trash them.
+LOCKED_FILES=()
+trap 'chmod 644 "${LOCKED_FILES[@]}" 2>/dev/null || true' EXIT
+lock_file() {
+  mkrandfile "$1" 1K
+  chmod 000 "$1"
+  LOCKED_FILES+=("$PWD/$1")
+}
+
 # ============================================================================
 # S1. off (silent default)
 #     CLI: no RUST_LOG set; R: no set_dvs_log_level call.
@@ -39,7 +52,7 @@ DVS_STORAGE_R_S1="$SCRIPT_DIR/dvs_storage_rpkg_s1_$RUN_SUFFIX_S1"
 mkdir "$DVS_REPO_CLI_S1" "$DVS_STORAGE_CLI_S1" "$DVS_REPO_R_S1" "$DVS_STORAGE_R_S1"
 
 cd "$DVS_REPO_CLI_S1"
-dvs init "$DVS_STORAGE_CLI_S1"
+dvs init local "$DVS_STORAGE_CLI_S1"
 mkfiles 3 1K data/derived
 
 say "--- S1 CLI: dvs add (no RUST_LOG) ---"
@@ -76,14 +89,17 @@ DVS_STORAGE_R_S2="$SCRIPT_DIR/dvs_storage_rpkg_s2_$RUN_SUFFIX_S2"
 mkdir "$DVS_REPO_CLI_S2" "$DVS_STORAGE_CLI_S2" "$DVS_REPO_R_S2" "$DVS_STORAGE_R_S2"
 
 cd "$DVS_REPO_CLI_S2"
-dvs init "$DVS_STORAGE_CLI_S2"
+dvs init local "$DVS_STORAGE_CLI_S2"
 mkfiles 5 1K data/derived
 
 say "--- S2 CLI: dvs add (RUST_LOG=dvs=info) ---"
 RUST_LOG=dvs=info dvs add data/derived/file_*.bin
 
 say "--- S2 CLI: dvs get (RUST_LOG=dvs=info) ---"
-RUST_LOG=dvs=info dvs get data/derived/file_*.bin
+# Delete the working files first. A get of current files does nothing and logs
+# nothing, so it would not exercise the get path.
+rm -f data/derived/file_*.bin
+RUST_LOG=dvs=info dvs get --glob 'data/derived/*.bin'
 
 cd "$DVS_REPO_R_S2"
 mkfiles 5 1K data/derived
@@ -96,6 +112,7 @@ set_dvs_log_level("info")
 cat("--- add ---\n")
 dvs_add(glob = "data/derived/*.bin") |> print(width = Inf)
 cat("--- get ---\n")
+unlink(Sys.glob("data/derived/*.bin"))
 dvs_get(glob = "data/derived/*.bin") |> print(width = Inf)
 EOF
 
@@ -105,6 +122,7 @@ RUST_LOG=dvs=debug Rscript - <<EOF
 library(dvs)
 setwd("$DVS_REPO_R_S2")
 # No set_dvs_log_level() call → still 'off' default → silence.
+unlink(Sys.glob("data/derived/*.bin"))
 dvs_get(glob = "data/derived/*.bin") |> invisible()
 cat("[asymmetry probe complete — if the line above this is silent, RUST_LOG was correctly ignored]\n")
 EOF
@@ -127,14 +145,15 @@ DVS_STORAGE_R_S3="$SCRIPT_DIR/dvs_storage_rpkg_s3_$RUN_SUFFIX_S3"
 mkdir "$DVS_REPO_CLI_S3" "$DVS_STORAGE_CLI_S3" "$DVS_REPO_R_S3" "$DVS_STORAGE_R_S3"
 
 cd "$DVS_REPO_CLI_S3"
-dvs init "$DVS_STORAGE_CLI_S3"
+dvs init local "$DVS_STORAGE_CLI_S3"
 mkfiles 5 1K data/derived
 
 say "--- S3 CLI: dvs add (RUST_LOG=dvs=debug) ---"
 RUST_LOG=dvs=debug dvs add data/derived/file_*.bin
 
 say "--- S3 CLI: dvs get (RUST_LOG=dvs=debug) ---"
-RUST_LOG=dvs=debug dvs get data/derived/file_*.bin
+rm -f data/derived/file_*.bin
+RUST_LOG=dvs=debug dvs get --glob 'data/derived/*.bin'
 
 cd "$DVS_REPO_R_S3"
 mkfiles 5 1K data/derived
@@ -147,16 +166,17 @@ set_dvs_log_level("debug")
 cat("--- add ---\n")
 dvs_add(glob = "data/derived/*.bin") |> print(width = Inf)
 cat("--- get ---\n")
+unlink(Sys.glob("data/derived/*.bin"))
 dvs_get(glob = "data/derived/*.bin") |> print(width = Inf)
 EOF
 
 # ============================================================================
-# S4. warn — partial failure (4 real + 1 bogus)
+# S4. warn: partial failure (4 real + 1 unreadable)
 # ============================================================================
 
 say
 say "════════════════════════════════════════════════════════════"
-say "  S4. warn — partial failure (4 real + 1 bogus) — CLI + R"
+say "  S4. warn: partial failure (4 real + 1 unreadable), CLI + R"
 say "════════════════════════════════════════════════════════════"
 
 FIXTURES_S4="$(mktemp -d "$SCRIPT_DIR"/dvs_fixture_XXX)"
@@ -168,36 +188,39 @@ DVS_STORAGE_R_S4="$SCRIPT_DIR/dvs_storage_rpkg_s4_$RUN_SUFFIX_S4"
 mkdir "$DVS_REPO_CLI_S4" "$DVS_STORAGE_CLI_S4" "$DVS_REPO_R_S4" "$DVS_STORAGE_R_S4"
 
 cd "$DVS_REPO_CLI_S4"
-dvs init "$DVS_STORAGE_CLI_S4"
+dvs init local "$DVS_STORAGE_CLI_S4"
 mkfiles 4 1K data/derived
+lock_file data/derived/locked.bin
 
-say "--- S4 CLI: dvs add 4 real + 1 bogus (RUST_LOG=dvs=warn) ---"
-# || true: the CLI exits nonzero because one path fails; we want to see the
-# warn log line and the error row in output, not abort the entire test script.
+say "--- S4 CLI: dvs add 4 real + 1 unreadable (RUST_LOG=dvs=warn) ---"
+# || true: the CLI exits nonzero because one file fails after the batch
+# starts. We want the warn log line and the error line in the output, not an
+# abort of the whole test script.
 RUST_LOG=dvs=warn dvs add \
   data/derived/file_1.bin \
   data/derived/file_2.bin \
   data/derived/file_3.bin \
   data/derived/file_4.bin \
-  data/derived/does_not_exist.bin || true
+  data/derived/locked.bin || true
 
 cd "$DVS_REPO_R_S4"
 mkfiles 4 1K data/derived
+lock_file data/derived/locked.bin
 
-say "--- S4 R: dvs_add 4 real + 1 bogus (set_dvs_log_level(\"warn\")) ---"
+say "--- S4 R: dvs_add 4 real + 1 unreadable (set_dvs_log_level(\"warn\")) ---"
 print_eval_rscript <<EOF
 library(dvs)
 dvs_init("$DVS_STORAGE_R_S4")
 set_dvs_log_level("warn")
-# Wrap in tryCatch: the R wrapper raises an error if any file fails. We want
-# the script to continue regardless so subsequent scenarios still run.
+# A per-file failure does not raise. It is an error row in the returned data
+# frame. The tryCatch only keeps the script going if something else raises.
 tryCatch(
   dvs_add(paths = c(
     "data/derived/file_1.bin",
     "data/derived/file_2.bin",
     "data/derived/file_3.bin",
     "data/derived/file_4.bin",
-    "data/derived/does_not_exist.bin"
+    "data/derived/locked.bin"
   )) |> print(width = Inf),
   error = function(e) {
     cat("Caught R error (expected):", conditionMessage(e), "\n")
@@ -223,7 +246,7 @@ DVS_STORAGE_R_S5="$SCRIPT_DIR/dvs_storage_rpkg_s5_$RUN_SUFFIX_S5"
 mkdir "$DVS_REPO_CLI_S5" "$DVS_STORAGE_CLI_S5" "$DVS_REPO_R_S5" "$DVS_STORAGE_R_S5"
 
 cd "$DVS_REPO_CLI_S5"
-dvs init "$DVS_STORAGE_CLI_S5"
+dvs init local "$DVS_STORAGE_CLI_S5"
 
 say "--- S5 CLI: dvs add /no/such/path/file.bin (expect 'Error:' line, nonzero exit) ---"
 # || true: the path doesn't exist so dvs exits nonzero; we capture the error
@@ -263,14 +286,15 @@ DVS_STORAGE_R_S6="$SCRIPT_DIR/dvs_storage_rpkg_s6_$RUN_SUFFIX_S6"
 mkdir "$DVS_REPO_CLI_S6" "$DVS_STORAGE_CLI_S6" "$DVS_REPO_R_S6" "$DVS_STORAGE_R_S6"
 
 cd "$DVS_REPO_CLI_S6"
-dvs init "$DVS_STORAGE_CLI_S6"
+dvs init local "$DVS_STORAGE_CLI_S6"
 mkfiles 30 1M data/derived
 
 say "--- S6 CLI: dvs add 30×1M, 4 threads (RUST_LOG=dvs=debug) ---"
 DVS_NUM_THREADS=4 RUST_LOG=dvs=debug dvs add data/derived/file_*.bin
 
 say "--- S6 CLI: dvs get 30×1M, 4 threads (RUST_LOG=dvs=debug) ---"
-DVS_NUM_THREADS=4 RUST_LOG=dvs=debug dvs get data/derived/file_*.bin
+rm -f data/derived/file_*.bin
+DVS_NUM_THREADS=4 RUST_LOG=dvs=debug dvs get --glob 'data/derived/*.bin'
 
 cd "$DVS_REPO_R_S6"
 mkfiles 30 1M data/derived
@@ -284,6 +308,7 @@ set_dvs_log_level("debug")
 cat("--- add ---\n")
 dvs_add(glob = "data/derived/*.bin") |> print(width = Inf)
 cat("--- get ---\n")
+unlink(Sys.glob("data/derived/*.bin"))
 dvs_get(glob = "data/derived/*.bin") |> print(width = Inf)
 EOF
 
@@ -293,7 +318,7 @@ EOF
 
 say
 say "════════════════════════════════════════════════════════════"
-say "  S7. threads × warn — partial failure, 4 threads — CLI + R"
+say "  S7. threads × warn: partial failure (10 real + 1 unreadable), 4 threads, CLI + R"
 say "════════════════════════════════════════════════════════════"
 
 FIXTURES_S7="$(mktemp -d "$SCRIPT_DIR"/dvs_fixture_XXX)"
@@ -305,12 +330,13 @@ DVS_STORAGE_R_S7="$SCRIPT_DIR/dvs_storage_rpkg_s7_$RUN_SUFFIX_S7"
 mkdir "$DVS_REPO_CLI_S7" "$DVS_STORAGE_CLI_S7" "$DVS_REPO_R_S7" "$DVS_STORAGE_R_S7"
 
 cd "$DVS_REPO_CLI_S7"
-dvs init "$DVS_STORAGE_CLI_S7"
+dvs init local "$DVS_STORAGE_CLI_S7"
 mkfiles 10 1M data/derived
+lock_file data/derived/locked_thread.bin
 
-say "--- S7 CLI: dvs add 10 real + 1 bogus, 4 threads (RUST_LOG=dvs=warn) ---"
-# || true: same reason as S4 — one bad path causes a nonzero exit; we want the
-# warn log line for inspection without aborting the script.
+say "--- S7 CLI: dvs add 10 real + 1 unreadable, 4 threads (RUST_LOG=dvs=warn) ---"
+# || true: as in S4, the unreadable file makes the CLI exit nonzero. We want
+# the warn log line for inspection without aborting the script.
 DVS_NUM_THREADS=4 RUST_LOG=dvs=warn dvs add \
   data/derived/file_01.bin \
   data/derived/file_02.bin \
@@ -322,12 +348,13 @@ DVS_NUM_THREADS=4 RUST_LOG=dvs=warn dvs add \
   data/derived/file_08.bin \
   data/derived/file_09.bin \
   data/derived/file_10.bin \
-  data/derived/bogus_thread.bin || true
+  data/derived/locked_thread.bin || true
 
 cd "$DVS_REPO_R_S7"
 mkfiles 10 1M data/derived
+lock_file data/derived/locked_thread.bin
 
-say "--- S7 R: dvs_add 10 real + 1 bogus, 4 threads (set_dvs_log_level(\"warn\")) ---"
+say "--- S7 R: dvs_add 10 real + 1 unreadable, 4 threads (set_dvs_log_level(\"warn\")) ---"
 print_eval_rscript <<EOF
 library(dvs)
 dvs_init("$DVS_STORAGE_R_S7")
@@ -345,7 +372,7 @@ tryCatch(
     "data/derived/file_08.bin",
     "data/derived/file_09.bin",
     "data/derived/file_10.bin",
-    "data/derived/bogus_thread.bin"
+    "data/derived/locked_thread.bin"
   )) |> print(width = Inf),
   error = function(e) {
     cat("Caught R error (expected):", conditionMessage(e), "\n")
@@ -378,6 +405,7 @@ mkdir "$DVS_REPO_R_S8A" "$DVS_STORAGE_R_S8A" \
 cd "$DVS_REPO_R_S8A" && mkfiles 3 1K data/derived
 cd "$DVS_REPO_R_S8B" && mkfiles 3 1K data/derived
 cd "$DVS_REPO_R_S8C" && mkfiles 3 1K data/derived
+lock_file data/derived/phase_c_locked.bin
 
 say "--- S8 R: debug → off → warn transitions in one Rscript process ---"
 print_eval_rscript <<EOF
@@ -389,6 +417,7 @@ dvs_init("$DVS_STORAGE_R_S8A")
 set_dvs_log_level("debug")
 cat("\n[S8 phase A: debug]\n")
 dvs_add(glob = "data/derived/*.bin") |> print(width = Inf)
+unlink(Sys.glob("data/derived/*.bin"))
 dvs_get(glob = "data/derived/*.bin") |> print(width = Inf)
 
 # ── Phase B: off — silent; only result frame printed ──
@@ -397,9 +426,10 @@ dvs_init("$DVS_STORAGE_R_S8B")
 set_dvs_log_level("off")
 cat("\n[S8 phase B: off — expect no log lines below]\n")
 dvs_add(glob = "data/derived/*.bin") |> print(width = Inf)
+unlink(Sys.glob("data/derived/*.bin"))
 dvs_get(glob = "data/derived/*.bin") |> print(width = Inf)
 
-# ── Phase C: warn — only warnings; a bogus file triggers one warn line ──
+# ── Phase C: warn. Only warnings. The unreadable file triggers one warn line ──
 setwd("$DVS_REPO_R_S8C")
 dvs_init("$DVS_STORAGE_R_S8C")
 set_dvs_log_level("warn")
@@ -409,7 +439,7 @@ tryCatch(
     "data/derived/file_1.bin",
     "data/derived/file_2.bin",
     "data/derived/file_3.bin",
-    "data/derived/phase_c_bogus.bin"
+    "data/derived/phase_c_locked.bin"
   )) |> print(width = Inf),
   error = function(e) {
     cat("Caught R error (expected):", conditionMessage(e), "\n")

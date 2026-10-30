@@ -27,7 +27,7 @@ mkdir "$DVS_STORAGE_CLI" "$DVS_REPO_RPKG" "$DVS_STORAGE_RPKG"
 # ── Init ──
 
 cd "$DVS_REPO_CLI"
-dvs init "$DVS_STORAGE_CLI"
+dvs init local "$DVS_STORAGE_CLI"
 
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
@@ -119,6 +119,14 @@ print_eval_rscript <<EOF
 library(dvs)
 dvs_status(paths = "data/", recursive = TRUE) |> print(width = Inf)
 EOF
+
+# ── Delete the working files so sections 5 to 9 have absent files ──
+# dvs add keeps the working files, so up to here every file is current.
+
+say
+say "--- deleting the 7 working files in both repos (still tracked, so absent) ---"
+rm -f "$DVS_REPO_CLI"/data/raw/*.bin "$DVS_REPO_CLI"/data/derived/*.bin "$DVS_REPO_CLI"/models/v1/*.bin
+rm -f "$DVS_REPO_RPKG"/data/raw/*.bin "$DVS_REPO_RPKG"/data/derived/*.bin "$DVS_REPO_RPKG"/models/v1/*.bin
 
 # ── 5. Status: filter with status flags ──
 

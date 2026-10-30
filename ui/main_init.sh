@@ -44,7 +44,7 @@ say "============================================================"
 
 scenario_dirs S1
 cd "$REPO_CLI"
-dvs init "$STORAGE_CLI"
+dvs init local "$STORAGE_CLI"
 
 say "--- CLI tree after init ---"
 tree --noreport -a -I '.git'
@@ -74,7 +74,7 @@ say "============================================================"
 
 scenario_dirs S2
 cd "$REPO_CLI"
-dvs init --no-compression "$STORAGE_CLI"
+dvs init local --no-compression "$STORAGE_CLI"
 
 say "--- CLI dvs.toml ---"
 cat dvs.toml
@@ -98,7 +98,7 @@ say "============================================================"
 
 scenario_dirs S3
 cd "$REPO_CLI"
-dvs init --metadata-folder-name custom_meta "$STORAGE_CLI"
+dvs init local --metadata-folder-name custom_meta "$STORAGE_CLI"
 
 say "--- CLI tree (expect custom_meta/, not .dvs/) ---"
 tree --noreport -a -I '.git'
@@ -129,7 +129,7 @@ say "============================================================"
 
 scenario_dirs S4
 cd "$REPO_CLI"
-dvs init --group "$USER_GROUP" "$STORAGE_CLI"
+dvs init local --group "$USER_GROUP" "$STORAGE_CLI"
 
 say "--- CLI dvs.toml (expect group line) ---"
 cat dvs.toml
@@ -153,7 +153,7 @@ say "============================================================"
 
 scenario_dirs S5
 cd "$REPO_CLI"
-dvs init \
+dvs init local \
   --no-compression \
   --metadata-folder-name custom_meta \
   --group "$USER_GROUP" \
@@ -187,7 +187,7 @@ say "============================================================"
 scenario_dirs S6
 cd "$REPO_CLI"
 # Try to set storage to a subdir of the repo — must refuse.
-dvs init "$REPO_CLI/inside_storage" 2>&1 || say "(expected: CLI rejected)"
+dvs init local "$REPO_CLI/inside_storage" 2>&1 || say "(expected: CLI rejected)"
 
 cd "$REPO_R"
 print_eval_rscript <<EOF
