@@ -221,18 +221,18 @@ rpkg-doctor: rpkg-r-guard
 
 # The single-page HTML reference manual, built from man/ with base R's
 # tools::pkg2HTML() (R >= 4.4). It runs checkRd over man/ first and stops on a
-# finding, so it also lints the Rd files after rpkg-document. The script
-# writes dvs-rpkg/rust-target/doc/r/, which a clean install removes, so the
-# recipe copies the result to dist/reference/, next to the release tarball.
-[doc('Build the HTML reference manual and copy it to dist/reference.')]
+# finding, so it also lints the Rd files after rpkg-document. It writes two
+# manuals. The one for development, in dvs-rpkg/rust-target/doc/r/ next to
+# the rustdoc output, keeps the internal pages (MINIEXTENDR_HTML_INTERNAL=1).
+# The one for users, in dist/reference/ next to the release tarball, leaves
+# them out, as R's help index does. A clean install removes the first.
+[doc('Build the HTML reference manual: with internal pages in rust-target/doc/r, without them in dist/reference.')]
 rpkg-reference:
     #!/usr/bin/env bash
     set -euo pipefail
-    Rscript {{quote(rpkg_dir / "tools/build-html-reference.R")}}
+    MINIEXTENDR_HTML_INTERNAL=1 Rscript {{quote(rpkg_dir / "tools/build-html-reference.R")}}
     rm -rf dist/reference
-    mkdir -p dist/reference
-    cp -R {{quote(rpkg_dir / "rust-target/doc/r")}}/. dist/reference/
-    echo "copied to dist/reference/dvs.html"
+    Rscript {{quote(rpkg_dir / "tools/build-html-reference.R")}} dist/reference
 
 # Refresh the scaffold, configure.ac, the agent skills and the git hook
 # sections from the pinned minirextendr. configure.ac's AC_INIT takes the
