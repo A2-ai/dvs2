@@ -1144,7 +1144,8 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
     Ok(())
 }
 
-/// `dvs init <path>` predates backends: name the command that does it now.
+/// `dvs init <path>` predates backends: name the command that does it now. A
+/// bare name can be a backend typo or a directory, so the message covers both.
 fn init_backend_error(args: &[String]) -> String {
     let first = args.first().map(String::as_str).unwrap_or_default();
     let looks_like_path =
@@ -1156,7 +1157,8 @@ fn init_backend_error(args: &[String]) -> String {
         )
     } else {
         format!(
-            "unknown backend '{first}' for dvs init: use `dvs init local <PATH>` (a directory) or `dvs init server <NAME> <URL>`"
+            "unknown backend '{first}' for dvs init: use `dvs init local {}` to store the data in the directory {first}, or `dvs init server <NAME> <URL>`",
+            args.join(" ")
         )
     }
 }
@@ -1303,6 +1305,11 @@ mod tests {
             "dvs init needs a backend before the storage path: did you mean `dvs init local ../storage`?"
         );
         assert!(init_backend_error(&["lcoal".into()]).starts_with("unknown backend 'lcoal'"));
+        // A bare name that is not a path yet: still name the local command for it
+        assert_eq!(
+            init_backend_error(&["storage".into()]),
+            "unknown backend 'storage' for dvs init: use `dvs init local storage` to store the data in the directory storage, or `dvs init server <NAME> <URL>`"
+        );
     }
 
     #[test]
