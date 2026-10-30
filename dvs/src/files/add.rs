@@ -587,6 +587,36 @@ mod tests {
         );
     }
 
+    // An unmounted share: the add refuses before it hashes, writes no
+    // metadata and does not make a new storage directory
+    #[test]
+    fn add_files_refuses_a_missing_storage_directory() {
+        let (_tmp, root, config, paths) = project();
+        let storage = match config.backend() {
+            crate::Backend::Local(b) => b.path.clone(),
+            crate::Backend::Server(_) => unreachable!(),
+        };
+        fs::remove_dir_all(&storage).unwrap();
+        create_file(&root, "a.txt", b"a");
+
+        let err = add_files(
+            vec!["a.txt".into()],
+            &paths,
+            config.backend(),
+            None,
+            Compression::Zstd,
+            false,
+            &OperationContext::new(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            crate::error::backend_error_code(&err),
+            Some(ErrorCode::InvalidConfiguration)
+        );
+        assert!(!paths.metadata_path(Path::new("a.txt")).exists());
+        assert!(!storage.exists());
+    }
+
     #[test]
     fn add_files_aborts_when_path_outside_or_directory() {
         let (_tmp, root, config, paths) = project();

@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- Only `dvs init` creates a local storage directory. Every other command refuses one that does not exist, with `invalid_configuration`, and names it. `dvs add` created it again, so with a share that was not mounted the files went to the local disk, where nobody else looks. `dvs get` said each version was missing from storage, probably an interrupted upload.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.

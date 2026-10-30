@@ -275,6 +275,11 @@ This check is local: a `dvs.toml` in a parent directory does not prevent initial
 init also rejects a storage path inside the repository root. This guard applies to local-filesystem backends.
 Backends with no local directory (such as a future remote backend) skip it.
 
+Only init creates a local storage directory. Every other command that reads or writes the store refuses a
+storage directory that does not exist, with `invalid_configuration`, and names the path. A missing directory is
+a share that is not mounted, or a `dvs.toml` written on a machine that mounts the share elsewhere. Creating it
+would put the data where nobody else looks.
+
 On partial failure (e.g., metadata folder or storage creation fails after `dvs.toml` is written),
 init attempts best-effort cleanup of local artifacts (`dvs.toml` and, if it didn't exist beforehand, the metadata folder) so that a retry is possible.
 

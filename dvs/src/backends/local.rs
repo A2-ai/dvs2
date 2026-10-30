@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::audit::{AuditEntry, AuditFile, parse_audit_log};
 use crate::backends::{RetrieveRequest, StoreRequest, StoreResult};
-use crate::{Compression, Hashes};
+use crate::{Compression, Error, ErrorCode, Hashes};
 
 const AUDIT_LOG_FILENAME: &str = "audit.log.jsonl";
 /// Only protects the current dvs process, not concurrent dvs processes
@@ -191,13 +191,32 @@ impl LocalBackend {
         Ok(self.path.join(prefix).join(suffix))
     }
 
+    /// The storage directory is there. Only init creates it: anywhere else a
+    /// missing one is a share that is not mounted, or a dvs.toml written on a
+    /// machine that mounts it elsewhere, and creating it would put the data
+    /// where nobody else looks.
+    pub fn check_access(&self) -> Result<()> {
+        if self.path.is_dir() {
+            return Ok(());
+        }
+        Err(Error::new(
+            ErrorCode::InvalidConfiguration,
+            format!(
+                "the storage directory {} in dvs.toml does not exist. If it is on a shared \
+                 drive, check that the drive is mounted. Only dvs init creates a storage directory.",
+                self.path.display()
+            ),
+        )
+        .into())
+    }
+
     pub fn log_audit_entry(&self, entry: &AuditEntry) -> Result<()> {
         let _guard = AUDIT_LOG_LOCK
             .lock()
             .expect("audit log lock should not be poisoned");
         log::debug!("Appending {entry:?} to audit log");
 
-        fs::create_dir_all(&self.path)?;
+        self.check_access()?;
         self.ensure_group_and_mode(&self.path, self.dir_mode())?;
         let audit_path = self.path.join(AUDIT_LOG_FILENAME);
         let mut file = fs::OpenOptions::new()
@@ -234,6 +253,7 @@ impl LocalBackend {
             on_bytes,
             ..
         } = req;
+        self.check_access()?;
         let blob_path = self.hash_to_path(hashes)?;
 
         // Store the blob unless it is already present (dedup).
@@ -321,6 +341,7 @@ impl LocalBackend {
     /// An empty `files` slice returns the full audit log. See
     /// [`parse_audit_log`] for the filtering rules.
     pub fn get_audit_entries(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>> {
+        self.check_access()?;
         let files_to_include: HashSet<_> = HashSet::from_iter(files.iter().cloned());
         let audit_path = self.path.join(AUDIT_LOG_FILENAME);
         let f = fs::File::open(&audit_path)?;
@@ -378,6 +399,37 @@ mod tests {
 
         backend.init(Compression::None).unwrap();
         assert!(storage_path.is_dir());
+    }
+
+    // Only init creates the storage directory. With it gone, as on a share
+    // that is not mounted, store and the audit log refuse and create nothing
+    #[test]
+    fn a_missing_storage_directory_is_refused_not_created() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("storage");
+        let backend = LocalBackend::new(&storage, None).unwrap();
+        backend.init(Compression::Zstd).unwrap();
+        fs::remove_dir_all(&storage).unwrap();
+
+        let source = tmp.path().join("a.txt");
+        fs::write(&source, b"a").unwrap();
+        let hash = test_hash("d41d8cd98f00b204e9800998ecf8427e");
+        let err = backend
+            .store(StoreRequest::new_local(
+                &hash,
+                &source,
+                project_path("a.txt"),
+                Compression::Zstd,
+            ))
+            .unwrap_err();
+        let error = err.downcast_ref::<Error>().unwrap();
+        assert_eq!(error.code, ErrorCode::InvalidConfiguration);
+        assert!(error.message.contains(&storage.display().to_string()));
+
+        assert!(backend.check_access().is_err());
+        assert!(backend.get_audit_entries(&[]).is_err());
+        assert!(backend.log_audit_entry(&test_audit_entry()).is_err());
+        assert!(!storage.exists());
     }
 
     #[test]
