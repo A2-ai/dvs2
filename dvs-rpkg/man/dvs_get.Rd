@@ -75,6 +75,12 @@ A working file that differs from the tracked version is replaced without
 asking only when dvs itself put it there (for example after switching git
 branches). Otherwise it is a conflict, handled by \code{on_conflict}.
 }
+\details{
+In an interactive session, \code{dvs_get()} shows a progress bar while it
+copies files. It shows none in a dry run or in a non-interactive session,
+such as \code{Rscript}. The cli options for progress bars, such as
+\code{cli.progress_show_after}, do not change this.
+}
 \examples{
 \dontrun{
 # In a script: stop unless get did as asked

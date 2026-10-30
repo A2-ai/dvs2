@@ -39,6 +39,10 @@ dvs_init <- function(
 #'   `"io_error"`) and `error` (the reason). That row has `NA` in `outcome`,
 #'   `hash`, `size` and `stored_size`. A path that does not exist raises an
 #'   error and adds nothing.
+#' @details In an interactive session, `dvs_add()` shows a progress bar while it
+#'   copies files. It shows none in a dry run or in a non-interactive session,
+#'   such as `Rscript`. The cli options for progress bars, such as
+#'   `cli.progress_show_after`, do not change this.
 #' @rdname dvs_add
 #' @export
 dvs_add <- function(
@@ -159,6 +163,10 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   In scripts and pipelines, use `on_error = "error"` (or set
 #'   `options(dvs.on_error = "error")`) so the analysis cannot continue on data
 #'   that was not updated.
+#' @details In an interactive session, `dvs_get()` shows a progress bar while it
+#'   copies files. It shows none in a dry run or in a non-interactive session,
+#'   such as `Rscript`. The cli options for progress bars, such as
+#'   `cli.progress_show_after`, do not change this.
 #' @examples
 #' \dontrun{
 #' # In a script: stop unless get did as asked

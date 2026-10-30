@@ -42,3 +42,9 @@ error and adds nothing.
 \description{
 Hashes and copies the specified files into DVS storage.
 }
+\details{
+In an interactive session, \code{dvs_add()} shows a progress bar while it
+copies files. It shows none in a dry run or in a non-interactive session,
+such as \code{Rscript}. The cli options for progress bars, such as
+\code{cli.progress_show_after}, do not change this.
+}
