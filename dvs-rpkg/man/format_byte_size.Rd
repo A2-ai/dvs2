@@ -7,7 +7,8 @@
 format_byte_size(size_bytes)
 }
 \arguments{
-\item{size_bytes}{A size in bytes: one whole number, 0 or more.}
+\item{size_bytes}{A size in bytes: one whole number, 0 or more. \code{TRUE}
+and \code{FALSE} are refused.}
 }
 \value{
 A string. Below 1024 bytes it is the count with \code{B}, as in

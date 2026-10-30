@@ -129,3 +129,12 @@ test_that("format_byte_size returns a human-readable string", {
   expect_match(format_byte_size(1024), "KB")
   expect_match(format_byte_size(1048576), "MB")
 })
+
+test_that("format_byte_size refuses TRUE and FALSE, as set_dvs_threads does", {
+  for (x in list(TRUE, FALSE)) {
+    expect_argument_error(bquote(format_byte_size(.(x))), "size_bytes")
+  }
+  cnd <- tryCatch(format_byte_size(TRUE), error = identity)
+  expect_identical(conditionMessage(cnd), "`size_bytes` must be a number, not TRUE, FALSE or NA")
+  expect_identical(format_byte_size(1L), "1 B")
+})
