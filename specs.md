@@ -102,7 +102,7 @@ as the record stores it. The only exception is event `ts` (unix milliseconds).
 {"v":1,"command":"add","outcome":"failed","dry_run":false,
  "counts":{"total":0,"succeeded":0,"failed":0,"cancelled":0},
  "bytes":{"total":0,"to_transfer":0,"already_stored":0,"transferred":0},
- "error":{"code":"no_files_selected","message":"Path not found: missing.txt","hint":null},
+ "error":{"code":"invalid_arguments","message":"Refusing to add, the following paths are invalid:\n  missing.txt: path not found","hint":null},
  "files":[],"started_at":"2026-10-21T14:30:00.120Z","finished_at":"2026-10-21T14:30:00.123Z","duration_ms":3}
 ```
 
@@ -179,8 +179,9 @@ Backend and credentials failures share one set of codes, at the top level (`erro
 404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs` record, e.g. git conflict
 markers) and `credentials_unreadable` (the store exists but cannot be read). A row can also have
 `code: "cancelled"` (the file never started, see Cancellation), which is not a failure. Command-level codes:
-`not_in_project`, `invalid_configuration`, `invalid_arguments`, `no_files_selected` (also `get` when no tracked
-file matched), `io_error`, and `operation_failed`, the honest fallback when nothing more specific is known.
+`not_in_project`, `invalid_configuration`, `invalid_arguments`, `no_files_selected` (`add` when a glob matched no
+file, `get` when no tracked file matched), `io_error`, and `operation_failed`, the honest fallback when nothing
+more specific is known.
 `auth_required` is also what `login`, `init` and `attach` report in machine mode when device login would be
 needed. Row codes besides the shared ones: `add`, `status` and `availability` `io_error` and
 `operation_failed` (`file_failed` if a failure has no code), get's codes (see get), and `logout` `warnings`
@@ -381,7 +382,7 @@ Returns a single-row data frame describing the resulting configuration.
 It only takes files as input, directories will not work unless combined with a glob. It can also take an optional
 message that will be recorded in the metadata file. Similarly, `add` must not have a recursive option. The glob mechanism is sufficient, and intentional when used.
 
-Input paths are validated before any data is written. If any path cannot be resolved to a file to add (it does not exist, it is a directory passed without a glob, or it resolves outside the project root) the whole batch is refused and nothing is added.
+Input paths are validated before any data is written. If any path cannot be resolved to a file to add (it does not exist, it is a directory passed without a glob, or it resolves outside the project root) the whole batch is refused and nothing is added. The refusal names every invalid path with its reason, sorted by path.
 
 Once every input resolves, the add is best-effort. A file that fails during the read or the storage write (for example a permission error) does not stop the others. That file is reported and the rest are still added.
 
@@ -425,8 +426,8 @@ Global Options:
 You can run `dvs add *.csv` and it will be expanded by your shell before calling `dvs`.
 To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library. The glob string must be quoted (for example `--glob '*.csv'`) so the shell does not expand it before `dvs` sees it.
 
-A batch refused for an invalid input path (including a directory without `--glob`) is `invalid_arguments`,
-exits with `2` and adds nothing. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`. A cancelled batch exits with `130` (see Cancellation).
+A batch refused for an invalid input path (including a missing path and a directory without `--glob`) is
+`invalid_arguments`, exits with `2` and adds nothing. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`. A cancelled batch exits with `130` (see Cancellation).
 
 #### Rust library
 

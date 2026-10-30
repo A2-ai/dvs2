@@ -1,22 +1,10 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::paths::{DvsPaths, PathFilter};
 use anyhow::{Result, bail};
 use globset::{GlobBuilder, GlobMatcher};
 use walkdir::WalkDir;
-
-/// A valid add selection that names a path that does not exist.
-#[derive(Debug)]
-pub struct NoFilesSelected(pub PathBuf);
-
-impl std::fmt::Display for NoFilesSelected {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Path not found: {}", self.0.display())
-    }
-}
-
-impl std::error::Error for NoFilesSelected {}
 
 /// Builds the glob matching the rg behaviour
 /// eg "*.csv" will not match `some/dir/test.csv`
@@ -32,10 +20,29 @@ pub(crate) fn build_glob_matcher(pattern: Option<&str>) -> Result<Option<GlobMat
         .transpose()
 }
 
+/// The canonical form of the longest prefix of `path` that exists, followed by
+/// the rest of `path` as written. For a path that does not exist this names the
+/// same place and still does not resolve, so a later check finds it missing
+/// too, and a `..` after the missing part cannot lead to another file.
+fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+    let parts: Vec<_> = path.components().collect();
+    for split in (1..=parts.len()).rev() {
+        let head: PathBuf = parts[..split].iter().collect();
+        if let Ok(canonical) = head.canonicalize() {
+            return parts[split..]
+                .iter()
+                .fold(canonical, |out, part| out.join(part));
+        }
+    }
+    path.to_path_buf()
+}
+
 /// Resolve paths for `add` command following ripgrep-style behavior:
 /// - Explicit files: added directly (glob ignored)
 /// - Explicit directories: walked and filtered by glob
 /// - No paths + glob: walks cwd filtered by glob
+/// - Explicit paths that do not exist: returned relative to the repo root, so
+///   add refuses them together with the other invalid inputs
 pub fn resolve_paths_for_add(
     paths: Vec<PathBuf>,
     glob_pattern: Option<&str>,
@@ -59,11 +66,18 @@ pub fn resolve_paths_for_add(
     };
 
     for path in paths {
-        let full_path = dvs_paths
-            .cwd()
-            .join(&path)
-            .canonicalize()
-            .map_err(|_| NoFilesSelected(path.clone()))?;
+        let joined = dvs_paths.cwd().join(&path);
+        let Ok(full_path) = joined.canonicalize() else {
+            // Not found. Keep it relative to the repo root like the other
+            // inputs, resolved from the cwd: validate_for_add joins it to the
+            // root, and must not find a file of the same name there.
+            let resolved = canonicalize_existing_prefix(&joined);
+            out.insert(match resolved.strip_prefix(&repo_root) {
+                Ok(p) => p.to_path_buf(),
+                Err(_) => resolved,
+            });
+            continue;
+        };
 
         // Explicit file: we ignore the glob and add it to the file
         if full_path.is_file() {
@@ -184,6 +198,7 @@ pub fn select_paths_for_get(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths::AddPathStatus;
     use fs::File;
     use fs_err as fs;
     use tempfile::TempDir;
@@ -300,12 +315,49 @@ mod tests {
     }
 
     #[test]
-    fn add_path_not_found_errors() {
+    fn add_missing_path_is_returned_for_validation() {
         let (_temp, dvs_paths) = setup_test_repo();
-        let result = resolve_paths_for_add(vec![PathBuf::from("nonexistent")], None, &dvs_paths);
+        let paths = vec![
+            PathBuf::from("foo.txt"),
+            PathBuf::from("nonexistent"),
+            PathBuf::from("data/gone/x.csv"),
+        ];
+        let result = resolve_paths_for_add(paths, None, &dvs_paths).unwrap();
 
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Path not found"));
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&PathBuf::from("nonexistent")));
+        assert!(result.contains(&PathBuf::from("data/gone/x.csv")));
+    }
+
+    // From a subdirectory, a missing name stays in that subdirectory, even
+    // when the root has a file of that name.
+    #[test]
+    fn add_missing_path_from_subdirectory_keeps_the_cwd() {
+        let (temp, _) = setup_test_repo();
+        let root = temp.path().canonicalize().unwrap();
+        let dvs_paths = DvsPaths::new(root.join("data"), root.clone(), ".dvs").unwrap();
+
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("foo.txt")], None, &dvs_paths).unwrap();
+        assert_eq!(result, HashSet::from([PathBuf::from("data/foo.txt")]));
+
+        let validated = dvs_paths.validate_for_add(&Vec::from_iter(result));
+        assert_eq!(validated[0].1, AddPathStatus::NotFound);
+    }
+
+    // A `..` after the missing part is kept, so it cannot reach an existing file.
+    #[test]
+    fn add_missing_path_keeps_dotdot_after_the_missing_part() {
+        let (temp, dvs_paths) = setup_test_repo();
+        let root = temp.path().canonicalize().unwrap();
+        let result =
+            resolve_paths_for_add(vec![PathBuf::from("gone/../foo.txt")], None, &dvs_paths)
+                .unwrap();
+        assert_eq!(result, HashSet::from([PathBuf::from("gone/../foo.txt")]));
+        assert!(root.join("foo.txt").is_file());
+
+        let validated = dvs_paths.validate_for_add(&Vec::from_iter(result));
+        assert_eq!(validated[0].1, AddPathStatus::NotFound);
     }
 
     #[test]
