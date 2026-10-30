@@ -46,7 +46,7 @@ fresh_repo() {
   local storage="$SCRIPT_DIR/dvs_storage_cli_${tag}_${RUN_SUFFIX}"
   mkdir "$repo" "$storage"
   cp -r "$FIXTURES/data" "$repo/data"
-  ( cd "$repo" && dvs init "$storage" >/dev/null )
+  ( cd "$repo" && dvs init local "$storage" >/dev/null )
   printf '%s\n' "$repo"
 }
 

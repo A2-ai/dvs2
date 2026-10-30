@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
 
-# Showcase how dvs_add / dvs_get / dvs_status surface results under the
-# fail-fast (#240) model:
+# Showcase how dvs_add / dvs_get / dvs_status surface results:
 #
-#   add / get
-#     - all inputs valid          → data.frame, one row per file
-#     - any INPUT path invalid     → RAISES, the whole batch is refused and
-#       (nonexistent for add,         nothing is written/retrieved
-#        untracked for get)
-#     - failure AFTER the batch    → does NOT raise; that file is one row with
-#       starts (copy permission       its `error` column set and the success
-#       error / post-retrieval        columns NA, next to the rows that succeeded
-#       hash mismatch)
+#   add (fail-fast, #240)
+#     - all inputs valid          -> data.frame, one row per file
+#     - any input path nonexistent -> RAISES. The whole batch is refused and
+#                                    nothing is written.
+#     - failure AFTER the batch    -> does NOT raise. That file is one row with
+#       starts (copy permission)      its `error` column set and the success
+#                                    columns NA, next to the rows that succeeded.
+#
+#   get (dvs_get_result, #285)
+#     - all requested paths tracked -> dvs_get_result, one row per file
+#     - any requested path untracked -> does NOT raise. Nothing is retrieved.
+#                                      The untracked path is a `not_tracked`
+#                                      row and the rest are held back as
+#                                      `batch_aborted` (on_conflict = "abort").
+#                                      The default on_error = "return" only
+#                                      returns the result.
 #
 #   status
 #     - never raises as a whole. A file whose .dvs metadata is unparseable is
 #       reported as a per-file error row, next to the healthy rows.
 #
 # (The pre-#240 best-effort `list(Success = df, Error = df)` shape no longer
-# exists. specs.md: dvs_add L207, dvs_get L266, dvs_status L307-309.)
+# exists. specs.md: "### add" R package, "### get" R package, "### status".)
 
 set -euox pipefail
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
@@ -150,11 +156,12 @@ show_call("dvs_get all-tracked (5 files) -> data.frame",
                                "data/file_5.bin")))
 EOF
 
-# (b) every requested path is untracked → RAISES (whole batch refused)
+# (b) every requested path is untracked -> no raise. Every row is not_tracked
+#     and nothing is retrieved.
 print_eval_rscript <<EOF
 library(dvs)
 $shape_helper
-show_call("dvs_get all-untracked (3 paths) -> RAISES",
+show_call("dvs_get all-untracked (3 paths) -> not_tracked rows, no raise",
   function() dvs_get(paths = c("data/never_tracked_a.bin",
                                "data/never_tracked_b.bin",
                                "data/never_tracked_c.bin")))
@@ -162,11 +169,12 @@ EOF
 
 rm -f data/file_*.bin
 
-# (c) one requested path untracked among tracked ones → RAISES (nothing retrieved)
+# (c) one requested path untracked among tracked ones -> no raise. Nothing is
+#     retrieved. The tracked files are held back as batch_aborted.
 print_eval_rscript <<EOF
 library(dvs)
 $shape_helper
-show_call("dvs_get tracked + one untracked -> RAISES (all-or-nothing)",
+show_call("dvs_get tracked + one untracked -> batch_aborted rows, no raise",
   function() dvs_get(paths = c("data/file_1.bin",
                                "data/file_2.bin",
                                "data/never_tracked.bin")))

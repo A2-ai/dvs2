@@ -22,7 +22,7 @@ mkdir "$DVS_STORAGE_CLI"
 
 cd "$DVS_REPO_CLI"
 
-dvs init "$DVS_STORAGE_CLI"
+dvs init local "$DVS_STORAGE_CLI"
 
 ls -a "$DVS_REPO_CLI" "$DVS_STORAGE_CLI"
 

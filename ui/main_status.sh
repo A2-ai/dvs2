@@ -27,7 +27,7 @@ mkdir "$DVS_STORAGE_CLI" "$DVS_REPO_RPKG" "$DVS_STORAGE_RPKG"
 # ── Init ──
 
 cd "$DVS_REPO_CLI"
-dvs init "$DVS_STORAGE_CLI"
+dvs init local "$DVS_STORAGE_CLI"
 
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF

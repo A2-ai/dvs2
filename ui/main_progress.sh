@@ -36,7 +36,7 @@ mkfiles 100 1M data/derived
 
 printf '\n--- CLI ADD: 100 x 1MB ---\n'
 cd "$DVS_REPO_CLI_1"
-dvs init "$DVS_STORAGE_CLI_1"
+dvs init local "$DVS_STORAGE_CLI_1"
 cp -r "$FIXTURES_1/data" "$DVS_REPO_CLI_1/data"
 time dvs add data/derived/*
 
@@ -82,7 +82,7 @@ mkfiles 1 500M data/derived
 
 printf '\n--- CLI ADD: 1 x 500MB ---\n'
 cd "$DVS_REPO_CLI_2"
-dvs init "$DVS_STORAGE_CLI_2"
+dvs init local "$DVS_STORAGE_CLI_2"
 cp -r "$FIXTURES_2/data" "$DVS_REPO_CLI_2/data"
 time dvs add data/derived/file_1.bin
 

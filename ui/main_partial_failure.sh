@@ -53,7 +53,7 @@ seed_files() { # $1 = repo dir
 # region: CLI — nonzero exit, failure printed to stderr
 
 cd "$DVS_REPO_CLI"
-dvs init "$DVS_STORAGE_CLI"
+dvs init local "$DVS_STORAGE_CLI"
 seed_files "$DVS_REPO_CLI"
 
 say "--- project before add (locked.csv is mode 000) ---"
