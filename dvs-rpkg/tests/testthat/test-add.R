@@ -149,6 +149,25 @@ test_that("dvs_add reports per-file failures in the result, not as a warning", {
   expect_true(is.na(bad$outcome))
 })
 
+test_that("dvs_add keeps its column order when the first file fails", {
+  # A mode-000 file fails to open, except for root (see the test above)
+  skip_if(system("id -un", intern = TRUE) == "root", "cannot revoke read access from root")
+  new_dvs_test_repo()
+  write_theoph("a_noperm.csv")
+  write_theoph("b_good.csv")
+  Sys.chmod("a_noperm.csv", "000")
+  on.exit(Sys.chmod("a_noperm.csv", "644"), add = TRUE)
+
+  # Rows are sorted by path, so the failed file is the first row
+  result <- dvs_add(paths = c("a_noperm.csv", "b_good.csv"))
+  expect_equal(basename(result$path), c("a_noperm.csv", "b_good.csv"))
+  expect_equal(
+    names(result),
+    c("path", "outcome", "hash", "size", "stored_size", "duration_ms", "code", "error")
+  )
+  expect_s3_class(result$size, "dvs_bytes")
+})
+
 test_that("dvs_add resolves a bare relative path from a nested working directory", {
   repo <- new_dvs_test_repo()$repo
   nested <- file.path(repo, "analysis", "run1")

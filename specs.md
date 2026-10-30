@@ -36,7 +36,7 @@ You can pass some arguments to it or edit the toml file manually.
 `add` will add and update files to the storage. In practice this will:
 
 1. hash the files (currently blake3 only)
-2. save a metadata file for each files in the metadata folder
+2. save a metadata file for each file in the metadata folder
 3. add each metadata file to `.gitignore` that are adjacent to the files
 
 `get` will retrieve the files thanks to the metadata folder and pull them from the storage to their location in the project.
@@ -200,7 +200,7 @@ invalid; human `info` shows the error on its `on_conflict` line).
 
 ```shell
 ❯ dvs info --help
-Show the project configuration and the server info is using a dvs-server backend
+Show the project configuration, and the server info when the project uses a dvs-server backend
 
 Usage: dvs info [OPTIONS]
 
@@ -513,7 +513,7 @@ Options:
   -g, --glob <GLOB>           Only retrieve the tracked files matching this glob, e.g. '*.csv'
   -r, --recursive             Recursively include files in subdirectories for directory inputs. Without this flag, directories return only their direct children
       --dry-run               Show what would be retrieved without making any actual changes
-      --on-conflict <POLICY>  What to do with files whose local version dvs did not put there (local changes, or no record): abort changes nothing, skip leaves them and gets the rest, overwrite replaces them. Defaults to DVS_GET_ON_CONFLICT, then [get] on_conflict in dvs.toml, then abort [possible values: abort, skip, overwrite]
+      --on-conflict <POLICY>  What to do with files whose local version dvs did not put there (local changes, or no record): abort changes nothing, skip leaves them and gets the rest, overwrite replaces them. Defaults to DVS_GET_ON_CONFLICT, then `[get] on_conflict` in dvs.toml, then abort [possible values: abort, skip, overwrite]
   -f, --force                 Replace files with local changes (same as --on-conflict overwrite)
   -h, --help                  Print help
 
@@ -607,7 +607,7 @@ This returns the status (mentioned in the high level overview above)
 
 ```shell
 ❯ dvs status --help
-Gets the status of each files in the current repository
+Gets the status of each file in the current repository
 
 Usage: dvs status [OPTIONS] [PATHS]...
 
@@ -615,7 +615,7 @@ Arguments:
   [PATHS]...  Paths (files or directories) to check status for
 
 Options:
-  -r, --recursive      Recursively include files in subdirectories for given directories Without this flag, directories return only their direct children
+  -r, --recursive      Recursively include files in subdirectories for given directories. Without this flag, directories return only their direct children
   -g, --glob <GLOB>    Only include the tracked files matching this glob, e.g. '*.csv'
       --current        Include the files that are current
       --absent         Include the files that are absent
