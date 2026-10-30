@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- `dvs add --glob` never selects git's own files or a `dvs.toml`. `dvs add --glob '**/*'` at the project root added every file in `.git/` and `dvs.toml`, and gitignored them, so git no longer saw the project's config.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::paths::{DvsPaths, PathFilter};
+use crate::paths::{CONFIG_FILE_NAME, DvsPaths, PathFilter};
 use anyhow::{Result, bail};
 use globset::{GlobBuilder, GlobMatcher};
 use walkdir::WalkDir;
@@ -78,15 +78,22 @@ pub fn resolve_paths_for_add(
                 // A dir without a glob: it will be rejected later
                 out.insert(path.clone());
             } else if let Some(matcher) = &glob_matcher {
-                for entry in WalkDir::new(&full_path).into_iter().filter_map(|e| e.ok()) {
+                for entry in WalkDir::new(&full_path)
+                    .into_iter()
+                    // git's own files are never data: the walk does not enter a
+                    // .git folder (or take the .git file of a worktree)
+                    .filter_entry(|e| e.file_name() != ".git")
+                    .filter_map(|e| e.ok())
+                {
                     let entry_path = entry.path().canonicalize()?;
                     // Skip directories and metadata root folder
                     if !entry_path.is_file() || entry_path.starts_with(&metadata_root) {
                         continue;
                     }
-                    // dvs writes .gitignore files next to tracked data: only an
-                    // explicit path adds one, never a glob
-                    if entry.file_name() == ".gitignore" {
+                    // dvs writes .gitignore files next to tracked data, and
+                    // dvs.toml is a project's config: only an explicit path adds
+                    // one, never a glob
+                    if entry.file_name() == ".gitignore" || entry.file_name() == CONFIG_FILE_NAME {
                         continue;
                     }
 
@@ -297,6 +304,34 @@ mod tests {
             resolve_paths_for_add(vec![PathBuf::from("data/.gitignore")], None, &dvs_paths)
                 .unwrap();
         assert!(explicit.contains(&PathBuf::from("data/.gitignore")));
+    }
+
+    #[test]
+    fn add_glob_skips_git_and_dvs_toml() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let root = dvs_paths.repo_root();
+        File::create(root.join(".git/HEAD")).unwrap();
+        File::create(root.join(CONFIG_FILE_NAME)).unwrap();
+        // A nested project, and a worktree whose .git is a file
+        File::create(root.join("data").join(CONFIG_FILE_NAME)).unwrap();
+        File::create(root.join("data/subdir/.git")).unwrap();
+
+        let walked = resolve_paths_for_add(vec![], Some("**/*"), &dvs_paths).unwrap();
+        assert!(walked.contains(&PathBuf::from("data/subdir/c.csv")));
+        assert!(
+            !walked
+                .iter()
+                .any(|p| p.starts_with(".git") || p.ends_with(".git")),
+            "{walked:?}"
+        );
+        assert!(
+            !walked.iter().any(|p| p.ends_with(CONFIG_FILE_NAME)),
+            "{walked:?}"
+        );
+
+        let explicit =
+            resolve_paths_for_add(vec![PathBuf::from(CONFIG_FILE_NAME)], None, &dvs_paths).unwrap();
+        assert!(explicit.contains(&PathBuf::from(CONFIG_FILE_NAME)));
     }
 
     #[test]
