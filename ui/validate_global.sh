@@ -200,6 +200,20 @@ check "0" "$NOGIT_GI_COUNT" "no .gitignore written when no .git folder"
 
 # ──────────────────────────────────────────────────────────────────────────────
 say
+say "=== CLAIM 6b: a project in a subfolder of a git repo gets its entries (L24, L792) ==="
+NEST_REPO="$(mktemp -d "${TMPDIR:-/tmp}/dvs_repo_cli_nested_XXX")"
+NEST_STORE="${NEST_REPO}_store"
+git -C "$NEST_REPO" init -q
+mkdir "$NEST_REPO/study" "$NEST_STORE"
+(cd "$NEST_REPO/study" && dvs init local "$NEST_STORE" >/dev/null)
+head -c 1024 /dev/urandom > "$NEST_REPO/study/c.bin"
+(cd "$NEST_REPO/study" && dvs add c.bin >/dev/null 2>&1)
+# Untracked paths git lists in the repository: the data file and the cache must not be there
+NEST_SEEN="$({ set +x; } 2>/dev/null; git -C "$NEST_REPO" status --porcelain -uall | grep -c -e 'c\.bin$' -e 'dvs\.db$' || true)"
+check "0" "$NEST_SEEN" "git sees neither study/c.bin nor study/.dvs/.cache/dvs.db"
+
+# ──────────────────────────────────────────────────────────────────────────────
+say
 say "=== CLAIM 7: parallelism DVS_NUM_THREADS honored (L778-782) ==="
 # The actual thread count is not surfaced in plain CLI output, so the COUNT
 # itself is UNTESTABLE via the CLI. What we CAN verify: setting the variable
