@@ -97,7 +97,7 @@ say
 say "=== CLAIM: status --help matches spec (L609-632) ==="
 HELP="$(dvs status --help)"
 EXPECTED_HELP="$(cat <<'EOF'
-Gets the status of each files in the current repository
+Gets the status of each file in the current repository
 
 Usage: dvs status [OPTIONS] [PATHS]...
 
@@ -105,7 +105,7 @@ Arguments:
   [PATHS]...  Paths (files or directories) to check status for
 
 Options:
-  -r, --recursive      Recursively include files in subdirectories for given directories Without this flag, directories return only their direct children
+  -r, --recursive      Recursively include files in subdirectories for given directories. Without this flag, directories return only their direct children
   -g, --glob <GLOB>    Only include the tracked files matching this glob, e.g. '*.csv'
       --current        Include the files that are current
       --absent         Include the files that are absent

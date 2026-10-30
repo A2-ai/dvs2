@@ -80,7 +80,7 @@ Options:
   -g, --glob <GLOB>           Only retrieve the tracked files matching this glob, e.g. '*.csv'
   -r, --recursive             Recursively include files in subdirectories for directory inputs. Without this flag, directories return only their direct children
       --dry-run               Show what would be retrieved without making any actual changes
-      --on-conflict <POLICY>  What to do with files whose local version dvs did not put there (local changes, or no record): abort changes nothing, skip leaves them and gets the rest, overwrite replaces them. Defaults to DVS_GET_ON_CONFLICT, then [get] on_conflict in dvs.toml, then abort [possible values: abort, skip, overwrite]
+      --on-conflict <POLICY>  What to do with files whose local version dvs did not put there (local changes, or no record): abort changes nothing, skip leaves them and gets the rest, overwrite replaces them. Defaults to DVS_GET_ON_CONFLICT, then `[get] on_conflict` in dvs.toml, then abort [possible values: abort, skip, overwrite]
   -f, --force                 Replace files with local changes (same as --on-conflict overwrite)
   -h, --help                  Print help
 
