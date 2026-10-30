@@ -23,7 +23,7 @@ pub(crate) fn build_glob_matcher(pattern: Option<&str>) -> Result<Option<GlobMat
 /// The canonical form of the longest prefix of `path` that exists, followed by
 /// the rest of `path` as written. For a path that does not exist this names the
 /// same place and still does not resolve, so a later check finds it missing
-/// too, and a `..` after the missing part cannot lead to another file.
+/// too. A `..` after the missing part is kept as written, not normalized away.
 fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
     let parts: Vec<_> = path.components().collect();
     for split in (1..=parts.len()).rev() {
@@ -346,6 +346,9 @@ mod tests {
     }
 
     // A `..` after the missing part is kept, so it cannot reach an existing file.
+    // Unix only: Windows resolves `..` as text before it opens the path, so
+    // `gone/../foo.txt` is `foo.txt` there.
+    #[cfg(unix)]
     #[test]
     fn add_missing_path_keeps_dotdot_after_the_missing_part() {
         let (temp, dvs_paths) = setup_test_repo();
