@@ -200,7 +200,7 @@ invalid; human `info` shows the error on its `on_conflict` line).
 
 ```shell
 ❯ dvs info --help
-Show the project configuration and the server info is using a dvs-server backend
+Show the project configuration, and the server info when the project uses a dvs-server backend
 
 Usage: dvs info [OPTIONS]
 

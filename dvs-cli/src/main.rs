@@ -173,7 +173,7 @@ pub enum Command {
         #[clap(long, short, conflicts_with = "on_conflict")]
         force: bool,
     },
-    /// Show the project configuration and the server info is using a dvs-server backend
+    /// Show the project configuration, and the server info when the project uses a dvs-server backend
     Info,
     /// Check whether explicitly named BLAKE3 content is stored, without downloading it
     Availability {
