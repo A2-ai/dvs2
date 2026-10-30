@@ -166,7 +166,7 @@ pub enum Command {
         /// What to do with files whose local version dvs did not put there
         /// (local changes, or no record): abort changes nothing, skip leaves
         /// them and gets the rest, overwrite replaces them. Defaults to
-        /// DVS_GET_ON_CONFLICT, then [get] on_conflict in dvs.toml, then abort
+        /// DVS_GET_ON_CONFLICT, then `[get] on_conflict` in dvs.toml, then abort
         #[clap(long, value_name = "POLICY", value_parser = clap::builder::PossibleValuesParser::new(OnConflict::CHOICES))]
         on_conflict: Option<String>,
         /// Replace files with local changes (same as --on-conflict overwrite)
