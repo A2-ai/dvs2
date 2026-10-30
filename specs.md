@@ -767,7 +767,7 @@ Example:
 `dvs` maintains a SQLite cache at `{metadata_folder}/.cache/dvs.db` to avoid re-hashing files that haven't
 changed. Both `add` and `get` populate the cache after a successful operation, so a subsequent `status`
 check benefits from cache hits. A cache hit is determined by matching the file's `mtime` and `size`. The cache directory is
-automatically added to `.gitignore` on creation. The cache is optional.
+added to `.gitignore` each time dvs opens the cache, when the entry is missing. The cache is optional.
 
 The same database holds the local baseline (`baseline(path, blake3, size)`): what dvs last wrote or added at
 each path. Unlike the hash cache, `status` never writes it. Deleting it is safe; a differing file then reports
@@ -789,8 +789,10 @@ The threadpool size set directly by the R package takes precedence over the
 ### Gitignore
 
 After a successful `add`, each data file gets a `/<filename>` entry in its own directory's `.gitignore`, keeping the
-data out of Git while the `.dvs` metadata stays tracked. Existing entries are not duplicated. If there is no `.git`
-folder the update is skipped, and a failed `.gitignore` update is logged as a warning without failing the `add`.
+data out of Git while the `.dvs` metadata stays tracked. Existing entries are not duplicated. The project root or a
+directory above it must have a `.git` (a folder, or the file of a worktree or submodule), so a project in a subfolder
+of a repository gets its entries too. With no `.git` there, the update is skipped. A failed `.gitignore` update is
+logged as a warning without failing the `add`.
 
 ### Globbing
 

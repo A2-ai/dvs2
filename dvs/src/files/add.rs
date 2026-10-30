@@ -587,6 +587,39 @@ mod tests {
         );
     }
 
+    // A project in a subfolder of the git repository, as an RStudio project
+    // with the dvs project inside it: the data and the cache are ignored
+    #[test]
+    fn add_files_gitignores_in_a_project_inside_the_repo() {
+        let (_tmp, repo) = create_temp_git_repo();
+        let root = repo.join("study");
+        fs::create_dir(&root).unwrap();
+        let (config, _dvs_dir) = init_dvs_repo(&root);
+        let paths =
+            DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name()).unwrap();
+        create_file(&root, "data/dm.csv", b"USUBJID,AGE\n01,54\n");
+
+        add_files(
+            vec!["data/dm.csv".into()],
+            &paths,
+            config.backend(),
+            None,
+            Compression::Zstd,
+            false,
+            &OperationContext::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.join("data/.gitignore")).unwrap(),
+            "/dm.csv\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join(".dvs/.gitignore")).unwrap(),
+            "/.cache\n"
+        );
+    }
+
     #[test]
     fn add_files_aborts_when_path_outside_or_directory() {
         let (_tmp, root, config, paths) = project();
