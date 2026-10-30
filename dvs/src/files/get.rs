@@ -1497,6 +1497,32 @@ mod tests {
         assert_eq!(repo.read("a.csv"), b"a");
     }
 
+    // The storage directory is gone, as on a share that is not mounted: the
+    // row says so, not that the version is missing from storage
+    #[test]
+    fn a_missing_storage_directory_is_named() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        fs::remove_file(repo.root.join("a.csv")).unwrap();
+        let storage = match &repo.config.backend {
+            Backend::Local(b) => b.path.clone(),
+            Backend::Server(_) => unreachable!(),
+        };
+        fs::rename(&storage, storage.with_extension("unmounted")).unwrap();
+
+        let report = repo.get(&["a.csv"], OnConflict::Abort);
+        let r = row(&report, "a.csv");
+        assert_eq!(
+            r.code,
+            Some(GetCode::Shared(ErrorCode::InvalidConfiguration))
+        );
+        assert!(
+            r.message.as_deref().unwrap().contains("does not exist"),
+            "{r:?}"
+        );
+        assert!(!storage.exists());
+    }
+
     // Spec 2
     #[test]
     fn current_files_are_unchanged() {
