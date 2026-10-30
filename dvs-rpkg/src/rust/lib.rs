@@ -299,17 +299,17 @@ impl From<StatusChoice> for Status {
 /// @title Report the sync status of DVS-managed files
 /// @description
 /// Reports the sync status of DVS-managed files. By default all statuses
-/// are shown; pass a character vector
-/// of status names (e.g. `c("current", "absent")`) to restrict output.
+/// are shown. Pass a character vector of status names, such as
+/// `c("current", "absent")`, to show only those.
 /// A file whose status cannot be read is always kept, with status `"error"`,
 /// the kind of failure in `code` and the reason in `error`.
 ///
 /// @param paths Files or directories to report, relative to the working
 ///   directory. `NULL` is the same as `character(0)`.
-/// @param recursive If `TRUE`, directory inputs include all descendants;
-///   if `FALSE` or `NULL`, only direct children of the directory
-///   are returned. The flag only constrains descendants of paths passed
-///   explicitly — when `paths` is empty, every tracked file is returned
+/// @param recursive If `TRUE`, directory inputs include all descendants.
+///   If `FALSE` or `NULL`, only direct children of the directory are
+///   returned. The flag only constrains descendants of paths passed
+///   explicitly. When `paths` is empty, every tracked file is returned
 ///   regardless of nesting depth, and `recursive` has no effect.
 /// @param glob A glob that selects tracked files, such as `"*.csv"`. It
 ///   runs from the working directory, or from each directory in `paths`. `*`
@@ -523,15 +523,16 @@ impl From<OnConflictChoice> for OnConflict {
 ///   does not cross a path separator, so `*.csv` matches `a.csv` but not
 ///   `sub/a.csv`. Use `**/*.csv` to match at any depth. Mutually exclusive
 ///   with `recursive`.
-/// @param recursive If `TRUE`, directory inputs include all descendants;
-///   if `FALSE` or `NULL`, only direct children of the directory
-///   are returned. With no explicit `paths` the directory is the working
+/// @param recursive If `TRUE`, directory inputs include all descendants.
+///   If `FALSE` or `NULL`, only direct children of the directory are
+///   returned. With no explicit `paths` the directory is the working
 ///   directory. Mutually exclusive with `glob`.
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
 /// @param on_conflict `NULL` (use `DVS_GET_ON_CONFLICT`, then `[get] on_conflict`
 ///   in dvs.toml, then `"abort"`), or one of `"abort"` (change no files if any
 ///   requested file has local changes or another problem), `"skip"` (leave those
-///   files and get the rest) or `"overwrite"` (replace them; local changes are lost).
+///   files and get the rest) or `"overwrite"` (replace them, and lose the
+///   local changes).
 /// @param on_error What `dvs_get()` does when get did not do as asked:
 ///   `"return"`, `"warn"` or `"error"`. The result carries the matched choice
 ///   back to R, which acts on it.
@@ -789,17 +790,17 @@ pub fn dvs_version() -> String {
 /// @title Set the log level for DVS internals
 /// @description
 /// Controls which log messages from the DVS internals are routed to R's
-/// console. `error` and `warn` go to [stderr()]; `info`, `debug`, and `trace`
+/// console. `error` and `warn` go to [stderr()]. `info`, `debug` and `trace`
 /// go to stdout.
 ///
 /// The R package does not consult the `RUST_LOG` environment variable.
-/// `RUST_LOG=dvs=<level>` only affects the `dvs` CLI binary; in R you must
-/// call `set_dvs_log_level()`.
+/// `RUST_LOG=dvs=<level>` only affects the `dvs` CLI binary. In R, call
+/// `set_dvs_log_level()`.
 ///
-/// Default at package load: `"off"` — no log output is produced until this
-/// function is called.
+/// The level is `"off"` when the package loads, so there is no log output
+/// until this function is called.
 ///
-/// @return Called for its side effect; returns `NULL` invisibly.
+/// @return `NULL`, invisibly. It is called for its side effect.
 ///
 /// @examples
 /// \dontrun{

@@ -25,9 +25,9 @@ does not cross a path separator, so \verb{*.csv} matches \code{a.csv} but not
 \code{sub/a.csv}. Use \verb{**/*.csv} to match at any depth. Mutually exclusive
 with \code{recursive}.}
 
-\item{recursive}{If \code{TRUE}, directory inputs include all descendants;
-if \code{FALSE} or \code{NULL}, only direct children of the directory
-are returned. With no explicit \code{paths} the directory is the working
+\item{recursive}{If \code{TRUE}, directory inputs include all descendants.
+If \code{FALSE} or \code{NULL}, only direct children of the directory are
+returned. With no explicit \code{paths} the directory is the working
 directory. Mutually exclusive with \code{glob}.}
 
 \item{dry_run}{If \code{TRUE}, report what would be retrieved without writing files.}
@@ -35,7 +35,8 @@ directory. Mutually exclusive with \code{glob}.}
 \item{on_conflict}{\code{NULL} (use \code{DVS_GET_ON_CONFLICT}, then \verb{[get] on_conflict}
 in dvs.toml, then \code{"abort"}), or one of \code{"abort"} (change no files if any
 requested file has local changes or another problem), \code{"skip"} (leave those
-files and get the rest) or \code{"overwrite"} (replace them; local changes are lost).}
+files and get the rest) or \code{"overwrite"} (replace them, and lose the
+local changes).}
 
 \item{on_error}{What \code{dvs_get()} does when get did not do as asked:
 \code{"return"}, \code{"warn"} or \code{"error"}. The result carries the matched choice

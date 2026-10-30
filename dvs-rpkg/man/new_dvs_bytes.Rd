@@ -17,6 +17,5 @@ a \code{dvs_bytes} object inheriting from \code{numeric}
 A thin constructor used by \code{\link[=dvs_add]{dvs_add()}}, \code{\link[=dvs_status]{dvs_status()}} and \code{\link[=dvs_get]{dvs_get()}} to
 tag byte-size columns so that pillar renders them as human-readable sizes
 in tibble output. Stored as \code{double} to safely represent file sizes up to
-\code{2^53} bytes — \code{integer} in R is 32 bits and would silently overflow at
-~2 GB.
+\code{2^53} bytes. An R \code{integer} is 32 bits and would overflow at about 2 GB.
 }
