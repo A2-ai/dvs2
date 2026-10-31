@@ -74,11 +74,12 @@ impl FileMetadata {
             fs::create_dir_all(parent)?;
         }
         log::debug!("Writing metadata to {}", dvs_file_path.display());
-        fs::write(
+        write_atomic(
             &dvs_file_path,
-            serde_json::to_string_pretty(self).expect("valid json"),
-        )?;
-        Ok(())
+            serde_json::to_string_pretty(self)
+                .expect("valid json")
+                .as_bytes(),
+        )
     }
 
     /// Whether storage has the content and the metadata file already says
@@ -190,7 +191,7 @@ impl FileMetadata {
                     relative_path.as_ref().display()
                 );
                 if let Some(old) = old_metadata_content {
-                    let _ = fs::write(&dvs_file_path, &old);
+                    let _ = write_atomic(&dvs_file_path, &old);
                 } else {
                     let _ = fs::remove_file(&dvs_file_path);
                 }
@@ -202,7 +203,7 @@ impl FileMetadata {
                     relative_path.as_ref().display()
                 );
                 if let Some(old) = old_metadata_content {
-                    let _ = fs::write(&dvs_file_path, &old);
+                    let _ = write_atomic(&dvs_file_path, &old);
                 } else {
                     let _ = fs::remove_file(&dvs_file_path);
                 }
@@ -218,7 +219,7 @@ impl FileMetadata {
                     relative_path.as_ref().display()
                 );
                 if let Some(old) = old_metadata_content {
-                    let _ = fs::write(&dvs_file_path, &old);
+                    let _ = write_atomic(&dvs_file_path, &old);
                 } else {
                     let _ = fs::remove_file(&dvs_file_path);
                 }
@@ -226,6 +227,18 @@ impl FileMetadata {
             }
         }
     }
+}
+
+/// Writes a metadata file through a temp file next to it and a rename, so a
+/// kill never leaves a half-written or empty record. The temp name does not
+/// end in `.dvs`, so a leftover one is never read as a record.
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
+    let tmp_path = path.with_extension(format!("dvs-tmp.{}", Uuid::new_v4()));
+    let result = fs::write(&tmp_path, contents).and_then(|()| fs::rename(&tmp_path, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    Ok(result?)
 }
 
 #[cfg(test)]
@@ -292,6 +305,52 @@ mod tests {
         let result =
             FileMetadata::from_file(tmp.path().join("nonexistent.txt"), Compression::Zstd, None);
         assert!(result.is_err());
+    }
+
+    fn dir_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    // A record is replaced through a temp file and a rename, and no temp file
+    // is left next to it
+    #[test]
+    fn write_replaces_a_record_and_leaves_no_temp_file() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, dvs_dir) = init_dvs_repo(&root);
+        let paths = make_paths(&root, &config);
+        let one = create_file(&root, "data/one.bin", b"one");
+        let two = create_file(&root, "data/two.bin", b"two, longer");
+
+        let first = FileMetadata::from_file(&one, Compression::Zstd, None).unwrap();
+        first.write(&paths, "data/one.bin").unwrap();
+        let second = FileMetadata::from_file(&two, Compression::Zstd, None).unwrap();
+        second.write(&paths, "data/one.bin").unwrap();
+
+        let record = dvs_dir.join("data/one.bin.dvs");
+        let read: FileMetadata = serde_json::from_reader(fs::File::open(&record).unwrap()).unwrap();
+        assert_eq!(read, second);
+        assert_eq!(dir_names(&dvs_dir.join("data")), ["one.bin.dvs"]);
+    }
+
+    // When the rename fails, the temp file is removed
+    #[test]
+    fn a_failed_write_leaves_no_temp_file() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, dvs_dir) = init_dvs_repo(&root);
+        let paths = make_paths(&root, &config);
+        let file = create_file(&root, "a.bin", b"a");
+        // A directory where the record goes, which a file cannot replace
+        fs::create_dir_all(dvs_dir.join("a.bin.dvs/inside")).unwrap();
+        let before = dir_names(&dvs_dir);
+
+        let metadata = FileMetadata::from_file(&file, Compression::Zstd, None).unwrap();
+        assert!(metadata.write(&paths, "a.bin").is_err());
+        assert_eq!(dir_names(&dvs_dir), before);
     }
 
     #[test]

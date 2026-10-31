@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- A killed `dvs add` no longer leaves an empty `.dvs` file. An empty one failed that file in `status`, `add` and `get` until it was deleted by hand. A `.dvs` file is written to a temp file, then renamed.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
