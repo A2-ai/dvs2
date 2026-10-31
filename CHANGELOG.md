@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- `dvs init` into a storage directory that already holds a dvs store names the directory, says that init starts a new store, and says to restore `dvs.toml` from git when it is the store of this project. It said "dvs is already initialized (backend storage exists)", which read as if the project was. With a `dvs.toml` already there, it says how to move the storage: copy the storage directory, then edit `path` under `[backend]`.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
