@@ -1512,10 +1512,7 @@ mod tests {
 
         let report = repo.get(&["a.csv"], OnConflict::Abort);
         let r = row(&report, "a.csv");
-        assert_eq!(
-            r.code,
-            Some(GetCode::Shared(ErrorCode::InvalidConfiguration))
-        );
+        assert_eq!(r.code, Some(GetCode::Shared(ErrorCode::StorageUnavailable)));
         assert!(
             r.message.as_deref().unwrap().contains("does not exist"),
             "{r:?}"

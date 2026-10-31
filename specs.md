@@ -175,7 +175,8 @@ the add's message.
 
 Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row (`code`):
 `auth_required` (no token, not logged in), `auth_expired` (the server said 401), `access_denied` (403),
-`server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint that should exist answered
+`server_unavailable` (transport error, timeout, 5xx), `storage_unavailable` (a local storage directory that
+does not exist, see init), `server_too_old` (an endpoint that should exist answered
 404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs` record, e.g. git conflict
 markers) and `credentials_unreadable` (the store exists but cannot be read). A row can also have
 `code: "cancelled"` (the file never started, see Cancellation), which is not a failure. Command-level codes:
@@ -276,9 +277,9 @@ init also rejects a storage path inside the repository root. This guard applies 
 Backends with no local directory (such as a future remote backend) skip it.
 
 Only init creates a local storage directory. Every other command that reads or writes the store refuses a
-storage directory that does not exist, with `invalid_configuration`, and names the path. A missing directory is
-a share that is not mounted, or a `dvs.toml` written on a machine that mounts the share elsewhere. Creating it
-would put the data where nobody else looks.
+storage directory that does not exist, with `storage_unavailable` (exit 1), and names the path. A missing
+directory is a filesystem that is not mounted, or a wrong path in `dvs.toml`. Creating it would put the data
+where nobody else looks.
 
 On partial failure (e.g., metadata folder or storage creation fails after `dvs.toml` is written),
 init attempts best-effort cleanup of local artifacts (`dvs.toml` and, if it didn't exist beforehand, the metadata folder) so that a retry is possible.
@@ -557,11 +558,11 @@ invalid configuration) it is the shared error envelope, without `on_conflict`/`s
   `on_conflict = skip` asked), `failed` or `cancelled`.
 - `hint`: the next step, in CLI syntax, filled in by the library.
 - `satisfied`: the file is at its tracked version afterwards; in a dry run, that it would be.
-- A shared cause (`access_denied`, `server_unavailable`) is printed once in human output, not per file.
+- A shared cause (`access_denied`, `server_unavailable`, `storage_unavailable`) is printed once in human output, not per file.
 - `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run` (held back), `cancelled`, `failed`, `would_restore`,
   `would_replace`.
 - `code`: `local_changes`, `unknown_local`, `batch_aborted`, `not_tracked`, `not_a_file`, `unsafe_path`,
-  `source_missing`, `hash_mismatch`, `access_denied`, `server_unavailable`, `destination_changed`, `permission_denied`, `file_in_use`,
+  `source_missing`, `hash_mismatch`, `access_denied`, `server_unavailable`, `storage_unavailable`, `destination_changed`, `permission_denied`, `file_in_use`,
   `io_error`, `bad_metadata`, the shared codes (`auth_required`, `auth_expired`, `server_too_old`,
   `project_not_found`, `credentials_unreadable`, ...) and `cancelled`.
 - `counts`: `total` (every row) and `succeeded` (rows at their target: restored, replaced, unchanged, and

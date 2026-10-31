@@ -9,6 +9,9 @@ pub enum ErrorCode {
     AuthExpired,
     AccessDenied,
     ServerUnavailable,
+    /// A local storage directory that does not exist, as when its filesystem
+    /// is not mounted
+    StorageUnavailable,
     ServerTooOld,
     ProjectNotFound,
     /// An unreadable `.dvs` record, including git conflict markers
@@ -35,6 +38,7 @@ impl ErrorCode {
             ErrorCode::AuthExpired => "auth_expired",
             ErrorCode::AccessDenied => "access_denied",
             ErrorCode::ServerUnavailable => "server_unavailable",
+            ErrorCode::StorageUnavailable => "storage_unavailable",
             ErrorCode::ServerTooOld => "server_too_old",
             ErrorCode::ProjectNotFound => "project_not_found",
             ErrorCode::BadMetadata => "bad_metadata",

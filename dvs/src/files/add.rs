@@ -611,7 +611,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             crate::error::backend_error_code(&err),
-            Some(ErrorCode::InvalidConfiguration)
+            Some(ErrorCode::StorageUnavailable)
         );
         assert!(!paths.metadata_path(Path::new("a.txt")).exists());
         assert!(!storage.exists());

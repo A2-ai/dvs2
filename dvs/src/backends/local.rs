@@ -192,18 +192,17 @@ impl LocalBackend {
     }
 
     /// The storage directory is there. Only init creates it: anywhere else a
-    /// missing one is a share that is not mounted, or a dvs.toml written on a
-    /// machine that mounts it elsewhere, and creating it would put the data
-    /// where nobody else looks.
+    /// missing one is a filesystem that is not mounted, or a wrong path in
+    /// dvs.toml, and creating it would put the data where nobody else looks.
     pub fn check_access(&self) -> Result<()> {
         if self.path.is_dir() {
             return Ok(());
         }
         Err(Error::new(
-            ErrorCode::InvalidConfiguration,
+            ErrorCode::StorageUnavailable,
             format!(
-                "the storage directory {} in dvs.toml does not exist. If it is on a shared \
-                 drive, check that the drive is mounted. Only dvs init creates a storage directory.",
+                "the storage directory {} in dvs.toml does not exist. If it is on a network \
+                 filesystem, check that it is mounted. Only dvs init creates a storage directory.",
                 self.path.display()
             ),
         )
@@ -423,7 +422,7 @@ mod tests {
             ))
             .unwrap_err();
         let error = err.downcast_ref::<Error>().unwrap();
-        assert_eq!(error.code, ErrorCode::InvalidConfiguration);
+        assert_eq!(error.code, ErrorCode::StorageUnavailable);
         assert!(error.message.contains(&storage.display().to_string()));
 
         assert!(backend.check_access().is_err());
