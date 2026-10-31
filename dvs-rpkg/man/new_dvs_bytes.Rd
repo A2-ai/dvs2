@@ -19,3 +19,8 @@ tag byte-size columns so that pillar renders them as human-readable sizes
 in tibble output. Stored as \code{double} to safely represent file sizes up to
 \code{2^53} bytes. An R \code{integer} is 32 bits and would overflow at about 2 GB.
 }
+\details{
+\code{+} and \code{-} keep the class. A negative value, such as the difference of two
+sizes, prints with a minus sign. A value that is not a whole number prints
+rounded.
+}

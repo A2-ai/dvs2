@@ -110,6 +110,26 @@ test_that("pillar_shaft.dvs_bytes renders NA as NA", {
   expect_true(any(grepl("NA", out)))
 })
 
+test_that("pillar_shaft.dvs_bytes prints a difference below zero with a sign", {
+  x <- new_dvs_bytes(c(41943048, 44040200)) - 50e6
+  shaft <- pillar::pillar_shaft(x)
+  out <- trimws(as.character(format(shaft, width = pillar::get_max_extent(shaft))))
+  expect_equal(out, paste0("-", c(format_byte_size(8056952), format_byte_size(5959800))))
+})
+
+test_that("a tibble prints dvs_bytes that arithmetic made fractional or infinite", {
+  tbl <- tibble::tibble(size = new_dvs_bytes(c(1024, 2048)))
+  tbl$shrunk <- tbl$size - tbl$size * 0.1
+  tbl$diff <- tbl$size - 4096
+  tbl$inf <- tbl$size + Inf
+  out <- capture.output(print(tbl))
+  expect_true(any(grepl("-3.0 KB", out, fixed = TRUE)))
+  expect_true(any(grepl("Inf", out, fixed = TRUE)))
+  shaft <- pillar::pillar_shaft(tbl$shrunk)
+  formatted <- trimws(as.character(format(shaft, width = pillar::get_max_extent(shaft))))
+  expect_equal(formatted, c(format_byte_size(922), format_byte_size(1843)))
+})
+
 test_that("type_sum.dvs_bytes returns 'bytes'", {
   expect_equal(pillar::type_sum(new_dvs_bytes(100)), "bytes")
 })

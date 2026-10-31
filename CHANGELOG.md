@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- R package: a tibble with a negative `dvs_bytes` value prints, with a minus sign, as in `-7.7 MB`. `-` keeps the class, so a difference of sizes that went below zero made the whole tibble fail to print with "'size_bytes' must be non-negative". A value that is not a whole number prints rounded, and `Inf` prints as `Inf`.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
