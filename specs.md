@@ -800,6 +800,9 @@ folder the update is skipped, and a failed `.gitignore` update is logged as a wa
 - Explicit directories with a glob: walked and filtered by glob
 - No given paths with a glob: walks current directory filtered by glob
 
+An `add` walk never selects the metadata folder, git's own files (a `.git` folder, or the `.git` file of a
+worktree), a `.gitignore` or a `dvs.toml`. Only an explicit file path selects one of them.
+
 Globs use a literal path separator, meaning `*.csv` only matches files in the target directory and
 will not match `subdir/file.csv`. Use `'**/*.csv'` (quoted, to avoid shell expansion) to match recursively across subdirectories.
 
