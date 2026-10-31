@@ -5,6 +5,10 @@
 #' in tibble output. Stored as `double` to safely represent file sizes up to
 #' `2^53` bytes. An R `integer` is 32 bits and would overflow at about 2 GB.
 #'
+#' `+` and `-` keep the class. A negative value, such as the difference of two
+#' sizes, prints with a minus sign. A value that is not a whole number prints
+#' rounded.
+#'
 #' @param x atomic numeric / integer / logical vector (incl. `NA`). `NULL`
 #'   raises a `dvs_error_argument` condition.
 #' @return a `dvs_bytes` object inheriting from `numeric`
@@ -19,13 +23,22 @@ new_dvs_bytes <- function(x) {
 #' @importFrom pillar pillar_shaft new_pillar_shaft_simple
 #' @export
 pillar_shaft.dvs_bytes <- function(x, ...) {
-  vals <- unclass(x)
-  formatted <- vapply(
-    vals,
-    function(v) if (is.na(v)) NA_character_ else format_byte_size(v),
-    character(1)
-  )
+  formatted <- format_bytes_for_print(unclass(x))
   pillar::new_pillar_shaft_simple(formatted, align = "right")
+}
+
+# Sizes as the CLI prints them, for any doubles. `-` keeps the class, so a
+# difference of sizes can be negative, and arithmetic with a plain number can
+# make it fractional or infinite. Printing must not fail on those.
+format_bytes_for_print <- function(v) {
+  formatted <- rep(NA_character_, length(v))
+  infinite <- is.infinite(v)
+  formatted[infinite] <- as.character(v[infinite])
+  finite <- is.finite(v)
+  rounded <- round(v[finite])
+  sign <- ifelse(rounded < 0, "-", "")
+  formatted[finite] <- paste0(sign, format_byte_size(abs(rounded)))
+  formatted
 }
 
 #' @importFrom pillar type_sum

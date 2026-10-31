@@ -13,6 +13,7 @@
 
 ### Added
 
+- R package: `format_byte_size()` takes a vector and returns one string per size, as in `format_byte_size(c(512, 2048))`. It took one size. An `NA` among the sizes says that `size_bytes` must not contain `NA`.
 - R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
 - R package: `just rpkg-reference` builds the HTML reference manual. The one in `dist/reference/` is for users and leaves out the internal pages, as R's help index does. The one in `dvs-rpkg/rust-target/doc/r/` is for development and keeps them.
 - R package: `dvs_status()` has a `code` column, the kind of failure of a row that failed, as in the CLI's JSON.
@@ -24,6 +25,7 @@
 
 ### Fixed
 
+- R package: a tibble with a negative `dvs_bytes` value prints, with a minus sign, as in `-7.7 MB`. `-` keeps the class, so a difference of sizes that went below zero made the whole tibble fail to print with "'size_bytes' must be non-negative". A value that is not a whole number prints rounded, and `Inf` prints as `Inf`.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.

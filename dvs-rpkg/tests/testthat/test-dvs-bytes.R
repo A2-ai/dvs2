@@ -33,6 +33,15 @@ test_that("2.5 GiB u64 from Rust survives the trip to dvs_bytes and formats corr
   expect_argument_error(quote(format_byte_size(NA_real_)), "size_bytes")
 })
 
+test_that("format_byte_size takes a vector and returns one string per size", {
+  expect_identical(format_byte_size(c(512, 2048, 1e6)), c("512 B", "2.0 KB", "976.6 KB"))
+  expect_identical(format_byte_size(512L), "512 B")
+  expect_identical(format_byte_size(numeric(0)), character(0))
+  expect_argument_error(quote(format_byte_size(c(1, -1))), "size_bytes")
+  expect_argument_error(quote(format_byte_size(c(1, 1.5))), "size_bytes")
+  expect_argument_error(quote(format_byte_size(c(TRUE, FALSE))), "size_bytes")
+})
+
 test_that("dvs_bytes + and - preserve class", {
   x <- new_dvs_bytes(c(1024, 2048))
   y <- new_dvs_bytes(c(100, 200))
@@ -108,6 +117,26 @@ test_that("pillar_shaft.dvs_bytes renders NA as NA", {
   shaft <- pillar::pillar_shaft(x)
   out <- as.character(format(shaft, width = pillar::get_max_extent(shaft)))
   expect_true(any(grepl("NA", out)))
+})
+
+test_that("pillar_shaft.dvs_bytes prints a difference below zero with a sign", {
+  x <- new_dvs_bytes(c(41943048, 44040200)) - 50e6
+  shaft <- pillar::pillar_shaft(x)
+  out <- trimws(as.character(format(shaft, width = pillar::get_max_extent(shaft))))
+  expect_equal(out, paste0("-", c(format_byte_size(8056952), format_byte_size(5959800))))
+})
+
+test_that("a tibble prints dvs_bytes that arithmetic made fractional or infinite", {
+  tbl <- tibble::tibble(size = new_dvs_bytes(c(1024, 2048)))
+  tbl$shrunk <- tbl$size - tbl$size * 0.1
+  tbl$diff <- tbl$size - 4096
+  tbl$inf <- tbl$size + Inf
+  out <- capture.output(print(tbl))
+  expect_true(any(grepl("-3.0 KB", out, fixed = TRUE)))
+  expect_true(any(grepl("Inf", out, fixed = TRUE)))
+  shaft <- pillar::pillar_shaft(tbl$shrunk)
+  formatted <- trimws(as.character(format(shaft, width = pillar::get_max_extent(shaft))))
+  expect_equal(formatted, c(format_byte_size(922), format_byte_size(1843)))
 })
 
 test_that("type_sum.dvs_bytes returns 'bytes'", {

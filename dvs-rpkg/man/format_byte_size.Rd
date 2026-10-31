@@ -7,14 +7,14 @@
 format_byte_size(size_bytes)
 }
 \arguments{
-\item{size_bytes}{A size in bytes: one whole number, 0 or more. \code{TRUE}
+\item{size_bytes}{Sizes in bytes: whole numbers, 0 or more. \code{TRUE}
 and \code{FALSE} are refused.}
 }
 \value{
-A string. Below 1024 bytes it is the count with \code{B}, as in
-\code{"512 B"}. From 1024 bytes up it has one decimal and the largest unit
-that fits: \code{KB}, \code{MB}, \code{GB} or \code{TB}. The units are powers of 1024, so
-\code{format_byte_size(1e6)} is \code{"976.6 KB"}.
+A character vector with one string per size. Below 1024 bytes it
+is the count with \code{B}, as in \code{"512 B"}. From 1024 bytes up it has one
+decimal and the largest unit that fits: \code{KB}, \code{MB}, \code{GB} or \code{TB}. The
+units are powers of 1024, so \code{format_byte_size(1e6)} is \code{"976.6 KB"}.
 }
 \description{
 Formats a size the way the dvs CLI prints it. The size columns of
