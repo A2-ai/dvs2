@@ -387,6 +387,9 @@ Once every input resolves, the add is best-effort. A file that fails during the 
 
 Each added file gets a metadata sidecar at `<metadata folder>/<path to file>.dvs` (metadata folder defaults to
 `.dvs`), mirroring the added file. The sidecar must be committed to version control (e.g. `git`). The data file itself is gitignored.
+A sidecar is written to a temp file next to it, then renamed over it, so a killed `dvs` never leaves an empty or
+half-written sidecar. A killed `dvs` can leave a temp file (`<name>.dvs-tmp.<uuid>`). dvs never reads it as a
+sidecar, and it is safe to delete.
 
 Each file in an `add` result reports an outcome:
 
