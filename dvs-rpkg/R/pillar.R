@@ -23,24 +23,22 @@ new_dvs_bytes <- function(x) {
 #' @importFrom pillar pillar_shaft new_pillar_shaft_simple
 #' @export
 pillar_shaft.dvs_bytes <- function(x, ...) {
-  vals <- unclass(x)
-  formatted <- vapply(vals, format_bytes_for_print, character(1))
+  formatted <- format_bytes_for_print(unclass(x))
   pillar::new_pillar_shaft_simple(formatted, align = "right")
 }
 
-# One size as the CLI prints it, for any double. `-` keeps the class, so a
+# Sizes as the CLI prints them, for any doubles. `-` keeps the class, so a
 # difference of sizes can be negative, and arithmetic with a plain number can
 # make it fractional or infinite. Printing must not fail on those.
 format_bytes_for_print <- function(v) {
-  if (is.na(v)) {
-    return(NA_character_)
-  }
-  if (!is.finite(v)) {
-    return(format(v))
-  }
-  v <- round(v)
-  formatted <- format_byte_size(abs(v))
-  if (v < 0) paste0("-", formatted) else formatted
+  formatted <- rep(NA_character_, length(v))
+  infinite <- is.infinite(v)
+  formatted[infinite] <- as.character(v[infinite])
+  finite <- is.finite(v)
+  rounded <- round(v[finite])
+  sign <- ifelse(rounded < 0, "-", "")
+  formatted[finite] <- paste0(sign, format_byte_size(abs(rounded)))
+  formatted
 }
 
 #' @importFrom pillar type_sum
