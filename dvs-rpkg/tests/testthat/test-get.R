@@ -79,6 +79,19 @@ test_that("dvs_get(recursive = TRUE) with no paths restores every tracked file a
   expect_true(all(file.exists(c("top.csv", "data/raw/deep.csv"))))
 })
 
+test_that("dvs_get refuses a glob with paths that are all files", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add("a.csv")
+  file.remove("a.csv")
+  expect_error(
+    dvs_get(paths = "a.csv", glob = "*.csv"),
+    "the glob `*.csv` would be ignored",
+    fixed = TRUE
+  )
+  expect_false(file.exists("a.csv"))
+})
+
 test_that("an untracked path is a row, and holds the batch back by default", {
   new_dvs_test_repo()
   write_theoph("tracked.csv")

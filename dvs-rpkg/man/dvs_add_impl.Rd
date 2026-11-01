@@ -24,8 +24,9 @@ they were added.}
 
 \item{glob}{A glob that selects the files to add, such as \code{"*.csv"}. It
 runs from the working directory, or from each directory in \code{paths}. A
-file named in \code{paths} is added whether or not it matches. \code{*} does not
-cross a path separator, so \verb{*.csv} matches \code{a.csv} but not
+file named in \code{paths} is added whether or not it matches. With \code{paths}
+that are all files, \code{glob} would select nothing and is an error. \code{*}
+does not cross a path separator, so \verb{*.csv} matches \code{a.csv} but not
 \code{sub/a.csv}. Use \verb{**/*.csv} to match at any depth.}
 
 \item{dry_run}{If \code{TRUE}, report what would be added without modifying anything.}

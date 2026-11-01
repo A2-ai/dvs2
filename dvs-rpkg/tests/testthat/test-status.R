@@ -40,6 +40,17 @@ test_that("dvs_status takes status = character(0) as no filter", {
   expect_equal(dvs_status(status = character(0)), dvs_status())
 })
 
+test_that("dvs_status refuses a glob with paths that are all files", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add("a.csv")
+  expect_error(
+    dvs_status(paths = "a.csv", glob = "*.csv"),
+    "the glob `*.csv` would be ignored",
+    fixed = TRUE
+  )
+})
+
 test_that("dvs_status takes paths = NULL as no paths", {
   new_dvs_test_repo()
   plant_three_statuses()

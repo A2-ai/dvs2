@@ -425,7 +425,7 @@ Global Options:
 You can run `dvs add *.csv` and it will be expanded by your shell before calling `dvs`.
 To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library. The glob string must be quoted (for example `--glob '*.csv'`) so the shell does not expand it before `dvs` sees it.
 
-A batch refused for an invalid input path (including a directory without `--glob`) is `invalid_arguments`,
+A batch refused for an invalid input path (including a directory without `--glob`), or for a `--glob` given with paths that are all files (see Globbing), is `invalid_arguments`,
 exits with `2` and adds nothing. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`. A cancelled batch exits with `130` (see Cancellation).
 
 #### Rust library
@@ -796,9 +796,12 @@ folder the update is skipped, and a failed `.gitignore` update is logged as a wa
 
 `add`, `status`, and `get` accept a `--glob` flag. The resolution works the following way:
 
-- Explicit files: added/retrieved directly (glob ignored)
+- Explicit files: added/retrieved directly, whether or not they match the glob
 - Explicit directories with a glob: walked and filtered by glob
 - No given paths with a glob: walks current directory filtered by glob
+- Explicit paths that are all files, with a glob: refused with `invalid_arguments` (exit `2`), as the glob would select nothing. Nothing is added, retrieved or reported. The message names the glob. For `status` and `get`, a path counts as a file when it names a tracked file or a file on disk. A path that names neither does not count, and is reported as before.
+
+The usual cause is an unquoted glob: the shell expands `--glob *.csv` into `--glob a.csv b.csv`, so `dvs` sees the glob `a.csv` and one file. When the glob has none of `*?[{`, the CLI adds a hint to quote it, on stderr and in the `hint` of the JSON error.
 
 Globs use a literal path separator, meaning `*.csv` only matches files in the target directory and
 will not match `subdir/file.csv`. Use `'**/*.csv'` (quoted, to avoid shell expansion) to match recursively across subdirectories.

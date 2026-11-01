@@ -300,6 +300,17 @@ impl PathFilter {
         Self { paths, recursive }
     }
 
+    /// Whether every selected path names a file: a tracked file, or a file on
+    /// disk. A glob only applies below a directory, so with such paths it
+    /// selects nothing. False when no path is selected.
+    pub(crate) fn names_only_files(&self, tracked: &[PathBuf], dvs_paths: &DvsPaths) -> bool {
+        !self.paths.is_empty()
+            && self
+                .paths
+                .iter()
+                .all(|p| tracked.contains(p) || dvs_paths.repo_root().join(p).is_file())
+    }
+
     pub(crate) fn matches(&self, tracked_path: &Path, glob: Option<&GlobMatcher>) -> bool {
         self.paths.iter().any(|filter_path| {
             if tracked_path == filter_path {
