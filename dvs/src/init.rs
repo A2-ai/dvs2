@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::audit::AuditEntry;
 use crate::backends::Backend;
 use crate::config::Config;
+use crate::gitignore::git_work_tree_root;
 use crate::paths;
 
 /// Creates the metadata folder of the project in `root_dir`, if it doesn't exist yet.
@@ -27,8 +28,9 @@ pub fn create_metadata_folder(root_dir: impl AsRef<Path>, config: &Config) -> Re
 pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
     let root_dir = root_dir.as_ref();
 
-    // The storage directory must not live inside the repository, otherwise it
-    // would be tracked alongside the user's files.
+    // The storage directory must not live inside the project, or inside the
+    // git repository that holds it, otherwise it would be tracked alongside
+    // the user's files.
     match &mut config.backend {
         Backend::Local(b) => {
             let storage_path = &b.path;
@@ -42,6 +44,16 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
             let abs_root = fs::canonicalize(root_dir)?;
             if abs_storage.starts_with(&abs_root) {
                 bail!("The given storage path is within the repository.");
+            }
+            if let Some(git_root) = git_work_tree_root(&abs_root)
+                && abs_storage.starts_with(git_root)
+            {
+                bail!(
+                    "the storage directory {} is inside the git repository at {}, so git \
+                     could commit the stored data. Choose a storage directory outside it.",
+                    abs_storage.display(),
+                    git_root.display()
+                );
             }
             b.path = abs_storage;
         }
@@ -189,6 +201,38 @@ mod tests {
         );
         // Nothing should have been created.
         assert!(!root.join("dvs.toml").exists());
+    }
+
+    // A project in a subfolder of a git repository may not keep its storage
+    // elsewhere in that repository: git would see the stored data
+    #[test]
+    fn init_rejects_storage_inside_the_enclosing_git_repo() {
+        let (_tmp, repo) = create_temp_git_repo();
+        let root = repo.join("study");
+        fs::create_dir(&root).unwrap();
+        let storage = repo.join("study-storage");
+
+        let config = Config::new_local(&storage, None).unwrap();
+        let err = init(&root, config).unwrap_err().to_string();
+        assert!(err.contains("inside the git repository at"), "{err}");
+        assert!(err.contains(&repo.display().to_string()), "{err}");
+        assert!(!root.join("dvs.toml").exists());
+        assert!(!storage.exists());
+
+        // Outside the repository is fine
+        let outside = repo.parent().unwrap().join("study-storage");
+        init(&root, Config::new_local(&outside, None).unwrap()).unwrap();
+    }
+
+    // The nearest .git counts: a project with its own repository inside
+    // another one may keep its storage next to it
+    #[test]
+    fn init_uses_the_nearest_git_repo() {
+        let (_tmp, outer) = create_temp_git_repo();
+        let root = outer.join("study");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let storage = outer.join("study-storage");
+        init(&root, Config::new_local(&storage, None).unwrap()).unwrap();
     }
 
     #[test]
