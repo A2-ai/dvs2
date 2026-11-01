@@ -69,7 +69,9 @@ Fetches the specified files from DVS storage and writes them
 to their original paths in the working directory. With no \code{paths}
 or \code{glob}, \code{dvs_get()} scopes to the working directory: it restores
 the files directly under it, and \code{dvs_get(recursive = TRUE)} restores
-every tracked file beneath it at any depth.
+every tracked file beneath it at any depth. When tracked files outside
+that scope are not on disk, the printed result says how many, and the
+call that gets every tracked file.
 
 A working file that differs from the tracked version is replaced without
 asking only when dvs itself put it there (for example after switching git

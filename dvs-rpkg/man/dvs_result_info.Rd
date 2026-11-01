@@ -20,7 +20,10 @@ for the rows at their target, then one count per action, the same fields
 as the CLI's JSON \code{counts}), \code{problem} (an operation-level message, or
 \code{NA} when there is none) and \code{summary} (the summary the CLI prints, with
 a second line \verb{on_conflict = <policy> (<source>)} when the policy acted
-on a file with local changes or no record, or the problem's message).
+on a file with local changes or no record, or the problem's message) and
+\code{hint} (for a \code{dvs_get()} with no \code{paths} or \code{glob}: how many tracked
+files outside its scope are not on disk, and the call that gets every
+tracked file, or \code{NA} when there are none).
 }
 \description{
 The rows of a \code{\link[=dvs_get]{dvs_get()}} result describe each file. This returns what

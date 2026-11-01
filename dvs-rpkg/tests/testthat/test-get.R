@@ -79,6 +79,40 @@ test_that("dvs_get(recursive = TRUE) with no paths restores every tracked file a
   expect_true(all(file.exists(c("top.csv", "data/raw/deep.csv"))))
 })
 
+test_that("a bare dvs_get() says how many tracked files outside its scope are not on disk", {
+  new_dvs_test_repo()
+  dir.create("sub")
+  dir.create("other")
+  writeLines("a", "a.csv")
+  writeLines("b", "sub/b.csv")
+  writeLines("c", "other/c.csv")
+  dvs_add(c("a.csv", "sub/b.csv", "other/c.csv"))
+  file.remove(c("a.csv", "sub/b.csv", "other/c.csv"))
+
+  # At the root, without recursion: the two files in subdirectories are left out
+  result <- dvs_get()
+  expect_equal(result$path, "a.csv")
+  hint <- dvs_result_info(result)$hint
+  expect_match(hint, "^2 tracked files outside this scope are not on disk")
+  expect_match(hint, "To get every tracked file: dvs_get(recursive = TRUE)", fixed = TRUE)
+  expect_output(print(result), "# To get every tracked file: dvs_get(recursive = TRUE)", fixed = TRUE)
+
+  # In a subdirectory, the call reaches the root
+  setwd("sub")
+  result <- dvs_get(recursive = TRUE)
+  expect_equal(result$path, "sub/b.csv")
+  hint <- dvs_result_info(result)$hint
+  expect_match(hint, "^1 tracked file outside this scope is not on disk")
+  expect_match(hint, "files below the working directory", fixed = TRUE)
+  expect_match(hint, 'dvs_get(paths = "..", recursive = TRUE)', fixed = TRUE)
+
+  # With paths, or once every file is on disk, there is no hint
+  result <- dvs_get(paths = "..", recursive = TRUE)
+  expect_equal(result$path[result$action == "restored"], "other/c.csv")
+  expect_true(is.na(dvs_result_info(result)$hint))
+  expect_true(is.na(dvs_result_info(dvs_get())$hint))
+})
+
 test_that("an untracked path is a row, and holds the batch back by default", {
   new_dvs_test_repo()
   write_theoph("tracked.csv")

@@ -13,6 +13,7 @@
 
 ### Added
 
+- R package: a `dvs_get()` with no `paths` or `glob` says how many tracked files outside its scope are not on disk, and the call that gets every tracked file, such as `dvs_get(recursive = TRUE)` at the root. It is `hint` in `dvs_result_info()` and printed under the summary.
 - R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
 - R package: `just rpkg-reference` builds the HTML reference manual. The one in `dist/reference/` is for users and leaves out the internal pages, as R's help index does. The one in `dvs-rpkg/rust-target/doc/r/` is for development and keeps them.
 - R package: `dvs_status()` has a `code` column, the kind of failure of a row that failed, as in the CLI's JSON.
