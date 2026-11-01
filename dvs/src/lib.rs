@@ -21,8 +21,9 @@ pub use error::{Error, ErrorCode, backend_error_code};
 pub use files::add::{AddDetail, AddReport, AddResult, add_files};
 pub use files::get::{
     Action, Before, GetCode, GetCounts, GetOptions, GetOutcome, GetReport, GetRow, GetVerdict,
-    StoredCopy, get_files, shell_path,
+    StoredCopy, get_files, row_hint, shell_path,
 };
+pub use files::hint::{Hint, HintPart, HintSyntax, NextStep};
 pub use files::metadata::FileMetadata;
 pub use files::status::{Baseline, StatusFacts, StatusReport, WorkingCopy, inspect_status};
 pub use files::types::{Outcome, Status};
@@ -147,7 +148,11 @@ pub mod testutil {
         fn file_finished(&self, row: crate::FileRow<'_>) {
             let (path, json) = match row {
                 crate::FileRow::Add(r) => (&r.path, serde_json::to_value(r)),
-                crate::FileRow::Get(r) => (&r.path, serde_json::to_value(r)),
+                // Not Serialize: a get row's hint is rendered by each front end
+                crate::FileRow::Get(r) => (
+                    &r.path,
+                    Ok(serde_json::json!({"path": r.path, "row": format!("{r:?}")})),
+                ),
                 crate::FileRow::Status(r) => (&r.path, serde_json::to_value(r)),
             };
             self.push(format!("row {}", path.display()));

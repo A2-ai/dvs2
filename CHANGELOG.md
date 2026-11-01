@@ -13,6 +13,7 @@
 
 ### Added
 
+- `dvs get --json`: every row has `next_steps`, the commands of its hint as data, such as `{"action": "add", "paths": ["b.csv"]}`. `[]` when there are none. `hint` stays the same text.
 - R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
 - R package: `just rpkg-reference` builds the HTML reference manual. The one in `dist/reference/` is for users and leaves out the internal pages, as R's help index does. The one in `dvs-rpkg/rust-target/doc/r/` is for development and keeps them.
 - R package: `dvs_status()` has a `code` column, the kind of failure of a row that failed, as in the CLI's JSON.
@@ -24,6 +25,7 @@
 
 ### Fixed
 
+- R package: the `hint` column of `dvs_get()` is in R syntax, as `dvs_add("b.csv")` and `dvs_get("b.csv", on_conflict = "overwrite")`. It gave the CLI commands, `dvs add b.csv` and `dvs get --force b.csv`. The library now gives hints as data, and the CLI and R write them.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
