@@ -98,6 +98,7 @@ test_that("dvs_add refuses a glob with paths that are all files", {
   new_dvs_test_repo()
   write_theoph_shuffled("data_a.csv", seed = 7)
   writeLines("other", "notes.txt")
+  expect_argument_error(quote(dvs_add(paths = "notes.txt", glob = "*.csv")), "glob")
   expect_error(
     dvs_add(paths = "notes.txt", glob = "*.csv"),
     "the glob `*.csv` would be ignored",

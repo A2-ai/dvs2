@@ -44,6 +44,7 @@ test_that("dvs_status refuses a glob with paths that are all files", {
   new_dvs_test_repo()
   writeLines("a", "a.csv")
   dvs_add("a.csv")
+  expect_argument_error(quote(dvs_status(paths = "a.csv", glob = "*.csv")), "glob")
   expect_error(
     dvs_status(paths = "a.csv", glob = "*.csv"),
     "the glob `*.csv` would be ignored",

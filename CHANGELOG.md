@@ -5,7 +5,7 @@
 ### Breaking
 
 - R package: requires R 4.4 or later.
-- `add`, `get` and `status` refuse a glob given with paths that are all files, with `invalid_arguments` (exit 2). The glob would select nothing, and was ignored. The usual cause is an unquoted `--glob *.csv`, which the shell expands into file names, and the CLI then says to quote it. In R, `dvs_add()`, `dvs_get()` and `dvs_status()` raise the same error.
+- `add`, `get` and `status` refuse a glob given with paths that are all files, with `invalid_arguments` (exit 2). The glob would select nothing, and was ignored. The usual cause is an unquoted `--glob *.csv`, which the shell expands into file names, and the CLI then says to quote it. In R, `dvs_add()`, `dvs_get()` and `dvs_status()` raise it as a `dvs_error_argument` for `glob`.
 - R package: `dvs_audit_log()` spreads each entry's action into columns: `action_variant` ("init" or "add") and one `action_<field>` column per field that the actions carry, `NA` where an action has none. The action was a list-column. `timestamp` is a date-time (UTC), not unix seconds.
 - R package: `NA` is never a value. An `NA` in any argument raises an error that says it must not be `NA`, also among several values, as in `on_error = c("return", NA)`. An `NA` `message`, `group`, `root_dir` or `metadata_folder_name` meant the argument was not given. Use `NULL` or leave the argument out.
 - R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
