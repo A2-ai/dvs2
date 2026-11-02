@@ -1,18 +1,20 @@
-//! The commands for server projects, as in the CLI: info, login and logout.
+//! The commands for server projects, as in the CLI: init server, attach, info,
+//! login and logout.
 
 use dvs::ErrorCode;
 use dvs::auth::{
-    Logout, TOKEN_POLL_INTERVAL, get_client_approve_url, initiate_device_approval, poll_token_once,
-    store_token,
+    Logout, TOKEN_POLL_INTERVAL, get_client_approve_url, get_token, initiate_device_approval,
+    poll_token_once, store_token,
 };
 use dvs::config::Config;
+use dvs::init::{attach, check_attachable, check_uninitialized, init};
 use dvs::paths::DvsPaths;
 use miniextendr_api::miniextendr;
 use miniextendr_api::serde::AsSerialize;
 use serde::Serialize;
 use url::Url;
 
-use crate::{DvsError, find_config};
+use crate::{CompressionChoice, DvsError, find_config};
 
 /// The URL of the project's dvs server. A local project is an error, as in
 /// the CLI.
@@ -166,4 +168,76 @@ pub(crate) fn dvs_logout() -> Result<AsSerialize<Logout>, DvsError> {
     let config = find_config()?;
     let logout = dvs::auth::logout(server_url(&config)?).map_err(|e| DvsError::from(e.error))?;
     Ok(AsSerialize(logout))
+}
+
+/// @title Create a project on a dvs server
+/// @description
+/// Creates the project `name` on the dvs server at `url` and makes the
+/// working directory its dvs project, as `dvs init server` does. Without a
+/// stored token for the server it logs in first, as `dvs_login()` does, after
+/// the checks that need no server: a `dvs.toml`, or a metadata folder with
+/// files in it, is an error before any login.
+///
+/// @param name The project name on the server.
+/// @param url The URL of the dvs server.
+/// @param group The server group whose members can read and write the
+///   project. You must be one of them.
+/// @param metadata_folder_name Name of the metadata folder. Defaults to `.dvs`.
+/// @param compression Compression method for stored files. One of `"zstd"`
+///   (default) or `"none"`. The server keeps it, so `dvs.toml` has no
+///   `compression` line.
+/// @return The project root, or `NA` when there is no token for the server
+///   yet. Then nothing was written.
+/// @keywords internal
+#[miniextendr(r_name = "dvs_init_server_impl", internal, call = caller)]
+pub(crate) fn dvs_init_server(
+    #[miniextendr(no_na)] name: String,
+    #[miniextendr(no_na)] url: String,
+    #[miniextendr(no_na)] group: String,
+    #[miniextendr(default = "NULL", no_na)] metadata_folder_name: Option<String>,
+    #[miniextendr(match_arg, default = "\"zstd\"")] compression: CompressionChoice,
+) -> Result<Option<String>, DvsError> {
+    let url = parse_url(&url, "url")?;
+    let root = std::env::current_dir()?;
+    let mut config = Config::new_server(name, url.clone(), Some(group));
+    config.set_compression(Some(compression.into()));
+    if let Some(m) = metadata_folder_name {
+        config.set_metadata_folder_name(m);
+    }
+    check_uninitialized(&root, &config)?;
+    if get_token(&url)?.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(init(&root, config)?.to_string_lossy().into_owned()))
+}
+
+/// @title Attach to a project on a dvs server
+/// @description
+/// Makes the working directory a dvs project of the project `name` that
+/// exists on the dvs server at `url`, as `dvs attach` does. It checks that the
+/// server has the project and that you can reach it, then writes the metadata
+/// folder and `dvs.toml`. Without a stored token for the server it logs in
+/// first, as `dvs_login()` does. A `dvs.toml` in the working directory is an
+/// error before any login.
+///
+/// @param name The project name on the server.
+/// @param url The URL of the dvs server.
+/// @param metadata_folder_name Name of the metadata folder. Defaults to `.dvs`.
+/// @return The project root, or `NA` when there is no token for the server
+///   yet. Then nothing was written.
+/// @keywords internal
+#[miniextendr(r_name = "dvs_attach_impl", internal, call = caller)]
+pub(crate) fn dvs_attach(
+    #[miniextendr(no_na)] name: String,
+    #[miniextendr(no_na)] url: String,
+    #[miniextendr(default = "NULL", no_na)] metadata_folder_name: Option<String>,
+) -> Result<Option<String>, DvsError> {
+    let url = parse_url(&url, "url")?;
+    let root = std::env::current_dir()?;
+    check_attachable(&root)?;
+    if get_token(&url)?.is_none() {
+        return Ok(None);
+    }
+    attach(&root, name, url, metadata_folder_name)?;
+    Ok(Some(root.to_string_lossy().into_owned()))
 }

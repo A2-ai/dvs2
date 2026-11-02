@@ -389,6 +389,17 @@ dvs_init(
 
 Returns a single-row data frame describing the resulting configuration.
 
+```r
+dvs_init_server(name, url, group, metadata_folder_name = NULL, compression = c("zstd", "none"))
+dvs_attach(name, url, metadata_folder_name = NULL)
+```
+
+`dvs_init_server()` and `dvs_attach()` do what `dvs init server` and `dvs attach` do, with the same library
+functions, in the working directory. Neither takes `root_dir`, as in the CLI. Without a token for the server they
+log in first with `dvs_login()`, after the checks that need no server: `dvs init server` refuses a `dvs.toml` or a
+metadata folder with files, and `dvs attach` a `dvs.toml`, before any login. Both return the project root, as
+`project_root` in `dvs init --json`.
+
 ### add
 
 It only takes files as input, directories will not work unless combined with a glob. It can also take an optional

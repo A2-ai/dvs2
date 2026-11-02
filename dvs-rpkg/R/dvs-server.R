@@ -53,3 +53,65 @@ dvs_logout <- function() {
   )
   logout
 }
+
+#' @inherit dvs_init_server_impl title description params
+#' @return The project root, the folder that holds `dvs.toml`, as
+#'   `project_root` in `dvs init --json`.
+#'
+#'   A project that exists on the server, a group you are not in and a
+#'   refused login raise a `dvs_error` with the CLI's `code`.
+#' @examples
+#' \dontrun{
+#' dvs_init_server("my-project", "https://dvs.example.com", group = "my-team")
+#' }
+#' @rdname dvs_init_server
+#' @export
+dvs_init_server <- function(
+  name,
+  url,
+  group,
+  metadata_folder_name = NULL,
+  compression = c("zstd", "none")
+) {
+  root <- dvs_init_server_impl(
+    name = name,
+    url = url,
+    group = group,
+    metadata_folder_name = metadata_folder_name,
+    compression = compression
+  )
+  if (is.na(root)) {
+    # No token for the server yet: log in, as dvs init server does, then again
+    dvs_login(url)
+    root <- dvs_init_server_impl(
+      name = name,
+      url = url,
+      group = group,
+      metadata_folder_name = metadata_folder_name,
+      compression = compression
+    )
+  }
+  root
+}
+
+#' @inherit dvs_attach_impl title description params
+#' @return The project root, the working directory.
+#'
+#'   A project the server does not have (`"project_not_found"`), a project
+#'   you cannot reach (`"access_denied"`) and a refused login raise a
+#'   `dvs_error` with the CLI's `code`.
+#' @examples
+#' \dontrun{
+#' dvs_attach("my-project", "https://dvs.example.com")
+#' }
+#' @rdname dvs_attach
+#' @export
+dvs_attach <- function(name, url, metadata_folder_name = NULL) {
+  root <- dvs_attach_impl(name = name, url = url, metadata_folder_name = metadata_folder_name)
+  if (is.na(root)) {
+    # No token for the server yet: log in, as dvs attach does, then again
+    dvs_login(url)
+    root <- dvs_attach_impl(name = name, url = url, metadata_folder_name = metadata_folder_name)
+  }
+  root
+}
