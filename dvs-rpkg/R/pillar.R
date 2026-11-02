@@ -5,9 +5,10 @@
 #' in tibble output. Stored as `double` to safely represent file sizes up to
 #' `2^53` bytes. An R `integer` is 32 bits and would overflow at about 2 GB.
 #'
-#' `+` and `-` keep the class. A negative value, such as the difference of two
-#' sizes, prints with a minus sign. A value that is not a whole number prints
-#' rounded.
+#' `format()` and `print()` give the sizes as the CLI prints them, such as
+#' `"40.0 MB"`. `+`, `-`, `[` and `[[` keep the class. A negative value, such
+#' as the difference of two sizes, prints with a minus sign. A value that is
+#' not a whole number prints rounded.
 #'
 #' @param x atomic numeric / integer / logical vector (incl. `NA`). `NULL`
 #'   raises a `dvs_error_argument` condition.
@@ -17,7 +18,7 @@ new_dvs_bytes <- function(x) {
   if (is.null(x)) {
     .miniextendr_arg_error("x", "must not be NULL", sys.call())
   }
-  structure(as.double(x), class = c("dvs_bytes", "numeric"))
+  structure(as.double(x), names = names(x), class = c("dvs_bytes", "numeric"))
 }
 
 #' @importFrom pillar pillar_shaft new_pillar_shaft_simple
@@ -39,6 +40,37 @@ format_bytes_for_print <- function(v) {
   sign <- ifelse(rounded < 0, "-", "")
   formatted[finite] <- paste0(sign, format_byte_size(abs(rounded)))
   formatted
+}
+
+#' @export
+format.dvs_bytes <- function(x, ...) {
+  formatted <- format_bytes_for_print(unclass(x))
+  names(formatted) <- names(x)
+  formatted
+}
+
+#' @export
+print.dvs_bytes <- function(x, ...) {
+  if (length(x) == 0L) {
+    cat("<dvs_bytes[0]>\n")
+  } else {
+    print(format(x), quote = FALSE)
+  }
+  invisible(x)
+}
+
+#' @export
+`[.dvs_bytes` <- function(x, ...) {
+  result <- NextMethod()
+  class(result) <- class(x)
+  result
+}
+
+#' @export
+`[[.dvs_bytes` <- function(x, ...) {
+  result <- NextMethod()
+  class(result) <- class(x)
+  result
 }
 
 #' @importFrom pillar type_sum

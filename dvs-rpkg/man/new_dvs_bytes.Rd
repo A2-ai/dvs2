@@ -20,7 +20,8 @@ in tibble output. Stored as \code{double} to safely represent file sizes up to
 \code{2^53} bytes. An R \code{integer} is 32 bits and would overflow at about 2 GB.
 }
 \details{
-\code{+} and \code{-} keep the class. A negative value, such as the difference of two
-sizes, prints with a minus sign. A value that is not a whole number prints
-rounded.
+\code{format()} and \code{print()} give the sizes as the CLI prints them, such as
+\code{"40.0 MB"}. \code{+}, \code{-}, \code{[} and \code{[[} keep the class. A negative value, such
+as the difference of two sizes, prints with a minus sign. A value that is
+not a whole number prints rounded.
 }
