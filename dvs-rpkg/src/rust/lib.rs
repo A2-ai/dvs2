@@ -26,8 +26,9 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
-    OperationContext, PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
+    AddReport, ByteTotals, Compression, Counts, FileProgress, GetCounts, GetOptions, GetReport,
+    GetRow, GetVerdict, OperationContext, PathFilter, Status, TransferObserver, add_files,
+    get_files, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -216,7 +217,7 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
     #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<BuiltDataFrame> {
+) -> Result<AddOutput> {
     let paths = paths.unwrap_or_default();
     // The CLI requires paths unless --glob is given. With neither, the library
     // would refuse the working directory as a directory.
@@ -234,7 +235,7 @@ pub(crate) fn dvs_add(
     }
 
     let dry_run = dry_run.unwrap_or(false);
-    let results = if progress_callback.is_some() {
+    let report = if progress_callback.is_some() {
         run_with_progress(|tx| {
             let ctx = OperationContext::new()
                 .with_observer(Arc::new(TransferObserver(progress_on_file_start(tx))));
@@ -247,7 +248,6 @@ pub(crate) fn dvs_add(
                 dry_run,
                 &ctx,
             )
-            .map(|report| report.files)
         })?
     } else {
         add_files(
@@ -259,10 +259,48 @@ pub(crate) fn dvs_add(
             dry_run,
             &OperationContext::new(),
         )?
-        .files
     };
 
-    Ok(miniextendr_api::serde::vec_to_dataframe(&results)?)
+    Ok(AddOutput {
+        files: miniextendr_api::serde::vec_to_dataframe(&report.files)?,
+        info: AddInfo::from(&report),
+    })
+}
+
+/// What `dvs_add_impl()` returns, `list(files, info)`. R adds the class.
+#[derive(IntoList, PreferList)]
+struct AddOutput {
+    files: BuiltDataFrame,
+    info: AddInfo,
+}
+
+/// The list `dvs_result_info()` returns for a `dvs_add()` result: the CLI's
+/// JSON envelope for add and the summary it prints. The fields are the list's
+/// entries, in order.
+#[derive(IntoList, PreferList)]
+struct AddInfo {
+    command: &'static str,
+    outcome: &'static str,
+    dry_run: bool,
+    /// Counts through serde, the same fields as the CLI's JSON `counts`.
+    counts: AsSerialize<Counts>,
+    /// ByteTotals through serde, the same fields as the CLI's JSON `bytes`.
+    bytes: AsSerialize<ByteTotals>,
+    /// What the CLI prints as the summary.
+    summary: String,
+}
+
+impl From<&AddReport> for AddInfo {
+    fn from(report: &AddReport) -> Self {
+        AddInfo {
+            command: "add",
+            outcome: report.outcome.as_str(),
+            dry_run: report.dry_run,
+            counts: AsSerialize(report.counts),
+            bytes: AsSerialize(report.bytes),
+            summary: report.summary(),
+        }
+    }
 }
 
 /// Valid status filter choices for `dvs_status`.
@@ -723,12 +761,19 @@ impl From<&GetReport> for GetInfo {
 
 /// @title Operation information for a dvs result
 /// @description
-/// The rows of a [dvs_get()] result describe each file. This returns what
-/// applies to the whole operation.
+/// The rows of a [dvs_get()] or [dvs_add()] result describe each file. This
+/// returns what applies to the whole operation.
 ///
-/// @param x A result returned by [dvs_get()]. Anything else raises a
-///   `dvs_error_argument` condition.
-/// @return A list: `command`, `outcome` (`"complete"`, `"aborted"`,
+/// @param x A result returned by [dvs_get()] or [dvs_add()]. Anything else
+///   raises a `dvs_error_argument` condition.
+/// @return For [dvs_add()], a list: `command` (`"add"`), `outcome`
+///   (`"complete"`, `"partial"`, `"failed"` or `"cancelled"`), `dry_run`,
+///   `counts` (`total`, `succeeded`, `failed` and `cancelled`), `bytes`
+///   (`total`, `to_transfer`, `already_stored` and `transferred`, the same
+///   fields as the CLI's JSON `bytes`) and `summary` (the line the CLI
+///   prints, such as `"Added 2, 1 unchanged"`).
+///
+///   For [dvs_get()], a list: `command`, `outcome` (`"complete"`, `"aborted"`,
 ///   `"partial"` or `"failed"`), `did_as_asked` (`TRUE` unless a file failed
 ///   or `on_conflict = "abort"` held files back), `dry_run`, `on_conflict` and
 ///   its `source` (`"argument"`, `"env"`, `"config"` for dvs.toml, or
@@ -740,7 +785,7 @@ impl From<&GetReport> for GetInfo {
 ///   on a file with local changes or no record, or the problem's message).
 #[miniextendr]
 pub fn dvs_result_info(x: DataFrame) -> SEXP {
-    // dvs_get() sets this attribute on its result.
+    // dvs_get() and dvs_add() set this attribute on their results.
     match x.as_sexp().get_attr_opt(SEXP::symbol("dvs_info")) {
         Some(info) => info,
         None => miniextendr_api::arg_error!(param = "x", "`x` is not a dvs result"),

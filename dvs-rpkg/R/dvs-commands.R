@@ -39,6 +39,10 @@ dvs_init <- function(
 #'   `"io_error"`) and `error` (the reason). That row has `NA` in `outcome`,
 #'   `hash`, `size` and `stored_size`. A path that does not exist raises an
 #'   error and adds nothing.
+#'
+#'   The tibble has class `dvs_add_result`. [dvs_result_info()] returns the
+#'   outcome, the counts, the bytes and the summary the CLI prints, such as
+#'   `"Added 2, 1 unchanged"`. A printed result starts with that summary.
 #' @details In an interactive session, `dvs_add()` shows a progress bar while it
 #'   copies files. It shows none in a dry run or in a non-interactive session,
 #'   such as `Rscript`. The cli options for progress bars, such as
@@ -59,13 +63,14 @@ dvs_add <- function(
     progress_callback <- ProgressBarCallback$new()
   }
 
-  result <- dvs_add_impl(
+  raw <- dvs_add_impl(
     paths = paths,
     message = message,
     glob = glob,
     dry_run = dry_run,
     progress_callback = progress_callback
   )
+  result <- raw$files
 
   # The columns come in the order the first row names them, so a first file
   # that failed put `code` and `error` first. Keep one order.
@@ -85,7 +90,23 @@ dvs_add <- function(
     result$stored_size <- new_dvs_bytes(result$stored_size)
   }
 
-  tibble::as_tibble(result)
+  result <- tibble::as_tibble(result)
+  structure(result, class = c("dvs_add_result", class(result)), dvs_info = raw$info)
+}
+
+#' @export
+print.dvs_add_result <- function(x, ...) {
+  info <- attr(x, "dvs_info", exact = TRUE)
+  if (!is.null(info)) {
+    if (nrow(x) == info$counts$total) {
+      cat(comment_lines(info$summary), sep = "\n")
+    } else {
+      # Filtered: the info describes the whole add.
+      cat(sprintf("# %d of %d rows from:", nrow(x), info$counts$total), comment_lines(info$summary), sep = "\n")
+    }
+  }
+  NextMethod()
+  invisible(x)
 }
 
 #' @inherit dvs_status_impl title description params

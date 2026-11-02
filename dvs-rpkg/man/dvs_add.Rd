@@ -38,6 +38,10 @@ also has the columns \code{code} (the kind of failure, for example
 \code{"io_error"}) and \code{error} (the reason). That row has \code{NA} in \code{outcome},
 \code{hash}, \code{size} and \code{stored_size}. A path that does not exist raises an
 error and adds nothing.
+
+The tibble has class \code{dvs_add_result}. \code{\link[=dvs_result_info]{dvs_result_info()}} returns the
+outcome, the counts, the bytes and the summary the CLI prints, such as
+\code{"Added 2, 1 unchanged"}. A printed result starts with that summary.
 }
 \description{
 Hashes and copies the specified files into DVS storage.
