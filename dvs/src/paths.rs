@@ -164,7 +164,7 @@ impl DvsPaths {
     /// Repo-root-relative paths of every tracked file: one per `.dvs` entry in
     /// the metadata folder, with the `.dvs` extension stripped.
     /// Shared by `get` and `status`
-    pub(crate) fn tracked_paths(&self) -> Vec<PathBuf> {
+    pub fn tracked_paths(&self) -> Vec<PathBuf> {
         let metadata_root = self.metadata_folder();
         WalkDir::new(&metadata_root)
             .into_iter()

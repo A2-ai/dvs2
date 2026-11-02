@@ -274,6 +274,9 @@ print.dvs_get_result <- function(x, ...) {
       if (length(attention) > 0) {
         cat(comment_lines(paste(attention, collapse = "\n")), sep = "\n")
       }
+      if (!is.null(info$hint) && !is.na(info$hint)) {
+        cat(comment_lines(info$hint), sep = "\n")
+      }
     } else {
       # Filtered or columns selected: the info describes the whole request.
       cat(sprintf("# %d of %d rows from:", nrow(x), n_request), comment_lines(info$summary), sep = "\n")

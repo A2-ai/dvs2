@@ -510,7 +510,9 @@ impl From<OnConflictChoice> for OnConflict {
 /// to their original paths in the working directory. With no `paths`
 /// or `glob`, `dvs_get()` scopes to the working directory: it restores
 /// the files directly under it, and `dvs_get(recursive = TRUE)` restores
-/// every tracked file beneath it at any depth.
+/// every tracked file beneath it at any depth. When tracked files outside
+/// that scope are not on disk, the printed result says how many, and the
+/// call that gets every tracked file.
 ///
 /// A working file that differs from the tracked version is replaced without
 /// asking only when dvs itself put it there (for example after switching git
@@ -559,12 +561,17 @@ pub(crate) fn dvs_get(
         Err(ConfigError(message)) => config_error(&message),
     };
     let dvs_paths = DvsPaths::from_cwd(&config)?;
+    let recursive = recursive.unwrap_or(false);
+    let scoped = paths.as_ref().is_none_or(Vec::is_empty) && glob.is_none();
     let selection = select_paths_for_get(
         paths.unwrap_or_default(),
         glob.as_deref(),
         &dvs_paths,
-        recursive.unwrap_or(false),
+        recursive,
     )?;
+    let hint = scoped
+        .then(|| scope_hint(&dvs_paths, &selection.tracked, recursive))
+        .flatten();
     let options = GetOptions {
         dry_run,
         on_conflict: policy,
@@ -599,9 +606,49 @@ pub(crate) fn dvs_get(
             .map(GetFileRow::from)
             .collect::<Vec<_>>()
             .into_dataframe()?,
-        info: GetInfo::from(&report),
+        info: GetInfo {
+            hint,
+            ..GetInfo::from(&report)
+        },
         on_error: on_error.to_choice(),
     })
+}
+
+/// The hint of a `dvs_get()` with no `paths` or `glob`, which covers only the
+/// working directory: how many tracked files it left out that are not on
+/// disk, and on a second line the call that gets every tracked file. `None`
+/// when there are none. A stat per tracked file, no hashing.
+fn scope_hint(
+    dvs_paths: &DvsPaths,
+    selected: &std::collections::HashSet<PathBuf>,
+    recursive: bool,
+) -> Option<String> {
+    let absent = dvs_paths
+        .tracked_paths()
+        .into_iter()
+        .filter(|p| !selected.contains(p) && !dvs_paths.repo_root().join(p).exists())
+        .count();
+    if absent == 0 {
+        return None;
+    }
+    let (files, are) = if absent == 1 {
+        ("file", "is")
+    } else {
+        ("files", "are")
+    };
+    let scope = if recursive { "below" } else { "directly in" };
+    let every = match dvs_paths.cwd_relative_to_root() {
+        None => "dvs_get(recursive = TRUE)".to_string(),
+        Some(cwd) => {
+            let root = vec![".."; cwd.components().count()].join("/");
+            format!("dvs_get(paths = \"{root}\", recursive = TRUE)")
+        }
+    };
+    Some(format!(
+        "{absent} tracked {files} outside this scope {are} not on disk. With no `paths`, \
+         dvs_get() gets only the files {scope} the working directory.\n\
+         To get every tracked file: {every}"
+    ))
 }
 
 /// The config of the dvs project that holds the working directory. Outside a
@@ -700,6 +747,9 @@ struct GetInfo {
     problem: Option<String>,
     /// What the CLI prints as the summary, or the problem's message.
     summary: String,
+    /// For a `dvs_get()` with no `paths` or `glob`: the tracked files outside
+    /// its scope that are not on disk, `NA` when there are none.
+    hint: Option<String>,
 }
 
 impl From<&GetReport> for GetInfo {
@@ -717,6 +767,7 @@ impl From<&GetReport> for GetInfo {
                 Some(p) => p.message.clone(),
                 None => report.summary(),
             },
+            hint: None,
         }
     }
 }
@@ -737,7 +788,10 @@ impl From<&GetReport> for GetInfo {
 ///   as the CLI's JSON `counts`), `problem` (an operation-level message, or
 ///   `NA` when there is none) and `summary` (the summary the CLI prints, with
 ///   a second line `on_conflict = <policy> (<source>)` when the policy acted
-///   on a file with local changes or no record, or the problem's message).
+///   on a file with local changes or no record, or the problem's message) and
+///   `hint` (for a `dvs_get()` with no `paths` or `glob`: how many tracked
+///   files outside its scope are not on disk, and the call that gets every
+///   tracked file, or `NA` when there are none).
 #[miniextendr]
 pub fn dvs_result_info(x: DataFrame) -> SEXP {
     // dvs_get() sets this attribute on its result.
