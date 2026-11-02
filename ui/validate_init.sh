@@ -3,7 +3,7 @@
 # Validate CLI spec claims for `dvs init` (specs.md).
 # Per claim: prints expected vs actual and a PASS/FAIL verdict, then a summary.
 # CLI only. The `dvs` binary is assumed already on PATH (do not reinstall).
-# Line refs (Lnnn) are to specs.md on main at 370f448.
+# Claims come from specs.md, init, unless a claim names another section.
 
 set -eu
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
@@ -37,7 +37,7 @@ mkdir "$DVS_STORAGE"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== Claim: init local creates dvs.toml in current folder (L33, L288) ==="
+say "=== Claim: init local creates dvs.toml in current folder ==="
 cd "$DVS_REPO"
 dvs init local "$DVS_STORAGE"
 toml_exists=no; [ -f "$DVS_REPO/dvs.toml" ] && toml_exists=yes
@@ -47,7 +47,7 @@ check "yes" "$meta_exists" "init local creates default .dvs metadata folder"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== Claim: the pre-backend form 'dvs init <PATH>' exits 2 and suggests 'dvs init local <PATH>' (L284) ==="
+say "=== Claim: the pre-backend form 'dvs init <PATH>' exits 2 and suggests 'dvs init local <PATH>' ==="
 OLD_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_old"
 DVS_STORAGE_OLD="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_old"
 mkdir -p "$OLD_REPO" "$DVS_STORAGE_OLD"
@@ -64,7 +64,7 @@ check "absent" "$old_toml" "'dvs init <PATH>' writes no dvs.toml"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== Claim: init errors if dvs.toml already exists in target dir (L272) ==="
+say "=== Claim: init errors if dvs.toml already exists in target dir ==="
 cd "$DVS_REPO"
 rc=0
 dvs init local "$DVS_STORAGE" || rc=$?
@@ -72,7 +72,7 @@ check "1" "$rc" "re-init in dir with existing dvs.toml exits 1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== Claim: check is LOCAL, parent dvs.toml does NOT block nested init (L273) ==="
+say "=== Claim: check is LOCAL, parent dvs.toml does NOT block nested init ==="
 DVS_STORAGE_NESTED="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_nested"
 mkdir -p "$DVS_REPO/nested" "$DVS_STORAGE_NESTED"
 cd "$DVS_REPO/nested"
@@ -84,7 +84,7 @@ check "yes" "$nested_toml" "nested dvs.toml created"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== Claim: init rejects a storage path inside the repository root (L275) ==="
+say "=== Claim: init rejects a storage path inside the repository root ==="
 IN_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_inside"
 mkdir -p "$IN_REPO"
 cd "$IN_REPO"
@@ -96,7 +96,7 @@ check "absent" "$in_toml" "storage inside the repo root writes no dvs.toml"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== Claim: --root-dir <DIR> creates dvs.toml in that root instead of cwd (L314) ==="
+say "=== Claim: --root-dir <DIR> creates dvs.toml in that root instead of cwd ==="
 ROOTDIR="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_root"
 DVS_STORAGE_ROOT="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_root"
 mkdir -p "$ROOTDIR" "$DVS_STORAGE_ROOT"
@@ -112,7 +112,7 @@ check "absent" "$cwd_toml" "--root-dir does NOT create dvs.toml in cwd"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== Claim: --metadata-folder-name <NAME> uses custom metadata folder (L316) ==="
+say "=== Claim: --metadata-folder-name <NAME> uses custom metadata folder ==="
 MFN_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_mfn"
 DVS_STORAGE_MFN="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_mfn"
 mkdir -p "$MFN_REPO" "$DVS_STORAGE_MFN"
@@ -128,7 +128,7 @@ check "yes" "$toml_has_mfn" "dvs.toml records metadata_folder_name = .mymeta"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== Claim: --no-compression -> compression \"none\" (L320, L715-718, verify via add metadata) ==="
+say "=== Claim: --no-compression -> compression \"none\" (verify via add metadata, specs.md, Compression) ==="
 NC_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_nc"
 DVS_STORAGE_NC="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_nc"
 mkdir -p "$NC_REPO" "$DVS_STORAGE_NC"
@@ -159,7 +159,7 @@ check "zstd" "$def_comp" "default add metadata records compression=zstd"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== Claim: --group <GRP> sets unix group on storage dir/files (L318) ==="
+say "=== Claim: --group <GRP> sets unix group on storage dir/files ==="
 USER_GROUP="$(id -gn)"
 GRP_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_grp"
 DVS_STORAGE_GRP="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_grp"
@@ -176,7 +176,7 @@ check "$USER_GROUP" "$toml_grp" "--group recorded in dvs.toml backend.group"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== Claim: --json prints the v1 envelope with project_root (L82-95) ==="
+say "=== Claim: --json prints the v1 envelope with project_root (specs.md, Machine output) ==="
 JSON_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_json"
 DVS_STORAGE_JSON="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_json"
 mkdir -p "$JSON_REPO" "$DVS_STORAGE_JSON"
@@ -203,7 +203,7 @@ if not os.path.isabs(root) or os.path.realpath(root) != os.path.realpath(sys.arg
 print("ok" if not bad else ";".join(bad))
 ' "$JSON_REPO" 2>&1 || echo "<parse-error>")"
 check "ok" "$json_ok" "init --json is a v1 envelope (command=init, outcome=complete, project_root = repo root)"
-# The JSON error envelope for a failing init (re-init) (L89, L216).
+# The JSON error envelope for a failing init (re-init).
 rc=0
 json_err="$(dvs --json init local "$DVS_STORAGE_JSON")" || rc=$?
 say "$json_err"
@@ -219,7 +219,7 @@ check "1" "$rc" "failing init --json exits 1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== Claim: partial-failure best-effort cleanup (L278-279) ==="
+say "=== Claim: partial-failure best-effort cleanup ==="
 # Storage creation must fail AFTER dvs.toml is conceptually written; force by
 # pointing storage at a path under a non-directory so mkdir fails.
 PF_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_pf"
@@ -242,7 +242,7 @@ check "0" "$rc" "retry init succeeds after partial-failure cleanup"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
-say "=== Claim: init writes audit entry action=init with settings + project_path (L722-739) ==="
+say "=== Claim: init writes audit entry action=init with settings + project_path (specs.md, Audit trail) ==="
 AUDIT="$DVS_STORAGE/audit.log.jsonl"
 audit_exists=no; [ -f "$AUDIT" ] && audit_exists=yes
 check "yes" "$audit_exists" "audit.log.jsonl exists in storage after init"
