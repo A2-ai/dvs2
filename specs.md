@@ -130,6 +130,8 @@ relative to the current directory.
 
 `dvs availability <HASHES>...` takes one or more BLAKE3 hashes (an invalid one is `invalid_arguments`) and
 reports, per hash and in input order, whether storage has that content, without downloading it.
+R's `dvs_availability(hashes)` returns the same rows as a tibble (`hash`, `state`, `code`, `message`), built by
+the same library function (`dvs::availability`). A storage it cannot read is a row, not an R error.
 `dvs history <PATHS>...` takes one or more file paths and reports their stored upload history; the files need
 not exist in this checkout. It takes files, not folders: a path that is a folder is refused with
 `invalid_arguments` (exit `2`), as is a path outside the project.

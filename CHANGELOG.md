@@ -13,6 +13,7 @@
 
 ### Added
 
+- R package: `dvs_availability(hashes)` reports whether the storage holds each BLAKE3 hash, without downloading it, as `dvs availability` does: a tibble of `hash`, `state` (`present`, `absent` or `unknown`), `code` and `message`.
 - R package: `dvs_init_server()` and `dvs_attach()` create a project on a dvs server or attach to one, as `dvs init server` and `dvs attach` do. Without a token for the server they log in first with `dvs_login()`. Both return the project root.
 - R package: `dvs_login()` and `dvs_logout()` log in to and out of a dvs server, as `dvs login` and `dvs logout` do, and share the CLI's credentials. `dvs_login()` needs an interactive R session. It shows the address and the code to enter, and an interrupt stops its wait. `dvs_logout()` returns `revoked` and a tibble of `warnings`: a token the server could not revoke is deleted all the same, and the reason is a row there, not an R warning.
 - R package: `dvs_info()` returns the fields of `dvs info --json` as a list: the backend, the storage or server, the compression, and for a server project the login, the connection, the user, the access and the groups. The CLI's JSON and R build them with one library function, `dvs::info::project_info`.

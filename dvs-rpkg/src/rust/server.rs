@@ -1,5 +1,5 @@
 //! The commands for server projects, as in the CLI: init server, attach, info,
-//! login and logout.
+//! login, logout and availability.
 
 use dvs::ErrorCode;
 use dvs::auth::{
@@ -9,8 +9,9 @@ use dvs::auth::{
 use dvs::config::Config;
 use dvs::init::{attach, check_attachable, check_uninitialized, init};
 use dvs::paths::DvsPaths;
-use miniextendr_api::miniextendr;
+use miniextendr_api::dataframe::IntoDataFrame;
 use miniextendr_api::serde::AsSerialize;
+use miniextendr_api::{BuiltDataFrame, DataFrameRow, miniextendr};
 use serde::Serialize;
 use url::Url;
 
@@ -240,4 +241,51 @@ pub(crate) fn dvs_attach(
     }
     attach(&root, name, url, metadata_folder_name)?;
     Ok(Some(root.to_string_lossy().into_owned()))
+}
+
+/// One row of the `dvs_availability()` frame.
+#[derive(DataFrameRow)]
+struct AvailabilityFileRow {
+    hash: String,
+    state: String,
+    code: Option<String>,
+    message: Option<String>,
+}
+
+/// @title Check whether content is stored
+/// @description
+/// Looks up each BLAKE3 hash in the project's storage without downloading
+/// anything, as `dvs availability` does: the local storage folder, or the dvs
+/// server. The hashes are the ones `dvs_status()` and `dvs_add()` report, and
+/// a hash may be given more than once.
+///
+/// A storage it cannot read (no login, no access, a server that does not
+/// answer, a missing storage folder) is not an error: every row is
+/// `"unknown"`, with the reason.
+///
+/// @param hashes BLAKE3 hashes, 64 hex digits each, in any case.
+/// @return A tibble with one row per hash, in the order given: `hash` (in
+///   lowercase), `state` (`"present"`, `"absent"`, or `"unknown"` when the
+///   storage could not say), and `code` and `message` (why the storage could
+///   not say, `NA` otherwise), the fields of `dvs availability --json`.
+///
+///   A hash that is not 64 hex digits, or no hashes, raises a `dvs_error`
+///   with `code` `"invalid_arguments"` before any lookup.
+/// @keywords internal
+#[miniextendr(r_name = "dvs_availability_impl", internal, call = caller)]
+pub(crate) fn dvs_availability(
+    #[miniextendr(no_na)] hashes: Vec<String>,
+) -> Result<BuiltDataFrame, DvsError> {
+    let config = find_config()?;
+    let rows = dvs::availability(config.backend(), &hashes)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| AvailabilityFileRow {
+            hash: row.hash,
+            state: row.state.as_str().to_string(),
+            code: row.code.map(|code| code.as_str().to_string()),
+            message: row.message,
+        })
+        .collect::<Vec<_>>()
+        .into_dataframe()?)
 }

@@ -115,3 +115,15 @@ dvs_attach <- function(name, url, metadata_folder_name = NULL) {
   }
   root
 }
+
+#' @inherit dvs_availability_impl title description params return
+#' @examples
+#' \dontrun{
+#' status <- dvs_status()
+#' dvs_availability(status$hash[!is.na(status$hash)])
+#' }
+#' @rdname dvs_availability
+#' @export
+dvs_availability <- function(hashes) {
+  tibble::as_tibble(dvs_availability_impl(hashes = hashes))
+}
