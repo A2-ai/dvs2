@@ -4,7 +4,9 @@
 # add, get, and status. CLI only.
 #
 # Claims under test (Script 5 in ui/TODO.md):
-#   1. explicit files: glob ignored, files added/retrieved directly
+#   1. explicit files only + glob: refused, invalid_arguments, exit 2.
+#      Files and a directory: the files as given, the glob searches the
+#      directory. An unquoted glob the shell expanded gets a hint to quote it.
 #   2. explicit directory + glob: directory walked, filtered by glob
 #   3. no paths + glob: walks current directory filtered by glob
 #   4. literal separator: '*.bin' matches only target dir, NOT subdir
@@ -53,6 +55,16 @@ print(",".join(sorted(r["path"] for r in d["files"] if r.get("code") is None)))'
   { set -x; } 2>/dev/null
 }
 
+# "<code> hint" or "<code> no-hint" for the error of a failed --json envelope.
+json_error() {
+  { set +x; } 2>/dev/null
+  python3 -c 'import sys,json
+e=json.load(sys.stdin).get("error") or {}
+print(e.get("code"), "hint" if e.get("hint") else "no-hint")' 2>/dev/null \
+    || echo "<parse-error>"
+  { set -x; } 2>/dev/null
+}
+
 # Sorted, comma-joined list of tracked sidecars relative to the .dvs folder.
 sidecar_paths() {
   { set +x; } 2>/dev/null
@@ -96,7 +108,6 @@ tree --noreport -I '.git'
 TOP_ONLY="top1.bin,top2.bin"
 ALL_BIN="data/d1.bin,data/d2.bin,sub/s1.bin,sub/s2.bin,top1.bin,top2.bin"
 DATA_DIR_BIN="data/d1.bin,data/d2.bin"
-EXPLICIT_TXT="keep1.txt,keep2.txt"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ADD claims
@@ -138,11 +149,44 @@ check "$DATA_DIR_BIN" "$(printf '%s' "$out" | json_paths)" "add data --glob '*.b
 
 reset_repo
 
-# ── Claim 1 (add): explicit files -> glob ignored ──
+# ── Claim 1 (add): explicit files only + glob -> refused ──
+# A glob only searches the directories among the paths, so it would select nothing.
 say
-say "=== ADD claim 1: explicit files keep1.txt keep2.txt + --glob '*.bin' (glob ignored) ==="
-out="$(dvs add keep1.txt keep2.txt --glob '*.bin' --json)"
-check "$EXPLICIT_TXT" "$(printf '%s' "$out" | json_paths)" "add explicit files ignores --glob, adds exact files"
+say "=== ADD claim 1: explicit files keep1.txt keep2.txt + --glob '*.bin' (refused) ==="
+rc=0
+out="$(dvs add keep1.txt keep2.txt --glob '*.bin' --json)" || rc=$?
+check "2" "$rc" "add with only files and --glob exits 2"
+check "invalid_arguments no-hint" "$(printf '%s' "$out" | json_error)" "add with only files and a quoted --glob is invalid_arguments, with no quoting hint"
+check "" "$(sidecar_paths)" "add with only files and --glob adds nothing"
+
+reset_repo
+
+# A file and a directory: the file as given, the glob searches the directory.
+say
+say "=== ADD claim 1b: keep1.txt + data + --glob '*.bin' ==="
+out="$(dvs add keep1.txt data --glob '*.bin' --json)"
+check "data/d1.bin,data/d2.bin,keep1.txt" "$(printf '%s' "$out" | json_paths)" "add with a file, a directory and --glob adds the file and the matches in the directory"
+
+reset_repo
+
+# Unquoted, the shell expands the glob: dvs sees the glob top1.bin and the file top2.bin.
+say
+say "=== ADD claim 1c: unquoted --glob *.bin (shell-expanded) is refused with a hint ==="
+rc=0
+# shellcheck disable=SC2035
+out="$(dvs add --glob *.bin --json)" || rc=$?
+check "2" "$rc" "add --glob *.bin (unquoted) exits 2"
+check "invalid_arguments hint" "$(printf '%s' "$out" | json_error)" "add --glob *.bin (unquoted) is invalid_arguments, with a hint to quote the glob"
+check "" "$(sidecar_paths)" "add --glob *.bin (unquoted) adds nothing"
+# shellcheck disable=SC2035
+err="$(dvs add --glob *.bin 2>&1 >/dev/null)" || true
+# Key tokens, not wording: the glob dvs saw, and the same hint the --json
+# error carries.
+got="$(printf '%s' "$out" | python3 -c 'import sys,json
+h=(json.load(sys.stdin).get("error") or {}).get("hint") or ""
+e=sys.argv[1]
+print("yes" if h and h in e and "top1.bin" in e else "no")' "$err" 2>/dev/null || echo "<parse-error>")"
+check "yes" "$got" "the terminal error names the glob top1.bin and shows the --json hint"
 
 reset_repo
 
@@ -195,12 +239,23 @@ del_locals
 out="$(dvs get -g '**/*.bin' --json)"
 check "$ALL_BIN" "$(printf '%s' "$out" | json_paths)" "get -g '**/*.bin' matches recursively (short flag works)"
 
-# ── Claim 1 (get): explicit files -> glob ignored ──
+# ── Claim 1 (get): explicit files only + glob -> refused ──
+# The files are tracked and missing locally: a tracked file counts as a file.
 say
-say "=== GET claim 1: explicit files + --glob (glob ignored) ==="
+say "=== GET claim 1: explicit files + --glob (refused) ==="
 del_locals
-out="$(dvs get top1.bin top2.bin --glob '**/*.bin' --json)"
-check "$TOP_ONLY" "$(printf '%s' "$out" | json_paths)" "get explicit files ignores --glob, retrieves exact files"
+rc=0
+out="$(dvs get top1.bin top2.bin --glob '**/*.bin' --json)" || rc=$?
+check "2" "$rc" "get with only files and --glob exits 2"
+check "invalid_arguments no-hint" "$(printf '%s' "$out" | json_error)" "get with only files and --glob is invalid_arguments"
+check "no" "$([ -e top1.bin ] && echo yes || echo no)" "get with only files and --glob retrieves nothing"
+
+# A file and a directory: the file as given, the glob searches the directory.
+say
+say "=== GET claim 1b: top1.bin + data + --glob '*.bin' ==="
+del_locals
+out="$(dvs get top1.bin data --glob '*.bin' --json)"
+check "data/d1.bin,data/d2.bin,top1.bin" "$(printf '%s' "$out" | json_paths)" "get with a file, a directory and --glob retrieves the file and the matches in the directory"
 
 # ── Claim 2 (get): explicit dir + glob -> dir walked filtered (#217 fixed) ──
 # Globbing: get resolves a glob the same way as add, and an explicit
@@ -241,6 +296,14 @@ say "status --glob stdout: $status_out"
 check "0" "$rc" "status --glob is accepted (exit 0), not rejected (#218)"
 got="$(printf '%s' "$status_out" | json_paths)"
 check "$TOP_ONLY" "$got" "status --glob '*.bin' follows literal-separator rule (top-level only)"
+
+# Explicit files only + glob: refused, as for add and get.
+say
+say "=== STATUS: explicit file + --glob is refused ==="
+rc=0
+out="$(dvs status top1.bin --glob '*.bin' --json)" || rc=$?
+check "2" "$rc" "status with only files and --glob exits 2"
+check "invalid_arguments no-hint" "$(printf '%s' "$out" | json_error)" "status with only files and --glob is invalid_arguments"
 
 # -g is the short form of --glob.
 say
