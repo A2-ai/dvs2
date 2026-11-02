@@ -63,7 +63,7 @@ pub enum Init {
         /// If you want to use a folder name other than `.dvs` for storing the metadata files
         #[clap(long)]
         metadata_folder_name: Option<String>,
-        /// Unix group to use for permissions
+        /// The server group whose members can read and write the project. You must be one of them
         #[clap(long)]
         group: String,
         /// Disable compression of stored files. Compression defaults to zstd
@@ -114,7 +114,12 @@ pub enum Command {
         dry_run: bool,
     },
     /// Gets the status of each file in the current repository
-    #[command(next_display_order = 100)]
+    #[command(
+        next_display_order = 100,
+        after_help = "Status reads only local files: the working files, their .dvs records and dvs's local cache. \
+It never contacts the storage or the dvs server, so it does not say whether the stored copies exist \
+or whether you can get them. `dvs info` checks the server connection and your access."
+    )]
     Status {
         /// Paths (files or directories) to check status for
         paths: Vec<PathBuf>,

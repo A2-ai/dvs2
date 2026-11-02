@@ -51,5 +51,9 @@ are shown. Pass a character vector of status names, such as
 \code{c("current", "absent")}, to show only those.
 A file whose status cannot be read is always kept, with status \code{"error"},
 the kind of failure in \code{code} and the reason in \code{error}.
+
+Status reads only local files: the working files, their \code{.dvs} records
+and dvs's local cache. It never contacts the storage or the dvs server, so
+it does not say whether the stored copies exist or whether you can get them.
 }
 \keyword{internal}

@@ -340,7 +340,7 @@ Options:
       --metadata-folder-name <METADATA_FOLDER_NAME>
           If you want to use a folder name other than `.dvs` for storing the metadata files
       --group <GROUP>
-          Unix group to use for permissions
+          The server group whose members can read and write the project. You must be one of them
       --no-compression
           Disable compression of stored files. Compression defaults to zstd
   -h, --help
@@ -629,6 +629,8 @@ Global Options:
       --json               Output results as JSON
       --emit-events        Stream operation results and transfer progress as NDJSON
       --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+
+Status reads only local files: the working files, their .dvs records and dvs's local cache. It never contacts the storage or the dvs server, so it does not say whether the stored copies exist or whether you can get them. `dvs info` checks the server connection and your access.
 ```
 
 By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`,

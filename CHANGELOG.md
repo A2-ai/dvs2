@@ -24,6 +24,8 @@
 
 ### Fixed
 
+- `dvs init server --help` describes `--group` as the server group whose members can read and write the project. It said "Unix group to use for permissions".
+- `dvs status --help` and `dvs_status()`'s help say that status reads only local files and never contacts the storage or the dvs server.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
