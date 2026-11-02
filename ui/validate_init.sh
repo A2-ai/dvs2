@@ -112,7 +112,10 @@ rc=0
 git_out="$(dvs init local "$GIT_REPO/study-store" 2>&1)" || rc=$?
 git_toml=absent; [ -f "$GIT_REPO/study/dvs.toml" ] && git_toml=present
 git_store=absent; [ -e "$GIT_REPO/study-store" ] && git_store=present
-names_repo=no; printf '%s' "$git_out" | grep -qF "inside the git repository at" && names_repo=yes
+# The repo's folder name is the key token. It must stand on its own, not only
+# as the start of the store path, and it survives /tmp -> /private/tmp.
+names_repo="$(printf '%s' "$git_out" | python3 -c 'import re,sys
+print("yes" if re.search(re.escape(sys.argv[1]) + r"(?![\w/-])", sys.stdin.read()) else "no")' "${GIT_REPO##*/}")"
 check "1" "$rc" "storage elsewhere in the enclosing git repo exits 1"
 check "absent" "$git_toml" "storage in the enclosing git repo writes no dvs.toml"
 check "absent" "$git_store" "storage in the enclosing git repo is not created"
