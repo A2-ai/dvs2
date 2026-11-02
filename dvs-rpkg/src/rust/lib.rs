@@ -22,7 +22,7 @@ use miniextendr_api::{
 
 use anyhow::{Result, anyhow};
 use dvs::config::{Config, ConfigError, OnConflict};
-use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
+use dvs::globbing::{GlobIgnored, resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
@@ -203,8 +203,9 @@ pub(crate) fn dvs_init(
 ///   they were added.
 /// @param glob A glob that selects the files to add, such as `"*.csv"`. It
 ///   runs from the working directory, or from each directory in `paths`. A
-///   file named in `paths` is added whether or not it matches. `*` does not
-///   cross a path separator, so `*.csv` matches `a.csv` but not
+///   file named in `paths` is added whether or not it matches. With `paths`
+///   that are all files, `glob` would select nothing and is an error. `*`
+///   does not cross a path separator, so `*.csv` matches `a.csv` but not
 ///   `sub/a.csv`. Use `**/*.csv` to match at any depth.
 /// @param dry_run If `TRUE`, report what would be added without modifying anything.
 /// @param progress_callback Optional handle to enable progress bar display.
@@ -226,7 +227,8 @@ pub(crate) fn dvs_add(
     let config = find_config()?;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
+    let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)
+        .map_err(glob_argument_error)?
         .into_iter()
         .collect();
     if all_paths.is_empty() {
@@ -312,10 +314,11 @@ impl From<StatusChoice> for Status {
 ///   explicitly. When `paths` is empty, every tracked file is returned
 ///   regardless of nesting depth, and `recursive` has no effect.
 /// @param glob A glob that selects tracked files, such as `"*.csv"`. It
-///   runs from the working directory, or from each directory in `paths`. `*`
-///   does not cross a path separator, so `*.csv` matches `a.csv` but not
-///   `sub/a.csv`. Use `**/*.csv` to match at any depth. Mutually exclusive
-///   with `recursive`.
+///   runs from the working directory, or from each directory in `paths`. With
+///   `paths` that are all files (tracked, or on disk), `glob` would select
+///   nothing and is an error. `*` does not cross a path separator, so `*.csv`
+///   matches `a.csv` but not `sub/a.csv`. Use `**/*.csv` to match at any
+///   depth. Mutually exclusive with `recursive`.
 /// @param status The statuses to include, any of:
 ///   * `"current"`: the local file matches the tracked version.
 ///   * `"absent"`: the file is tracked but missing locally.
@@ -364,7 +367,8 @@ pub(crate) fn dvs_status(
         filter.as_ref(),
         glob.as_deref(),
         &OperationContext::new(),
-    )?
+    )
+    .map_err(glob_argument_error)?
     .files;
     if !show_all {
         statuses.retain(|row| {
@@ -519,10 +523,11 @@ impl From<OnConflictChoice> for OnConflict {
 /// @param paths Tracked files or directories to retrieve, relative to the
 ///   working directory. `NULL` is the same as `character(0)`.
 /// @param glob A glob that selects tracked files, such as `"*.csv"`. It
-///   runs from the working directory, or from each directory in `paths`. `*`
-///   does not cross a path separator, so `*.csv` matches `a.csv` but not
-///   `sub/a.csv`. Use `**/*.csv` to match at any depth. Mutually exclusive
-///   with `recursive`.
+///   runs from the working directory, or from each directory in `paths`. With
+///   `paths` that are all files (tracked, or on disk), `glob` would select
+///   nothing and is an error. `*` does not cross a path separator, so `*.csv`
+///   matches `a.csv` but not `sub/a.csv`. Use `**/*.csv` to match at any
+///   depth. Mutually exclusive with `recursive`.
 /// @param recursive If `TRUE`, directory inputs include all descendants.
 ///   If `FALSE` or `NULL`, only direct children of the directory are
 ///   returned. With no explicit `paths` the directory is the working
@@ -564,7 +569,8 @@ pub(crate) fn dvs_get(
         glob.as_deref(),
         &dvs_paths,
         recursive.unwrap_or(false),
-    )?;
+    )
+    .map_err(glob_argument_error)?;
     let options = GetOptions {
         dry_run,
         on_conflict: policy,
@@ -613,6 +619,16 @@ fn find_config() -> Result<Config> {
         Ok(config) => Ok(config),
         Err(e) => config_error(&e.to_string()),
     }
+}
+
+/// A glob given with paths that are all files raises a `dvs_error_argument`
+/// for `glob`, as the CLI refuses it with `invalid_arguments`. Other errors
+/// pass through.
+fn glob_argument_error(error: anyhow::Error) -> anyhow::Error {
+    if let Some(ignored) = error.downcast_ref::<GlobIgnored>() {
+        miniextendr_api::arg_error!(param = "glob", "{ignored}");
+    }
+    error
 }
 
 /// Raises a `dvs_config_error`, one of the `dvs_error` family.

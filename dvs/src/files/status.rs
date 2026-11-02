@@ -199,6 +199,13 @@ fn status_scan_inputs(
     rayon::ThreadPool,
 )> {
     let glob = crate::globbing::build_glob_matcher(glob_pattern)?;
+    let tracked = paths.tracked_paths();
+    if let Some(given) = filter
+        && let Some(glob) = glob_pattern
+        && given.names_only_files(&tracked, paths)
+    {
+        return Err(crate::globbing::GlobIgnored(glob.to_string()).into());
+    }
     let cwd_filter = if filter.is_none() && glob_pattern.is_some() {
         Some(PathFilter::cwd_scoped(false, paths))
     } else {
@@ -206,8 +213,7 @@ fn status_scan_inputs(
     };
     let filter = filter.or(cwd_filter.as_ref());
     let cache = cache::try_open_cache(paths);
-    let entries: Vec<_> = paths
-        .tracked_paths()
+    let entries: Vec<_> = tracked
         .into_iter()
         .filter(|path| !filter.is_some_and(|f| !f.matches(path, glob.as_ref())))
         .collect();
@@ -528,6 +534,40 @@ mod tests {
             .files;
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].path, PathBuf::from("dir1/b.txt"));
+    }
+
+    #[test]
+    fn status_glob_with_only_files_is_refused() {
+        let (_tmp, paths) = setup_filtered_repo();
+        let filter = PathFilter::from_user_paths(vec![PathBuf::from("dir1/b.txt")], false, &paths);
+        let error = inspect_status(
+            &paths,
+            Some(&filter),
+            Some("*.txt"),
+            &OperationContext::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<crate::globbing::GlobIgnored>()
+                .is_some()
+        );
+
+        // With a directory among the paths, the glob applies to it
+        let filter = PathFilter::from_user_paths(
+            vec![PathBuf::from("dir1/b.txt"), PathBuf::from("dir1")],
+            false,
+            &paths,
+        );
+        assert!(
+            inspect_status(
+                &paths,
+                Some(&filter),
+                Some("*.txt"),
+                &OperationContext::new()
+            )
+            .is_ok()
+        );
     }
 
     #[test]

@@ -76,6 +76,8 @@ pub fn error_code(error: &Error) -> ErrorCode {
         .is_some()
     {
         ErrorCode::NoFilesSelected
+    } else if error.downcast_ref::<dvs::globbing::GlobIgnored>().is_some() {
+        ErrorCode::InvalidArguments
     } else if error.downcast_ref::<dvs::config::ConfigError>().is_some() {
         ErrorCode::InvalidConfiguration
     } else if let Some(code) = dvs::backend_error_code(error) {
@@ -85,6 +87,19 @@ pub fn error_code(error: &Error) -> ErrorCode {
     } else {
         ErrorCode::OperationFailed
     }
+}
+
+/// A next step for a run that failed before it could report rows, in CLI
+/// syntax.
+pub fn hint(error: &Error) -> Option<String> {
+    let glob = &error.downcast_ref::<dvs::globbing::GlobIgnored>()?.0;
+    // A glob with no wildcard is most likely the first file name of a glob the
+    // shell expanded: `--glob *.csv` arrives as `--glob a.csv b.csv`.
+    (!glob.contains(['*', '?', '[', '{'])).then(|| {
+        "If the shell expanded an unquoted glob into file names, quote the glob, as in \
+         --glob '*.csv'."
+            .to_string()
+    })
 }
 
 /// The exit status of a run that reported rows: get passes its verdict, add
@@ -151,6 +166,7 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
     }
     value["outcome"] = json!("failed");
     value["error"] = error_json(error_code(error), format!("{error:#}"));
+    value["error"]["hint"] = json!(hint(error));
     value
 }
 
@@ -209,5 +225,20 @@ mod tests {
         assert_eq!(run_exit_code(RunOutcome::Partial), EXIT_FAILED);
         assert_eq!(run_exit_code(RunOutcome::Complete), EXIT_OK);
         assert_eq!(run_exit_code(GetVerdict::HeldBack), EXIT_CONFLICTS);
+    }
+
+    #[test]
+    fn an_ignored_glob_is_a_usage_error_with_a_quoting_hint() {
+        let expanded: Error = dvs::globbing::GlobIgnored("a.csv".into()).into();
+        assert_eq!(error_code(&expanded), ErrorCode::InvalidArguments);
+        assert_eq!(exit_code(&expanded), EXIT_USAGE);
+        assert!(hint(&expanded).is_some_and(|h| h.contains("--glob '*.csv'")));
+
+        // A quoted glob reached dvs as written: quoting is no help
+        let quoted: Error = dvs::globbing::GlobIgnored("*.csv".into()).into();
+        assert_eq!(hint(&quoted), None);
+        let problem = problem("add", false, &quoted);
+        assert_eq!(problem["error"]["code"], "invalid_arguments");
+        assert!(problem["error"]["hint"].is_null());
     }
 }

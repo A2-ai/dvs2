@@ -18,10 +18,11 @@ dvs_get(
 working directory. \code{NULL} is the same as \code{character(0)}.}
 
 \item{glob}{A glob that selects tracked files, such as \code{"*.csv"}. It
-runs from the working directory, or from each directory in \code{paths}. \code{*}
-does not cross a path separator, so \verb{*.csv} matches \code{a.csv} but not
-\code{sub/a.csv}. Use \verb{**/*.csv} to match at any depth. Mutually exclusive
-with \code{recursive}.}
+runs from the working directory, or from each directory in \code{paths}. With
+\code{paths} that are all files (tracked, or on disk), \code{glob} would select
+nothing and is an error. \code{*} does not cross a path separator, so \verb{*.csv}
+matches \code{a.csv} but not \code{sub/a.csv}. Use \verb{**/*.csv} to match at any
+depth. Mutually exclusive with \code{recursive}.}
 
 \item{recursive}{If \code{TRUE}, directory inputs include all descendants.
 Otherwise only direct children of the directory. With no explicit \code{paths}

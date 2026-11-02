@@ -94,6 +94,25 @@ test_that("dvs_add with glob picks up matching files", {
   expect_setequal(basename(result$path), c("data_a.csv", "data_b.csv"))
 })
 
+test_that("dvs_add refuses a glob with paths that are all files", {
+  new_dvs_test_repo()
+  write_theoph_shuffled("data_a.csv", seed = 7)
+  writeLines("other", "notes.txt")
+  expect_argument_error(quote(dvs_add(paths = "notes.txt", glob = "*.csv")), "glob")
+  expect_error(
+    dvs_add(paths = "notes.txt", glob = "*.csv"),
+    "the glob `*.csv` would be ignored",
+    fixed = TRUE
+  )
+  expect_equal(nrow(dvs_status()), 0L)
+
+  # With a directory among the paths, the glob applies to it
+  dir.create("sub")
+  write_theoph_shuffled("sub/data_b.csv", seed = 8)
+  result <- dvs_add(paths = c("notes.txt", "sub"), glob = "*.csv")
+  expect_setequal(result$path, c("notes.txt", "sub/data_b.csv"))
+})
+
 test_that("dvs_add takes paths = NULL as no paths", {
   new_dvs_test_repo()
   write_theoph_shuffled("data_a.csv", seed = 7)

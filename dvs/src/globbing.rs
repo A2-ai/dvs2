@@ -18,6 +18,34 @@ impl std::fmt::Display for NoFilesSelected {
 
 impl std::error::Error for NoFilesSelected {}
 
+/// A glob given with paths that are all files. A glob only searches the
+/// directories among the paths, so it would select nothing. Refused rather
+/// than ignored.
+#[derive(Debug)]
+pub struct GlobIgnored(pub String);
+
+impl std::fmt::Display for GlobIgnored {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the glob `{}` would be ignored: every path given is a file, and a glob only \
+             searches the directories among the paths. Pass a directory to search, or leave \
+             the glob out.",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for GlobIgnored {}
+
+/// Refuses a glob given with paths that are all files, see [`GlobIgnored`].
+fn refuse_ignored_glob(glob_pattern: Option<&str>, only_files: bool) -> Result<()> {
+    match glob_pattern {
+        Some(glob) if only_files => Err(GlobIgnored(glob.to_string()).into()),
+        _ => Ok(()),
+    }
+}
+
 /// Builds the glob matching the rg behaviour
 /// eg "*.csv" will not match `some/dir/test.csv`
 pub(crate) fn build_glob_matcher(pattern: Option<&str>) -> Result<Option<GlobMatcher>> {
@@ -33,9 +61,10 @@ pub(crate) fn build_glob_matcher(pattern: Option<&str>) -> Result<Option<GlobMat
 }
 
 /// Resolve paths for `add` command following ripgrep-style behavior:
-/// - Explicit files: added directly (glob ignored)
+/// - Explicit files: added directly, whether or not they match the glob
 /// - Explicit directories: walked and filtered by glob
 /// - No paths + glob: walks cwd filtered by glob
+/// - Explicit paths that are all files + glob: refused with [`GlobIgnored`]
 pub fn resolve_paths_for_add(
     paths: Vec<PathBuf>,
     glob_pattern: Option<&str>,
@@ -58,6 +87,7 @@ pub fn resolve_paths_for_add(
         paths
     };
 
+    let mut any_dir = false;
     for path in paths {
         let full_path = dvs_paths
             .cwd()
@@ -74,6 +104,7 @@ pub fn resolve_paths_for_add(
             };
             out.insert(relative_to_root);
         } else if full_path.is_dir() {
+            any_dir = true;
             if !full_path.starts_with(&repo_root) {
                 // A dir without a glob: it will be rejected later
                 out.insert(path.clone());
@@ -126,6 +157,8 @@ pub fn resolve_paths_for_add(
         }
     }
 
+    // After the loop, so that a path that does not exist is reported first
+    refuse_ignored_glob(glob_pattern, !any_dir)?;
     Ok(out)
 }
 
@@ -142,7 +175,8 @@ pub struct GetSelection {
 /// - Glob: matched relative to each path argument, or relative to cwd when no paths are given
 /// - No paths + no glob: returns all tracked files directly under cwd
 ///
-/// Explicit paths that match nothing are returned in `unmatched`.
+/// Explicit paths that match nothing are returned in `unmatched`. A glob with
+/// explicit paths that are all files is refused with [`GlobIgnored`].
 pub fn select_paths_for_get(
     paths: Vec<PathBuf>,
     glob_pattern: Option<&str>,
@@ -163,6 +197,9 @@ pub fn select_paths_for_get(
             unmatched: Vec::new(),
         });
     }
+
+    let given = PathFilter::from_user_paths(paths.clone(), recursive, dvs_paths);
+    refuse_ignored_glob(glob_pattern, given.names_only_files(&tracked, dvs_paths))?;
 
     let mut selection = GetSelection::default();
     for path in paths {
@@ -229,15 +266,50 @@ mod tests {
         assert_eq!(result, HashSet::from([PathBuf::from("data/a.csv")]));
     }
 
-    #[test]
-    fn add_explicit_file_ignores_glob() {
-        let (_temp, dvs_paths) = setup_test_repo();
-        let result =
-            resolve_paths_for_add(vec![PathBuf::from("foo.txt")], Some("*.csv"), &dvs_paths)
-                .unwrap();
+    fn is_glob_ignored(result: Result<impl std::fmt::Debug>, glob: &str) -> bool {
+        result
+            .unwrap_err()
+            .downcast_ref::<GlobIgnored>()
+            .is_some_and(|e| e.0 == glob)
+    }
 
-        assert_eq!(result.len(), 1);
-        assert!(result.contains(&PathBuf::from("foo.txt")));
+    #[test]
+    fn add_glob_with_only_files_is_refused() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        // What `--glob *.csv` becomes once the shell expands it
+        let result = resolve_paths_for_add(
+            vec![PathBuf::from("foo.txt"), PathBuf::from("data/a.csv")],
+            Some("bar.csv"),
+            &dvs_paths,
+        );
+        assert!(is_glob_ignored(result, "bar.csv"));
+    }
+
+    #[test]
+    fn add_glob_with_a_file_and_a_directory_keeps_the_file() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let result = resolve_paths_for_add(
+            vec![PathBuf::from("foo.txt"), PathBuf::from("data")],
+            Some("*.csv"),
+            &dvs_paths,
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            HashSet::from([PathBuf::from("foo.txt"), PathBuf::from("data/a.csv")])
+        );
+    }
+
+    #[test]
+    fn add_glob_reports_a_missing_path_first() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let error = resolve_paths_for_add(
+            vec![PathBuf::from("foo.txt"), PathBuf::from("missing.csv")],
+            Some("*.csv"),
+            &dvs_paths,
+        )
+        .unwrap_err();
+        assert!(error.downcast_ref::<NoFilesSelected>().is_some());
     }
 
     #[test]
@@ -359,19 +431,42 @@ mod tests {
     }
 
     #[test]
-    fn get_explicit_file_ignores_glob() {
-        let (_temp, dvs_paths) = setup_test_repo();
+    fn get_glob_with_only_files_is_refused() {
+        let (temp, dvs_paths) = setup_test_repo();
+        // A tracked file counts even when it is missing locally, and an untracked
+        // file on disk counts too
+        fs::remove_file(temp.path().join("foo.txt")).unwrap();
         let result = select_paths_for_get(
-            vec![PathBuf::from("foo.txt")],
+            vec![PathBuf::from("foo.txt"), PathBuf::from("bar.csv")],
+            Some("*.csv"),
+            &dvs_paths,
+            false,
+        );
+        assert!(is_glob_ignored(result, "*.csv"));
+    }
+
+    #[test]
+    fn get_glob_with_a_path_that_is_no_file_is_not_refused() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        // A typo is neither a file nor a directory: it is reported as unmatched
+        let result = select_paths_for_get(
+            vec![PathBuf::from("foo.txt"), PathBuf::from("typo")],
             Some("*.csv"),
             &dvs_paths,
             false,
         )
-        .unwrap()
-        .tracked;
+        .unwrap();
+        assert!(result.tracked.contains(&PathBuf::from("foo.txt")));
+        assert_eq!(result.unmatched, vec![PathBuf::from("typo")]);
+    }
 
-        assert_eq!(result.len(), 1);
-        assert!(result.contains(&PathBuf::from("foo.txt")));
+    #[test]
+    fn get_glob_with_a_path_outside_the_root_is_not_refused() {
+        let (temp, dvs_paths) = setup_test_repo();
+        let outside = temp.path().parent().unwrap().join("outside.csv");
+        let result = select_paths_for_get(vec![outside], Some("*.csv"), &dvs_paths, false).unwrap();
+        assert!(result.tracked.is_empty());
+        assert_eq!(result.unmatched.len(), 1);
     }
 
     #[test]
