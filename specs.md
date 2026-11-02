@@ -561,7 +561,8 @@ invalid configuration) it is the shared error envelope, without `on_conflict`/`s
   commands in its own syntax: the CLI as `dvs add data/b.csv`, R as `dvs_add("data/b.csv")`. In R, logging in
   stays a terminal command.
 - `next_steps`: the commands of the hint, in order, each an object tagged by `action`. Paths are relative to
-  the current directory, as `local_path`. Clients tolerate unknown actions.
+  the current directory, as `local_path`. Clients tolerate unknown actions. The steps are choices to show with
+  the hint, not a default to run: the first one can replace local changes, as for `both_modified`.
   - `add` (`paths`): make the local files the tracked version.
   - `get` (`paths`, `on_conflict`, `null` for the default): get these files.
   - `rerun_with` (`on_conflict`, `recursive`): the same get again, with these options added.
