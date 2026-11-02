@@ -28,6 +28,10 @@ check() {
   set -x
 }
 
+# Run a python expression over the --json envelope on stdin. Prints
+# <parse-error> instead of aborting, so the script always reaches SUMMARY.
+jq_py() { python3 -c "import sys,json;d=json.load(sys.stdin);$1" 2>/dev/null || echo "<parse-error>"; }
+
 # ── Setup: temp repo + sibling storage ──
 
 DVS_REPO="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
@@ -244,9 +248,9 @@ check "0" "$rc" "retry init succeeds after partial-failure cleanup"
 # ─────────────────────────────────────────────────────────────────────────────
 say
 say "=== Claim: init writes audit entry action=init with settings + project_path (specs.md, Audit trail) ==="
-AUDIT="$DVS_STORAGE/audit.log.jsonl"
+AUDIT="$(project_store "$DVS_STORAGE")/audit.log.jsonl"
 audit_exists=no; [ -f "$AUDIT" ] && audit_exists=yes
-check "yes" "$audit_exists" "audit.log.jsonl exists in storage after init"
+check "yes" "$audit_exists" "audit.log.jsonl exists in the project folder after init"
 say "--- audit.log.jsonl (first init entry) ---"
 init_line="$(grep -m1 '"init"' "$AUDIT" || true)"
 say "$init_line"
@@ -266,6 +270,50 @@ ok = ("init" in act
 print("yes" if ok else "no")
 ')"
 check "yes" "$audit_ok" "init audit entry has action.init with settings + project_path (+ op_id, user, unix-seconds timestamp)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Line refs in these claims are to specs.md with projects (dvs2 feat/local-projects).
+say
+say "=== Claim: projects share a storage directory, each in its own folder (L278-307) ==="
+PROJ_BASE="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_proj"
+PROJ_STORE="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_proj"
+for d in a/analysis b/analysis c/elsewhere d/pk2; do
+  mkdir -p "$PROJ_BASE/$d"
+  (cd "$PROJ_BASE/$d" && git init -q)
+done
+cd "$PROJ_BASE/a/analysis"
+rc=0; FIRST="$(dvs init local "$PROJ_STORE")" || rc=$?
+say "$FIRST"
+check "0" "$rc" "init local into a new storage directory exits 0"
+check "1" "$(grep -c '^Created the project "analysis" in ' <<<"$FIRST" || true)" "without --name, the project takes the folder's name (L286, L390)"
+check "analysis" "$(grep -E '^name' dvs.toml | tr -d ' "' | cut -d= -f2)" "dvs.toml records name = the folder name (L294)"
+check "$PROJ_STORE" "$(grep -E '^path' dvs.toml | cut -d'"' -f2)" "dvs.toml path stays the storage directory (L294)"
+cd "$PROJ_BASE/d/pk2"
+# A dvs from before projects refuses a second project here: count it as FAILs.
+dvs init local "$PROJ_STORE" >/dev/null 2>&1 || true
+FOLDERS="$(ls "$PROJ_STORE" | grep -cE '^[0-9a-f]{64}$' || true)"
+check "2" "$FOLDERS" "two projects -> two 64-hex folders in the storage directory (L278)"
+check "0" "$(ls "$PROJ_STORE" | grep -c '^audit.log.jsonl$' || true)" "no audit log at the storage root, each project keeps its own (L278)"
+
+say
+say "=== Claim: a folder name that exists is refused, a given name joins (L289-292) ==="
+cd "$PROJ_BASE/b/analysis"
+rc=0; REFUSED="$(dvs init local "$PROJ_STORE" 2>&1)" || rc=$?
+say "$REFUSED"
+check "2" "$rc" "same folder name, no --name: exit 2 (L292)"
+check "1" "$(grep -c '^  join it: .*--name analysis$' <<<"$REFUSED" || true)" "the refusal gives the command to join it (L292, L390)"
+check "absent" "$([ -f dvs.toml ] && echo present || echo absent)" "the refusal writes no dvs.toml"
+REFUSED_CODE="$({ set +x; } 2>/dev/null; dvs --json init local "$PROJ_STORE" 2>/dev/null | jq_py 'print(d["error"]["code"])' )" || true
+check "invalid_arguments" "$REFUSED_CODE" "--json: error.code invalid_arguments (L292)"
+cd "$PROJ_BASE/c/elsewhere"
+JOIN_JSON="$({ set +x; } 2>/dev/null; dvs --json init local "$PROJ_STORE" --name analysis | jq_py 'print(d["project"], d["joined"])' )" || true
+check "analysis True" "$JOIN_JSON" "--name analysis joins: project=analysis, joined=true (L289, L390)"
+check "2" "$(ls "$PROJ_STORE" | grep -cE '^[0-9a-f]{64}$' || true)" "the join adds no folder"
+INFO_PROJECT="$({ set +x; } 2>/dev/null; dvs --json info | jq_py 'print(d["project"])' )" || true
+check "analysis" "$INFO_PROJECT" "dvs info --json shows the project (L401)"
+rc=0; dvs init local "$PROJ_STORE" --name Bad_Name --root-dir "$PROJ_BASE/b/analysis" >/dev/null 2>&1 || rc=$?
+check "2" "$rc" "a name outside ^[a-z0-9][a-z0-9-]{0,99}\$ exits 2 (L284)"
+cd "$SCRIPT_DIR"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say

@@ -139,8 +139,8 @@ check "1" "$([ -f "$NESTED_PROJ/dvs.toml" ] && echo 1 || echo 0)" "nested init s
 # proving dvs resolved the nearest (inner) dvs.toml, not the outer one.
 head -c 777 /dev/urandom > "$NESTED_PROJ/inner.bin"
 INNER_HASH="$(cd "$NESTED_PROJ" && dvs add inner.bin --json | jq_py 'print(d["files"][0]["hash"])')"
-INNER_BLOB="$NESTED_STORE/${INNER_HASH:0:2}/${INNER_HASH:2}"
-OUTER_BLOB="$DVS_STORAGE/${INNER_HASH:0:2}/${INNER_HASH:2}"
+INNER_BLOB="$(project_store "$NESTED_STORE")/${INNER_HASH:0:2}/${INNER_HASH:2}"
+OUTER_BLOB="$(project_store "$DVS_STORAGE")/${INNER_HASH:0:2}/${INNER_HASH:2}"
 if [ -f "$INNER_BLOB" ] && [ ! -f "$OUTER_BLOB" ]; then
   NEAREST=nearest
 elif [ -f "$OUTER_BLOB" ]; then

@@ -108,10 +108,11 @@ say "=== specs.md, Storage layout ==="
 # content-addressable: blob at <storage>/<first2>/<remaining62>
 PREFIX="${BLAKE3:0:2}"
 REST="${BLAKE3:2}"
-BLOB="$DVS_STORAGE/$PREFIX/$REST"
+PROJECT_STORE="$(project_store "$DVS_STORAGE")"
+BLOB="$PROJECT_STORE/$PREFIX/$REST"
 say "--- expecting blob at $PREFIX/$REST ---"
 [ -f "$BLOB" ] && BLOBOK=yes || BLOBOK=no
-check yes "$BLOBOK" "blob at <storage>/<2-prefix>/<62-rest>"
+check yes "$BLOBOK" "blob at <project folder>/<2-prefix>/<62-rest>"
 
 # dedup: two DIFFERENT-named files, IDENTICAL content -> ONE blob.
 # Added in separate invocations. The single-invocation case (#216, fixed by
@@ -125,7 +126,7 @@ dvs add dedup_b.bin
 HA="$(jq -r '.hashes.blake3' .dvs/dedup_a.bin.dvs)"
 HB="$(jq -r '.hashes.blake3' .dvs/dedup_b.bin.dvs)"
 check "$HA" "$HB" "identical content -> identical blake3"
-DEDUP_BLOBS="$(find "$DVS_STORAGE/${HA:0:2}" -type f -name "${HA:2}" | wc -l | tr -d ' ')"
+DEDUP_BLOBS="$(find "$PROJECT_STORE/${HA:0:2}" -type f -name "${HA:2}" | wc -l | tr -d ' ')"
 check "1" "$DEDUP_BLOBS" "identical content -> exactly one storage blob"
 
 # no .tmp leftovers in storage after add
