@@ -715,7 +715,8 @@ Stored files are set read-only after writing.
 The two compression modes are `zstd` (default) and `none`, set at `init` time (CLI
 `--no-compression`, R `compression`) or in `dvs.toml`. The mode is recorded per-file in the
 metadata, so `get` always reads it from there. Changing the project setting (`dvs.toml`) must not
-affect previously added files.
+affect previously added files. When the content is already stored, a new file records the compression of the stored copy,
+which may differ from the project setting.
 
 ### Audit trail
 
