@@ -5,7 +5,7 @@
 mod cli_progress;
 mod test_support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -22,7 +22,7 @@ use miniextendr_api::{
 
 use anyhow::{Result, anyhow};
 use dvs::config::{Config, ConfigError, OnConflict};
-use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
+use dvs::globbing::{DirectoryWithoutGlob, resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
@@ -226,7 +226,8 @@ pub(crate) fn dvs_add(
     let config = find_config()?;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
-    let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)?
+    let all_paths: Vec<_> = resolve_paths_for_add(paths, glob.as_deref(), &dvs_paths)
+        .map_err(directory_argument_error)?
         .into_iter()
         .collect();
     if all_paths.is_empty() {
@@ -613,6 +614,31 @@ fn find_config() -> Result<Config> {
         Ok(config) => Ok(config),
         Err(e) => config_error(&e.to_string()),
     }
+}
+
+/// A directory given without `glob` raises a `dvs_error_argument` for
+/// `paths`, as the CLI refuses it with `invalid_arguments`. The message says
+/// how to pass a glob, in R syntax. Other errors pass through.
+fn directory_argument_error(error: anyhow::Error) -> anyhow::Error {
+    if let Some(refused) = error.downcast_ref::<DirectoryWithoutGlob>() {
+        let paths: Vec<String> = refused.0.iter().map(|p| r_string(p)).collect();
+        let paths = match paths.as_slice() {
+            [one] => one.clone(),
+            many => format!("c({})", many.join(", ")),
+        };
+        miniextendr_api::arg_error!(
+            param = "paths",
+            "{refused}\nTo add the files under a directory, pass a glob: \
+             dvs_add({paths}, glob = \"**/*\")"
+        );
+    }
+    error
+}
+
+/// A path as an R string literal.
+fn r_string(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 /// Raises a `dvs_config_error`, one of the `dvs_error` family.

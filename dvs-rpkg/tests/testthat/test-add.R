@@ -221,6 +221,20 @@ test_that("dvs_add raises a wrong argument as a dvs_error_argument", {
   expect_equal(conditionMessage(cnd), "`paths` or `glob` is required")
 })
 
+test_that("dvs_add of a directory without glob says how to pass one, in R syntax", {
+  new_dvs_test_repo()
+  write_theoph("raw/t.csv")
+  expect_argument_error(quote(dvs_add("raw")), "paths")
+  cnd <- tryCatch(dvs_add(c("raw", "raw/")), error = identity)
+  msg <- conditionMessage(cnd)
+  expect_match(msg, "raw: path is a directory", fixed = TRUE)
+  expect_match(msg, 'dvs_add(c("raw", "raw/"), glob = "**/*")', fixed = TRUE)
+  expect_false(grepl("--", msg, fixed = TRUE))
+  expect_false(grepl("dvs add", msg, fixed = TRUE))
+  # The call it gives adds the file
+  expect_equal(dvs_add("raw", glob = "**/*")$path, "raw/t.csv")
+})
+
 test_that("dvs_add takes NULL as no message and refuses NA", {
   new_dvs_test_repo()
   write_theoph("t.csv")

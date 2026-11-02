@@ -76,6 +76,11 @@ pub fn error_code(error: &Error) -> ErrorCode {
         .is_some()
     {
         ErrorCode::NoFilesSelected
+    } else if error
+        .downcast_ref::<dvs::globbing::DirectoryWithoutGlob>()
+        .is_some()
+    {
+        ErrorCode::InvalidArguments
     } else if error.downcast_ref::<dvs::config::ConfigError>().is_some() {
         ErrorCode::InvalidConfiguration
     } else if let Some(code) = dvs::backend_error_code(error) {
@@ -85,6 +90,19 @@ pub fn error_code(error: &Error) -> ErrorCode {
     } else {
         ErrorCode::OperationFailed
     }
+}
+
+/// A next step for a run that failed before it could report rows, in CLI
+/// syntax.
+pub fn hint(error: &Error) -> Option<String> {
+    let directories = &error
+        .downcast_ref::<dvs::globbing::DirectoryWithoutGlob>()?
+        .0;
+    let paths: Vec<String> = directories.iter().map(|p| dvs::shell_path(p)).collect();
+    Some(format!(
+        "To add the files under a directory, pass a glob: dvs add {} --glob '**/*'",
+        paths.join(" ")
+    ))
 }
 
 /// The exit status of a run that reported rows: get passes its verdict, add
@@ -151,6 +169,7 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
     }
     value["outcome"] = json!("failed");
     value["error"] = error_json(error_code(error), format!("{error:#}"));
+    value["error"]["hint"] = json!(hint(error));
     value
 }
 
@@ -209,5 +228,23 @@ mod tests {
         assert_eq!(run_exit_code(RunOutcome::Partial), EXIT_FAILED);
         assert_eq!(run_exit_code(RunOutcome::Complete), EXIT_OK);
         assert_eq!(run_exit_code(GetVerdict::HeldBack), EXIT_CONFLICTS);
+    }
+
+    #[test]
+    fn a_directory_without_a_glob_is_a_usage_error_with_a_glob_hint() {
+        let refused: Error =
+            dvs::globbing::DirectoryWithoutGlob(vec!["raw".into(), "my data".into()]).into();
+        assert_eq!(error_code(&refused), ErrorCode::InvalidArguments);
+        assert_eq!(exit_code(&refused), EXIT_USAGE);
+        let expected = "To add the files under a directory, pass a glob: \
+                        dvs add raw 'my data' --glob '**/*'";
+        assert_eq!(hint(&refused).as_deref(), Some(expected));
+        let json = problem("add", false, &refused);
+        assert_eq!(json["error"]["code"], "invalid_arguments");
+        assert_eq!(json["error"]["hint"], expected);
+
+        // Other failures have no hint
+        let other = problem("add", false, &anyhow::anyhow!("disk"));
+        assert!(other["error"]["hint"].is_null());
     }
 }
