@@ -134,9 +134,12 @@ pub enum Command {
         /// Include files unchanged since the last successful get, when metadata has advanced
         #[clap(long)]
         stale: bool,
-        /// Include files changed since the last successful get
+        /// Include files changed since the last successful get, when metadata has not advanced
         #[clap(long)]
         modified: bool,
+        /// Include files changed since the last successful get, when metadata has advanced too
+        #[clap(long)]
+        both_modified: bool,
         /// Include differing files whose local baseline is unavailable
         #[clap(long)]
         unsynced: bool,
@@ -281,6 +284,7 @@ struct StatusSelection {
     absent: bool,
     stale: bool,
     modified: bool,
+    both_modified: bool,
     unsynced: bool,
 }
 
@@ -291,6 +295,7 @@ fn status_row_selected(row: &dvs::StatusFacts, selection: StatusSelection) -> bo
         || (selection.absent && row.status == Some(Status::Absent))
         || (selection.stale && row.status == Some(Status::Stale))
         || (selection.modified && row.status == Some(Status::Modified))
+        || (selection.both_modified && row.status == Some(Status::BothModified))
         || (selection.unsynced && row.status == Some(Status::Unsynced))
 }
 
@@ -676,19 +681,22 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             absent,
             stale,
             modified,
+            both_modified,
             unsynced,
             with_metadata,
             glob,
         } => {
             let config = find_config(&current_dir)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let show_all = !current && !absent && !stale && !modified && !unsynced;
+            let show_all =
+                !current && !absent && !stale && !modified && !both_modified && !unsynced;
             let selection = StatusSelection {
                 show_all,
                 current,
                 absent,
                 stale,
                 modified,
+                both_modified,
                 unsynced,
             };
 

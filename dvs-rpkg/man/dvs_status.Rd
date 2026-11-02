@@ -8,7 +8,7 @@ dvs_status(
   paths = character(0),
   recursive = FALSE,
   glob = NULL,
-  status = c("current", "absent", "stale", "modified", "unsynced")
+  status = c("current", "absent", "stale", "modified", "both_modified", "unsynced")
 )
 }
 \arguments{
@@ -34,8 +34,11 @@ with \code{recursive}.}
 \item \code{"stale"}: the local file is what dvs last wrote or added there, and
 the tracked version has changed since, for example after a git pull.
 \code{\link[=dvs_get]{dvs_get()}} updates it.
-\item \code{"modified"}: the local file differs from the tracked version and from
-what dvs last wrote or added there.
+\item \code{"modified"}: the local file differs from what dvs last wrote or added
+there, and the tracked version has not changed since.
+\item \code{"both_modified"}: the local file differs from what dvs last wrote or
+added there, and the tracked version has changed since too. Compare
+the two before keeping either.
 \item \code{"unsynced"}: the local file differs from the tracked version, and dvs
 has no record of what it last wrote there.
 }

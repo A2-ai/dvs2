@@ -50,11 +50,12 @@ A file in a `dvs` project has these status states:
 - `current`: tracked in `dvs` and we have the same version as in the metadata folder checked out
 - `absent`: metadata exists in the folder but the local file is not present
 - `stale`: local content differs from current metadata but still matches the local baseline
-- `modified`: local content differs from both current metadata and the local baseline
+- `modified`: local content differs from both current metadata and the local baseline, and metadata still matches the baseline. Only the local file changed.
+- `both_modified`: local content differs from both current metadata and the local baseline, and metadata differs from the baseline too. The local file and the tracked version both changed since the last `get`, so keeping either one unseen drops the other change.
 - `unsynced`: local content differs from metadata, but no baseline is available to determine why
 
-Both human-readable and machine-readable CLI status report `stale` and
-`modified` separately.
+Both human-readable and machine-readable CLI status report `stale`, `modified` and
+`both_modified` separately.
 
 ### Relative paths vs. absolute paths
 
@@ -462,7 +463,8 @@ Each requested file is classified before anything is written:
 | `absent` | no working file | restores it |
 | `current` | the working file already matches the metadata | nothing, and needs no server |
 | `clean` | differs, but is exactly what dvs last wrote or added at this path in this clone (the baseline) | replaces it, e.g. after switching git branches |
-| `modified` | differs, and differs from the baseline | conflict |
+| `modified` | differs, and differs from the baseline, while the metadata still matches the baseline | conflict |
+| `both_modified` | differs, and differs from the baseline, while the metadata differs from the baseline too | conflict |
 | `unknown` | differs, and there is no baseline | conflict |
 | `not_tracked` | no metadata for the path (or a directory with no selected tracked files) | known problem |
 | `not_a_file` | a directory or special file is in the way | known problem, never replaced |
@@ -532,7 +534,9 @@ restores every tracked file in the project.)
 Human output lists each file that changed or needs attention, then, after a blank line, a summary. Under it,
 `on_conflict = <policy> (<source>)` appears on its own line only when the policy acted, that is when a file
 with local changes or no record was skipped, held back or replaced. Then come the commands to keep or discard
-local changes. The library builds the summary (`GetReport::summary`). R shows the same lines above a
+local changes. A `both_modified` file gets no plain keep command. Keeping it unseen would drop the newer
+tracked version, so the hint says to copy it aside, take the tracked version, compare, and then add the version
+to keep. The library builds the summary (`GetReport::summary`). R shows the same lines above a
 printed `dvs_get()` result and in its `on_error` warning or error, and returns them as `summary` in
 `dvs_result_info()`.
 
@@ -633,7 +637,8 @@ Options:
       --current        Include the files that are current
       --absent         Include the files that are absent
       --stale          Include files unchanged since the last successful get, when metadata has advanced
-      --modified       Include files changed since the last successful get
+      --modified       Include files changed since the last successful get, when metadata has not advanced
+      --both-modified  Include files changed since the last successful get, when metadata has advanced too
       --unsynced       Include differing files whose local baseline is unavailable
       --with-metadata  Show all metadata columns in the table output
   -h, --help           Print help
@@ -645,7 +650,7 @@ Global Options:
 ```
 
 By default (no flags), `dvs status` shows all tracked files regardless of state. The `--current`, `--absent`,
-`--stale`, `--modified`, and `--unsynced` flags are filters: when one or more status flags are provided, only files matching those states are shown.
+`--stale`, `--modified`, `--both-modified`, and `--unsynced` flags are filters: when one or more status flags are provided, only files matching those states are shown.
 
 Human output ends, after a blank line, with a summary line ("Checked 3, 1 failed"), which also counts
 cancelled files. This will exit with `1` if one or more files could not be inspected.
@@ -666,14 +671,14 @@ as per-file errors in the result list.
 dvs_status(
   paths = character(0),
   recursive = NULL,
-  status = c("current", "absent", "stale", "modified", "unsynced")
+  status = c("current", "absent", "stale", "modified", "both_modified", "unsynced")
 )
 ```
 
 - `paths` optional vector of paths files to retrieve status of
 - `recursive` if `TRUE`, recursively include files in subdirectories for any directory paths
-- `status` filters by `current`, `absent`, `stale`, `modified`, or `unsynced`.
-  A differing working file is `stale` when it still matches the local baseline, and `modified` when it differs from that baseline.
+- `status` filters by `current`, `absent`, `stale`, `modified`, `both_modified`, or `unsynced`.
+  A differing working file is `stale` when it still matches the local baseline. It is `modified` when it differs from that baseline and the metadata does not, and `both_modified` when the metadata differs from the baseline too.
   Without a baseline, DVS reports `unsynced` because it cannot determine why the file differs from metadata. When omitted, all statuses are returned.
 
 Returns a data frame with one row per tracked file.

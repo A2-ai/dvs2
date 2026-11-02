@@ -271,7 +271,7 @@ pub(crate) fn dvs_add(
 /// Used with `match.arg(status, several.ok = TRUE)` in the R wrapper to let
 /// users select which file statuses to include.
 #[derive(Copy, Clone, Debug, PartialEq, miniextendr_api::MatchArg)]
-#[match_arg(rename_all = "lower")]
+#[match_arg(rename_all = "snake_case")]
 pub enum StatusChoice {
     /// Local file exists and matches stored version.
     Current,
@@ -279,8 +279,12 @@ pub enum StatusChoice {
     Absent,
     /// Local file matches the last successful get, while metadata has advanced.
     Stale,
-    /// Local file differs from metadata and the last successful get.
+    /// Local file differs from metadata and the last successful get, and
+    /// metadata has not advanced.
     Modified,
+    /// Local file differs from the last successful get, and metadata has
+    /// advanced too.
+    BothModified,
     /// Local file differs from metadata, but no local baseline is available.
     Unsynced,
 }
@@ -292,6 +296,7 @@ impl From<StatusChoice> for Status {
             StatusChoice::Absent => Status::Absent,
             StatusChoice::Stale => Status::Stale,
             StatusChoice::Modified => Status::Modified,
+            StatusChoice::BothModified => Status::BothModified,
             StatusChoice::Unsynced => Status::Unsynced,
         }
     }
@@ -323,8 +328,11 @@ impl From<StatusChoice> for Status {
 ///   * `"stale"`: the local file is what dvs last wrote or added there, and
 ///     the tracked version has changed since, for example after a git pull.
 ///     [dvs_get()] updates it.
-///   * `"modified"`: the local file differs from the tracked version and from
-///     what dvs last wrote or added there.
+///   * `"modified"`: the local file differs from what dvs last wrote or added
+///     there, and the tracked version has not changed since.
+///   * `"both_modified"`: the local file differs from what dvs last wrote or
+///     added there, and the tracked version has changed since too. Compare
+///     the two before keeping either.
 ///   * `"unsynced"`: the local file differs from the tracked version, and dvs
 ///     has no record of what it last wrote there.
 ///

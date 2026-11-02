@@ -91,6 +91,10 @@ fn classify(
     } else {
         match baseline {
             Some(b) if b.blake3 == hashes.blake3 && b.size == size => Status::Stale,
+            // The tracked version moved on from the baseline too
+            Some(b) if b.blake3 != metadata.hashes.blake3 || b.size != metadata.size => {
+                Status::BothModified
+            }
             Some(_) => Status::Modified,
             None => Status::Unsynced,
         }
@@ -464,11 +468,28 @@ mod tests {
             .unwrap()
             .files;
         assert_eq!(stale[0].status, Some(Status::Stale));
+        // Edited here while the tracked version moved on from the baseline
         fs::write(paths.repo_root().join("data.txt"), b"user edits").unwrap();
+        let both = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
+        assert_eq!(both[0].status, Some(Status::BothModified));
+        // Back to the baseline's version: only the local file changed
+        let mut original_target = target.clone();
+        original_target.hashes.blake3 = original.blake3.clone();
+        fs::write(
+            paths.metadata_path(std::path::Path::new("data.txt")),
+            serde_json::to_vec(&original_target).unwrap(),
+        )
+        .unwrap();
         let modified = inspect_status(&paths, None, None, &OperationContext::new())
             .unwrap()
             .files;
         assert_eq!(modified[0].status, Some(Status::Modified));
+        assert_eq!(
+            serde_json::to_value(Status::BothModified).unwrap(),
+            "both_modified"
+        );
     }
 
     #[test]

@@ -103,7 +103,14 @@ dvs_status <- function(
   paths = character(0),
   recursive = FALSE,
   glob = NULL,
-  status = c("current", "absent", "stale", "modified", "unsynced")
+  status = c(
+    "current",
+    "absent",
+    "stale",
+    "modified",
+    "both_modified",
+    "unsynced"
+  )
 ) {
   apply_dvs_threads_option()
   # An empty filter is no filter, as NULL is.
@@ -146,7 +153,8 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   `cnd$result`. Pipelines can set `options(dvs.on_error = "error")`.
 #' @return A tibble of class `dvs_get_result` with one row per requested file
 #'   and always the same columns: `path`, `local_path`, `before` (`"absent"`,
-#'   `"current"`, `"clean"`, `"modified"`, `"unknown"`, `"not_tracked"`,
+#'   `"current"`, `"clean"`, `"modified"`, `"both_modified"`, `"unknown"`,
+#'   `"not_tracked"`,
 #'   `"not_a_file"`, `"unsafe_path"`), `action` (`"restored"`, `"replaced"`,
 #'   `"unchanged"`, `"skipped"`, `"not_run"`, `"failed"`, `"would_restore"`,
 #'   `"would_replace"`), `satisfied`, `size`, `target_hash`, `local_hash`,
