@@ -606,11 +606,17 @@ pub(crate) fn dvs_get(
 
 /// The config of the dvs project that holds the working directory. Outside a
 /// project it is an error. A dvs.toml that does not load raises a
-/// `dvs_config_error`.
+/// `dvs_config_error`. An unknown key in it is a `dvs_config_warning`, given
+/// once the command returns, as the CLI prints it and goes on.
 fn find_config() -> Result<Config> {
     let current_dir = std::env::current_dir()?;
     match Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))? {
-        Ok(config) => Ok(config),
+        Ok(config) => {
+            for warning in config.warnings() {
+                miniextendr_api::defer_warning!(class = "dvs_config_warning", "{warning}");
+            }
+            Ok(config)
+        }
         Err(e) => config_error(&e.to_string()),
     }
 }

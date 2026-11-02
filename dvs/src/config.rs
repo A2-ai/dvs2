@@ -222,6 +222,31 @@ impl std::fmt::Display for SettingSource {
     }
 }
 
+/// A dvs.toml key as `table.key`, from the path serde_ignored reports. The
+/// path also has steps for `Option` and newtypes, which are not keys.
+fn key_name(path: &serde_ignored::Path) -> String {
+    let mut keys = Vec::new();
+    let mut step = path;
+    loop {
+        step = match step {
+            serde_ignored::Path::Root => break,
+            serde_ignored::Path::Map { parent, key } => {
+                keys.push(key.clone());
+                parent
+            }
+            serde_ignored::Path::Seq { parent, index } => {
+                keys.push(index.to_string());
+                parent
+            }
+            serde_ignored::Path::Some { parent }
+            | serde_ignored::Path::NewtypeStruct { parent }
+            | serde_ignored::Path::NewtypeVariant { parent } => parent,
+        };
+    }
+    keys.reverse();
+    keys.join(".")
+}
+
 /// A problem with dvs.toml or a DVS_* environment variable. Frontends report it
 /// distinctly (the CLI exits 2) because no operation was attempted.
 #[derive(Debug)]
@@ -258,6 +283,9 @@ pub struct Config {
     cli: Option<CliConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     get: Option<GetConfig>,
+    /// The keys of dvs.toml that no setting reads, filled by [`Config::find`]
+    #[serde(skip)]
+    unknown_keys: Vec<String>,
 }
 
 impl Config {
@@ -269,6 +297,7 @@ impl Config {
             backend: Backend::Local(backend),
             cli: None,
             get: None,
+            unknown_keys: Vec::new(),
         })
     }
 
@@ -280,6 +309,7 @@ impl Config {
             backend: Backend::Server(backend),
             cli: None,
             get: None,
+            unknown_keys: Vec::new(),
         }
     }
 
@@ -300,13 +330,59 @@ impl Config {
                 Ok(c) => c,
                 Err(e) => return Some(Err(e.into())),
             };
-            Some(toml::from_str(&content).map_err(|e| {
+            Some(Config::parse(&content).map_err(|e| {
                 ConfigError(format!("Failed to parse {}: {e}", config_path.display())).into()
             }))
         } else {
             log::debug!("No config file found at {}", config_path.display());
             None
         }
+    }
+
+    /// Parses dvs.toml and records the keys that no setting reads. They are
+    /// not an error: a newer dvs can write a setting that this one does not
+    /// know.
+    fn parse(content: &str) -> std::result::Result<Config, toml::de::Error> {
+        let mut unknown_keys = Vec::new();
+        let mut config: Config =
+            serde_ignored::deserialize(toml::Deserializer::parse(content)?, |path| {
+                unknown_keys.push(key_name(&path))
+            })?;
+        // `backend` is untagged. serde reads its keys before it picks the
+        // variant, so the pass above sees none of them ignored. Read the
+        // table again as the variant it became.
+        let table: toml::Table = content.parse()?;
+        if let Some(backend) = table.get("backend").cloned() {
+            let mut record = |path: serde_ignored::Path| {
+                unknown_keys.push(format!("backend.{}", key_name(&path)))
+            };
+            match config.backend {
+                Backend::Local(_) => {
+                    serde_ignored::deserialize::<_, _, LocalBackend>(backend, &mut record)?;
+                }
+                Backend::Server(_) => {
+                    serde_ignored::deserialize::<_, _, ServerBackend>(backend, &mut record)?;
+                }
+            }
+        }
+        // Sorted, so the order does not depend on how the parser walks tables
+        unknown_keys.sort();
+        config.unknown_keys = unknown_keys;
+        Ok(config)
+    }
+
+    /// One warning per key of dvs.toml that no setting reads, for the CLI and
+    /// R to show the same text.
+    pub fn warnings(&self) -> Vec<String> {
+        self.unknown_keys
+            .iter()
+            .map(|key| {
+                format!(
+                    "{CONFIG_FILE_NAME}: unknown key `{key}` is ignored. Check its spelling, or \
+                     update dvs if a newer version wrote it"
+                )
+            })
+            .collect()
     }
 
     pub fn set_metadata_folder_name(&mut self, name: String) {
@@ -394,6 +470,64 @@ mod tests {
         let result = Config::new_local(&storage, Some("nonexistent_group_12345".to_string()));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    /// The unknown keys of a dvs.toml with this content.
+    fn unknown_keys(content: &str) -> Vec<String> {
+        Config::parse(content).unwrap().unknown_keys
+    }
+
+    #[test]
+    fn a_saved_config_has_no_unknown_keys() {
+        let (_tmp, root) = create_temp_git_repo();
+        let mut local = Config::new_local(root.join(".storage"), None).unwrap();
+        local.set_metadata_folder_name(".custom_dvs".to_string());
+        local.save(&root).unwrap();
+        assert!(Config::find(&root).unwrap().unwrap().warnings().is_empty());
+
+        let url = Url::parse("https://dvs.example.com").unwrap();
+        let server = Config::new_server("p".to_string(), url, Some("g".to_string()));
+        server.save(&root).unwrap();
+        assert!(Config::find(&root).unwrap().unwrap().warnings().is_empty());
+    }
+
+    // A typo leaves the setting at its default, so it must not pass silently
+    #[test]
+    fn unknown_keys_are_named() {
+        let local = "compresion = \"none\"\nlevel = 19\n\n[backend]\npath = \"/s\"\npth = \"/t\"\n\n\
+                     [cli]\nprogress_treshold = \"1MB\"\n\n[server]\nurl = \"x\"\n";
+        let config = Config::parse(local).unwrap();
+        assert_eq!(config.compression(), Compression::Zstd);
+        assert_eq!(
+            config.unknown_keys,
+            [
+                "backend.pth",
+                "cli.progress_treshold",
+                "compresion",
+                "level",
+                "server"
+            ]
+        );
+        let server = "[backend]\nname = \"p\"\nurl = \"https://dvs.example.com\"\npth = \"/t\"\n";
+        assert!(matches!(
+            Config::parse(server).unwrap().backend,
+            Backend::Server(_)
+        ));
+        assert_eq!(unknown_keys(server), ["backend.pth"]);
+    }
+
+    #[test]
+    fn a_warning_names_the_key() {
+        let mut config = Config::parse("[backend]\npath = \"/s\"\nname = \"p\"\n").unwrap();
+        assert_eq!(
+            config.warnings(),
+            [
+                "dvs.toml: unknown key `backend.name` is ignored. Check its spelling, or update dvs \
+              if a newer version wrote it"
+            ]
+        );
+        config.unknown_keys.clear();
+        assert!(config.warnings().is_empty());
     }
 
     #[test]

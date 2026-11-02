@@ -230,6 +230,24 @@ test_that("every command raises a dvs.toml that does not load as a dvs_config_er
   expect_error(dvs_audit_log(), class = "dvs_config_error")
 })
 
+test_that("every command warns about an unknown dvs.toml key and still returns", {
+  new_dvs_test_repo()
+  cat('\n[cli]\nprogress_treshold = "1MB"\n', file = "dvs.toml", append = TRUE)
+  writeLines("t", "t.csv")
+  key <- "unknown key `cli.progress_treshold` is ignored"
+  expect_warning(
+    added <- dvs_add("t.csv"),
+    key,
+    fixed = TRUE,
+    class = "dvs_config_warning"
+  )
+  expect_equal(added$outcome, "copied")
+  expect_warning(status <- dvs_status(), key, fixed = TRUE, class = "dvs_config_warning")
+  expect_equal(status$status, "current")
+  expect_warning(dvs_get("t.csv"), key, fixed = TRUE, class = "dvs_config_warning")
+  expect_warning(dvs_audit_log(), key, fixed = TRUE, class = "dvs_config_warning")
+})
+
 test_that("printing shows the outcome, what needs attention, and survives subsetting", {
   new_dvs_test_repo()
   switch_branches()

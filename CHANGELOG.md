@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- A key in `dvs.toml` that dvs does not read, such as a misspelled `compresion`, gives a warning that names it, in the CLI and in R (`dvs_config_warning`). It was ignored silently, so the setting kept its default. An unknown key under `[get]` is still an error.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.

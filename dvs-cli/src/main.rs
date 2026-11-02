@@ -1180,9 +1180,15 @@ impl std::fmt::Display for Exit {
 
 impl std::error::Error for Exit {}
 
+/// The project's config. Its warnings go to stderr, so `--json` output stays
+/// one document.
 fn find_config(current_dir: &std::path::Path) -> Result<Config> {
-    Config::find(current_dir)
-        .ok_or_else(|| output::coded(ErrorCode::NotInProject, "Not in a DVS repository"))?
+    let config = Config::find(current_dir)
+        .ok_or_else(|| output::coded(ErrorCode::NotInProject, "Not in a DVS repository"))??;
+    for warning in config.warnings() {
+        eprintln!("Warning: {warning}");
+    }
+    Ok(config)
 }
 
 impl Command {

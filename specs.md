@@ -33,6 +33,14 @@ There are 4 main actions: `init`, `add`, `get` and  `status`. We will see them m
 `init` will create the `dvs.toml`.
 You can pass some arguments to it or edit the toml file manually.
 
+A key in `dvs.toml` that no setting reads is not an error, since a newer `dvs` can write a setting that an older
+one does not know. Every command that reads `dvs.toml` warns once per such key, names it as `table.key` (for
+example `compresion` or `cli.progress_treshold`), and goes on with the other settings. The CLI writes
+``Warning: dvs.toml: unknown key `<key>` is ignored. Check its spelling, or update dvs if a newer version wrote it``
+to stderr, so `--json` output stays one document. In R it is a warning of class `dvs_config_warning`, signalled
+once the function returns, so the function still returns its result. An unknown key under `[get]` is a
+configuration error, as before.
+
 `add` will add and update files to the storage. In practice this will:
 
 1. hash the files (currently blake3 only)
