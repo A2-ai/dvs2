@@ -12,7 +12,7 @@ fn is_shared(code: Option<GetCode>) -> bool {
     matches!(
         code,
         Some(GetCode::Shared(
-            ErrorCode::AccessDenied | ErrorCode::ServerUnavailable
+            ErrorCode::AccessDenied | ErrorCode::ServerUnavailable | ErrorCode::StorageUnavailable
         ))
     )
 }

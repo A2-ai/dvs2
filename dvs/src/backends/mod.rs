@@ -108,8 +108,9 @@ impl Backend {
     /// fast with a single error instead of once per file.
     pub fn check_access(&self) -> Result<()> {
         match self {
-            // The filesystem permissions are the access control for local storage.
-            Backend::Local(_) => Ok(()),
+            // The filesystem permissions are the access control for local
+            // storage: only check that the directory is there
+            Backend::Local(b) => b.check_access(),
             Backend::Server(s) => s.check_access(),
         }
     }

@@ -10,6 +10,7 @@
 - R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
 - R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
 - R package: `format_byte_size(TRUE)` and `format_byte_size(FALSE)` are errors, as `set_dvs_threads(TRUE)` is. They returned `"1 B"` and `"0 B"`.
+- Rust library: `ErrorCode` has a new variant, `StorageUnavailable`. A `match` on `ErrorCode` outside the crate must handle it.
 
 ### Added
 
@@ -21,9 +22,11 @@
 - R package: a wrong argument raises a `dvs_error_argument` condition, also a `dvs_error`, with the argument in `param` and the call the user wrote. A `dvs.toml` that does not load raises a `dvs_config_error`, also a `dvs_error`, in every command. One `dvs_error` handler catches them all.
 - R package: a bad `dvs.num_threads` or `dvs.on_error` option raises the same `dvs_error_argument`, and the message names the option.
 - R package: `dvs_result_info()` has `summary`, the summary the CLI prints. A printed `dvs_get()` result and its `on_error` warning or error start with it, so R and the CLI say the same. `on_conflict = <policy> (<source>)` appears only when the policy acted, as in the CLI.
+- Rust library: `LocalBackend::check_access()` refuses a storage directory that does not exist, with `ErrorCode::StorageUnavailable`.
 
 ### Fixed
 
+- Only `dvs init` creates a local storage directory. Every other command refuses one that does not exist, with the new code `storage_unavailable`, and names it. `dvs add` created it again, so with a filesystem that was not mounted the files went to the local disk, where nobody else looks. `dvs get` said each version was missing from storage, probably an interrupted upload.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
