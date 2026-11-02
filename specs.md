@@ -663,7 +663,11 @@ dvs_status(
   A differing working file is `stale` when it still matches the local baseline, and `modified` when it differs from that baseline.
   Without a baseline, DVS reports `unsynced` because it cannot determine why the file differs from metadata. When omitted, all statuses are returned.
 
-Returns a data frame with one row per tracked file.
+Returns a data frame with one row per tracked file. Next to `hash`, the tracked version's BLAKE3, it has
+`local_hash` (the working file's, the JSON's `working.hashes.blake3`) and `baseline_hash` (the JSON's
+`baseline.blake3`), the hashes `status` follows from. The hash columns of `dvs_add()`, `dvs_status()` and
+`dvs_get()` are `dvs_hash` vectors: full hashes that a tibble prints as their first 12 characters, as `dvs history`
+does.
 
 ## Internals
 

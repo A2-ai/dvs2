@@ -25,7 +25,8 @@ cross a path separator, so \verb{*.csv} matches \code{a.csv} but not
 }
 \value{
 A tibble with one row per file: \code{path} (relative to the project
-root), \code{outcome}, \code{hash} (the blake3 hash), \code{size} (\code{dvs_bytes}),
+root), \code{outcome}, \code{hash} (the blake3 hash, a \code{dvs_hash}, see
+\code{\link[=dvs_status]{dvs_status()}}), \code{size} (\code{dvs_bytes}),
 \code{stored_size} (\code{dvs_bytes}, the size of the copy in storage after
 compression) and \code{duration_ms} (the milliseconds spent on the file).
 \code{outcome} is \code{"copied"} when the file was stored and its metadata

@@ -45,12 +45,22 @@ has no record of what it last wrote there.
 \value{
 A tibble with one row per tracked file and always the same
 columns: \code{path} (relative to the project root), \code{status}, \code{hash} (the
-blake3 hash of the tracked version), \code{size} (\code{dvs_bytes}, the size of the
+blake3 hash of the tracked version), \code{local_hash} (the blake3 hash of the
+working file, \code{NA} when it is absent or cannot be read), \code{baseline_hash}
+(the blake3 hash of what dvs last wrote or added at this path in this
+clone, \code{NA} when there is no record of it), \code{size} (\code{dvs_bytes}, the size of the
 tracked version), \code{created_by} (who added it), \code{compression}, \code{message}
 (the message given at add, \code{NA} without one), \code{code} and \code{error} (\code{NA}
 unless \code{status} is \code{"error"}) and \code{add_time} (POSIXct, UTC). Files that
 dvs does not track are not listed. A row whose metadata cannot be read has
 \code{NA} in the metadata columns.
+
+\code{status} follows from the three hashes: \code{"absent"} when there is no
+working file, \code{"current"} when \code{local_hash} is \code{hash}, \code{"stale"} when it
+is \code{baseline_hash} but not \code{hash}, \code{"modified"} when it is neither, and
+\code{"unsynced"} when it is not \code{hash} and there is no \code{baseline_hash}. The hash columns are \code{dvs_hash} vectors:
+the full hashes, which a tibble prints as their first 12 characters, as
+\verb{dvs history} does. \code{as.character()} gives the full hashes.
 }
 \description{
 Reports the sync status of DVS-managed files. By default all statuses

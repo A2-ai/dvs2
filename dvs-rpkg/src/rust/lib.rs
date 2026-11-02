@@ -428,6 +428,8 @@ struct StatusRow {
     path: String,
     status: String,
     hash: Option<String>,
+    local_hash: Option<String>,
+    baseline_hash: Option<String>,
     size: Option<f64>,
     created_by: Option<String>,
     compression: Option<String>,
@@ -441,14 +443,14 @@ impl From<&dvs::StatusFacts> for StatusRow {
     fn from(row: &dvs::StatusFacts) -> Self {
         // No `..`: a field added to StatusFacts does not compile here until it
         // has a column or is left out by name. `status_name()` reads `status`.
-        // The frame leaves out `working` and `baseline`, the details of the
-        // local copy.
+        // Of the local copy, the frame keeps the two BLAKE3 hashes that decide
+        // the status: the working file's and the baseline's.
         let dvs::StatusFacts {
             path,
             status: _,
             metadata,
-            working: _,
-            baseline: _,
+            working,
+            baseline,
             code,
             error,
         } = row;
@@ -457,6 +459,8 @@ impl From<&dvs::StatusFacts> for StatusRow {
             path: path.to_string_lossy().into_owned(),
             status: row.status_name(),
             hash: metadata.map(|m| m.hashes.blake3.clone()),
+            local_hash: working.hashes.as_ref().map(|h| h.blake3.clone()),
+            baseline_hash: baseline.as_ref().map(|b| b.blake3.clone()),
             size: metadata.map(|m| m.size as f64),
             created_by: metadata.map(|m| m.created_by.clone()),
             compression: metadata.map(|m| m.compression.to_string()),

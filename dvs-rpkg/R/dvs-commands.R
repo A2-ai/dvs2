@@ -26,7 +26,8 @@ dvs_init <- function(
 
 #' @inherit dvs_add_impl title description params
 #' @return A tibble with one row per file: `path` (relative to the project
-#'   root), `outcome`, `hash` (the blake3 hash), `size` (`dvs_bytes`),
+#'   root), `outcome`, `hash` (the blake3 hash, a `dvs_hash`, see
+#'   [dvs_status()]), `size` (`dvs_bytes`),
 #'   `stored_size` (`dvs_bytes`, the size of the copy in storage after
 #'   compression) and `duration_ms` (the milliseconds spent on the file).
 #'   `outcome` is `"copied"` when the file was stored and its metadata
@@ -78,6 +79,9 @@ dvs_add <- function(
     setdiff(names(result), columns)
   )]
 
+  if (!is.null(result$hash)) {
+    result$hash <- new_dvs_hash(result$hash)
+  }
   if (!is.null(result$size)) {
     result$size <- new_dvs_bytes(result$size)
   }
@@ -91,12 +95,22 @@ dvs_add <- function(
 #' @inherit dvs_status_impl title description params
 #' @return A tibble with one row per tracked file and always the same
 #'   columns: `path` (relative to the project root), `status`, `hash` (the
-#'   blake3 hash of the tracked version), `size` (`dvs_bytes`, the size of the
+#'   blake3 hash of the tracked version), `local_hash` (the blake3 hash of the
+#'   working file, `NA` when it is absent or cannot be read), `baseline_hash`
+#'   (the blake3 hash of what dvs last wrote or added at this path in this
+#'   clone, `NA` when there is no record of it), `size` (`dvs_bytes`, the size of the
 #'   tracked version), `created_by` (who added it), `compression`, `message`
 #'   (the message given at add, `NA` without one), `code` and `error` (`NA`
 #'   unless `status` is `"error"`) and `add_time` (POSIXct, UTC). Files that
 #'   dvs does not track are not listed. A row whose metadata cannot be read has
 #'   `NA` in the metadata columns.
+#'
+#'   `status` follows from the three hashes: `"absent"` when there is no
+#'   working file, `"current"` when `local_hash` is `hash`, `"stale"` when it
+#'   is `baseline_hash` but not `hash`, `"modified"` when it is neither, and
+#'   `"unsynced"` when it is not `hash` and there is no `baseline_hash`. The hash columns are `dvs_hash` vectors:
+#'   the full hashes, which a tibble prints as their first 12 characters, as
+#'   `dvs history` does. `as.character()` gives the full hashes.
 #' @rdname dvs_status
 #' @export
 dvs_status <- function(
@@ -118,6 +132,11 @@ dvs_status <- function(
       status = status
     )
 
+  for (column in c("hash", "local_hash", "baseline_hash")) {
+    if (!is.null(status_data_frame[[column]])) {
+      status_data_frame[[column]] <- new_dvs_hash(status_data_frame[[column]])
+    }
+  }
   if (!is.null(status_data_frame$size)) {
     status_data_frame$size <- new_dvs_bytes(status_data_frame$size)
   }
@@ -215,6 +234,8 @@ dvs_get <- function(
 
   files <- tibble::as_tibble(raw$files)
   files$size <- new_dvs_bytes(files$size)
+  files$target_hash <- new_dvs_hash(files$target_hash)
+  files$local_hash <- new_dvs_hash(files$local_hash)
   result <- structure(files, class = c("dvs_get_result", class(files)), dvs_info = info)
 
   if (raw$on_error != "return" && !info$did_as_asked) {

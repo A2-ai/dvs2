@@ -84,3 +84,26 @@ Summary.dvs_bytes <- function(..., na.rm = FALSE) {
   }
   result
 }
+
+# A BLAKE3 hash column: the full hex hashes, which a tibble prints as their
+# first 12 characters, as `dvs history` does. `as.character()` and `==` see
+# the full hashes.
+new_dvs_hash <- function(x) {
+  structure(as.character(x), class = c("dvs_hash", "character"))
+}
+
+#' @export
+pillar_shaft.dvs_hash <- function(x, ...) {
+  pillar::new_pillar_shaft_simple(substr(unclass(x), 1L, 12L), align = "left")
+}
+
+#' @export
+type_sum.dvs_hash <- function(x) {
+  "blake3"
+}
+
+#' @export
+print.dvs_hash <- function(x, ...) {
+  print(unclass(x), ...)
+  invisible(x)
+}
