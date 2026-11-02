@@ -190,13 +190,20 @@ needed. Row codes besides the shared ones: `add`, `status` and `availability` `i
 absolute native paths. For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
 `unknown` when not logged in), `connection_error`, `user`, `access` and `groups`; a local project reports
 `connection: "not_applicable"`. `compression` is a local project's (`zstd` or `none`), and `null` for a server
-project, whose compression is set on the server (human `info` prints "set by the server"). `connection_error` is `{code, message}` (`server_unavailable`,
+project, whose compression is set on the server (human `info` prints "set by the server"). A server project's
+dvs.toml can still have a `compression` line, which every dvs before 0.5.0 wrote at init. The server's setting
+wins, so `ignored_compression` names the line (`null` without one) and human `info` adds it to the compression
+line. `connection_error` is `{code, message}` (`server_unavailable`,
 `project_not_found` or `server_too_old`) when `connection` is `unavailable`, else `null`. `access` is the
 server's level (`read`, `write`, `admin`), `not_logged_in` without a token, `none` on a 403 (no membership:
 `connection` is `available`, exit `0`, like human mode's "no access"), or `null` when the server could not say;
 a rejected login (401, `auth_expired`) is an error envelope. Every project also reports `on_conflict` and
 `on_conflict_source`, what `get` does with local changes and where that was set (`null` when the setting is
 invalid; human `info` shows the error on its `on_conflict` line).
+
+R's `dvs_info()` returns the same fields as a list, built by the same library function (`dvs::info::project_info`).
+`NULL` stands for `null`, and `groups` is a character vector. A credentials store that cannot be read or a rejected
+login raises a `dvs_error` with that code.
 
 ```shell
 ❯ dvs info --help
@@ -597,6 +604,10 @@ It returns a tibble of class `dvs_get_result` with the same columns as the JSON 
 returns the operation information (outcome, `did_as_asked`, policy and its source, counts, problem), and printing
 shows it as a header. Invalid arguments, not being in a dvs project, and configuration errors (`dvs_config_error`)
 are the only immediate errors.
+
+A command that fails raises a `dvs_error` with `code`, the code the CLI's JSON gives the same failure, and the
+CLI's message. A `dvs_config_error` has `code` `invalid_configuration`. An argument error is a `dvs_error_argument`
+with `param`.
 
 ### status
 

@@ -225,6 +225,7 @@ test_that("every command raises a dvs.toml that does not load as a dvs_config_er
   new_dvs_test_repo()
   cat("[[[broken\n", file = "dvs.toml", append = TRUE)
   expect_error(dvs_get(), class = "dvs_config_error")
+  expect_equal(tryCatch(dvs_get(), error = identity)$code, "invalid_configuration")
   expect_error(dvs_status(), class = "dvs_config_error")
   expect_error(dvs_add("t.csv"), class = "dvs_config_error")
   expect_error(dvs_audit_log(), class = "dvs_config_error")
