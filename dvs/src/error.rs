@@ -79,3 +79,23 @@ impl std::error::Error for Error {}
 pub fn backend_error_code(error: &anyhow::Error) -> Option<ErrorCode> {
     error.downcast_ref::<Error>().map(|e| e.code)
 }
+
+/// The code of a failed command, as the CLI's JSON and R report it: no files
+/// selected, an unreadable dvs.toml, a coded backend or records failure, an
+/// I/O error, else `operation_failed`.
+pub fn error_code(error: &anyhow::Error) -> ErrorCode {
+    if error
+        .downcast_ref::<crate::globbing::NoFilesSelected>()
+        .is_some()
+    {
+        ErrorCode::NoFilesSelected
+    } else if error.downcast_ref::<crate::config::ConfigError>().is_some() {
+        ErrorCode::InvalidConfiguration
+    } else if let Some(code) = backend_error_code(error) {
+        code
+    } else if error.downcast_ref::<std::io::Error>().is_some() {
+        ErrorCode::IoError
+    } else {
+        ErrorCode::OperationFailed
+    }
+}
