@@ -259,7 +259,9 @@ for `add`). Files that never started get `code: "cancelled"` (also `action: "can
 `status: "cancelled"` in `status`); they count in
 `counts.total` and `counts.cancelled`, in neither `succeeded` nor `failed`. The outcome is `cancelled` whenever the request came
 before the operation finished, the full result is still written, and the exit code is `130`, over every
-other exit code. A second signal exits `130` at once, without a result.
+other exit code. A second signal exits `130` at once, without a result. A signal within a quarter second of the first
+is not a second one: one kill can arrive twice, as from GNU `timeout`, which signals the process and then its own
+process group.
 
 #### R package
 
