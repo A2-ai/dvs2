@@ -20,6 +20,7 @@
 - R package: the counts of `dvs_result_info()` include `total`, `succeeded` and `cancelled`, as in the CLI's JSON.
 - R package: a wrong argument raises a `dvs_error_argument` condition, also a `dvs_error`, with the argument in `param` and the call the user wrote. A `dvs.toml` that does not load raises a `dvs_config_error`, also a `dvs_error`, in every command. One `dvs_error` handler catches them all.
 - R package: a bad `dvs.num_threads` or `dvs.on_error` option raises the same `dvs_error_argument`, and the message names the option.
+- R package: a command that fails raises a `dvs_error` with `code`, the code the CLI's JSON gives the same failure (`not_in_project`, `auth_required`, `access_denied`, `project_not_found`, `server_unavailable`, ...), and the CLI's message. It was a `rust_error` with no code, so a script could not tell a missing login from an unreachable server. A `dvs_config_error` has `code` `invalid_configuration`.
 - R package: `dvs_result_info()` has `summary`, the summary the CLI prints. A printed `dvs_get()` result and its `on_error` warning or error start with it, so R and the CLI say the same. `on_conflict = <policy> (<source>)` appears only when the policy acted, as in the CLI.
 
 ### Fixed

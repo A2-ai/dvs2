@@ -598,6 +598,10 @@ returns the operation information (outcome, `did_as_asked`, policy and its sourc
 shows it as a header. Invalid arguments, not being in a dvs project, and configuration errors (`dvs_config_error`)
 are the only immediate errors.
 
+A command that fails raises a `dvs_error` with `code`, the code the CLI's JSON gives the same failure, and the
+CLI's message. A `dvs_config_error` has `code` `invalid_configuration`. An argument error is a `dvs_error_argument`
+with `param`.
+
 ### status
 
 This returns the status (mentioned in the high level overview above)
