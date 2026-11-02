@@ -24,7 +24,7 @@ use dvs::auth::{
 };
 use dvs::config::{Config, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
-use dvs::init::{create_metadata_folder, init};
+use dvs::init::{check_uninitialized, create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
@@ -524,11 +524,6 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                     group,
                     no_compression,
                 } => {
-                    // Initializing on the server requires authentication, so run the
-                    // login flow first if we don't have a token for it yet.
-                    if get_token(&url)?.is_none() {
-                        run_device_login(&url, cli.json)?;
-                    }
                     let mut config = Config::new_server(name, url, Some(group));
                     if no_compression {
                         config.set_compression(Some(Compression::None));
@@ -543,6 +538,14 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             }
             let root = root_dir.unwrap_or(current_dir);
 
+            // Creating the project on the server needs a token: log in first if there
+            // is none, after the checks that need no server.
+            if let Some(url) = config.server_url() {
+                check_uninitialized(&root, &config)?;
+                if get_token(url)?.is_none() {
+                    run_device_login(url, cli.json)?;
+                }
+            }
             let repo_root = init(&root, config)?;
             if cli.json {
                 let mut result = output::envelope("init", false);
