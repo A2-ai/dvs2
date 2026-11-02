@@ -110,7 +110,8 @@ Options:
       --current        Include the files that are current
       --absent         Include the files that are absent
       --stale          Include files unchanged since the last successful get, when metadata has advanced
-      --modified       Include files changed since the last successful get
+      --modified       Include files changed since the last successful get, when metadata has not advanced
+      --both-modified  Include files changed since the last successful get, when metadata has advanced too
       --unsynced       Include differing files whose local baseline is unavailable
       --with-metadata  Show all metadata columns in the table output
   -h, --help           Print help
@@ -124,8 +125,8 @@ EOF
 norm() { printf '%s\n' "$1" | sed 's/[[:space:]]*$//'; }
 check "$(norm "$EXPECTED_HELP")" "$(norm "$HELP")" "help text matches spec block (trailing-space normalized)"
 # Option flags in the order they appear in --help.
-OPT_ORDER="$({ set +x; } 2>/dev/null; grep -oE '\-\-(json|emit-events|threads|recursive|glob|current|absent|stale|modified|unsynced|with-metadata)' <<<"$HELP" | tr '\n' ',' )"
-check "--recursive,--glob,--current,--absent,--stale,--modified,--unsynced,--with-metadata,--json,--emit-events,--threads," "$OPT_ORDER" "help option order matches spec"
+OPT_ORDER="$({ set +x; } 2>/dev/null; grep -oE '\-\-(json|emit-events|threads|recursive|glob|current|absent|stale|both-modified|modified|unsynced|with-metadata)' <<<"$HELP" | tr '\n' ',' )"
+check "--recursive,--glob,--current,--absent,--stale,--modified,--both-modified,--unsynced,--with-metadata,--json,--emit-events,--threads," "$OPT_ORDER" "help option order matches spec"
 USAGE="$({ set +x; } 2>/dev/null; grep -oE 'Usage: dvs status \[OPTIONS\] \[PATHS\]\.\.\.' <<<"$HELP" )"
 check "Usage: dvs status [OPTIONS] [PATHS]..." "$USAGE" "help usage line matches spec"
 SHORTR="$({ set +x; } 2>/dev/null; grep -c '\-r, --recursive' <<<"$HELP" )"
@@ -311,6 +312,28 @@ rm -f "$SCRIPT_DIR/sidebak_$RUN_SUFFIX"
 # Restore: confirm clean exit 0 once sidecar is good again.
 rc=0; dvs status >/dev/null 2>&1 || rc=$?
 check "0" "$rc" "status exits 0 after sidecar restored"
+
+# ── Claim: both_modified when the local file and metadata both changed (L54) ─
+# Line refs in this claim are to specs.md with both_modified (dvs2 feat/both-modified).
+# Edit the stale file here: it now differs from its baseline, and the
+# metadata (the donor's) differs from that baseline too.
+say
+say "=== CLAIM: a stale file edited here is both_modified, not modified (L54) ==="
+printf 'MINE' >> other/stale.bin
+BOTH_ALL="$(dvs status)"
+echo "$BOTH_ALL"
+check "yes" "$(has_row "$BOTH_ALL" "other/stale.bin" "both_modified")" "other/stale.bin (metadata advanced, then edited here) is both_modified (L54)"
+check "yes" "$(has_row "$BOTH_ALL" "data/raw/file_1.bin" "modified")" "data/raw/file_1.bin (only the local file changed) stays modified (L53)"
+# An older CLI rejects --both-modified: count it as a FAIL, reach SUMMARY.
+BOTH="$(dvs status --both-modified 2>&1)" || true
+echo "$BOTH"
+check "1" "$(count_rows "$BOTH")" "--both-modified shows 1 row"
+check "yes" "$(has_row "$BOTH" "other/stale.bin" "both_modified")" "--both-modified shows the both_modified file"
+MOD2="$(dvs status --modified)" || true
+check "no" "$(has_row "$MOD2" "other/stale.bin" "modified")" "--modified excludes the both_modified file"
+check "1" "$(count_rows "$MOD2")" "--modified still shows only the 1 modified row"
+JBOTH="$({ set +x; } 2>/dev/null; dvs status --json --both-modified | jq_py 'print(len(d["files"]), d["files"][0]["status"])' )" || true
+check "1 both_modified" "$JBOTH" "--json --both-modified: 1 row, status both_modified"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 say

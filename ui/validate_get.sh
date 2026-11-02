@@ -280,6 +280,27 @@ check "1" "$rc" "exit 1 on partial failure: 1 good + 1 hash-mismatch file (L569)
 check "yes" "$([ -f data/raw/file_1.bin ] && echo yes || echo no)" "good file still retrieved during partial failure (L479-480)"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Line refs in this claim are to specs.md with both_modified (dvs2 feat/both-modified).
+say
+say "=== Claim: an edit here after the tracked version moved on is before=both_modified, code local_changes, and the hint compares first (L467, L537) ==="
+# Metadata advances as after a git pull, then the file is edited here.
+mkrandfile other/donor.bin 400
+dvs add other/donor.bin >/dev/null
+cp .dvs/other/donor.bin.dvs .dvs/data/raw/file_2.bin.dvs
+rm .dvs/other/donor.bin.dvs other/donor.bin
+printf 'MINE' >> data/raw/file_2.bin
+BOTH_HASH="$(shasum data/raw/file_2.bin | cut -d' ' -f1)"
+rc=0; BOTH_JSON="$(dvs get --json data/raw/file_2.bin 2>/dev/null)" || rc=$?
+check "3" "$rc" "both changed under on_conflict=abort exits 3, as local changes do"
+BOTH_ROW="$(printf '%s' "$BOTH_JSON" | jq_py 'r=d["files"][0];print(r["before"], r["action"], r["code"], ",".join(s["action"] for s in r["next_steps"]))')"
+check "both_modified not_run local_changes get,add" "$BOTH_ROW" "row: before=both_modified, code=local_changes, next_steps get (overwrite) then add (L467)"
+check "$BOTH_HASH" "$(shasum data/raw/file_2.bin | cut -d' ' -f1)" "abort kept the local edit unchanged"
+rc=0; BOTH_OUT="$(dvs get data/raw/file_2.bin 2>&1)" || rc=$?
+say "$BOTH_OUT"
+check "1" "$(grep -c '^  compare first: ' <<<"$BOTH_OUT" || true)" "human output lists the file under 'compare first' (L537)"
+check "0" "$(grep -c 'keep your version:' <<<"$BOTH_OUT" || true)" "human output offers no plain 'keep your version' for it (L537)"
+
+# ─────────────────────────────────────────────────────────────────────────────
 say
 say "=== SUMMARY: $PASS pass, $FAIL fail ==="
 printf '\nCleanup: bash %s/cleanup.sh\n' "$SCRIPT_DIR"
