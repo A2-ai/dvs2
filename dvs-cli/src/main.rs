@@ -24,8 +24,8 @@ use dvs::auth::{
 };
 use dvs::config::{Config, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
-use dvs::init::{check_uninitialized, create_metadata_folder, init};
-use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
+use dvs::init::{attach, check_attachable, check_uninitialized, init};
+use dvs::paths::DvsPaths;
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
     FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow,
@@ -560,30 +560,15 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             url,
             metadata_folder_name,
         } => {
-            let config_path = current_dir.join(CONFIG_FILE_NAME);
-            if config_path.exists() {
-                bail!("Configuration file already exists");
-            }
-
-            // Initializing on the server requires authentication, so run the
-            // login flow first if we don't have a token for it yet.
+            check_attachable(&current_dir)?;
+            // Attaching asks the server, so run the login flow first if we don't
+            // have a token for it yet.
             if get_token(&url)?.is_none() {
                 run_device_login(&url, cli.json)?;
             }
-            let mut config = Config::new_server(name, url, None);
-            config.set_compression(None);
-            if let Some(m) = metadata_folder_name {
-                config.set_metadata_folder_name(m);
-            }
-
-            if let Backend::Server(s) = config.backend() {
-                s.attach()?;
-                // Before the config, so a failure leaves nothing that blocks a retry
-                create_metadata_folder(&current_dir, &config)?;
-                config.save(&current_dir)?;
-                if cli.json {
-                    output::emit(output::envelope("attach", false));
-                }
+            attach(&current_dir, name, url, metadata_folder_name)?;
+            if cli.json {
+                output::emit(output::envelope("attach", false));
             }
         }
         Command::Add {
