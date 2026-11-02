@@ -12,7 +12,7 @@ use crate::gitignore::add_to_gitignore;
 #[cfg(feature = "cache")]
 use anyhow::bail;
 #[cfg(feature = "cache")]
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 /// Bump whenever the cache schema changes; a mismatch drops and rebuilds the table.
 #[cfg(feature = "cache")]
@@ -59,6 +59,8 @@ fn ctime_ns(_meta: &std::fs::Metadata) -> i64 {
 #[cfg(feature = "cache")]
 pub struct HashCache {
     conn: Connection,
+    /// Opened by a dry run: lookups only, every write is dropped
+    read_only: bool,
 }
 
 #[cfg(feature = "cache")]
@@ -105,7 +107,25 @@ impl HashCache {
              );",
         )?;
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            read_only: false,
+        })
+    }
+
+    /// Opens an existing cache for a dry run, which writes nothing. It is not
+    /// created, migrated or repaired, and inserts are dropped.
+    pub fn open_read_only(db_path: &Path) -> Result<Self> {
+        let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.execute_batch("PRAGMA busy_timeout=5000;")?;
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version != SCHEMA_VERSION {
+            bail!("cache schema version {version}, expected {SCHEMA_VERSION}");
+        }
+        Ok(Self {
+            conn,
+            read_only: true,
+        })
     }
 
     pub fn baseline(&self, relative_path: &str) -> Result<Option<(String, u64)>> {
@@ -124,6 +144,9 @@ impl HashCache {
     }
 
     pub fn set_baseline(&self, relative_path: &str, blake3: &str, size: u64) -> Result<()> {
+        if self.read_only {
+            return Ok(());
+        }
         let mut stmt = self.conn.prepare_cached(
             "INSERT INTO baseline (path, blake3, size) VALUES (?1, ?2, ?3)
              ON CONFLICT(path) DO UPDATE SET blake3=?2, size=?3",
@@ -154,6 +177,9 @@ impl HashCache {
     }
 
     pub fn insert(&self, relative_path: &str, stat: &FileStat, hashes: &Hashes) -> Result<()> {
+        if self.read_only {
+            return Ok(());
+        }
         let mut stmt = self.conn.prepare_cached(
             "INSERT INTO hash_cache (path, mtime_ns, ctime_ns, size, blake3, md5)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -323,6 +349,31 @@ pub(crate) fn try_open_cache(paths: &DvsPaths) -> Option<Mutex<HashCache>> {
     }
 }
 
+/// The cache for a dry run, which writes nothing: the existing cache, opened
+/// read-only, so lookups still hit. With no cache there is none: a dry run
+/// creates neither the cache nor its `.gitignore` entry.
+pub(crate) fn try_open_cache_read_only(paths: &DvsPaths) -> Option<Mutex<HashCache>> {
+    #[cfg(feature = "cache")]
+    {
+        let db_path = paths.cache_folder().join("dvs.db");
+        if !db_path.is_file() {
+            return None;
+        }
+        match HashCache::open_read_only(&db_path) {
+            Ok(c) => Some(Mutex::new(c)),
+            Err(e) => {
+                log::warn!("Failed to open hash cache: {e}");
+                None
+            }
+        }
+    }
+    #[cfg(not(feature = "cache"))]
+    {
+        let _ = paths;
+        None
+    }
+}
+
 #[cfg(all(test, feature = "cache"))]
 mod tests {
     use super::*;
@@ -408,6 +459,31 @@ mod tests {
 
         let result = cache.lookup("file.txt", &stat).unwrap();
         assert_eq!(result, Some(hashes2));
+    }
+
+    // A dry run's cache: it reads, drops every write, and is never created
+    #[test]
+    fn a_read_only_cache_reads_and_drops_writes() {
+        let (tmp, cache) = setup_cache();
+        let stat = sample_stat();
+        cache.insert("file.txt", &stat, &sample_hashes()).unwrap();
+        drop(cache);
+
+        let db_path = tmp.path().join("cache.db");
+        let read_only = HashCache::open_read_only(&db_path).unwrap();
+        assert_eq!(
+            read_only.lookup("file.txt", &stat).unwrap(),
+            Some(sample_hashes())
+        );
+        read_only
+            .insert("new.txt", &stat, &sample_hashes())
+            .unwrap();
+        read_only.set_baseline("new.txt", "abc123", 1024).unwrap();
+        assert_eq!(read_only.lookup("new.txt", &stat).unwrap(), None);
+        assert_eq!(read_only.baseline("new.txt").unwrap(), None);
+
+        assert!(HashCache::open_read_only(&tmp.path().join("missing.db")).is_err());
+        assert!(!tmp.path().join("missing.db").exists());
     }
 
     #[test]

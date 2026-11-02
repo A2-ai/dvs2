@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- `dvs add --dry-run` and `dvs get --dry-run` write nothing. In a project with no hash cache yet, they created `.dvs/.cache/dvs.db` and, with it, the `/.cache` entry in `.dvs/.gitignore`. A dry run now reads an existing cache read-only and creates none. The same holds for `dry_run = TRUE` in `dvs_add()` and `dvs_get()`.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
