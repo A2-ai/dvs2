@@ -18,6 +18,23 @@ impl std::fmt::Display for NoFilesSelected {
 
 impl std::error::Error for NoFilesSelected {}
 
+/// Directories given to `add` without a glob, as the user wrote them. `add`
+/// takes files: a directory needs a glob to select the files in it.
+#[derive(Debug)]
+pub struct DirectoryWithoutGlob(pub Vec<PathBuf>);
+
+impl std::fmt::Display for DirectoryWithoutGlob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Refusing to add, the following paths are invalid:")?;
+        for path in &self.0 {
+            write!(f, "\n  {}: path is a directory", path.display())?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for DirectoryWithoutGlob {}
+
 /// Builds the glob matching the rg behaviour
 /// eg "*.csv" will not match `some/dir/test.csv`
 pub(crate) fn build_glob_matcher(pattern: Option<&str>) -> Result<Option<GlobMatcher>> {
@@ -36,6 +53,8 @@ pub(crate) fn build_glob_matcher(pattern: Option<&str>) -> Result<Option<GlobMat
 /// - Explicit files: added directly (glob ignored)
 /// - Explicit directories: walked and filtered by glob
 /// - No paths + glob: walks cwd filtered by glob
+/// - Explicit directories in the project and no glob: refused with
+///   [`DirectoryWithoutGlob`], which names them all
 pub fn resolve_paths_for_add(
     paths: Vec<PathBuf>,
     glob_pattern: Option<&str>,
@@ -58,6 +77,7 @@ pub fn resolve_paths_for_add(
         paths
     };
 
+    let mut directories = Vec::new();
     for path in paths {
         let full_path = dvs_paths
             .cwd()
@@ -115,17 +135,17 @@ pub fn resolve_paths_for_add(
                     }
                 }
             } else {
-                let relative_to_root = match full_path.strip_prefix(&repo_root) {
-                    Ok(p) => p.to_path_buf(),
-                    Err(_) => path.clone(),
-                };
-                out.insert(relative_to_root);
+                directories.push(path);
             }
         } else {
             bail!("Path is not a file or directory: {}", path.display());
         }
     }
 
+    // After the loop, so that a path that does not exist is reported first
+    if !directories.is_empty() {
+        return Err(DirectoryWithoutGlob(directories).into());
+    }
     Ok(out)
 }
 
@@ -264,19 +284,40 @@ mod tests {
         assert!(!result.contains(&PathBuf::from("data/b.txt")));
     }
 
+    // Every directory is named, as written, so the front ends can say how to
+    // pass a glob for them
     #[test]
-    fn add_directory_without_glob() {
+    fn add_directory_without_glob_is_refused() {
         let (_temp, dvs_paths) = setup_test_repo();
-        let result = resolve_paths_for_add(
-            vec![PathBuf::from("data"), PathBuf::from("foo.txt")],
+        let error = resolve_paths_for_add(
+            vec![
+                PathBuf::from("data"),
+                PathBuf::from("foo.txt"),
+                PathBuf::from("data/subdir/"),
+            ],
             None,
             &dvs_paths,
         )
-        .unwrap();
+        .unwrap_err();
+        let refused = error.downcast_ref::<DirectoryWithoutGlob>().unwrap();
+        assert_eq!(
+            refused.0,
+            [PathBuf::from("data"), PathBuf::from("data/subdir/")]
+        );
+        assert_eq!(
+            error.to_string(),
+            "Refusing to add, the following paths are invalid:\n  data: path is a directory\n  \
+             data/subdir/: path is a directory"
+        );
 
-        // We keep it, it will be rejected later down the line since it's a dir
-        assert!(result.contains(&PathBuf::from("data")));
-        assert!(result.contains(&PathBuf::from("foo.txt")));
+        // A path that does not exist is reported first
+        let error = resolve_paths_for_add(
+            vec![PathBuf::from("data"), PathBuf::from("missing.txt")],
+            None,
+            &dvs_paths,
+        )
+        .unwrap_err();
+        assert!(error.downcast_ref::<NoFilesSelected>().is_some());
     }
 
     #[test]

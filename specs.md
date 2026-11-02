@@ -118,7 +118,8 @@ keys: a field that does not apply is `null`, never missing (an `add` error row h
 cancel stopped, see Cancellation) and `succeeded` (the rest), so `total = succeeded + failed + cancelled`; get
 adds its detailed counts and defines `succeeded` itself. All are computed by the library. `error` is a
 failure of the whole command; per-file failures stay in the rows, so a `partial` result normally has
-`error: null`. A `hint` is the next thing to try, for people (only `get` fills row hints today).
+`error: null`. A `hint` is the next thing to try, for people (only `get` fills row hints today). The envelope's
+`error.hint` is filled for a directory given to `add` without `--glob`, and is `null` otherwise.
 
 Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; `get` see get;
 `status` `path`, `status` (`error` on an error row, `cancelled` on a cancelled one), `metadata`, `working` (`state` `present`, `absent` or
@@ -426,12 +427,23 @@ You can run `dvs add *.csv` and it will be expanded by your shell before calling
 To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library. The glob string must be quoted (for example `--glob '*.csv'`) so the shell does not expand it before `dvs` sees it.
 
 A batch refused for an invalid input path (including a directory without `--glob`) is `invalid_arguments`,
-exits with `2` and adds nothing. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`. A cancelled batch exits with `130` (see Cancellation).
+exits with `2` and adds nothing. A directory without `--glob` is refused once every path is resolved, and the
+error names every such directory. Its hint, on stderr after the error and in the JSON `error.hint`, gives the
+command for them with `--glob '**/*'`:
+
+```
+Error: Refusing to add, the following paths are invalid:
+  raw: path is a directory
+  To add the files under a directory, pass a glob: dvs add raw --glob '**/*'
+```
+
+A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`. A cancelled batch exits with `130` (see Cancellation).
 
 #### Rust library
 
 The library validates every input path first and returns an error, refusing the whole batch, if any path is invalid. It also returns an error if it cannot set up the threadpool.
 Otherwise it returns an `AddReport`: the results sorted alphabetically by path, their counts and byte totals, letting users decide what to do with each per-file runtime failure.
+`resolve_paths_for_add` refuses the directories in the project given without a glob with a `DirectoryWithoutGlob` error, which holds them as the user wrote them, so each front end can write the hint in its own syntax.
 
 #### R package
 
@@ -446,7 +458,7 @@ dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 
 Returns a data frame with one row per file. Glob resolution uses the same rules as the CLI. See the Globbing section.
 
-It raises an error if no files match, or if any input path is invalid (the whole batch is refused and nothing is written). A file that fails after a valid batch starts (for example a permission error during the copy) does not raise. That file is one row with its `code` and `error` columns set and the success columns `NA`, next to the rows that succeeded.
+It raises an error if no files match, or if any input path is invalid (the whole batch is refused and nothing is written). A directory in `paths` without `glob` raises a `dvs_error_argument` for `paths`, and its message ends with the call for them in R syntax, as in `dvs_add("raw", glob = "**/*")`. A file that fails after a valid batch starts (for example a permission error during the copy) does not raise. That file is one row with its `code` and `error` columns set and the success columns `NA`, next to the rows that succeeded.
 
 ### get
 

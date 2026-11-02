@@ -1260,6 +1260,9 @@ fn main() {
                     output::emit(output::problem(command, dry_run, &error));
                 } else {
                     eprintln!("Error: {error}");
+                    if let Some(hint) = output::hint(&error) {
+                        eprintln!("  {hint}");
+                    }
                 }
                 output::exit_code(&error)
             }
