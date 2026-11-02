@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- `dvs info` on a server project names a `compression` line in dvs.toml, which the server's compression overrides: `compression set by the server (compression = "none" in dvs.toml is ignored)`, and `ignored_compression` in its JSON. Nothing said that the line had no effect.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
