@@ -84,6 +84,11 @@ test_that("dvs_status uses the local baseline to distinguish stale from modified
   result <- dvs_status(paths = file.path(getwd(), "stale.txt"))
   expect_equal(nrow(result), 1L)
   expect_equal(result$status, "stale")
+
+  # Edited here as well: both sides changed since the last get
+  writeLines("my edit", "stale.txt")
+  result <- dvs_status(paths = file.path(getwd(), "stale.txt"))
+  expect_equal(result$status, "both_modified")
 })
 
 test_that("dvs_status reports unsynced when no local baseline exists", {
@@ -129,7 +134,9 @@ test_that("dvs_status(status = all statuses) == no filter", {
   new_dvs_test_repo()
   plant_three_statuses()
 
-  explicit_all <- dvs_status(status = c("current", "absent", "stale", "modified", "unsynced"))
+  explicit_all <- dvs_status(
+    status = c("current", "absent", "stale", "modified", "both_modified", "unsynced")
+  )
   default_all <- dvs_status()
 
   expect_equal(nrow(explicit_all), 3L)

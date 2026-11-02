@@ -39,8 +39,12 @@ pub enum Before {
     Current,
     /// Differs from the target but is exactly what dvs last wrote or added here
     Clean,
-    /// Differs from both the target and what dvs last wrote or added here
+    /// Differs from both the target and what dvs last wrote or added here,
+    /// and the target is what dvs last wrote: only the local file changed
     Modified,
+    /// Differs from the target, and both it and the target differ from what
+    /// dvs last wrote or added here: both changed
+    BothModified,
     /// Differs from the target, and dvs has no record of writing it
     Unknown,
     /// No `.dvs` file for the requested path
@@ -58,6 +62,7 @@ impl Before {
             Before::Current => "current",
             Before::Clean => "clean",
             Before::Modified => "modified",
+            Before::BothModified => "both_modified",
             Before::Unknown => "unknown",
             Before::NotTracked => "not_tracked",
             Before::NotAFile => "not_a_file",
@@ -319,10 +324,12 @@ impl GetReport {
         if let Some(first) = line.get(..1) {
             line.replace_range(..1, &first.to_uppercase());
         }
-        let policy_acted = self
-            .files
-            .iter()
-            .any(|r| matches!(r.before, Before::Modified | Before::Unknown));
+        let policy_acted = self.files.iter().any(|r| {
+            matches!(
+                r.before,
+                Before::Modified | Before::BothModified | Before::Unknown
+            )
+        });
         if policy_acted {
             line.push_str(&format!(
                 "\non_conflict = {} ({})",
@@ -383,12 +390,22 @@ fn conflict_reasons(files: &[GetRow]) -> Vec<String> {
             .filter(|r| r.is_conflict() && r.before == b)
             .count()
     };
-    let (modified, unknown) = (count(Before::Modified), count(Before::Unknown));
+    let (modified, both, unknown) = (
+        count(Before::Modified),
+        count(Before::BothModified),
+        count(Before::Unknown),
+    );
     let mut reasons = Vec::new();
     if modified > 0 {
         reasons.push(format!(
             "{} local changes",
             plural(modified, "file has", "files have")
+        ));
+    }
+    if both > 0 {
+        reasons.push(format!(
+            "{} local changes and a newer tracked version",
+            plural(both, "file has", "files have")
         ));
     }
     if unknown > 0 {
@@ -726,6 +743,12 @@ fn plan_file(
             Some((blake3, base_size)) if blake3 == hashes.blake3 && base_size == size => {
                 Before::Clean
             }
+            // The tracked version moved on from the baseline too
+            Some((blake3, base_size))
+                if blake3 != metadata.hashes.blake3 || base_size != metadata.size =>
+            {
+                Before::BothModified
+            }
             Some(_) => Before::Modified,
             None => Before::Unknown,
         }
@@ -734,6 +757,10 @@ fn plan_file(
         Before::Modified => Some((
             GetCode::LocalChanges,
             "local changes since dvs last wrote this file",
+        )),
+        Before::BothModified => Some((
+            GetCode::LocalChanges,
+            "local changes since dvs last wrote this file, and the tracked version changed too",
         )),
         Before::Unknown => Some((
             GetCode::UnknownLocal,
@@ -1165,7 +1192,8 @@ fn settle(
                 (false, false) => Action::Replaced,
             };
             let message = was_conflict.then(|| {
-                match (dry_run, p.row.before == Before::Modified) {
+                let edited = matches!(p.row.before, Before::Modified | Before::BothModified);
+                match (dry_run, edited) {
                     (true, true) => "local changes would be discarded",
                     (false, true) => "local changes were discarded",
                     (true, false) => "the local version would be replaced",
@@ -1242,6 +1270,20 @@ pub fn row_hint(row: &GetRow) -> Option<Hint> {
     };
     let again = |t: &str| text(t).step(NextStep::Retry).text(" again");
     match row.code? {
+        // Never just "keep yours": that would overwrite the newer tracked version
+        GetCode::LocalChanges if row.before == Before::BothModified => Some(
+            text(
+                "your file and the tracked version both changed since dvs last wrote it, so \
+                 compare them before keeping either. Copy yours aside, then take the tracked \
+                 version: ",
+            )
+            .step(NextStep::Get {
+                paths: p(),
+                on_conflict: Some(OnConflict::Overwrite),
+            })
+            .text(". To keep yours or a merge instead, put it back, then: ")
+            .step(NextStep::Add { paths: p() }),
+        ),
         GetCode::LocalChanges => Some(choices()),
         GetCode::UnknownLocal => Some(
             text(
@@ -1573,10 +1615,11 @@ mod tests {
         let report = repo.get(&["a.csv", "b.csv"], OnConflict::Abort);
         assert_eq!(report.outcome, GetOutcome::Aborted);
         let b = row(&report, "b.csv");
+        // Edited here, and the tracked version is another branch's
         assert_eq!(
             (b.before, b.action, b.code),
             (
-                Before::Modified,
+                Before::BothModified,
                 Action::NotRun,
                 Some(GetCode::LocalChanges)
             )
@@ -1590,10 +1633,44 @@ mod tests {
         assert_eq!(repo.read("a.csv"), b"a2", "nothing may change on abort");
         assert_eq!(repo.read("b.csv"), b"my edits");
         assert_eq!(report.verdict(), GetVerdict::HeldBack);
-        assert!(b.hint.as_ref().unwrap().steps().any(|s| s
-            == &NextStep::Add {
-                paths: vec!["b.csv".into()]
-            }));
+        // Compare first: take the tracked version, and add only to keep yours
+        let steps: Vec<_> = b.hint.as_ref().unwrap().steps().cloned().collect();
+        assert_eq!(
+            steps,
+            vec![
+                NextStep::Get {
+                    paths: vec!["b.csv".into()],
+                    on_conflict: Some(OnConflict::Overwrite)
+                },
+                NextStep::Add {
+                    paths: vec!["b.csv".into()]
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn only_local_changes_are_modified_and_offer_to_keep_them() {
+        let repo = TestRepo::new();
+        repo.add("c.csv", b"c1");
+        fs::write(repo.root.join("c.csv"), b"my edits").unwrap();
+
+        let report = repo.get(&["c.csv"], OnConflict::Abort);
+        let c = row(&report, "c.csv");
+        assert_eq!(
+            (c.before, c.code),
+            (Before::Modified, Some(GetCode::LocalChanges))
+        );
+        assert_eq!(
+            c.hint.as_ref().unwrap().steps().next(),
+            Some(&NextStep::Add {
+                paths: vec!["c.csv".into()]
+            })
+        );
+        assert_eq!(
+            report.summary(),
+            "Aborted, nothing changed: 1 file has local changes\non_conflict = abort (argument)"
+        );
     }
 
     // Spec 4o
@@ -1606,7 +1683,11 @@ mod tests {
         let report = repo.get(&["b.csv"], OnConflict::Overwrite);
         assert_eq!(report.outcome, GetOutcome::Complete);
         let b = row(&report, "b.csv");
-        assert_eq!((b.before, b.action), (Before::Modified, Action::Replaced));
+        assert_eq!(
+            (b.before, b.action),
+            (Before::BothModified, Action::Replaced)
+        );
+        assert_eq!(b.message.as_deref(), Some("local changes were discarded"));
         assert_eq!(repo.read("b.csv"), b"b1");
     }
 

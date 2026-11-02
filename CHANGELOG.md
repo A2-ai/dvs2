@@ -10,6 +10,7 @@
 - R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
 - R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
 - R package: `format_byte_size(TRUE)` and `format_byte_size(FALSE)` are errors, as `set_dvs_threads(TRUE)` is. They returned `"1 B"` and `"0 B"`.
+- `dvs status` and `dvs_status()` report `both_modified` for a file changed here while the tracked version changed too since the last get, for example after a git pull. It was `modified`, which now means that only the local file changed. `dvs status --both-modified` and `dvs_status(status = "both_modified")` select it. `dvs get` reports it as `before` `both_modified`, with code `local_changes` as before. Its hint says to compare the two first, and the CLI lists it under "compare first" instead of "keep your version".
 
 ### Added
 

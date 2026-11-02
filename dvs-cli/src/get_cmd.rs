@@ -188,17 +188,35 @@ pub fn print_human(report: &GetReport) {
     // Next steps for conflicts, in one place rather than per row.
     let conflicts: Vec<&GetRow> = report.files.iter().filter(|r| r.is_conflict()).collect();
     if !conflicts.is_empty() {
-        let paths = conflicts
+        let join = |rows: &[&&GetRow]| {
+            rows.iter()
+                .map(|r| shell_path(&r.local_path))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let paths = join(&conflicts.iter().collect::<Vec<_>>());
+        // Keeping these unseen would drop the newer tracked version
+        let (both, keepable): (Vec<&&GetRow>, Vec<&&GetRow>) = conflicts
             .iter()
-            .map(|r| shell_path(&r.local_path))
-            .collect::<Vec<_>>()
-            .join(" ");
+            .partition(|r| r.before == Before::BothModified);
         if conflicts.iter().any(|r| r.before == Before::Unknown) {
             eprintln!(
                 "  no record usually means a clone from before dvs recorded what it writes, or a cleared cache"
             );
         }
-        eprintln!("  keep your version:         dvs add {paths}   (makes it the tracked version)");
+        if !both.is_empty() {
+            eprintln!(
+                "  compare first:             {}   (the tracked version changed too: copy yours aside, \
+                 take the tracked version, then dvs add yours or a merge to keep it)",
+                join(&both)
+            );
+        }
+        if !keepable.is_empty() {
+            eprintln!(
+                "  keep your version:         dvs add {}   (makes it the tracked version)",
+                join(&keepable)
+            );
+        }
         let held_back = report
             .files
             .iter()
@@ -353,5 +371,29 @@ mod tests {
         let json = row_json(&row(GetCode::NotAFile, Path::new("b.csv")));
         assert_eq!(json["next_steps"], json!([]));
         assert!(json["hint"].is_null());
+    }
+
+    /// Both sides changed: compare first, and never a bare "keep yours".
+    #[test]
+    fn both_modified_hint_compares_first() {
+        let mut both = row(GetCode::LocalChanges, Path::new("b.csv"));
+        both.before = Before::BothModified;
+        both.hint = dvs::row_hint(&both);
+        let json = row_json(&both);
+        assert_eq!(json["before"], "both_modified");
+        assert_eq!(
+            json["hint"],
+            "your file and the tracked version both changed since dvs last wrote it, so compare \
+             them before keeping either. Copy yours aside, then take the tracked version: \
+             dvs get --force b.csv. To keep yours or a merge instead, put it back, then: \
+             dvs add b.csv"
+        );
+        assert_eq!(
+            json["next_steps"],
+            json!([
+                {"action": "get", "paths": ["b.csv"], "on_conflict": "overwrite"},
+                {"action": "add", "paths": ["b.csv"]},
+            ])
+        );
     }
 }

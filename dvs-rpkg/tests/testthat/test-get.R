@@ -109,7 +109,8 @@ test_that("after a branch switch, files dvs wrote are replaced without asking", 
 
 test_that("local changes abort by default and are kept", {
   new_dvs_test_repo()
-  switch_branches()
+  writeLines("main", "t.csv")
+  dvs_add("t.csv")
   writeLines("my edit", "t.csv")
   result <- dvs_get("t.csv")
   expect_equal(result$before, "modified")
@@ -129,6 +130,28 @@ test_that("local changes abort by default and are kept", {
   expect_equal(info$outcome, "aborted")
   expect_equal(info$on_conflict, "abort")
   expect_equal(info$source, "default")
+})
+
+test_that("when both sides changed, the hint says to compare first", {
+  new_dvs_test_repo()
+  switch_branches()
+  writeLines("my edit", "t.csv")
+  result <- dvs_get("t.csv")
+  expect_equal(result$before, "both_modified")
+  expect_equal(result$code, "local_changes")
+  expect_equal(
+    result$hint,
+    paste0(
+      "your file and the tracked version both changed since dvs last wrote it, ",
+      "so compare them before keeping either. Copy yours aside, then take the ",
+      'tracked version: dvs_get("t.csv", on_conflict = "overwrite"). ',
+      'To keep yours or a merge instead, put it back, then: dvs_add("t.csv")'
+    )
+  )
+  expect_equal(readLines("t.csv"), "my edit")
+  expect_equal(dvs_status()$status, "both_modified")
+  expect_equal(nrow(dvs_status(status = "modified")), 0L)
+  expect_equal(dvs_status(status = "both_modified")$path, "t.csv")
 })
 
 test_that("hints are in R syntax for every kind of row", {
@@ -260,7 +283,10 @@ test_that("printing shows the outcome, what needs attention, and survives subset
   file.remove("u.csv")
   res <- dvs_get(c("t.csv", "u.csv"))
   out <- capture.output(print(res))
-  expect_identical(out[1], "# Aborted, nothing changed: 1 file has local changes")
+  expect_identical(
+    out[1],
+    "# Aborted, nothing changed: 1 file has local changes and a newer tracked version"
+  )
   # The whole result prints its summary, not the line for a subset.
   expect_false(grepl("rows from", out[1], fixed = TRUE))
   # The policy decided something, so it is named, as in the CLI.

@@ -23,8 +23,13 @@ pub enum Status {
     Absent,
     /// Local file matches the baseline, while metadata points to another version.
     Stale,
-    /// Local file differs from current metadata and from the local baseline.
+    /// Local file differs from current metadata and from the local baseline,
+    /// and metadata still matches the baseline: only the local file changed.
     Modified,
+    /// Local file and metadata both differ from the local baseline, and from
+    /// each other: both changed since the last get.
+    #[serde(rename = "both_modified")]
+    BothModified,
     /// Local file differs from metadata, but no baseline exists to explain why.
     Unsynced,
 }
@@ -36,6 +41,7 @@ impl fmt::Display for Status {
             Status::Absent => write!(f, "absent"),
             Status::Stale => write!(f, "stale"),
             Status::Modified => write!(f, "modified"),
+            Status::BothModified => write!(f, "both_modified"),
             Status::Unsynced => write!(f, "unsynced"),
             Status::Untracked => write!(f, "untracked"),
         }

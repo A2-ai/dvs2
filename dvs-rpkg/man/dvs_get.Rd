@@ -46,7 +46,8 @@ The condition has class \code{dvs_get_incomplete} and carries the result as
 \value{
 A tibble of class \code{dvs_get_result} with one row per requested file
 and always the same columns: \code{path}, \code{local_path}, \code{before} (\code{"absent"},
-\code{"current"}, \code{"clean"}, \code{"modified"}, \code{"unknown"}, \code{"not_tracked"},
+\code{"current"}, \code{"clean"}, \code{"modified"}, \code{"both_modified"}, \code{"unknown"},
+\code{"not_tracked"},
 \code{"not_a_file"}, \code{"unsafe_path"}), \code{action} (\code{"restored"}, \code{"replaced"},
 \code{"unchanged"}, \code{"skipped"}, \code{"not_run"}, \code{"failed"}, \code{"would_restore"},
 \code{"would_replace"}), \code{satisfied}, \code{size}, \code{target_hash}, \code{local_hash},
