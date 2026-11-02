@@ -69,21 +69,9 @@ pub fn coded(code: ErrorCode, message: impl Into<String>) -> Error {
 }
 
 pub fn error_code(error: &Error) -> ErrorCode {
-    if let Some(error) = error.downcast_ref::<CodedError>() {
-        error.code
-    } else if error
-        .downcast_ref::<dvs::globbing::NoFilesSelected>()
-        .is_some()
-    {
-        ErrorCode::NoFilesSelected
-    } else if error.downcast_ref::<dvs::config::ConfigError>().is_some() {
-        ErrorCode::InvalidConfiguration
-    } else if let Some(code) = dvs::backend_error_code(error) {
-        code
-    } else if error.downcast_ref::<std::io::Error>().is_some() {
-        ErrorCode::IoError
-    } else {
-        ErrorCode::OperationFailed
+    match error.downcast_ref::<CodedError>() {
+        Some(error) => error.code,
+        None => dvs::error_code(error),
     }
 }
 
