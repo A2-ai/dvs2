@@ -10,6 +10,7 @@
 - R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
 - R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
 - R package: `format_byte_size(TRUE)` and `format_byte_size(FALSE)` are errors, as `set_dvs_threads(TRUE)` is. They returned `"1 B"` and `"0 B"`.
+- Rust library: `AddReport` has a new public field, `dry_run`. Code outside the crate that builds an `AddReport` from its fields must set it.
 
 ### Added
 
@@ -22,6 +23,7 @@
 - R package: a bad `dvs.num_threads` or `dvs.on_error` option raises the same `dvs_error_argument`, and the message names the option.
 - R package: `dvs_add()` returns a `dvs_add_result`. `dvs_result_info()` takes it and returns the outcome, the counts, the bytes and the summary the CLI prints ("Added 2, 1 unchanged"), as in the CLI's JSON. A printed result starts with the summary.
 - R package: `dvs_result_info()` has `summary`, the summary the CLI prints. A printed `dvs_get()` result and its `on_error` warning or error start with it, so R and the CLI say the same. `on_conflict = <policy> (<source>)` appears only when the policy acted, as in the CLI.
+- Rust library: `AddReport::summary()`, `Counts::summary()` and `RunOutcome::as_str()`. The CLI and R print the same summary.
 
 ### Fixed
 
