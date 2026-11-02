@@ -5,7 +5,8 @@
 #'   it was not given, so the folder is `.dvs`), `backend_path` (the absolute
 #'   path of the storage directory), `backend_name` (the project's name there)
 #'   and `backend_group` (`NA` when no group was given and your primary group
-#'   could not be found).
+#'   could not be found). `joined` is `TRUE` when the project was in the
+#'   storage directory already, and this call joined it.
 #' @rdname dvs_init
 #' @export
 dvs_init <- function(

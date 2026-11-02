@@ -14,7 +14,7 @@
 
 ### Added
 
-- `dvs info` and `dvs init --json` show the project name (`project`). `dvs init --json` also says whether it `joined` an existing project. R: `dvs_init()` returns `backend_name`.
+- `dvs info` and `dvs init --json` show the project name (`project`). `dvs init --json` also says whether it `joined` an existing project. R: `dvs_init()` returns `backend_name` and `joined`.
 - R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
 - R package: `just rpkg-reference` builds the HTML reference manual. The one in `dist/reference/` is for users and leaves out the internal pages, as R's help index does. The one in `dvs-rpkg/rust-target/doc/r/` is for development and keeps them.
 - R package: `dvs_status()` has a `code` column, the kind of failure of a row that failed, as in the CLI's JSON.

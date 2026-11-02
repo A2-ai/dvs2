@@ -59,7 +59,7 @@ test_that("dvs_init returns a single-row tibble describing the config", {
   )
   expect_setequal(
     names(result),
-    c("compression", "metadata_folder_name", "backend_path", "backend_name", "backend_group")
+    c("compression", "metadata_folder_name", "backend_path", "backend_name", "backend_group", "joined")
   )
   # Without a name, the project takes the folder's
   expect_equal(result$backend_name, basename(repo))
@@ -75,6 +75,7 @@ test_that("projects share a storage directory, each in its own folder", {
 
   first <- dvs_init(storage)
   expect_equal(first$backend_name, "analysis")
+  expect_false(first$joined)
   expect_equal(first$backend_path, normalizePath(storage, winslash = "/"))
   # The folder is named as dvs-server names it: the blake3 hash of the name
   folders <- list.files(storage)
@@ -94,6 +95,7 @@ test_that("projects share a storage directory, each in its own folder", {
   setwd(file.path(base, "c/elsewhere"))
   joined <- dvs_init(storage, name = "analysis")
   expect_equal(joined$backend_name, "analysis")
+  expect_true(joined$joined)
   expect_length(list.files(storage), 1L)
   expect_equal(nrow(dvs_audit_log()), 2L)
 })

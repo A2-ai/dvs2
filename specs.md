@@ -428,7 +428,8 @@ dvs_init(
   A refused or invalid name raises a `dvs_error_argument` with `param = "name"`. For a refused name the message
   ends with `dvs_init(storage_path, name = "analysis")` and `dvs_init(storage_path, name = "<other>")`.
 
-Returns a single-row data frame describing the resulting configuration, with the name in `backend_name`.
+Returns a single-row data frame describing the resulting configuration, with the name in `backend_name`, and
+`joined`, `TRUE` when the project was in the storage directory already, as in the CLI's `--json`.
 
 ### add
 

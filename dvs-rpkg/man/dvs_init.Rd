@@ -40,7 +40,8 @@ A one-row tibble with the configuration written to \code{dvs.toml}:
 it was not given, so the folder is \code{.dvs}), \code{backend_path} (the absolute
 path of the storage directory), \code{backend_name} (the project's name there)
 and \code{backend_group} (\code{NA} when no group was given and your primary group
-could not be found).
+could not be found). \code{joined} is \code{TRUE} when the project was in the
+storage directory already, and this call joined it.
 }
 \description{
 Creates the \code{.dvs} metadata folder and configures storage for versioned files.

@@ -161,7 +161,8 @@ impl From<CompressionChoice> for Compression {
 ///   two unrelated projects can have the same folder name.
 /// @return A single-row data frame describing the resulting configuration:
 ///   `compression`, `metadata_folder_name`, `backend_path`, `backend_name`,
-///   `backend_group`.
+///   `backend_group`, and `joined`, whether the project was in the storage
+///   directory already.
 ///   An optional config field that was not set comes back as `NA`.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_init_impl", internal, call = caller)]
@@ -191,8 +192,8 @@ pub(crate) fn dvs_init(
     // exactly what was persisted to dvs.toml — notably the absolute
     // `backend_path` that dvs core canonicalizes — rather than the pre-init
     // input. Keeps this rpkg-only: core canonicalizes, we just read the result.
-    let repo_root = match init(&root_dir, config) {
-        Ok(done) => done.root,
+    let done = match init(&root_dir, config) {
+        Ok(done) => done,
         Err(error) => {
             if let Some(exists) = error.downcast_ref::<dvs::init::ProjectExists>() {
                 miniextendr_api::arg_error!(
@@ -211,15 +212,27 @@ pub(crate) fn dvs_init(
             return Err(error);
         }
     };
-    let config = Config::find(&repo_root)
-        .ok_or_else(|| anyhow!("dvs.toml not found after init at {}", repo_root.display()))??;
+    let config = Config::find(&done.root)
+        .ok_or_else(|| anyhow!("dvs.toml not found after init at {}", done.root.display()))??;
 
     // `metadata_folder_name` is an `Option<String>`: when set it comes back as a
     // plain character scalar, when unset (None) as a scalar `NA` (logical)
     // column. Neither is a list-column, so init rows stack with
     // rbind()/bind_rows(). Relies on miniextendr#307 (fixed); the R tests in
     // test-init.R guard both the set and unset cases.
-    Ok(miniextendr_api::serde::vec_to_dataframe(&[config])?)
+    Ok(miniextendr_api::serde::vec_to_dataframe(&[InitRow {
+        config: &config,
+        joined: done.joined,
+    }])?)
+}
+
+/// The row `dvs_init()` returns: the configuration as written, and whether
+/// the project was in the storage directory already, as the CLI's `joined`.
+#[derive(serde::Serialize)]
+struct InitRow<'a> {
+    #[serde(flatten)]
+    config: &'a Config,
+    joined: bool,
 }
 
 /// @title Add files to DVS-managed storage

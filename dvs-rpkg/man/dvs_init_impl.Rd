@@ -40,7 +40,8 @@ two unrelated projects can have the same folder name.}
 \value{
 A single-row data frame describing the resulting configuration:
 \code{compression}, \code{metadata_folder_name}, \code{backend_path}, \code{backend_name},
-\code{backend_group}.
+\code{backend_group}, and \code{joined}, whether the project was in the storage
+directory already.
 An optional config field that was not set comes back as \code{NA}.
 }
 \description{
