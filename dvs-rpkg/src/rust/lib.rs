@@ -304,6 +304,10 @@ impl From<StatusChoice> for Status {
 /// A file whose status cannot be read is always kept, with status `"error"`,
 /// the kind of failure in `code` and the reason in `error`.
 ///
+/// Status reads only local files: the working files, their `.dvs` records
+/// and dvs's local cache. It never contacts the storage or the dvs server, so
+/// it does not say whether the stored copies exist or whether you can get them.
+///
 /// @param paths Files or directories to report, relative to the working
 ///   directory. `NULL` is the same as `character(0)`.
 /// @param recursive If `TRUE`, directory inputs include all descendants.
