@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use fs_err as fs;
+use url::Url;
 use uuid::Uuid;
 
 use crate::audit::AuditEntry;
@@ -18,6 +19,24 @@ pub fn create_metadata_folder(root_dir: impl AsRef<Path>, config: &Config) -> Re
         && e.kind() != std::io::ErrorKind::AlreadyExists
     {
         return Err(e.into());
+    }
+    Ok(())
+}
+
+/// Refuses a folder that dvs already initialized: one with a `dvs.toml`, or
+/// with a metadata folder that has files in it. `init` checks it before it
+/// touches the backend. `dvs init server` checks it before it logs in too.
+pub fn check_uninitialized(root_dir: impl AsRef<Path>, config: &Config) -> Result<()> {
+    let root_dir = root_dir.as_ref();
+    if root_dir.join(paths::CONFIG_FILE_NAME).exists() {
+        bail!("dvs is already initialized (dvs.toml exists)");
+    }
+    let metadata_dir = root_dir.join(config.metadata_folder_name());
+    if metadata_dir.exists() && fs::read_dir(&metadata_dir)?.next().is_some() {
+        bail!(
+            "dvs is already initialized ({} exists and is not empty)",
+            config.metadata_folder_name()
+        );
     }
     Ok(())
 }
@@ -48,18 +67,8 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
         Backend::Server(_) => { /* nothing to do here */ }
     }
 
-    if root_dir.join(paths::CONFIG_FILE_NAME).exists() {
-        bail!("dvs is already initialized (dvs.toml exists)");
-    }
-
-    // Check the metadata folder before touching the backend
-    let metadata_dir = root_dir.join(config.metadata_folder_name());
-    if metadata_dir.exists() && fs::read_dir(&metadata_dir)?.next().is_some() {
-        bail!(
-            "dvs is already initialized ({} exists and is not empty)",
-            config.metadata_folder_name()
-        );
-    }
+    // Before touching the backend
+    check_uninitialized(root_dir, &config)?;
 
     log::debug!("Initializing backend");
     if config.backend().init(config.compression())? {
@@ -97,6 +106,40 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
 
     log::info!("DVS repository initialized successfully");
     Ok(root_dir.to_path_buf())
+}
+
+/// Refuses a folder with a `dvs.toml`: attach writes its own. `dvs attach`
+/// checks it before it logs in.
+pub fn check_attachable(dir: impl AsRef<Path>) -> Result<()> {
+    if dir.as_ref().join(paths::CONFIG_FILE_NAME).exists() {
+        bail!("Configuration file already exists");
+    }
+    Ok(())
+}
+
+/// Attaches `dir` to the project `name` on the dvs server at `url`: checks
+/// that the server has the project and that you can reach it, then writes
+/// the metadata folder and `dvs.toml`. The server sets the compression, so
+/// `dvs.toml` has none. It needs a stored token: log in first.
+pub fn attach(
+    dir: impl AsRef<Path>,
+    name: String,
+    url: Url,
+    metadata_folder_name: Option<String>,
+) -> Result<()> {
+    let dir = dir.as_ref();
+    check_attachable(dir)?;
+    let mut config = Config::new_server(name, url, None);
+    config.set_compression(None);
+    if let Some(m) = metadata_folder_name {
+        config.set_metadata_folder_name(m);
+    }
+    if let Backend::Server(s) = config.backend() {
+        s.attach()?;
+    }
+    // Before the config, so a failure leaves nothing that blocks a retry
+    create_metadata_folder(dir, &config)?;
+    config.save(dir)
 }
 
 #[cfg(test)]

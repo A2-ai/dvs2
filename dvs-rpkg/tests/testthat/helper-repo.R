@@ -36,3 +36,9 @@ new_dvs_test_repo <- function() {
 
   list(repo = repo, storage = storage)
 }
+
+# Turn the project in the working directory into a server project at `url`.
+# With no token, or a server that does not answer, the tests need no server.
+server_project <- function(url) {
+  writeLines(c("[backend]", 'name = "p"', sprintf('url = "%s"', url)), "dvs.toml")
+}

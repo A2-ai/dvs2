@@ -3,6 +3,7 @@
 //! This crate provides R bindings for the DVS (Data Version Control System).
 
 mod cli_progress;
+mod server;
 mod test_support;
 
 use std::path::PathBuf;
@@ -26,7 +27,7 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
+    Compression, ErrorCode, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
     OperationContext, PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
 };
 
@@ -53,7 +54,9 @@ where
 {
     let mut bar = CliProgressBar::new();
     let result = WorkerPump::<ProgressBytes>::new().channel_capacity(64).run(
-        |tx| task(tx).map_err(Into::into),
+        // The pump boxes the error, which loses what anyhow knew about it.
+        // A dvs::Error carries the code across.
+        |tx| task(tx).map_err(|e| dvs::Error::new(dvs::error_code(&e), format!("{e:#}")).into()),
         |bytes| {
             if bytes < 0 {
                 bar.grow_total((-bytes) as f64);
@@ -63,7 +66,10 @@ where
         },
     );
     bar.done();
-    result.map_err(|e| anyhow!("{e}"))
+    result.map_err(|e| match e.downcast::<dvs::Error>() {
+        Ok(e) => (*e).into(),
+        Err(e) => anyhow!("{e}"),
+    })
 }
 
 /// Build the `on_file_start` closure that feeds byte-level progress.
@@ -163,7 +169,7 @@ pub(crate) fn dvs_init(
     #[miniextendr(default = "NULL", no_na)] group: Option<String>,
     #[miniextendr(default = "NULL", no_na)] metadata_folder_name: Option<String>,
     #[miniextendr(match_arg, default = "\"zstd\"")] compression: CompressionChoice,
-) -> Result<BuiltDataFrame> {
+) -> Result<BuiltDataFrame, DvsError> {
     let root_dir = match root_dir {
         Some(d) => d,
         None => std::env::current_dir()?,
@@ -216,7 +222,7 @@ pub(crate) fn dvs_add(
     #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
     #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<BuiltDataFrame> {
+) -> Result<BuiltDataFrame, DvsError> {
     let paths = paths.unwrap_or_default();
     // The CLI requires paths unless --glob is given. With neither, the library
     // would refuse the working directory as a directory.
@@ -230,7 +236,7 @@ pub(crate) fn dvs_add(
         .into_iter()
         .collect();
     if all_paths.is_empty() {
-        return Err(anyhow!("No files to add"));
+        return Err(DvsError::new(ErrorCode::NoFilesSelected, "No files to add"));
     }
 
     let dry_run = dry_run.unwrap_or(false);
@@ -335,12 +341,15 @@ pub(crate) fn dvs_status(
     #[miniextendr(default = "NULL", no_na)] recursive: Option<bool>,
     #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
     #[miniextendr(match_arg, several_ok)] status: Vec<StatusChoice>,
-) -> Result<BuiltDataFrame> {
+) -> Result<BuiltDataFrame, DvsError> {
     let config = find_config()?;
     let dvs_paths = DvsPaths::from_cwd(&config)?;
 
     if glob.is_some() && recursive.unwrap_or(false) {
-        return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
+        return Err(DvsError::new(
+            ErrorCode::InvalidArguments,
+            "`glob` and `recursive` are mutually exclusive",
+        ));
     }
 
     // Every choice selected shows every row, as no status flag does in the CLI.
@@ -396,7 +405,7 @@ pub(crate) fn dvs_status(
 #[miniextendr(r_name = "dvs_audit_log_impl", internal, call = caller)]
 pub(crate) fn dvs_audit_log(
     #[miniextendr(default = "character(0)", no_na)] paths: Option<Vec<PathBuf>>,
-) -> Result<BuiltDataFrame> {
+) -> Result<BuiltDataFrame, DvsError> {
     let config = find_config()?;
 
     // An empty `paths` slice returns the whole audit log. A non-empty filter
@@ -547,11 +556,14 @@ pub(crate) fn dvs_get(
     #[miniextendr(match_arg)] on_conflict: Option<OnConflictChoice>,
     #[miniextendr(match_arg)] on_error: OnErrorChoice,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
-) -> Result<GetResult> {
+) -> Result<GetResult, DvsError> {
     let dry_run = dry_run.unwrap_or(false);
     let explicit = on_conflict.map(OnConflict::from);
     if glob.is_some() && recursive.unwrap_or(false) {
-        return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
+        return Err(DvsError::new(
+            ErrorCode::InvalidArguments,
+            "`glob` and `recursive` are mutually exclusive",
+        ));
     }
     let config = find_config()?;
     let (policy, source) = match config.get_on_conflict(explicit) {
@@ -609,7 +621,8 @@ pub(crate) fn dvs_get(
 /// `dvs_config_error`.
 fn find_config() -> Result<Config> {
     let current_dir = std::env::current_dir()?;
-    match Config::find(&current_dir).ok_or_else(|| anyhow!("Not in a DVS repository"))? {
+    let not_in_project = || dvs::Error::new(ErrorCode::NotInProject, "Not in a DVS repository");
+    match Config::find(&current_dir).ok_or_else(not_in_project)? {
         Ok(config) => Ok(config),
         Err(e) => config_error(&e.to_string()),
     }
@@ -617,7 +630,55 @@ fn find_config() -> Result<Config> {
 
 /// Raises a `dvs_config_error`, one of the `dvs_error` family.
 fn config_error(message: &str) -> ! {
-    miniextendr_api::error!(class = ["dvs_config_error", "dvs_error"], "{message}")
+    miniextendr_api::error!(
+        class = ["dvs_config_error", "dvs_error"],
+        data = { code = ErrorCode::InvalidConfiguration.as_str() },
+        "{message}"
+    )
+}
+
+/// A failed command, raised in R as a `dvs_error` with `code`, the code the
+/// CLI's JSON gives the same failure (`auth_required`, `access_denied`,
+/// `not_in_project`, ...). The message is the CLI's JSON `message`.
+#[derive(Debug, miniextendr_api::RCondition)]
+#[condition(class = "dvs_error", message = "{text}")]
+pub(crate) struct DvsError {
+    code: String,
+    #[condition(skip)]
+    text: String,
+}
+
+impl DvsError {
+    fn new(code: ErrorCode, text: impl Into<String>) -> Self {
+        DvsError {
+            code: code.as_str().to_string(),
+            text: text.into(),
+        }
+    }
+}
+
+impl From<anyhow::Error> for DvsError {
+    fn from(error: anyhow::Error) -> Self {
+        DvsError::new(dvs::error_code(&error), format!("{error:#}"))
+    }
+}
+
+impl From<std::io::Error> for DvsError {
+    fn from(error: std::io::Error) -> Self {
+        anyhow::Error::from(error).into()
+    }
+}
+
+impl From<miniextendr_api::dataframe::DataFrameError> for DvsError {
+    fn from(error: miniextendr_api::dataframe::DataFrameError) -> Self {
+        anyhow::Error::from(error).into()
+    }
+}
+
+impl From<miniextendr_api::serde::RSerdeError> for DvsError {
+    fn from(error: miniextendr_api::serde::RSerdeError) -> Self {
+        anyhow::Error::from(error).into()
+    }
 }
 
 /// One row of the `files` frame of a `dvs_get()` result.
