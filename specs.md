@@ -129,7 +129,9 @@ fails per row). `path` is relative to the project root (`info`'s `project_root`)
 relative to the current directory.
 
 `dvs availability <HASHES>...` takes one or more BLAKE3 hashes (an invalid one is `invalid_arguments`) and
-reports, per hash and in input order, whether storage has that content, without downloading it.
+reports, per hash and in input order, whether storage has that content, without downloading it. A hash is the
+full 64 hexadecimal characters. A shorter one, such as the start that the history table shows, is refused with its
+length and a pointer to `dvs history --json`, which shows the full hash.
 `dvs history <PATHS>...` takes one or more file paths and reports their stored upload history; the files need
 not exist in this checkout. It takes files, not folders: a path that is a folder is refused with
 `invalid_arguments` (exit `2`), as is a path outside the project.
