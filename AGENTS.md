@@ -8,6 +8,8 @@ Commit `Cargo.lock` due to the presence of dependencies on github.
 
 No development build vendors. Vendoring happens only in the release tarball build.
 
+The cargo recipes on the rpkg crate (`rpkg-build`, `rpkg-build-release`, `rpkg-check`, `rpkg-clippy`, `rpkg-test`) build in `dvs-rpkg/rust-target`, where configure puts the R build, as in ncakit. Never in `dvs-rpkg/src/rust/target`. A `CARGO_TARGET_DIR` you set still wins. A target dir shared by several worktrees, such as one from `~/.cargo/config.toml`, can compile another worktree's code, so in a worktree run cargo on the root workspace with `CARGO_TARGET_DIR=$PWD/target`.
+
 The recipes that call minirextendr put the rv library first in `R_LIBS`, so they use the minirextendr that `dvs-rpkg/rproject.toml` and `dvs-rpkg/rv.lock` pin. Run `just rpkg-sync` after a fresh checkout or a pin change. They stop unless the `Rscript` on `PATH` is the R version in `rproject.toml` and the rv library holds minirextendr.
 
 ## Release tarball
