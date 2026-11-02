@@ -30,9 +30,15 @@ check() {
 
 # ── Setup: temp repo + sibling storage ──
 
-DVS_REPO="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
+# Outside the dvs2 checkout: a project under ui/ with no git repo of its own
+# is in the checkout's working tree, where init refuses its storage.
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dvs_validate_init_XXX")"
+WORK_IN_GIT=no
+git -C "$WORK_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 && WORK_IN_GIT=yes
+check "no" "$WORK_IN_GIT" "precondition: the work dir is not inside a git working tree"
+DVS_REPO="$(mktemp -d "$WORK_DIR"/dvs_repo_cli_XXX)"
 RUN_SUFFIX="${DVS_REPO##*_}"
-DVS_STORAGE="$SCRIPT_DIR/dvs_storage_cli_$RUN_SUFFIX"
+DVS_STORAGE="$WORK_DIR/dvs_storage_cli_$RUN_SUFFIX"
 mkdir "$DVS_STORAGE"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -48,8 +54,8 @@ check "yes" "$meta_exists" "init local creates default .dvs metadata folder"
 # ─────────────────────────────────────────────────────────────────────────────
 say
 say "=== Claim: the pre-backend form 'dvs init <PATH>' exits 2 and suggests 'dvs init local <PATH>' ==="
-OLD_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_old"
-DVS_STORAGE_OLD="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_old"
+OLD_REPO="$WORK_DIR/dvs_repo_cli_${RUN_SUFFIX}_old"
+DVS_STORAGE_OLD="$WORK_DIR/dvs_storage_cli_${RUN_SUFFIX}_old"
 mkdir -p "$OLD_REPO" "$DVS_STORAGE_OLD"
 cd "$OLD_REPO"
 rc=0
@@ -74,7 +80,7 @@ check "1" "$rc" "re-init in dir with existing dvs.toml exits 1"
 # ─────────────────────────────────────────────────────────────────────────────
 say
 say "=== Claim: check is LOCAL, parent dvs.toml does NOT block nested init ==="
-DVS_STORAGE_NESTED="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_nested"
+DVS_STORAGE_NESTED="$WORK_DIR/dvs_storage_cli_${RUN_SUFFIX}_nested"
 mkdir -p "$DVS_REPO/nested" "$DVS_STORAGE_NESTED"
 cd "$DVS_REPO/nested"
 rc=0
@@ -86,7 +92,7 @@ check "yes" "$nested_toml" "nested dvs.toml created"
 # ─────────────────────────────────────────────────────────────────────────────
 say
 say "=== Claim: init rejects a storage path inside the repository root ==="
-IN_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_inside"
+IN_REPO="$WORK_DIR/dvs_repo_cli_${RUN_SUFFIX}_inside"
 mkdir -p "$IN_REPO"
 cd "$IN_REPO"
 rc=0
@@ -97,12 +103,35 @@ check "absent" "$in_toml" "storage inside the repo root writes no dvs.toml"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say
+say "=== Claim: init rejects a storage path inside the git repository that holds the project ==="
+GIT_REPO="$WORK_DIR/dvs_repo_cli_${RUN_SUFFIX}_git"
+mkdir -p "$GIT_REPO/study"
+git -C "$GIT_REPO" init -q
+cd "$GIT_REPO/study"
+rc=0
+git_out="$(dvs init local "$GIT_REPO/study-store" 2>&1)" || rc=$?
+git_toml=absent; [ -f "$GIT_REPO/study/dvs.toml" ] && git_toml=present
+git_store=absent; [ -e "$GIT_REPO/study-store" ] && git_store=present
+# The repo's folder name is the key token. It must stand on its own, not only
+# as the start of the store path, and it survives /tmp -> /private/tmp.
+names_repo="$(printf '%s' "$git_out" | python3 -c 'import re,sys
+print("yes" if re.search(re.escape(sys.argv[1]) + r"(?![\w/-])", sys.stdin.read()) else "no")' "${GIT_REPO##*/}")"
+check "1" "$rc" "storage elsewhere in the enclosing git repo exits 1"
+check "absent" "$git_toml" "storage in the enclosing git repo writes no dvs.toml"
+check "absent" "$git_store" "storage in the enclosing git repo is not created"
+check "yes" "$names_repo" "the refusal names the git repository"
+rc=0
+dvs init local "$WORK_DIR/dvs_storage_cli_${RUN_SUFFIX}_git" >/dev/null || rc=$?
+check "0" "$rc" "storage outside the enclosing git repo is accepted"
+
+# ─────────────────────────────────────────────────────────────────────────────
+say
 say "=== Claim: --root-dir <DIR> creates dvs.toml in that root instead of cwd ==="
-ROOTDIR="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_root"
-DVS_STORAGE_ROOT="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_root"
+ROOTDIR="$WORK_DIR/dvs_repo_cli_${RUN_SUFFIX}_root"
+DVS_STORAGE_ROOT="$WORK_DIR/dvs_storage_cli_${RUN_SUFFIX}_root"
 mkdir -p "$ROOTDIR" "$DVS_STORAGE_ROOT"
 # Call from a different cwd to prove dvs.toml lands in --root-dir, not cwd.
-CWD_PROBE="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_cwdprobe"
+CWD_PROBE="$WORK_DIR/dvs_repo_cli_${RUN_SUFFIX}_cwdprobe"
 mkdir -p "$CWD_PROBE"
 cd "$CWD_PROBE"
 dvs init local --root-dir "$ROOTDIR" "$DVS_STORAGE_ROOT"
@@ -114,8 +143,8 @@ check "absent" "$cwd_toml" "--root-dir does NOT create dvs.toml in cwd"
 # ─────────────────────────────────────────────────────────────────────────────
 say
 say "=== Claim: --metadata-folder-name <NAME> uses custom metadata folder ==="
-MFN_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_mfn"
-DVS_STORAGE_MFN="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_mfn"
+MFN_REPO="$WORK_DIR/dvs_repo_cli_${RUN_SUFFIX}_mfn"
+DVS_STORAGE_MFN="$WORK_DIR/dvs_storage_cli_${RUN_SUFFIX}_mfn"
 mkdir -p "$MFN_REPO" "$DVS_STORAGE_MFN"
 cd "$MFN_REPO"
 dvs init local --metadata-folder-name .mymeta "$DVS_STORAGE_MFN"
@@ -130,8 +159,8 @@ check "yes" "$toml_has_mfn" "dvs.toml records metadata_folder_name = .mymeta"
 # ─────────────────────────────────────────────────────────────────────────────
 say
 say "=== Claim: --no-compression -> compression \"none\" (verify via add metadata, specs.md, Compression) ==="
-NC_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_nc"
-DVS_STORAGE_NC="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_nc"
+NC_REPO="$WORK_DIR/dvs_repo_cli_${RUN_SUFFIX}_nc"
+DVS_STORAGE_NC="$WORK_DIR/dvs_storage_cli_${RUN_SUFFIX}_nc"
 mkdir -p "$NC_REPO" "$DVS_STORAGE_NC"
 cd "$NC_REPO"
 dvs init local --no-compression "$DVS_STORAGE_NC"
@@ -162,8 +191,8 @@ check "zstd" "$def_comp" "default add metadata records compression=zstd"
 say
 say "=== Claim: --group <GRP> sets unix group on storage dir/files ==="
 USER_GROUP="$(id -gn)"
-GRP_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_grp"
-DVS_STORAGE_GRP="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_grp"
+GRP_REPO="$WORK_DIR/dvs_repo_cli_${RUN_SUFFIX}_grp"
+DVS_STORAGE_GRP="$WORK_DIR/dvs_storage_cli_${RUN_SUFFIX}_grp"
 mkdir -p "$GRP_REPO" "$DVS_STORAGE_GRP"
 cd "$GRP_REPO"
 dvs init local --group "$USER_GROUP" "$DVS_STORAGE_GRP"
@@ -178,8 +207,8 @@ check "$USER_GROUP" "$toml_grp" "--group recorded in dvs.toml backend.group"
 # ─────────────────────────────────────────────────────────────────────────────
 say
 say "=== Claim: --json prints the v1 envelope with project_root (specs.md, Machine output) ==="
-JSON_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_json"
-DVS_STORAGE_JSON="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_json"
+JSON_REPO="$WORK_DIR/dvs_repo_cli_${RUN_SUFFIX}_json"
+DVS_STORAGE_JSON="$WORK_DIR/dvs_storage_cli_${RUN_SUFFIX}_json"
 mkdir -p "$JSON_REPO" "$DVS_STORAGE_JSON"
 cd "$JSON_REPO"
 json_out="$(dvs init local --json "$DVS_STORAGE_JSON")"
@@ -223,7 +252,7 @@ say
 say "=== Claim: partial-failure best-effort cleanup ==="
 # Storage creation must fail AFTER dvs.toml is conceptually written; force by
 # pointing storage at a path under a non-directory so mkdir fails.
-PF_REPO="$SCRIPT_DIR/dvs_repo_cli_${RUN_SUFFIX}_pf"
+PF_REPO="$WORK_DIR/dvs_repo_cli_${RUN_SUFFIX}_pf"
 mkdir -p "$PF_REPO"
 cd "$PF_REPO"
 rc=0
@@ -235,7 +264,7 @@ check "1" "$rc" "init with unwritable storage exits non-zero"
 check "absent" "$pf_toml" "dvs.toml cleaned up after partial failure"
 check "absent" "$pf_meta" "metadata folder cleaned up after partial failure"
 # Prove retry is possible after cleanup.
-DVS_STORAGE_PF="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_pf"
+DVS_STORAGE_PF="$WORK_DIR/dvs_storage_cli_${RUN_SUFFIX}_pf"
 mkdir -p "$DVS_STORAGE_PF"
 rc=0
 dvs init local "$DVS_STORAGE_PF" || rc=$?
