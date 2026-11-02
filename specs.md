@@ -394,6 +394,10 @@ half-written sidecar. A killed `dvs` can leave a temp file (`<name>.dvs-tmp.<uui
 sidecar, and it is safe to delete. An empty sidecar, which a `dvs` from before atomic writes could leave, fails
 that file in `status` and `get` with "the .dvs file is empty. Add the file again to repair it", and `add` replaces
 it.
+A sidecar with git merge conflict markers fails that file in `status`, `add` and `get` with `bad_metadata` and "the
+.dvs file has git merge conflict markers. Resolve the conflict by keeping one side, then run dvs again". Any other
+sidecar that does not parse gives "the .dvs file is not a valid record: <reason>". All three commands start the
+message with `cannot read <sidecar path>: `, so it names the file to fix.
 
 Each file in an `add` result reports an outcome:
 

@@ -3,7 +3,7 @@ use crate::cache::{self, FileStat};
 use crate::files::metadata::read_record;
 use crate::operation::{FileRow, Hashing, OperationContext, OperationPlan, OperationRow, RowState};
 use crate::{DvsPaths, ErrorCode, FileMetadata, Hashes, PathFilter, Status};
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use fs_err as fs;
 use rayon::prelude::*;
 use serde::ser::SerializeStruct;
@@ -238,7 +238,11 @@ fn inspect_path(
     };
     let facts = (|| -> Result<()> {
         row.code = Some(ErrorCode::BadMetadata);
-        row.metadata = Some(read_record(&paths.metadata_path(&path))?);
+        // Named as get and add name it, so the user can find the file to fix
+        let record = paths.metadata_path(&path);
+        row.metadata = Some(
+            read_record(&record).map_err(|e| anyhow!("cannot read {}: {e}", record.display()))?,
+        );
         row.code = Some(ErrorCode::IoError);
         let key = path.to_string_lossy();
         row.baseline = cache
@@ -406,6 +410,39 @@ mod tests {
         assert_eq!(rows[0].code, Some(ErrorCode::BadMetadata));
         let error = rows[0].error.as_deref().unwrap();
         assert!(error.contains("Add the file again to repair it"), "{error}");
+    }
+
+    // A git merge conflict in the record says so, and names the record
+    #[test]
+    fn a_conflicted_record_says_so() {
+        let (_temp, paths) = fixture();
+        let record = paths.metadata_path(std::path::Path::new("data.txt"));
+        fs::write(
+            &record,
+            b"{\n<<<<<<< HEAD\n  \"size\": 1\n=======\n  \"size\": 2\n>>>>>>> theirs\n}\n",
+        )
+        .unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
+        assert_eq!(rows[0].code, Some(ErrorCode::BadMetadata));
+        assert_eq!(
+            rows[0].error.as_deref().unwrap(),
+            format!(
+                "cannot read {}: the .dvs file has git merge conflict markers. Resolve the \
+                 conflict by keeping one side, then run dvs again",
+                record.display()
+            )
+        );
+        fs::write(&record, b"broken").unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
+        let error = rows[0].error.as_deref().unwrap();
+        assert!(
+            error.contains("the .dvs file is not a valid record: "),
+            "{error}"
+        );
     }
 
     #[test]

@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- A `.dvs` file with git merge conflict markers says so in `status`, `add` and `get`: "the .dvs file has git merge conflict markers. Resolve the conflict by keeping one side, then run dvs again". `status` and `add` showed only the JSON parser error, such as "key must be a string at line 3 column 1". Any other `.dvs` file that does not parse says "the .dvs file is not a valid record". `status` names the `.dvs` file, as `add` and `get` do.
 - `dvs add`, `get` and `status` stopped by GNU `timeout -s INT` no longer quit at once at random, without a result and without the `.gitignore` entries of the files already added. `timeout` signals the process and then its own process group, so the signal could arrive twice, and a second signal quits at once. A signal within a quarter second of the first is not a second one now.
 - A killed `dvs add` no longer leaves an empty `.dvs` file. An empty one failed that file in `status`, `add` and `get` until it was deleted by hand. A `.dvs` file is written to a temp file, then renamed. Adding the file again replaces an empty one that an older `dvs` left, and `status` and `get` say that the file is empty.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.

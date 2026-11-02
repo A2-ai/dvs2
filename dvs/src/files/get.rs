@@ -1639,9 +1639,18 @@ mod tests {
 
         let report = repo.get(&["a.csv", "b.csv"], OnConflict::Abort);
         assert_eq!(report.outcome, GetOutcome::Aborted);
-        assert_eq!(
-            row(&report, "b.csv").code,
-            Some(GetCode::Shared(ErrorCode::BadMetadata))
+        let b = row(&report, "b.csv");
+        assert_eq!(b.code, Some(GetCode::Shared(ErrorCode::BadMetadata)));
+        let message = b.message.as_deref().unwrap();
+        assert!(
+            message.ends_with("the .dvs file has git merge conflict markers. Resolve the conflict by keeping one side, then run dvs again"),
+            "{message}"
+        );
+        assert!(
+            b.hint
+                .as_deref()
+                .unwrap()
+                .contains("resolve a git merge conflict")
         );
         assert_eq!(row(&report, "a.csv").code, Some(GetCode::BatchAborted));
         assert!(!repo.root.join("a.csv").exists());

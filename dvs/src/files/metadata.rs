@@ -110,7 +110,7 @@ impl FileMetadata {
                 log::debug!("Replacing the empty record of {}", relative_path.display());
                 return Ok(false);
             }
-            let existing: FileMetadata = serde_json::from_slice(&raw).map_err(|e| {
+            let existing = parse_record(&raw).map_err(|e| {
                 Error::new(
                     ErrorCode::BadMetadata,
                     format!("cannot read {}: {e}", dvs_file_path.display()),
@@ -241,7 +241,32 @@ pub(crate) fn read_record(path: &Path) -> Result<FileMetadata> {
     if is_empty_record(&raw) {
         bail!("the .dvs file is empty. Add the file again to repair it");
     }
-    Ok(serde_json::from_slice(&raw)?)
+    parse_record(&raw)
+}
+
+/// Parses a metadata file that is not empty. A record that does not parse
+/// says why in words: a git merge conflict, or what is wrong with it.
+fn parse_record(raw: &[u8]) -> Result<FileMetadata> {
+    serde_json::from_slice(raw).map_err(|e| {
+        if has_conflict_markers(raw) {
+            anyhow!(
+                "the .dvs file has git merge conflict markers. Resolve the conflict by keeping \
+                 one side, then run dvs again"
+            )
+        } else {
+            anyhow!("the .dvs file is not a valid record: {e}")
+        }
+    })
+}
+
+/// Whether a metadata file has a line that git writes around a merge
+/// conflict. Only asked of a record that does not parse.
+fn has_conflict_markers(raw: &[u8]) -> bool {
+    raw.split(|&b| b == b'\n').any(|line| {
+        [b"<<<<<<<", b"|||||||", b"=======", b">>>>>>>"]
+            .iter()
+            .any(|marker| line.starts_with(*marker))
+    })
 }
 
 /// Whether a metadata file holds nothing at all.
@@ -474,6 +499,69 @@ mod tests {
             .unwrap();
         assert_eq!(outcome, Outcome::Copied);
         assert_eq!(read_record(&record).unwrap(), metadata);
+    }
+
+    // Adding the file again does not replace a record with a git merge
+    // conflict. The error says what is wrong, and the record stays
+    #[test]
+    fn save_refuses_a_conflicted_record() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+        let file_path = create_file(&root, "data.bin", b"binary data");
+        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        metadata
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                None,
+            )
+            .unwrap();
+        let record = dvs_dir.join("data.bin.dvs");
+        let conflicted: &[u8] =
+            b"{\n<<<<<<< HEAD\n  \"size\": 1\n=======\n  \"size\": 2\n>>>>>>> theirs\n}\n";
+        fs::write(&record, conflicted).unwrap();
+
+        let error = metadata
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(
+            crate::error::backend_error_code(&error),
+            Some(ErrorCode::BadMetadata)
+        );
+        assert!(
+            error.to_string().ends_with(
+                "the .dvs file has git merge conflict markers. Resolve the conflict by \
+                 keeping one side, then run dvs again"
+            ),
+            "{error}"
+        );
+        assert_eq!(fs::read(&record).unwrap(), conflicted);
+    }
+
+    // Markers count only at the start of a line, and only in a record that
+    // does not parse
+    #[test]
+    fn conflict_markers_are_found_at_line_starts() {
+        assert!(has_conflict_markers(b"{\n<<<<<<< HEAD\n"));
+        assert!(has_conflict_markers(b"{\n=======\n"));
+        assert!(!has_conflict_markers(b"{\"message\": \"a <<<<<<< b\"}"));
+        let error = parse_record(b"{\"size\": 1}").unwrap_err().to_string();
+        assert!(
+            error.starts_with("the .dvs file is not a valid record: missing field"),
+            "{error}"
+        );
     }
 
     #[test]
