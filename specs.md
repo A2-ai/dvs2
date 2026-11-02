@@ -411,7 +411,7 @@ Arguments:
   [PATHS]...  Files to add, or directories to search with --glob
 
 Options:
-      --glob <GLOB>        Add the files matching this glob, e.g. '*.csv'
+  -g, --glob <GLOB>        Add the files matching this glob, e.g. '*.csv'
   -m, --message <MESSAGE>  An optional message to add
       --dry-run            Show what would be added without making any actual changes
   -h, --help               Print help

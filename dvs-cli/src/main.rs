@@ -104,7 +104,7 @@ pub enum Command {
         #[clap(required_unless_present = "glob")]
         paths: Vec<PathBuf>,
         /// Add the files matching this glob, e.g. '*.csv'
-        #[clap(long)]
+        #[clap(long, short)]
         glob: Option<String>,
         /// An optional message to add
         #[clap(long, short)]
@@ -1328,6 +1328,20 @@ mod tests {
                     args[0]
                 )
             );
+        }
+    }
+
+    #[test]
+    fn add_takes_g_for_glob_as_get_and_status_do() {
+        for command in ["add", "get", "status"] {
+            let cli = Cli::try_parse_from(["dvs", command, "-g", "*.csv"]).unwrap();
+            let glob = match cli.command {
+                Command::Add { glob, .. }
+                | Command::Get { glob, .. }
+                | Command::Status { glob, .. } => glob,
+                _ => panic!("expected {command}"),
+            };
+            assert_eq!(glob.as_deref(), Some("*.csv"), "{command}");
         }
     }
 
