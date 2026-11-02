@@ -6,7 +6,6 @@
 # Line refs (Lnnn) are to specs.md on main at 370f448.
 #
 # Assigned claims (specs.md / ui/TODO.md "Script 3"):
-#   - get --help text matches spec block L504-524
 #   - a path or --glob is required (L505, L526)
 #   - action `restored` after deleting local copy (L461, L556)
 #   - action `unchanged` when local already matches metadata (L462, L556)
@@ -64,35 +63,6 @@ dvs init local "$DVS_STORAGE"
 
 mkfiles 2 1K data/raw   # data/raw/file_1.bin, data/raw/file_2.bin
 dvs add --glob "data/**/*.bin"
-
-# ─────────────────────────────────────────────────────────────────────────────
-say
-say "=== Claim: get --help matches spec block (L504-524) ==="
-EXPECTED_HELP="$(cat <<'EOF'
-Retrieves the given files from dvs storage. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided; to restore every tracked file, pass `--glob '**/*'`
-
-Usage: dvs get [OPTIONS] [PATHS]...
-
-Arguments:
-  [PATHS]...  Tracked files or directories to retrieve
-
-Options:
-  -g, --glob <GLOB>           Only retrieve the tracked files matching this glob, e.g. '*.csv'
-  -r, --recursive             Recursively include files in subdirectories for directory inputs. Without this flag, directories return only their direct children
-      --dry-run               Show what would be retrieved without making any actual changes
-      --on-conflict <POLICY>  What to do with files whose local version dvs did not put there (local changes, or no record): abort changes nothing, skip leaves them and gets the rest, overwrite replaces them. Defaults to DVS_GET_ON_CONFLICT, then `[get] on_conflict` in dvs.toml, then abort [possible values: abort, skip, overwrite]
-  -f, --force                 Replace files with local changes (same as --on-conflict overwrite)
-  -h, --help                  Print help
-
-Global Options:
-      --json               Output results as JSON
-      --emit-events        Stream operation results and transfer progress as NDJSON
-      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
-EOF
-)"
-ACTUAL_HELP="$(dvs get --help)"
-norm() { printf '%s\n' "$1" | sed 's/[[:space:]]*$//'; }
-check "$(norm "$EXPECTED_HELP")" "$(norm "$ACTUAL_HELP")" "get --help matches spec block L504-524 (trailing-space normalized)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say

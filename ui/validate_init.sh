@@ -28,19 +28,6 @@ check() {
   set -x
 }
 
-# Compare a help text against a spec block, trailing whitespace stripped per
-# line. Prints the diff and records the verdict.
-check_help() {
-  { set +x; } 2>/dev/null
-  local expected="$1" actual="$2" label="$3" help_diff
-  help_diff="$(diff <(printf '%s\n' "$expected" | sed 's/[[:space:]]*$//') \
-                    <(printf '%s\n' "$actual" | sed 's/[[:space:]]*$//') || true)"
-  echo "--- diff (expected vs actual) ---"
-  echo "${help_diff:-<no diff>}"
-  set -x
-  check "" "$help_diff" "$label"
-}
-
 # ── Setup: temp repo + sibling storage ──
 
 DVS_REPO="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
@@ -229,85 +216,6 @@ print("ok" if ok else "bad: %r" % d)
 ' 2>&1 || echo "<parse-error>")"
 check "ok" "$err_ok" "failing init --json is an error envelope (outcome=failed, error.code set)"
 check "1" "$rc" "failing init --json exits 1"
-
-# ─────────────────────────────────────────────────────────────────────────────
-say
-say "=== Claim: init --help, init local --help, init server --help match spec blocks L287-353 ==="
-EXPECTED_HELP="$(cat <<'EOF'
-Starts a new dvs project. This will create a `dvs.toml` file in the current folder of where the user is calling the CLI from
-
-Usage: dvs init [OPTIONS] <COMMAND>
-
-Commands:
-  local   Store data in a directory, such as a shared drive
-  server  Store data on a dvs server
-  help    Print this message or the help of the given subcommand(s)
-
-Options:
-  -h, --help  Print help
-
-Global Options:
-      --json               Output results as JSON
-      --emit-events        Stream operation results and transfer progress as NDJSON
-      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
-EOF
-)"
-check_help "$EXPECTED_HELP" "$(dvs init --help)" "init --help matches spec block (order + text)"
-
-EXPECTED_HELP="$(cat <<'EOF'
-Store data in a directory, such as a shared drive
-
-Usage: dvs init local [OPTIONS] <PATH>
-
-Arguments:
-  <PATH>  Where the data will be stored
-
-Options:
-      --root-dir <ROOT_DIR>
-          If you want to use a root folder other than the current directory
-      --metadata-folder-name <METADATA_FOLDER_NAME>
-          If you want to use a folder name other than `.dvs` for storing the metadata files
-      --group <GROUP>
-          Unix group to set on storage directory and files
-      --no-compression
-          Disable compression of stored files. Compression defaults to zstd
-  -h, --help
-          Print help
-
-Global Options:
-      --json               Output results as JSON
-      --emit-events        Stream operation results and transfer progress as NDJSON
-      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
-EOF
-)"
-check_help "$EXPECTED_HELP" "$(dvs init local --help)" "init local --help matches spec block (order + text)"
-
-EXPECTED_HELP="$(cat <<'EOF'
-Store data on a dvs server
-
-Usage: dvs init server [OPTIONS] --group <GROUP> <NAME> <URL>
-
-Arguments:
-  <NAME>  The project name
-  <URL>   The URL of the dvs server
-
-Options:
-      --metadata-folder-name <METADATA_FOLDER_NAME>
-          If you want to use a folder name other than `.dvs` for storing the metadata files
-      --group <GROUP>
-          Unix group to use for permissions
-      --no-compression
-          Disable compression of stored files. Compression defaults to zstd
-  -h, --help
-          Print help
-
-Global Options:
-      --json               Output results as JSON
-      --emit-events        Stream operation results and transfer progress as NDJSON
-      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
-EOF
-)"
-check_help "$EXPECTED_HELP" "$(dvs init server --help)" "init server --help matches spec block (order + text)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 say

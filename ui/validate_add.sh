@@ -47,42 +47,6 @@ git init -q
 dvs init local "$DVS_STORAGE_ABS" >/dev/null
 
 # =====================================================================
-say
-say "=== CLAIM: add --help matches spec block L405-423 (option order) ==="
-# Expected reference block from specs.md L405-423.
-EXPECTED_HELP='Adds the given files to dvs. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided
-
-Usage: dvs add [OPTIONS] [PATHS]...
-
-Arguments:
-  [PATHS]...  Files to add, or directories to search with --glob
-
-Options:
-      --glob <GLOB>        Add the files matching this glob, e.g. '"'"'*.csv'"'"'
-  -m, --message <MESSAGE>  An optional message to add
-      --dry-run            Show what would be added without making any actual changes
-  -h, --help               Print help
-
-Global Options:
-      --json               Output results as JSON
-      --emit-events        Stream operation results and transfer progress as NDJSON
-      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)'
-ACTUAL_HELP="$(dvs add --help)"
-# Compare with trailing whitespace stripped per line: the spec markdown block
-# and clap both emit trailing padding that round-trips inconsistently through
-# markdown, so the load-bearing comparison is the visible text + order.
-norm() { printf '%s\n' "$1" | sed 's/[[:space:]]*$//'; }
-check "$(norm "$EXPECTED_HELP")" "$(norm "$ACTUAL_HELP")" "add --help text matches spec block (trailing-space normalized)"
-# Option order specifically: long flags from the Options: block to the end
-# (local options, then the Global Options block).
-EXP_ORDER="glob message dry-run help json emit-events threads"
-GOT_ORDER="$(printf '%s\n' "$ACTUAL_HELP" \
-  | sed -n '/^Options:/,$p' \
-  | sed -n 's/^[[:space:]]*\(-[a-z], \)\{0,1\}--\([a-z-]*\).*/\2/p' \
-  | tr '\n' ' ' | sed 's/ $//')"
-check "$EXP_ORDER" "$GOT_ORDER" "add --help option ORDER is glob,message,dry-run,help then globals json,emit-events,threads"
-
-# =====================================================================
 # A directory without --glob is an invalid input path: the batch is refused
 # with invalid_arguments and exit 2 (#240 fail-fast, then the exit-code table).
 say

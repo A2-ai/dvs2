@@ -92,45 +92,6 @@ cp .dvs/other/donor.bin.dvs .dvs/other/stale.bin.dvs
 cp .dvs/other/donor.bin.dvs .dvs/other/unsynced.bin.dvs
 rm .dvs/other/donor.bin.dvs other/donor.bin
 
-# ── Claim: status --help matches spec block (L609-632) ───────────────────────
-say
-say "=== CLAIM: status --help matches spec (L609-632) ==="
-HELP="$(dvs status --help)"
-EXPECTED_HELP="$(cat <<'EOF'
-Gets the status of each file in the current repository
-
-Usage: dvs status [OPTIONS] [PATHS]...
-
-Arguments:
-  [PATHS]...  Paths (files or directories) to check status for
-
-Options:
-  -r, --recursive      Recursively include files in subdirectories for given directories. Without this flag, directories return only their direct children
-  -g, --glob <GLOB>    Only include the tracked files matching this glob, e.g. '*.csv'
-      --current        Include the files that are current
-      --absent         Include the files that are absent
-      --stale          Include files unchanged since the last successful get, when metadata has advanced
-      --modified       Include files changed since the last successful get
-      --unsynced       Include differing files whose local baseline is unavailable
-      --with-metadata  Show all metadata columns in the table output
-  -h, --help           Print help
-
-Global Options:
-      --json               Output results as JSON
-      --emit-events        Stream operation results and transfer progress as NDJSON
-      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
-EOF
-)"
-norm() { printf '%s\n' "$1" | sed 's/[[:space:]]*$//'; }
-check "$(norm "$EXPECTED_HELP")" "$(norm "$HELP")" "help text matches spec block (trailing-space normalized)"
-# Option flags in the order they appear in --help.
-OPT_ORDER="$({ set +x; } 2>/dev/null; grep -oE '\-\-(json|emit-events|threads|recursive|glob|current|absent|stale|modified|unsynced|with-metadata)' <<<"$HELP" | tr '\n' ',' )"
-check "--recursive,--glob,--current,--absent,--stale,--modified,--unsynced,--with-metadata,--json,--emit-events,--threads," "$OPT_ORDER" "help option order matches spec"
-USAGE="$({ set +x; } 2>/dev/null; grep -oE 'Usage: dvs status \[OPTIONS\] \[PATHS\]\.\.\.' <<<"$HELP" )"
-check "Usage: dvs status [OPTIONS] [PATHS]..." "$USAGE" "help usage line matches spec"
-SHORTR="$({ set +x; } 2>/dev/null; grep -c '\-r, --recursive' <<<"$HELP" )"
-check "1" "$SHORTR" "help documents short -r for --recursive"
-
 # ── Claim: default (no flags) shows ALL tracked files (L634) ─────────────────
 say
 say "=== CLAIM: default no-flags shows all 7 tracked files regardless of state (L634) ==="

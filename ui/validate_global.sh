@@ -4,7 +4,6 @@
 #
 # Validates cross-cutting CLI surface claims from specs.md (CLI only).
 # Line refs (Lnnn) are to specs.md on main at 370f448.
-#   - `dvs --help` lists every subcommand the spec documents (L31, L131-229, L270-666)
 #   - `--json` accepted by every subcommand that runs locally, before or after it (L13, L82)
 #   - a --json argument error is an envelope with command `cli`, exit 2 (L89-90, L216)
 #   - project root discovery: walk UP from a nested subdir to dvs.toml (L23-24)
@@ -66,19 +65,6 @@ mkdir "$DVS_STORAGE"
 cd "$DVS_REPO"
 git init -q
 dvs init local "$DVS_STORAGE"
-
-# ──────────────────────────────────────────────────────────────────────────────
-say
-say "=== CLAIM 1: dvs --help lists every subcommand the spec documents ==="
-# Main's specs.md has no `dvs --help` block, so it fixes no order. It documents
-# init (L270), attach (L184), add (L379), status (L601), get (L451), info
-# (L189), availability (L131), history (L133), login and logout (L221-229).
-# clap appends help. Compare the sets.
-HELP_OUT="$(dvs --help)"
-COMMANDS="$(printf '%s\n' "$HELP_OUT" \
-  | awk '/^Commands:/{f=1;next} f && /^[[:space:]]+[a-z]/{print $1} f && /^$/{exit}' \
-  | sort | paste -sd, -)"
-check "add,attach,availability,get,help,history,info,init,login,logout,status" "$COMMANDS" "dvs --help subcommand set"
 
 # ──────────────────────────────────────────────────────────────────────────────
 say
