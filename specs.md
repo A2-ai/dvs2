@@ -235,6 +235,12 @@ Credentials and device secrets are never written to results or events.
 confirmed revocation, `false` for a failed revoke call, `null` when there was no token; `warnings` is always an
 array of `{code, message}`.
 
+R's `dvs_login()` and `dvs_logout()` do what `dvs login` and `dvs logout` do, with the same library functions and
+the same credentials store. `dvs_login()` shows the address and the code with `message()` and waits in R, so an
+interrupt stops it. Outside an interactive R session it raises a `dvs_error` with `auth_required`, as
+`login --json` reports it. `dvs_logout()` returns `revoked` (`NULL` for `null`) and `warnings`, a tibble with
+`code` and `message`.
+
 A server URL may carry a path prefix (a proxy, `https://host/dvs`, with or without the trailing slash): every
 request, login included, goes under it.
 

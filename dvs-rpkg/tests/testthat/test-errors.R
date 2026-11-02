@@ -1,10 +1,3 @@
-# The code of a failed command, from a condition that must be a dvs_error.
-error_code <- function(expr) {
-  cnd <- tryCatch(expr, error = identity)
-  expect_s3_class(cnd, "dvs_error")
-  cnd$code
-}
-
 test_that("a command outside a project fails with not_in_project", {
   withr::local_dir(withr::local_tempdir())
   expect_equal(error_code(dvs_status()), "not_in_project")

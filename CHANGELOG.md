@@ -13,6 +13,7 @@
 
 ### Added
 
+- R package: `dvs_login()` and `dvs_logout()` log in to and out of a dvs server, as `dvs login` and `dvs logout` do, and share the CLI's credentials. `dvs_login()` needs an interactive R session. It shows the address and the code to enter, and an interrupt stops its wait. `dvs_logout()` returns `revoked` and a tibble of `warnings`: a token the server could not revoke is deleted all the same, and the reason is a row there, not an R warning.
 - R package: `dvs_info()` returns the fields of `dvs info --json` as a list: the backend, the storage or server, the compression, and for a server project the login, the connection, the user, the access and the groups. The CLI's JSON and R build them with one library function, `dvs::info::project_info`.
 - R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
 - R package: `just rpkg-reference` builds the HTML reference manual. The one in `dist/reference/` is for users and leaves out the internal pages, as R's help index does. The one in `dvs-rpkg/rust-target/doc/r/` is for development and keeps them.

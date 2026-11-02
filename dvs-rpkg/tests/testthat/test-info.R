@@ -1,9 +1,3 @@
-# A server project that needs no server: with no token, or with a server
-# that does not answer, dvs_info() reports it without an error.
-server_project <- function(url) {
-  writeLines(c("[backend]", 'name = "p"', sprintf('url = "%s"', url)), "dvs.toml")
-}
-
 test_that("dvs_info() reports a local project as dvs info --json does", {
   repo <- new_dvs_test_repo()
   info <- dvs_info()
