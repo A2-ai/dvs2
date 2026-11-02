@@ -27,10 +27,9 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::{create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
-    AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
-    FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow,
-    Outcome, PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files,
-    set_num_threads,
+    AddDetail, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode, FileMetadata,
+    FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow, Outcome,
+    PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files, set_num_threads,
 };
 
 use crate::observer::CliObserver;
@@ -342,34 +341,6 @@ fn status_row(row: &dvs::StatusFacts) -> (serde_json::Value, bool) {
     (value, row.error.is_some())
 }
 
-/// One line closing a human add: "Added 2, 1 unchanged, 1 failed".
-fn add_summary(report: &AddReport, dry_run: bool) -> String {
-    let added = report
-        .files
-        .iter()
-        .filter(|r| {
-            matches!(
-                r.detail,
-                AddDetail::Success {
-                    outcome: Outcome::Copied,
-                    ..
-                }
-            )
-        })
-        .count();
-    let unchanged = report.counts.succeeded - added;
-    let verb = if dry_run { "Would add" } else { "Added" };
-    summary_line(
-        [
-            (added, format!("{verb} {added}")),
-            (unchanged, format!("{unchanged} unchanged")),
-        ],
-        &report.counts,
-    )
-    .unwrap_or_else(|| "Nothing to add".to_string())
-}
-
-/// One line closing a human status: "Checked 3, 1 failed".
 /// The compression `info` reports. A server project's is set on the server and not kept in
 /// dvs.toml, so it is `None` rather than the default.
 fn info_compression(config: &Config) -> Option<String> {
@@ -379,27 +350,12 @@ fn info_compression(config: &Config) -> Option<String> {
     }
 }
 
+/// One line closing a human status: "Checked 3, 1 failed".
 fn status_summary(counts: &Counts) -> String {
     let checked = counts.succeeded;
-    summary_line([(checked, format!("Checked {checked}"))], counts).unwrap_or_default()
-}
-
-/// The non-zero parts, then the failed and cancelled counts, as one sentence.
-fn summary_line<const N: usize>(parts: [(usize, String); N], counts: &Counts) -> Option<String> {
-    let mut line = parts
-        .into_iter()
-        .chain([
-            (counts.failed, format!("{} failed", counts.failed)),
-            (counts.cancelled, format!("cancelled {}", counts.cancelled)),
-        ])
-        .filter(|(n, _)| *n > 0)
-        .map(|(_, part)| part)
-        .collect::<Vec<_>>()
-        .join(", ");
-    // Whichever part comes first starts the sentence
-    let first = line.get(..1)?.to_uppercase();
-    line.replace_range(..1, &first);
-    Some(line)
+    counts
+        .summary([(checked, format!("Checked {checked}"))])
+        .unwrap_or_default()
 }
 
 /// Ends a run that reported rows with the exit status of how it ended.
@@ -660,7 +616,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                         },
                     }
                 }
-                let line = add_summary(&report, dry_run);
+                let line = report.summary();
                 if report.outcome == RunOutcome::Complete {
                     println!("\n{line}");
                 } else {
@@ -1350,34 +1306,5 @@ mod tests {
             cancelled: 2,
         };
         assert_eq!(status_summary(&counts), "Checked 3, 1 failed, cancelled 2");
-    }
-
-    #[test]
-    fn add_summary_takes_its_counts_from_the_library() {
-        let row = |outcome| AddResult {
-            path: "a.csv".into(),
-            detail: AddDetail::Success {
-                outcome,
-                hash: String::new(),
-                size: 0,
-                stored_size: 0,
-            },
-            duration_ms: None,
-        };
-        let report = AddReport {
-            files: vec![row(Outcome::Copied), row(Outcome::Present)],
-            counts: Counts {
-                total: 5,
-                succeeded: 2,
-                failed: 1,
-                cancelled: 2,
-            },
-            outcome: RunOutcome::Cancelled,
-            bytes: Default::default(),
-        };
-        assert_eq!(
-            add_summary(&report, false),
-            "Added 1, 1 unchanged, 1 failed, cancelled 2"
-        );
     }
 }
