@@ -260,6 +260,10 @@ fn add_file(
 /// a `cancelled` row and no record, except files whose add the server already
 /// recorded (see `cancelled_before_start`). A run that fails after a cancel
 /// still returns its (empty) cancelled report.
+///
+/// Files that share content storage does not have yet are stored once: the
+/// first by path stores it, and the others are added once it has, as if an
+/// earlier add had stored it. They count as already stored.
 pub fn add_files(
     files: Vec<PathBuf>,
     paths: &DvsPaths,
@@ -428,12 +432,30 @@ fn add_all(
         storage_asked = true;
     }
 
+    // Files of this add that share content storage does not have: the first by
+    // path stores it, the others are added after it and count as already stored
+    let mut duplicates = Vec::new();
+    if storage_asked {
+        pending.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+        let mut first = HashSet::new();
+        (duplicates, pending) = pending
+            .into_iter()
+            .partition(|p| !p.stored && !first.insert(p.metadata.hashes.blake3.clone()));
+        for p in &mut duplicates {
+            p.stored = true;
+        }
+    }
+
     // Nothing is known to need uploading until storage has been asked
     let to_transfer = pending.iter().filter(|p| storage_asked && !p.stored);
     let known_sizes = results.iter().filter_map(|(_, bytes)| bytes.as_ref());
     observer.planned(&OperationPlan {
         files_total,
-        bytes_total: pending.iter().map(|p| p.metadata.size).sum::<u64>()
+        bytes_total: pending
+            .iter()
+            .chain(&duplicates)
+            .map(|p| p.metadata.size)
+            .sum::<u64>()
             + known_sizes.map(|b| b.size).sum::<u64>(),
         files_to_transfer: to_transfer.clone().count() as u64,
         bytes_to_transfer: to_transfer.map(|p| p.metadata.size).sum(),
@@ -443,9 +465,11 @@ fn add_all(
     }
 
     // 3. Store what is missing and write the metadata files
-    let finish_one = |mut pending: Pending| -> (AddResult, Option<RowBytes>) {
+    let finish_one = |mut pending: Pending,
+                      missing: Option<&HashSet<String>>|
+     -> (AddResult, Option<RowBytes>) {
         let hash = &pending.metadata.hashes.blake3;
-        if cancelled_before_start(ctx.is_cancelled(), hash, missing.as_ref()) {
+        if cancelled_before_start(ctx.is_cancelled(), hash, missing) {
             let bytes = pending.row_bytes(false);
             let row = cancelled_row(pending.relative_path, Some(pending.work));
             observer.file_finished(FileRow::Add(&row));
@@ -457,7 +481,7 @@ fn add_all(
             paths,
             backend,
             operation_id,
-            missing.as_ref(),
+            missing,
             dry_run,
             observer,
         );
@@ -492,7 +516,28 @@ fn add_all(
         observer.file_finished(FileRow::Add(&result));
         (result, Some(bytes))
     };
-    results.extend(pool.install(|| pending.into_par_iter().map(finish_one).collect::<Vec<_>>()));
+    let finish_all = |pending: Vec<Pending>, missing: Option<&HashSet<String>>| {
+        pool.install(|| {
+            pending
+                .into_par_iter()
+                .map(|p| finish_one(p, missing))
+                .collect::<Vec<_>>()
+        })
+    };
+    let done = finish_all(pending, missing.as_ref());
+    // The server completes every file of the operation that has a hash with one
+    // upload of it, so a duplicate sends nothing once its first file is stored.
+    // The local backend sees the stored copy for itself.
+    let missing_after = missing.map(|mut missing| {
+        for (row, _) in &done {
+            if let AddDetail::Success { hash, .. } = &row.detail {
+                missing.remove(hash);
+            }
+        }
+        missing
+    });
+    results.extend(done);
+    results.extend(finish_all(duplicates, missing_after.as_ref()));
 
     let mut bytes = ByteTotals::default();
     let mut results: Vec<AddResult> = results
@@ -841,5 +886,65 @@ mod tests {
         );
         let c = report.counts;
         assert_eq!((c.total, c.succeeded, c.failed), (2, 1, 1));
+    }
+
+    // Two files with the same new content in one add: the first by path stores
+    // it, the other is added after it as already stored. One copy is counted.
+    #[test]
+    fn the_same_content_twice_in_one_add_is_stored_and_counted_once() {
+        let (_tmp, root, config, paths) = project();
+        let content = b"the same content in two files";
+        let size = content.len() as u64;
+        create_file(&root, "a.bin", content);
+        create_file(&root, "b.bin", content);
+
+        for dry_run in [true, false] {
+            let recorder = Arc::new(Recorder::default());
+            let ctx = OperationContext::new().with_observer(recorder.clone());
+            let report = add_files(
+                vec!["b.bin".into(), "a.bin".into()],
+                &paths,
+                config.backend(),
+                None,
+                Compression::Zstd,
+                dry_run,
+                &ctx,
+            )
+            .unwrap();
+            assert_eq!(report.counts.succeeded, 2);
+            for row in &report.files {
+                assert!(matches!(
+                    row.detail,
+                    AddDetail::Success {
+                        outcome: Outcome::Copied,
+                        ..
+                    }
+                ));
+            }
+            let b = report.bytes;
+            let transferred = if dry_run { 0 } else { size };
+            assert_eq!(
+                (b.total, b.to_transfer, b.already_stored, b.transferred),
+                (2 * size, size, size, transferred),
+                "dry run: {dry_run}"
+            );
+            let seen = recorder.seen();
+            let at = |line: &str| seen.iter().position(|s| s == line).unwrap();
+            assert!(seen.contains(&format!("plan 2 {} 1 {size}", 2 * size)));
+            assert!(at("row a.bin") < at("row b.bin"));
+        }
+
+        for name in ["a.bin", "b.bin"] {
+            assert!(paths.metadata_path(Path::new(name)).is_file());
+        }
+        let storage = root.parent().unwrap().join(".storage");
+        let blobs = walkdir::WalkDir::new(&storage)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file() && e.file_name() != "audit.log.jsonl")
+            .count();
+        assert_eq!(blobs, 1);
+        let audit = fs::read_to_string(storage.join("audit.log.jsonl")).unwrap();
+        assert!(audit.contains("a.bin") && audit.contains("b.bin"));
     }
 }
