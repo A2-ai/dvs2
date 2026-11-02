@@ -313,23 +313,24 @@ rm -f "$SCRIPT_DIR/sidebak_$RUN_SUFFIX"
 rc=0; dvs status >/dev/null 2>&1 || rc=$?
 check "0" "$rc" "status exits 0 after sidecar restored"
 
-# ── Claim: both_modified when the local file and metadata both changed (L54) ─
-# Line refs in this claim are to specs.md with both_modified (dvs2 feat/both-modified).
+# ── Claim: both_modified when the local file and metadata both changed ───────
+# This claim comes from specs.md, High-level overview, as on dvs2
+# feat/both-modified.
 # Edit the stale file here: it now differs from its baseline, and the
 # metadata (the donor's) differs from that baseline too.
 say
-say "=== CLAIM: a stale file edited here is both_modified, not modified (L54) ==="
+say "=== CLAIM: a stale file edited here is both_modified, not modified ==="
 printf 'MINE' >> other/stale.bin
-BOTH_ALL="$(dvs status)"
-echo "$BOTH_ALL"
-check "yes" "$(has_row "$BOTH_ALL" "other/stale.bin" "both_modified")" "other/stale.bin (metadata advanced, then edited here) is both_modified (L54)"
-check "yes" "$(has_row "$BOTH_ALL" "data/raw/file_1.bin" "modified")" "data/raw/file_1.bin (only the local file changed) stays modified (L53)"
+BOTH_ALL="$(dvs status --json)"
+show_rows "$BOTH_ALL"
+check "yes" "$(has_row "$BOTH_ALL" "other/stale.bin" "both_modified")" "other/stale.bin (metadata advanced, then edited here) is both_modified"
+check "yes" "$(has_row "$BOTH_ALL" "data/raw/file_1.bin" "modified")" "data/raw/file_1.bin (only the local file changed) stays modified"
 # An older CLI rejects --both-modified: count it as a FAIL, reach SUMMARY.
-BOTH="$(dvs status --both-modified 2>&1)" || true
-echo "$BOTH"
+BOTH="$(dvs status --both-modified --json 2>/dev/null)" || true
+show_rows "$BOTH"
 check "1" "$(count_rows "$BOTH")" "--both-modified shows 1 row"
 check "yes" "$(has_row "$BOTH" "other/stale.bin" "both_modified")" "--both-modified shows the both_modified file"
-MOD2="$(dvs status --modified)" || true
+MOD2="$(dvs status --modified --json)" || true
 check "no" "$(has_row "$MOD2" "other/stale.bin" "modified")" "--modified excludes the both_modified file"
 check "1" "$(count_rows "$MOD2")" "--modified still shows only the 1 modified row"
 JBOTH="$({ set +x; } 2>/dev/null; dvs status --json --both-modified | jq_py 'print(len(d["files"]), d["files"][0]["status"])' )" || true
