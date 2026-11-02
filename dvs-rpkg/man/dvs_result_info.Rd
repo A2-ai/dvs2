@@ -7,11 +7,18 @@
 dvs_result_info(x)
 }
 \arguments{
-\item{x}{A result returned by \code{\link[=dvs_get]{dvs_get()}}. Anything else raises a
-\code{dvs_error_argument} condition.}
+\item{x}{A result returned by \code{\link[=dvs_get]{dvs_get()}} or \code{\link[=dvs_add]{dvs_add()}}. Anything else
+raises a \code{dvs_error_argument} condition.}
 }
 \value{
-A list: \code{command}, \code{outcome} (\code{"complete"}, \code{"aborted"},
+For \code{\link[=dvs_add]{dvs_add()}}, a list: \code{command} (\code{"add"}), \code{outcome}
+(\code{"complete"}, \code{"partial"}, \code{"failed"} or \code{"cancelled"}), \code{dry_run},
+\code{counts} (\code{total}, \code{succeeded}, \code{failed} and \code{cancelled}), \code{bytes}
+(\code{total}, \code{to_transfer}, \code{already_stored} and \code{transferred}, the same
+fields as the CLI's JSON \code{bytes}) and \code{summary} (the line the CLI
+prints, such as \code{"Added 2, 1 unchanged"}).
+
+For \code{\link[=dvs_get]{dvs_get()}}, a list: \code{command}, \code{outcome} (\code{"complete"}, \code{"aborted"},
 \code{"partial"} or \code{"failed"}), \code{did_as_asked} (\code{TRUE} unless a file failed
 or \code{on_conflict = "abort"} held files back), \code{dry_run}, \code{on_conflict} and
 its \code{source} (\code{"argument"}, \code{"env"}, \code{"config"} for dvs.toml, or
@@ -23,6 +30,6 @@ a second line \verb{on_conflict = <policy> (<source>)} when the policy acted
 on a file with local changes or no record, or the problem's message).
 }
 \description{
-The rows of a \code{\link[=dvs_get]{dvs_get()}} result describe each file. This returns what
-applies to the whole operation.
+The rows of a \code{\link[=dvs_get]{dvs_get()}} or \code{\link[=dvs_add]{dvs_add()}} result describe each file. This
+returns what applies to the whole operation.
 }

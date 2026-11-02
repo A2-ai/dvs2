@@ -445,6 +445,8 @@ dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
 - `dry_run`: if `TRUE`, returns what would be added without making changes
 
 Returns a data frame with one row per file. Glob resolution uses the same rules as the CLI. See the Globbing section.
+It has class `dvs_add_result`. `dvs_result_info(res)` returns the CLI's JSON envelope for add (`outcome`, `dry_run`,
+`counts`, `bytes`) and `summary`, the line the CLI prints ("Added 2, 1 unchanged"). Printing shows it as a header.
 
 It raises an error if no files match, or if any input path is invalid (the whole batch is refused and nothing is written). A file that fails after a valid batch starts (for example a permission error during the copy) does not raise. That file is one row with its `code` and `error` columns set and the success columns `NA`, next to the rows that succeeded.
 

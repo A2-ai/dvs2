@@ -73,6 +73,15 @@ impl RunOutcome {
             RunOutcome::Partial
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RunOutcome::Complete => "complete",
+            RunOutcome::Partial => "partial",
+            RunOutcome::Failed => "failed",
+            RunOutcome::Cancelled => "cancelled",
+        }
+    }
 }
 
 /// What an operation is about to do, known once selection and storage checks
@@ -141,6 +150,26 @@ impl Counts {
             }
         }
         counts
+    }
+
+    /// The non-zero `parts`, then the failed and cancelled counts, as one
+    /// sentence: "Added 2, 1 unchanged, 1 failed". `None` when every count
+    /// is zero.
+    pub fn summary<const N: usize>(&self, parts: [(usize, String); N]) -> Option<String> {
+        let mut line = parts
+            .into_iter()
+            .chain([
+                (self.failed, format!("{} failed", self.failed)),
+                (self.cancelled, format!("cancelled {}", self.cancelled)),
+            ])
+            .filter(|(n, _)| *n > 0)
+            .map(|(_, part)| part)
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Whichever part comes first starts the sentence
+        let first = line.get(..1)?.to_uppercase();
+        line.replace_range(..1, &first);
+        Some(line)
     }
 }
 

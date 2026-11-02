@@ -53,17 +53,45 @@ pub struct AddReport {
     pub counts: Counts,
     pub outcome: RunOutcome,
     pub bytes: ByteTotals,
+    pub dry_run: bool,
 }
 
 impl AddReport {
-    fn new(files: Vec<AddResult>, bytes: ByteTotals, cancelled: bool) -> Self {
+    fn new(files: Vec<AddResult>, bytes: ByteTotals, cancelled: bool, dry_run: bool) -> Self {
         let counts = Counts::of(&files);
         AddReport {
             outcome: RunOutcome::of(&counts, cancelled),
             files,
             counts,
             bytes,
+            dry_run,
         }
+    }
+
+    /// The line that closes an add, the CLI's and R's: "Added 2, 1 unchanged,
+    /// 1 failed".
+    pub fn summary(&self) -> String {
+        let added = self
+            .files
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.detail,
+                    AddDetail::Success {
+                        outcome: Outcome::Copied,
+                        ..
+                    }
+                )
+            })
+            .count();
+        let unchanged = self.counts.succeeded - added;
+        let verb = if self.dry_run { "Would add" } else { "Added" };
+        self.counts
+            .summary([
+                (added, format!("{verb} {added}")),
+                (unchanged, format!("{unchanged} unchanged")),
+            ])
+            .unwrap_or_else(|| "Nothing to add".to_string())
     }
 }
 
@@ -270,7 +298,12 @@ pub fn add_files(
     ctx: &OperationContext,
 ) -> Result<AddReport> {
     match add_all(files, paths, backend, message, compression, dry_run, ctx) {
-        Err(_) if ctx.is_cancelled() => Ok(AddReport::new(Vec::new(), ByteTotals::default(), true)),
+        Err(_) if ctx.is_cancelled() => Ok(AddReport::new(
+            Vec::new(),
+            ByteTotals::default(),
+            true,
+            dry_run,
+        )),
         result => result,
     }
 }
@@ -293,6 +326,7 @@ fn add_all(
             Vec::new(),
             ByteTotals::default(),
             ctx.is_cancelled(),
+            dry_run,
         ));
     }
 
@@ -524,7 +558,7 @@ fn add_all(
         }
     }
 
-    Ok(AddReport::new(results, bytes, ctx.is_cancelled()))
+    Ok(AddReport::new(results, bytes, ctx.is_cancelled(), dry_run))
 }
 
 #[cfg(test)]
@@ -537,6 +571,43 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn summary_takes_its_counts_from_the_report() {
+        let row = |outcome| AddResult {
+            path: "a.csv".into(),
+            detail: AddDetail::Success {
+                outcome,
+                hash: String::new(),
+                size: 0,
+                stored_size: 0,
+            },
+            duration_ms: None,
+        };
+        let mut report = AddReport {
+            files: vec![row(Outcome::Copied), row(Outcome::Present)],
+            counts: Counts {
+                total: 5,
+                succeeded: 2,
+                failed: 1,
+                cancelled: 2,
+            },
+            outcome: RunOutcome::Cancelled,
+            bytes: Default::default(),
+            dry_run: false,
+        };
+        assert_eq!(
+            report.summary(),
+            "Added 1, 1 unchanged, 1 failed, cancelled 2"
+        );
+        report.dry_run = true;
+        report.files.pop();
+        report.counts = Counts::new(1, 0);
+        assert_eq!(report.summary(), "Would add 1");
+        report.files.clear();
+        report.counts = Counts::default();
+        assert_eq!(report.summary(), "Nothing to add");
+    }
 
     #[test]
     fn row_errors_carry_a_code() {
