@@ -124,15 +124,17 @@ Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored
 `status` `path`, `status` (`error` on an error row, `cancelled` on a cancelled one), `metadata`, `working` (`state` `present`, `absent` or
 `unknown`, `hashes`, `size`, `hash_source` `cache` or `computed`), `baseline` (`blake3`, `size` of what dvs
 last wrote or added at the path; `null` without one); `availability` `hash`, `state` (`present`,
-`absent`, `unknown`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action` (history never
-fails per row). `path` is relative to the project root (`info`'s `project_root`); get's `local_path` is
+`absent`, `unknown`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action`, newest first
+(history never fails per row). `path` is relative to the project root (`info`'s `project_root`); get's `local_path` is
 relative to the current directory.
 
 `dvs availability <HASHES>...` takes one or more BLAKE3 hashes (an invalid one is `invalid_arguments`) and
 reports, per hash and in input order, whether storage has that content, without downloading it.
 `dvs history <PATHS>...` takes one or more file paths and reports their stored upload history; the files need
-not exist in this checkout. It takes files, not folders: a path that is a folder is refused with
-`invalid_arguments` (exit `2`), as is a path outside the project.
+not exist in this checkout. The table and the JSON `files` give the entries in one order, newest first. The audit
+log keeps whole seconds, so two adds in one second have the same time. In a local store the later one comes first.
+It takes files, not folders: a path that is a folder is refused with `invalid_arguments` (exit `2`), as is a path
+outside the project.
 
 ```shell
 ❯ dvs availability --help

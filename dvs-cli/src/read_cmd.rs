@@ -1,5 +1,6 @@
 //! Batch, backend-neutral queries for consumers that invoke the CLI.
 use anyhow::Result;
+use dvs::audit::AuditEntry;
 use dvs::{Backend, DvsPaths, ErrorCode, Hashes, PathFilter};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -94,6 +95,7 @@ pub fn availability(backend: &Backend, hashes: &[String]) -> Result<(Vec<Value>,
 /// Resolve query paths lexically; the files need not exist in this checkout.
 /// Each entry is the audit entry with `timestamp` as RFC 3339 UTC.
 /// Reject escaping paths rather than silently broadening an invalid query to all history.
+/// Entries come newest first, for the table and for JSON alike.
 pub fn history(
     backend: &Backend,
     paths: &DvsPaths,
@@ -101,8 +103,9 @@ pub fn history(
 ) -> Result<Vec<Value>> {
     let relative = resolve_paths(paths, user_paths)?;
     check_backend(backend)?;
-    backend
-        .get_audit_entries(&relative)?
+    let mut entries = backend.get_audit_entries(&relative)?;
+    newest_first(&mut entries);
+    entries
         .into_iter()
         .map(|e| {
             let timestamp = std::time::SystemTime::from(e.timestamp);
@@ -114,9 +117,46 @@ pub fn history(
         .collect()
 }
 
+/// Sorts audit entries newest first. The log keeps whole seconds, and a local
+/// log is in the order of the adds, so reversing it first puts the later of
+/// two adds in one second first. The sort is stable.
+fn newest_first(entries: &mut [AuditEntry]) {
+    entries.reverse();
+    entries.sort_by_key(|e| std::cmp::Reverse(e.timestamp));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // An add entry as the log stores it, unix seconds
+    fn entry(id: &str, second: i64) -> AuditEntry {
+        serde_json::from_value(json!({
+            "operation_id": id,
+            "timestamp": second,
+            "user": "u",
+            "action": {"add": {
+                "file": {"path": "a.csv", "hashes": {"blake3": id}},
+                "compression": "zstd",
+            }},
+        }))
+        .unwrap()
+    }
+
+    // The log order is oldest first. Two adds in one second keep their
+    // order, reversed, so the later one comes first
+    #[test]
+    fn history_is_newest_first() {
+        let mut entries = vec![
+            entry("a", 10),
+            entry("b", 20),
+            entry("c", 20),
+            entry("d", 30),
+        ];
+        newest_first(&mut entries);
+        let ids: Vec<_> = entries.iter().map(|e| e.operation_id.as_str()).collect();
+        assert_eq!(ids, ["d", "c", "b", "a"]);
+    }
 
     #[test]
     fn history_refuses_folders() {

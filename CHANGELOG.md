@@ -10,6 +10,7 @@
 - R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
 - R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
 - R package: `format_byte_size(TRUE)` and `format_byte_size(FALSE)` are errors, as `set_dvs_threads(TRUE)` is. They returned `"1 B"` and `"0 B"`.
+- `dvs history --json` lists the entries newest first, as the table does. It listed them oldest first, so `.files[0]` was the oldest add. Two adds in one second also come in the right order in the table now: the later one first.
 
 ### Added
 
