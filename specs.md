@@ -42,6 +42,7 @@ You can pass some arguments to it or edit the toml file manually.
 `get` will retrieve the files thanks to the metadata folder and pull them from the storage to their location in the project.
 
 Both `add` and `get` support a dry run from the CLI, the library, or the R package, returning the outcome that would have happened for each file without actually doing it.
+A dry run writes nothing: no storage, no metadata file, no `.gitignore` and no hash cache. It reads an existing hash cache (see Hash cache).
 
 `status` compares the working file with its metadata and, when available, the local baseline recorded by the last successful `get`.
 
@@ -768,6 +769,7 @@ Example:
 changed. Both `add` and `get` populate the cache after a successful operation, so a subsequent `status`
 check benefits from cache hits. A cache hit is determined by matching the file's `mtime` and `size`. The cache directory is
 automatically added to `.gitignore` on creation. The cache is optional.
+A dry run neither creates the cache nor writes to it. It opens an existing cache read-only, so its lookups still hit.
 
 The same database holds the local baseline (`baseline(path, blake3, size)`): what dvs last wrote or added at
 each path. Unlike the hash cache, `status` never writes it. Deleting it is safe; a differing file then reports
