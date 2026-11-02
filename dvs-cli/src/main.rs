@@ -19,8 +19,8 @@ use tabled::settings::{Alignment, Modify, location::ByColumnName, object::Rows};
 use url::Url;
 
 use dvs::auth::{
-    delete_token, get_client_approve_url, get_token, initiate_device_approval, poll_for_token,
-    revoke_token, store_token,
+    LogoutError, get_client_approve_url, get_token, initiate_device_approval, logout,
+    poll_for_token, store_token,
 };
 use dvs::config::{Config, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
@@ -1015,60 +1015,42 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
         }
         Command::Logout => {
             let config = find_config(&current_dir)?;
-
-            if let Some(url) = config.server_url() {
-                let token = match get_token(url) {
-                    // Nothing to revoke: reset the unreadable store
-                    Err(e)
-                        if dvs::backend_error_code(&e)
-                            == Some(ErrorCode::CredentialsUnreadable) =>
-                    {
-                        delete_token(url)?;
-                        None
-                    }
-                    token => token?,
-                };
-                let Some(token) = token else {
-                    if cli.json {
-                        let mut result = output::envelope("logout", false);
-                        result["revoked"] = json!(null);
-                        result["warnings"] = json!([]);
-                        output::emit(result);
-                    } else {
-                        println!("You were not logged in");
-                    }
-                    return Ok(());
-                };
-                // The local copy goes regardless: the server may be unreachable, and keeping
-                // a token the user asked to drop is worse than one revoke call too few.
-                let revoke_error = revoke_token(url, &token).err();
-                if cli.json {
-                    let deleted = delete_token(url);
-                    let mut result = match &deleted {
-                        Err(delete_error) => output::problem("logout", false, delete_error),
-                        Ok(_) => output::envelope("logout", false),
-                    };
-                    result["revoked"] = json!(revoke_error.is_none());
-                    result["warnings"] = json!(
-                        revoke_error
-                            .as_ref()
-                            .map(|e| json!({"code": ErrorCode::RevokeFailed, "message": e.to_string()}))
-                            .into_iter()
-                            .collect::<Vec<_>>()
-                    );
-                    output::emit(result);
-                    if deleted.is_err() {
-                        return Err(Exit(1).into());
-                    }
-                } else {
-                    if let Some(e) = &revoke_error {
-                        eprintln!("Warning: could not revoke the token on the server: {e}");
-                    }
-                    delete_token(url)?;
-                    println!("Logged out successfully");
-                }
-            } else {
+            let Some(url) = config.server_url() else {
                 bail!("This project is not using a dvs server");
+            };
+            let revoke_warning = |w: &dvs::Error| {
+                eprintln!("Warning: could not revoke the token on the server: {w}");
+            };
+            let logout = match logout(url) {
+                Ok(logout) => logout,
+                Err(LogoutError {
+                    logout: Some(logout),
+                    error,
+                }) if cli.json => {
+                    let mut result = output::problem("logout", false, &error);
+                    result["revoked"] = json!(logout.revoked);
+                    result["warnings"] = json!(logout.warnings);
+                    output::emit(result);
+                    return Err(Exit(1).into());
+                }
+                Err(LogoutError { logout, error }) => {
+                    logout
+                        .iter()
+                        .flat_map(|l| &l.warnings)
+                        .for_each(revoke_warning);
+                    return Err(error);
+                }
+            };
+            if cli.json {
+                let mut result = output::envelope("logout", false);
+                result["revoked"] = json!(logout.revoked);
+                result["warnings"] = json!(logout.warnings);
+                output::emit(result);
+            } else if logout.revoked.is_none() {
+                println!("You were not logged in");
+            } else {
+                logout.warnings.iter().for_each(revoke_warning);
+                println!("Logged out successfully");
             }
         }
     }

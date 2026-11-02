@@ -179,24 +179,36 @@ pub fn query_for_token(base_url: &Url, device_code: &str) -> Result<Option<Token
     }
 }
 
+/// How long `poll_for_token` waits between two asks.
+pub const TOKEN_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How many times `poll_for_token` asks again after the first, about ten
+/// minutes at `TOKEN_POLL_INTERVAL`.
+const TOKEN_POLL_RETRIES: u32 = 120;
+
+/// Asks once whether the user approved the device login. `attempt` counts the
+/// asks before this one. Past `TOKEN_POLL_RETRIES` it is an error: the code
+/// will have expired. `None` is not approved yet: ask again after
+/// `TOKEN_POLL_INTERVAL`.
+pub fn poll_token_once(
+    base_url: &Url,
+    device_code: &str,
+    attempt: u32,
+) -> Result<Option<TokenResponse>> {
+    if attempt > TOKEN_POLL_RETRIES {
+        bail!("Token will have expired");
+    }
+    query_for_token(base_url, device_code)
+}
+
 pub fn poll_for_token(base_url: &Url, device_code: &str) -> Result<TokenResponse> {
-    let mut num_retries = 0;
-
+    let mut attempt = 0;
     loop {
-        if num_retries > 120 {
-            bail!("Token will have expired");
+        if let Some(token) = poll_token_once(base_url, device_code, attempt)? {
+            return Ok(token);
         }
-
-        match query_for_token(base_url, device_code) {
-            Ok(None) => {
-                sleep(Duration::from_secs(5));
-                num_retries += 1;
-            }
-            Ok(Some(t)) => {
-                return Ok(t);
-            }
-            Err(e) => return Err(e),
-        }
+        sleep(TOKEN_POLL_INTERVAL);
+        attempt += 1;
     }
 }
 
@@ -212,6 +224,70 @@ pub fn revoke_token(base_url: &Url, token: &str) -> Result<()> {
         return Err(response_error(base_url, &mut resp, "revoking the token"));
     }
     Ok(())
+}
+
+/// What logging out of a dvs server did, as `dvs logout --json` reports it.
+#[derive(Debug, Serialize)]
+pub struct Logout {
+    /// `None` when no token was stored, else whether the server revoked it.
+    pub revoked: Option<bool>,
+    /// A `revoke_failed` warning when the server did not revoke the token.
+    /// The local copy is deleted all the same.
+    pub warnings: Vec<Error>,
+}
+
+/// Logging out failed. `logout` is what the server said when it was asked to
+/// revoke the token before the failure.
+#[derive(Debug)]
+pub struct LogoutError {
+    pub logout: Option<Logout>,
+    pub error: anyhow::Error,
+}
+
+impl From<anyhow::Error> for LogoutError {
+    fn from(error: anyhow::Error) -> Self {
+        LogoutError {
+            logout: None,
+            error,
+        }
+    }
+}
+
+/// Logs out of the dvs server at `url`: asks the server to revoke the stored
+/// token, then deletes the local copy. An unreadable credentials store has no
+/// token to revoke, and is reset.
+pub fn logout(url: &Url) -> std::result::Result<Logout, LogoutError> {
+    let token = match get_token(url) {
+        // Nothing to revoke: reset the unreadable store
+        Err(e) if crate::backend_error_code(&e) == Some(ErrorCode::CredentialsUnreadable) => {
+            delete_token(url)?;
+            None
+        }
+        token => token?,
+    };
+    let Some(token) = token else {
+        return Ok(Logout {
+            revoked: None,
+            warnings: Vec::new(),
+        });
+    };
+    // The local copy goes regardless: the server may be unreachable, and keeping
+    // a token the user asked to drop is worse than one revoke call too few.
+    let revoke_error = revoke_token(url, &token).err();
+    let logout = Logout {
+        revoked: Some(revoke_error.is_none()),
+        warnings: revoke_error
+            .map(|e| Error::new(ErrorCode::RevokeFailed, e.to_string()))
+            .into_iter()
+            .collect(),
+    };
+    match delete_token(url) {
+        Ok(_) => Ok(logout),
+        Err(error) => Err(LogoutError {
+            logout: Some(logout),
+            error,
+        }),
+    }
 }
 
 #[cfg(test)]
