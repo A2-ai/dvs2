@@ -379,6 +379,15 @@ fn info_compression(config: &Config) -> Option<String> {
     }
 }
 
+/// The compression line in a server project's dvs.toml, which the server's
+/// setting overrides. `None` for a local project or without the line.
+fn ignored_compression(config: &Config) -> Option<String> {
+    match config.backend() {
+        Backend::Local(_) => None,
+        Backend::Server(_) => config.configured_compression().map(|c| c.to_string()),
+    }
+}
+
 fn status_summary(counts: &Counts) -> String {
     let checked = counts.succeeded;
     summary_line([(checked, format!("Checked {checked}"))], counts).unwrap_or_default()
@@ -837,6 +846,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
         Command::Info => {
             let config = find_config(&current_dir)?;
             let compression = info_compression(&config);
+            let ignored = ignored_compression(&config);
             // What get does with local changes, and where that was set. An
             // invalid setting is shown, not an error: only get refuses to run
             let on_conflict = config.get_on_conflict(None);
@@ -929,6 +939,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                             "project": s.name,
                             "server": s.url,
                             "compression": compression,
+                            "ignored_compression": ignored,
                             "logged_in": logged_in,
                             "connection": connection,
                             "connection_error": connection_error,
@@ -971,7 +982,12 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                                 println!("groups      {}", a.groups.join(", "));
                             }
                         }
-                        println!("compression set by the server");
+                        match &ignored {
+                            Some(c) => println!(
+                                "compression set by the server (compression = \"{c}\" in dvs.toml is ignored)"
+                            ),
+                            None => println!("compression set by the server"),
+                        }
                         println!("{on_conflict_line}");
                     }
                 }
@@ -1339,6 +1355,20 @@ mod tests {
         assert_eq!(info_compression(&config), None);
         let local = Config::new_local("/tmp/store", None).unwrap();
         assert_eq!(info_compression(&local).as_deref(), Some("zstd"));
+    }
+
+    #[test]
+    fn info_names_a_server_projects_ignored_compression_line() {
+        let url = Url::parse("https://dvs.example.com").unwrap();
+        let mut config = Config::new_server("trial".into(), url, None);
+        config.set_compression(Some(Compression::None));
+        assert_eq!(ignored_compression(&config).as_deref(), Some("none"));
+        // What init writes: no line
+        config.set_compression(None);
+        assert_eq!(ignored_compression(&config), None);
+        // A local project uses its line
+        let local = Config::new_local("/tmp/store", None).unwrap();
+        assert_eq!(ignored_compression(&local), None);
     }
 
     #[test]
