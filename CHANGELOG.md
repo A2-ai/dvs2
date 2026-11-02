@@ -20,10 +20,13 @@
 - R package: the counts of `dvs_result_info()` include `total`, `succeeded` and `cancelled`, as in the CLI's JSON.
 - R package: a wrong argument raises a `dvs_error_argument` condition, also a `dvs_error`, with the argument in `param` and the call the user wrote. A `dvs.toml` that does not load raises a `dvs_config_error`, also a `dvs_error`, in every command. One `dvs_error` handler catches them all.
 - R package: a bad `dvs.num_threads` or `dvs.on_error` option raises the same `dvs_error_argument`, and the message names the option.
+- R package: `dvs_status()` has a `hint` column, what to do about a row that failed.
 - R package: `dvs_result_info()` has `summary`, the summary the CLI prints. A printed `dvs_get()` result and its `on_error` warning or error start with it, so R and the CLI say the same. `on_conflict = <policy> (<source>)` appears only when the policy acted, as in the CLI.
 
 ### Fixed
 
+- `dvs status` names a symbolic link. A link at a tracked path, or a directory or another file that is not a regular file there, is `not_a_file`. A linked parent directory is `unsafe_path`. These are `dvs get`'s codes, and each row has a hint. They were `io_error`, "working path contains a symlink" or "working path is not a regular file", with no hint. R's `dvs_status()` reports the same.
+- `dvs add` says when a symbolic link leads a path outside the project. It said "path is outside project". From a subfolder, a path outside the project, through a link or not, was "file not found".
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.

@@ -25,6 +25,8 @@ pub enum AddPathStatus {
     IsDirectory,
     /// Path resolves to outside the project root
     OutsideProject,
+    /// Path is in the project, but a symbolic link on it leads outside
+    LinkOutsideProject,
 }
 
 impl AddPathStatus {
@@ -33,6 +35,9 @@ impl AddPathStatus {
             AddPathStatus::Valid => None,
             AddPathStatus::NotFound => Some("file not found"),
             AddPathStatus::OutsideProject => Some("path is outside project"),
+            AddPathStatus::LinkOutsideProject => {
+                Some("leads outside the project through a symbolic link")
+            }
             AddPathStatus::IsDirectory => Some("path is a directory"),
         }
     }
@@ -210,7 +215,13 @@ impl DvsPaths {
             let status = match file_path.canonicalize() {
                 Ok(canonical) => {
                     if !canonical.starts_with(&self.repo_root) {
-                        AddPathStatus::OutsideProject
+                        // Lexically in the project: a link took it outside
+                        if normalize_path(file_path).is_some_and(|p| p.starts_with(&self.repo_root))
+                        {
+                            AddPathStatus::LinkOutsideProject
+                        } else {
+                            AddPathStatus::OutsideProject
+                        }
                     } else if canonical.is_dir() {
                         AddPathStatus::IsDirectory
                     } else if canonical.is_file() {
@@ -454,6 +465,24 @@ mod tests {
         assert_eq!(result[1].1, AddPathStatus::NotFound);
         assert_eq!(result[2].1, AddPathStatus::OutsideProject);
         assert_eq!(result[3].1, AddPathStatus::IsDirectory);
+
+        // LinkOutsideProject: in the project, but a link leads to the sibling
+        #[cfg(unix)]
+        {
+            let parent = root.parent().unwrap();
+            std::os::unix::fs::symlink(parent.join("outside.txt"), root.join("link.txt")).unwrap();
+            std::os::unix::fs::symlink(parent, root.join("linked")).unwrap();
+            let result = paths.validate_for_add(&[
+                PathBuf::from("link.txt"),
+                PathBuf::from("linked/outside.txt"),
+            ]);
+            assert_eq!(result[0].1, AddPathStatus::LinkOutsideProject);
+            assert_eq!(result[1].1, AddPathStatus::LinkOutsideProject);
+            assert_eq!(
+                result[0].1.reason(),
+                Some("leads outside the project through a symbolic link")
+            );
+        }
     }
 
     #[test]

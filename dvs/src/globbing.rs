@@ -1,7 +1,7 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::paths::{DvsPaths, PathFilter};
+use crate::paths::{DvsPaths, PathFilter, normalize_path};
 use anyhow::{Result, bail};
 use globset::{GlobBuilder, GlobMatcher};
 use walkdir::WalkDir;
@@ -69,14 +69,14 @@ pub fn resolve_paths_for_add(
         if full_path.is_file() {
             let relative_to_root = match full_path.strip_prefix(&repo_root) {
                 Ok(p) => p.to_path_buf(),
-                // Outside repo: insert original user path; validate_for_add will catch it
-                Err(_) => path.clone(),
+                // Outside repo: validate_for_add will catch it
+                Err(_) => as_given(&path, dvs_paths),
             };
             out.insert(relative_to_root);
         } else if full_path.is_dir() {
             if !full_path.starts_with(&repo_root) {
                 // A dir without a glob: it will be rejected later
-                out.insert(path.clone());
+                out.insert(as_given(&path, dvs_paths));
             } else if let Some(matcher) = &glob_matcher {
                 for entry in WalkDir::new(&full_path).into_iter().filter_map(|e| e.ok()) {
                     let entry_path = entry.path().canonicalize()?;
@@ -117,7 +117,7 @@ pub fn resolve_paths_for_add(
             } else {
                 let relative_to_root = match full_path.strip_prefix(&repo_root) {
                     Ok(p) => p.to_path_buf(),
-                    Err(_) => path.clone(),
+                    Err(_) => as_given(&path, dvs_paths),
                 };
                 out.insert(relative_to_root);
             }
@@ -127,6 +127,21 @@ pub fn resolve_paths_for_add(
     }
 
     Ok(out)
+}
+
+/// A path that resolves outside the project, as `validate_for_add` reads it:
+/// from the project root while it stays in the project before links are
+/// followed, else absolute. The path as typed is relative to the cwd, which
+/// may be a subfolder.
+fn as_given(path: &Path, dvs_paths: &DvsPaths) -> PathBuf {
+    let full = dvs_paths.cwd().join(path);
+    match normalize_path(full.clone()) {
+        Some(p) => p
+            .strip_prefix(dvs_paths.repo_root())
+            .map(Path::to_path_buf)
+            .unwrap_or(p),
+        None => full,
+    }
 }
 
 /// What a `get` request selected: repo-root-relative tracked files, plus the
@@ -519,6 +534,40 @@ mod tests {
         assert!(result.contains(&PathBuf::from("data/a.csv")));
         assert!(result.contains(&PathBuf::from("data/subdir/c.csv")));
         assert!(!result.contains(&PathBuf::from("foo.txt")));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn add_outside_paths_from_a_subfolder_are_checked_where_they_point() {
+        let (_temp, dvs_paths) = setup_test_repo();
+        let root = dvs_paths.repo_root().to_path_buf();
+        let outside = TempDir::new().unwrap();
+        let outside_dir = outside.path().canonicalize().unwrap();
+        File::create(outside_dir.join("secret.csv")).unwrap();
+        std::os::unix::fs::symlink(outside_dir.join("secret.csv"), root.join("data/link.csv"))
+            .unwrap();
+        // The cwd is data/, so both paths are relative to it
+        let in_data = DvsPaths::new(root.join("data"), root.clone(), ".dvs").unwrap();
+        let escaping = Path::new("../..")
+            .join(outside_dir.file_name().unwrap())
+            .join("secret.csv");
+        assert!(in_data.cwd().join(&escaping).exists());
+
+        let result =
+            resolve_paths_for_add(vec!["link.csv".into(), escaping], None, &in_data).unwrap();
+        let link = PathBuf::from("data/link.csv");
+        let secret = outside_dir.join("secret.csv");
+        assert_eq!(result, HashSet::from([link.clone(), secret.clone()]));
+        let mut checked = in_data.validate_for_add(&[link, secret]);
+        checked.sort_by(|a, b| a.0.cmp(&b.0));
+        let statuses: Vec<_> = checked.into_iter().map(|(_, status)| status).collect();
+        assert_eq!(
+            statuses,
+            [
+                crate::paths::AddPathStatus::OutsideProject,
+                crate::paths::AddPathStatus::LinkOutsideProject
+            ]
+        );
     }
 
     #[test]

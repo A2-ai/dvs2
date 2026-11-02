@@ -182,7 +182,7 @@ test_that("dvs_status returns POSIXct add_time and dvs_bytes size", {
 
 status_columns <- c(
   "path", "status", "hash", "size", "created_by", "compression",
-  "message", "code", "error", "add_time"
+  "message", "code", "error", "hint", "add_time"
 )
 
 test_that("dvs_status has the same columns whatever the rows", {
@@ -248,6 +248,31 @@ test_that("dvs_status keeps an unreadable record as an error row", {
   expect_equal(result$status, "error")
   expect_equal(result$code, "bad_metadata")
   expect_false(is.na(result$error))
+})
+
+test_that("dvs_status reports a symlink as not_a_file, with a hint", {
+  skip_on_os("windows")
+  new_dvs_test_repo()
+  write_theoph("t.csv")
+  writeLines("a", "a.csv")
+  dvs_add(paths = file.path(getwd(), c("a.csv", "t.csv")))
+  # The file moved to scratch space, and a link took its place
+  scratch <- withr::local_tempdir()
+  file.copy("t.csv", file.path(scratch, "t.csv"))
+  file.remove("t.csv")
+  file.symlink(file.path(scratch, "t.csv"), "t.csv")
+
+  # Kept by a filter, as every error row is, and never an R error or warning
+  expect_no_warning(result <- dvs_status(status = "absent"))
+  expect_equal(result$path, "t.csv")
+  expect_equal(result$status, "error")
+  expect_equal(result$code, "not_a_file")
+  expect_equal(result$error, "is a symbolic link, and dvs does not follow links")
+  expect_equal(result$hint, "Replace the link with the file it points to.")
+
+  result <- dvs_status()
+  expect_equal(result$status, c("current", "error"))
+  expect_true(is.na(result$hint[1]))
 })
 
 test_that("a wrong argument type is a dvs_error_argument", {

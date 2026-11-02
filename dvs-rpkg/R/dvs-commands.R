@@ -93,8 +93,8 @@ dvs_add <- function(
 #'   columns: `path` (relative to the project root), `status`, `hash` (the
 #'   blake3 hash of the tracked version), `size` (`dvs_bytes`, the size of the
 #'   tracked version), `created_by` (who added it), `compression`, `message`
-#'   (the message given at add, `NA` without one), `code` and `error` (`NA`
-#'   unless `status` is `"error"`) and `add_time` (POSIXct, UTC). Files that
+#'   (the message given at add, `NA` without one), `code`, `error` and `hint`
+#'   (`NA` unless `status` is `"error"`) and `add_time` (POSIXct, UTC). Files that
 #'   dvs does not track are not listed. A row whose metadata cannot be read has
 #'   `NA` in the metadata columns.
 #' @rdname dvs_status
