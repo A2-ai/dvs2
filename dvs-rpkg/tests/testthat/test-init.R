@@ -59,8 +59,54 @@ test_that("dvs_init returns a single-row tibble describing the config", {
   )
   expect_setequal(
     names(result),
-    c("compression", "metadata_folder_name", "backend_path", "backend_group")
+    c("compression", "metadata_folder_name", "backend_path", "backend_name", "backend_group", "joined")
   )
+  # Without a name, the project takes the folder's
+  expect_equal(result$backend_name, basename(repo))
+})
+
+test_that("projects share a storage directory, each in its own folder", {
+  base <- withr::local_tempdir()
+  storage <- file.path(base, "store")
+  for (dir in c("a/analysis", "b/analysis", "c/elsewhere")) {
+    dir.create(file.path(base, dir), recursive = TRUE)
+  }
+  withr::local_dir(file.path(base, "a/analysis"))
+
+  first <- dvs_init(storage)
+  expect_equal(first$backend_name, "analysis")
+  expect_false(first$joined)
+  expect_equal(first$backend_path, normalizePath(storage, winslash = "/"))
+  # The folder is named as dvs-server names it: the blake3 hash of the name
+  folders <- list.files(storage)
+  expect_length(folders, 1L)
+  expect_match(folders, "^[0-9a-f]{64}$")
+  expect_true(file.exists(file.path(storage, folders, "audit.log.jsonl")))
+
+  # The same folder name, with no name given, is refused: it may be another project
+  setwd(file.path(base, "b/analysis"))
+  cnd <- tryCatch(dvs_init(storage), error = identity)
+  expect_s3_class(cnd, "dvs_error_argument")
+  expect_equal(cnd$param, "name")
+  expect_match(conditionMessage(cnd), 'dvs_init(storage_path, name = "analysis")', fixed = TRUE)
+  expect_false(file.exists("dvs.toml"))
+
+  # The name given joins it
+  setwd(file.path(base, "c/elsewhere"))
+  joined <- dvs_init(storage, name = "analysis")
+  expect_equal(joined$backend_name, "analysis")
+  expect_true(joined$joined)
+  expect_length(list.files(storage), 1L)
+  expect_equal(nrow(dvs_audit_log()), 2L)
+})
+
+test_that("dvs_init refuses a name the server would refuse", {
+  storage <- file.path(withr::local_tempdir(), "store")
+  withr::local_dir(withr::local_tempdir())
+  expect_argument_error(quote(dvs_init(storage, name = "My Analysis")), "name")
+  expect_argument_error(quote(dvs_init(storage, name = NA_character_)), "name")
+  expect_false(file.exists("dvs.toml"))
+  expect_false(dir.exists(storage))
 })
 
 # Regression guard for miniextendr#307: an unset Option<T> config field must

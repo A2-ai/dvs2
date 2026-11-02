@@ -14,7 +14,7 @@ fn check_backend(backend: &Backend) -> Result<()> {
     match backend {
         Backend::Server(s) => s.check_access()?,
         Backend::Local(b) => {
-            std::fs::read_dir(&b.path)?;
+            std::fs::read_dir(b.project_dir())?;
         }
     }
     Ok(())

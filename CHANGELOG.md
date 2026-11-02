@@ -4,15 +4,18 @@
 
 ### Breaking
 
+- `dvs init local` and `dvs_init()` start a project in its own folder of the storage directory, `<storage>/<blake3 hash of the name>/`, as dvs-server does. Several projects can now share one storage directory, each with its own audit log. The name comes from `--name` (R `name`), or else from the project folder. A given name joins the project of that name, a folder name that exists is refused. `dvs.toml` gets `name` next to `path`. A dvs from before this ignores `name` and would use the storage directory itself, so everyone on a named project needs this version. A `dvs.toml` without `name` keeps the earlier layout. Init into a storage directory that holds such a store now starts a project beside it. It used to refuse. init sets the group and mode of the storage directory only while it holds nothing, so a second project never changes what the first one's users rely on. The project folder always gets them.
 - R package: requires R 4.4 or later.
 - R package: `dvs_audit_log()` spreads each entry's action into columns: `action_variant` ("init" or "add") and one `action_<field>` column per field that the actions carry, `NA` where an action has none. The action was a list-column. `timestamp` is a date-time (UTC), not unix seconds.
 - R package: `NA` is never a value. An `NA` in any argument raises an error that says it must not be `NA`, also among several values, as in `on_error = c("return", NA)`. An `NA` `message`, `group`, `root_dir` or `metadata_folder_name` meant the argument was not given. Use `NULL` or leave the argument out.
 - R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
 - R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
 - R package: `format_byte_size(TRUE)` and `format_byte_size(FALSE)` are errors, as `set_dvs_threads(TRUE)` is. They returned `"1 B"` and `"0 B"`.
+- Rust library: `init::init()` returns an `Initialized`, not a `PathBuf`.
 
 ### Added
 
+- `dvs info` and `dvs init --json` show the project name (`project`). `dvs init --json` also says whether it `joined` an existing project. R: `dvs_init()` returns `backend_name` and `joined`.
 - R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
 - R package: `just rpkg-reference` builds the HTML reference manual. The one in `dist/reference/` is for users and leaves out the internal pages, as R's help index does. The one in `dvs-rpkg/rust-target/doc/r/` is for development and keeps them.
 - R package: `dvs_status()` has a `code` column, the kind of failure of a row that failed, as in the CLI's JSON.
@@ -21,6 +24,7 @@
 - R package: a wrong argument raises a `dvs_error_argument` condition, also a `dvs_error`, with the argument in `param` and the call the user wrote. A `dvs.toml` that does not load raises a `dvs_config_error`, also a `dvs_error`, in every command. One `dvs_error` handler catches them all.
 - R package: a bad `dvs.num_threads` or `dvs.on_error` option raises the same `dvs_error_argument`, and the message names the option.
 - R package: `dvs_result_info()` has `summary`, the summary the CLI prints. A printed `dvs_get()` result and its `on_error` warning or error start with it, so R and the CLI say the same. `on_conflict = <policy> (<source>)` appears only when the policy acted, as in the CLI.
+- Rust library: `Initialized`, `ProjectExists`, `InvalidProjectName`, `validate_project_name()`, `project_name_from_folder()`, `project_folder_name()`, `LocalBackend::name()`, `LocalBackend::set_name()`, `LocalBackend::project_dir()` and `Config::backend_mut()`.
 
 ### Fixed
 

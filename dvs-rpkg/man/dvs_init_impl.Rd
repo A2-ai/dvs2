@@ -10,11 +10,14 @@ dvs_init_impl(
   group = NULL,
   metadata_folder_name = NULL,
   compression = c("zstd", "none"),
+  name = NULL,
   .call = NULL
 )
 }
 \arguments{
-\item{storage_path}{Path to the storage directory where file contents are kept.}
+\item{storage_path}{Path to the storage directory where file contents are kept.
+Several projects can share it. Each keeps its files and audit log in its
+own folder there.}
 
 \item{root_dir}{Repository root directory. Defaults to the current working directory.}
 
@@ -26,11 +29,19 @@ dvs_init_impl(
 \item{compression}{Compression method for stored files. One of \code{"zstd"}
 (default) or \code{"none"}.}
 
+\item{name}{The project's name in the storage directory: lowercase letters,
+digits and dashes. \code{NULL} (the default) uses the name of the project
+folder, lowercased. A name given here joins the project of that name if
+it exists. A name taken from the folder that exists is an error, since
+two unrelated projects can have the same folder name.}
+
 \item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }
 \value{
 A single-row data frame describing the resulting configuration:
-\code{compression}, \code{metadata_folder_name}, \code{backend_path}, \code{backend_group}.
+\code{compression}, \code{metadata_folder_name}, \code{backend_path}, \code{backend_name},
+\code{backend_group}, and \code{joined}, whether the project was in the storage
+directory already.
 An optional config field that was not set comes back as \code{NA}.
 }
 \description{
