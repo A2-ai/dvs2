@@ -65,6 +65,10 @@ All `dvs` commands must accept absolute paths, and whether they need to be withi
 Use `NULL` in `dvs_*` functions, when we want to defer to the default value
 by the library.
 
+`paths` is a character vector. A data frame given as `paths`, such as a `dvs_status()` result, raises a
+`dvs_error_argument` that says so. The `path` column of a result is relative to the project root, and `paths` to
+the working directory, so `x$path` works as `paths` from the project root.
+
 
 ## In-depth spec
 

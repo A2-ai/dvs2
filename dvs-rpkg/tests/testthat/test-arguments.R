@@ -84,3 +84,26 @@ test_that("an NA in an option says the option must not be NA", {
   cnd <- tryCatch(dvs_get(), error = identity)
   expect_identical(conditionMessage(cnd), "`options(dvs.on_error)` must not be NA")
 })
+
+test_that("a data frame given as paths says so, not that it contains NA", {
+  new_dvs_test_repo()
+  withr::local_options(dvs.num_threads = NULL, dvs.on_error = NULL)
+  writeLines("a", "t.csv")
+  dvs_add("t.csv")
+  # A result with NA cells, as a status row has in `code` and `error`
+  status <- dvs_status()
+  expect_true(anyNA(status))
+  refused <- function(call) {
+    expect_argument_error(call, "paths")
+    cnd <- tryCatch(eval(call), error = identity)
+    expect_match(conditionMessage(cnd), "^`paths` must be a character vector, not a data frame\\.")
+  }
+  refused(quote(dvs_add(status, message = "again")))
+  refused(quote(dvs_status(status)))
+  refused(quote(dvs_get(status)))
+  refused(quote(dvs_audit_log(status)))
+  # A one-column data frame said "expected character, got list"
+  refused(quote(dvs_add(status["path"])))
+  # Its `path` column works from the project root
+  expect_equal(dvs_add(status$path)$outcome, "present")
+})

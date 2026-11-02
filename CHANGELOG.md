@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- R package: a data frame given as `paths`, as in `dvs_status() |> dvs_add()`, raises a `dvs_error_argument` that says `paths` must be a character vector, not a data frame. It said `'paths' must not contain NA`, from the `NA` cells of the result, or `expected character, got list` for a data frame with no `NA`. This holds for `dvs_add()`, `dvs_status()`, `dvs_get()` and `dvs_audit_log()`.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.

@@ -51,6 +51,7 @@ dvs_add <- function(
   glob = NULL,
   dry_run = FALSE
 ) {
+  refuse_data_frame_paths(paths, sys.call())
   apply_dvs_threads_option()
   progress_callback <- NULL
   # Only show a progress bar in interactive sessions; non-interactive callers
@@ -105,6 +106,7 @@ dvs_status <- function(
   glob = NULL,
   status = c("current", "absent", "stale", "modified", "unsynced")
 ) {
+  refuse_data_frame_paths(paths, sys.call())
   apply_dvs_threads_option()
   # An empty filter is no filter, as NULL is.
   if (is.character(status) && length(status) == 0L) {
@@ -129,6 +131,7 @@ dvs_status <- function(
 #' @rdname dvs_audit_log
 #' @keywords internal
 dvs_audit_log <- function(paths = character(0)) {
+  refuse_data_frame_paths(paths, sys.call())
   tibble::as_tibble(dvs_audit_log_impl(paths = paths))
 }
 
@@ -187,6 +190,7 @@ dvs_get <- function(
   on_conflict = NULL,
   on_error = NULL
 ) {
+  refuse_data_frame_paths(paths, sys.call())
   apply_dvs_threads_option()
   progress_callback <- NULL
   # Only show a progress bar in interactive sessions; non-interactive callers
@@ -221,6 +225,23 @@ dvs_get <- function(
     signal_incomplete(result, raw$on_error, sys.call())
   }
   result
+}
+
+# A dvs result given as `paths`, as in `dvs_status() |> dvs_add()`. The
+# `no_na` check of `paths` would read its NA cells and say that `paths` must
+# not contain NA. `path` in a result is relative to the project root, and
+# `paths` to the working directory, so its column works from the root only.
+refuse_data_frame_paths <- function(paths, call) {
+  if (is.data.frame(paths)) {
+    .miniextendr_arg_error(
+      "paths",
+      message = paste(
+        "`paths` must be a character vector, not a data frame.",
+        "The `path` column of a dvs result, `x$path`, works from the project root."
+      ),
+      call = call
+    )
+  }
 }
 
 # The lines of `text` as comments above a printed result.
