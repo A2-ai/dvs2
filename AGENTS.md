@@ -43,7 +43,8 @@ The pin bump is one commit, the scaffold refresh another, and each adopted featu
 
 `just dvs <ref> <args...>` runs a `dvs` binary built from any branch, tag, or commit. Example: `just dvs main status`, or `just dvs HEAD~3 --version`. Use it to test cross-version behavior, such as reading data written by a CLI built from another branch.
 
-- `just dvs-build <ref>` builds if needed and prints the binary path. Progress goes to stderr, so `bin=$(just dvs-build main)` works in scripts.
+- `just dvs-build <ref>` builds if needed and prints the binary path. Progress goes to stderr, so `bin=$(just dvs-build main)` works in scripts. It builds with `cargo install --root` into the cache.
+- `just install-pr-cli [pr]` installs both sides of a PR next to `dvs`: `dvs-before` from the merge base with the base branch, `dvs-after` from the PR head on GitHub. It takes a PR number, URL or branch. Without one it uses the current branch's PR. Uncommitted and unpushed changes are not in `dvs-after`.
 - The cache is keyed by the resolved commit hash, never the ref name, so a moving branch never serves a stale binary. It is shared across all worktrees at `<main-worktree>/target/dvs-versions/<hash>/bin/dvs`.
 - Pass CLI flags directly, as in `just dvs main --help`. Do not insert `--` before the flags. just forwards `--` literally to the binary.
 - `just dvs HEAD` builds the committed tree, not your uncommitted changes. Use `just install-cli` for the working tree.

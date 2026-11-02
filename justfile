@@ -67,10 +67,11 @@ dvs-build ref:
         work="$(mktemp -d "$root/target/dvs-versions/.work-$hash-XXXXXX")"
         trap 'rm -rf "$work"' EXIT
         git archive "$hash" | tar -x -C "$work"
-        cargo build --release --locked \
-            --manifest-path "$work/dvs-cli/Cargo.toml" \
+        # A fresh target dir per commit. A shared one can install a stale binary
+        # when two commits carry the same crate version.
+        cargo install --locked --force --root "$cache" \
+            --path "$work/dvs-cli" \
             --target-dir "$work/target" 1>&2
-        mv -f "$work/target/release/dvs" "$bin"
     fi
     echo "$bin"
 
@@ -94,6 +95,48 @@ dvs-clean *ref:
         rm -rf "$root/target/dvs-versions/$(git rev-parse --verify "$1^{commit}")"
     else
         rm -rf "$root/target/dvs-versions"
+    fi
+
+# dvs-before is built from the merge base of the PR and its base branch, where
+# the PR's diff starts. dvs-after is built from the PR head as pushed to GitHub.
+# Takes a PR number, URL or branch. Without one it uses the current branch's PR.
+# Both go next to the dvs that install-cli installs. Builds come from the
+# dvs-build cache.
+# Install the dvs CLI from both sides of a PR as dvs-before and dvs-after
+[positional-arguments]
+install-pr-cli *pr:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    info="$(gh pr view "$@" --json number,baseRefName,headRefOid \
+        --jq '"\(.number) \(.baseRefName) \(.headRefOid)"')" \
+        || { echo "error: no PR found. Pass a PR number, URL or branch." >&2; exit 1; }
+    read -r number base head <<<"$info"
+    git fetch --quiet origin "+refs/heads/$base:refs/remotes/origin/$base" "refs/pull/$number/head"
+    before="$(git merge-base "origin/$base" "$head")"
+    build() { {{quote(just_executable())}} --justfile {{quote(justfile())}} dvs-build "$1"; }
+    before_bin="$(build "$before")"
+    after_bin="$(build "$head")"
+    dest="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin"
+    mkdir -p "$dest"
+    # Copy, not symlink, so dvs-clean leaves them working. Copy to a temp file
+    # and rename it, so a failed copy never replaces a working binary.
+    install_as() {
+        cp "$1" "$dest/.$2.tmp"
+        mv -f "$dest/.$2.tmp" "$dest/$2"
+    }
+    install_as "$before_bin" dvs-before
+    install_as "$after_bin" dvs-after
+    echo "PR #$number, base $base"
+    echo "  dvs-before  $before  $(git log -1 --format=%s "$before")"
+    echo "  dvs-after   $head  $(git log -1 --format=%s "$head")"
+    echo "Installed in $dest"
+    ahead="$(git rev-list --count "$before..origin/$base")"
+    if [[ "$ahead" -gt 0 ]]; then
+        echo "origin/$base is $ahead commit(s) past the merge base. Neither binary has them."
+    fi
+    echo "dvs-after has no uncommitted or unpushed changes. Use install-cli for the working tree."
+    if cmp -s "$before_bin" "$after_bin"; then
+        echo "warning: dvs-before and dvs-after are the same binary" >&2
     fi
 
 # ============================================================================
