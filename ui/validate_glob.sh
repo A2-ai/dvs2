@@ -155,7 +155,7 @@ say
 say "=== ADD claim 1: explicit files keep1.txt keep2.txt + --glob '*.bin' (refused) ==="
 rc=0
 out="$(dvs add keep1.txt keep2.txt --glob '*.bin' --json)" || rc=$?
-check "2" "$rc" "add with only files and --glob exits 2 (L799)"
+check "2" "$rc" "add with only files and --glob exits 2"
 check "invalid_arguments no-hint" "$(printf '%s' "$out" | json_error)" "add with only files and a quoted --glob is invalid_arguments, with no quoting hint"
 check "" "$(sidecar_paths)" "add with only files and --glob adds nothing"
 
@@ -180,8 +180,13 @@ check "invalid_arguments hint" "$(printf '%s' "$out" | json_error)" "add --glob 
 check "" "$(sidecar_paths)" "add --glob *.bin (unquoted) adds nothing"
 # shellcheck disable=SC2035
 err="$(dvs add --glob *.bin 2>&1 >/dev/null)" || true
-got="$(case "$err" in *'the glob `top1.bin`'*'quote the glob'*) echo yes ;; *) echo no ;; esac)"
-check "yes" "$got" "the terminal error names the glob and says to quote it"
+# Key tokens, not wording: the glob dvs saw, and the same hint the --json
+# error carries.
+got="$(printf '%s' "$out" | python3 -c 'import sys,json
+h=(json.load(sys.stdin).get("error") or {}).get("hint") or ""
+e=sys.argv[1]
+print("yes" if h and h in e and "top1.bin" in e else "no")' "$err" 2>/dev/null || echo "<parse-error>")"
+check "yes" "$got" "the terminal error names the glob top1.bin and shows the --json hint"
 
 reset_repo
 
@@ -234,14 +239,14 @@ del_locals
 out="$(dvs get -g '**/*.bin' --json)"
 check "$ALL_BIN" "$(printf '%s' "$out" | json_paths)" "get -g '**/*.bin' matches recursively (short flag works)"
 
-# ── Claim 1 (get): explicit files only + glob -> refused (L799) ──
+# ── Claim 1 (get): explicit files only + glob -> refused ──
 # The files are tracked and missing locally: a tracked file counts as a file.
 say
 say "=== GET claim 1: explicit files + --glob (refused) ==="
 del_locals
 rc=0
 out="$(dvs get top1.bin top2.bin --glob '**/*.bin' --json)" || rc=$?
-check "2" "$rc" "get with only files and --glob exits 2 (L799)"
+check "2" "$rc" "get with only files and --glob exits 2"
 check "invalid_arguments no-hint" "$(printf '%s' "$out" | json_error)" "get with only files and --glob is invalid_arguments"
 check "no" "$([ -e top1.bin ] && echo yes || echo no)" "get with only files and --glob retrieves nothing"
 
@@ -292,12 +297,12 @@ check "0" "$rc" "status --glob is accepted (exit 0), not rejected (#218)"
 got="$(printf '%s' "$status_out" | json_paths)"
 check "$TOP_ONLY" "$got" "status --glob '*.bin' follows literal-separator rule (top-level only)"
 
-# Explicit files only + glob: refused, as for add and get (L799).
+# Explicit files only + glob: refused, as for add and get.
 say
-say "=== STATUS: explicit file + --glob is refused (L799) ==="
+say "=== STATUS: explicit file + --glob is refused ==="
 rc=0
 out="$(dvs status top1.bin --glob '*.bin' --json)" || rc=$?
-check "2" "$rc" "status with only files and --glob exits 2 (L799)"
+check "2" "$rc" "status with only files and --glob exits 2"
 check "invalid_arguments no-hint" "$(printf '%s' "$out" | json_error)" "status with only files and --glob is invalid_arguments"
 
 # -g is the short form of --glob.
