@@ -777,12 +777,12 @@ pub(crate) fn dvs_set_threads(
 /// Formats a size the way the dvs CLI prints it. The size columns of
 /// [dvs_add()], [dvs_status()] and [dvs_get()] print this way in a tibble.
 ///
-/// @param size_bytes A size in bytes: one whole number, 0 or more. `TRUE`
+/// @param size_bytes Sizes in bytes: whole numbers, 0 or more. `TRUE`
 ///   and `FALSE` are refused.
-/// @return A string. Below 1024 bytes it is the count with `B`, as in
-///   `"512 B"`. From 1024 bytes up it has one decimal and the largest unit
-///   that fits: `KB`, `MB`, `GB` or `TB`. The units are powers of 1024, so
-///   `format_byte_size(1e6)` is `"976.6 KB"`.
+/// @return A character vector with one string per size. Below 1024 bytes it
+///   is the count with `B`, as in `"512 B"`. From 1024 bytes up it has one
+///   decimal and the largest unit that fits: `KB`, `MB`, `GB` or `TB`. The
+///   units are powers of 1024, so `format_byte_size(1e6)` is `"976.6 KB"`.
 #[miniextendr]
 pub fn format_byte_size(
     // u64 reads TRUE as 1, as usize does for the thread count.
@@ -793,9 +793,9 @@ pub fn format_byte_size(
             message = "`size_bytes` must be a number, not TRUE, FALSE or NA"
         )
     )]
-    size_bytes: u64,
-) -> String {
-    dvs::format_size(size_bytes)
+    size_bytes: Vec<u64>,
+) -> Vec<String> {
+    size_bytes.into_iter().map(dvs::format_size).collect()
 }
 
 /// @title Version of the bundled DVS Rust core crate

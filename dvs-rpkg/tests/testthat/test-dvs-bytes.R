@@ -33,6 +33,15 @@ test_that("2.5 GiB u64 from Rust survives the trip to dvs_bytes and formats corr
   expect_argument_error(quote(format_byte_size(NA_real_)), "size_bytes")
 })
 
+test_that("format_byte_size takes a vector and returns one string per size", {
+  expect_identical(format_byte_size(c(512, 2048, 1e6)), c("512 B", "2.0 KB", "976.6 KB"))
+  expect_identical(format_byte_size(512L), "512 B")
+  expect_identical(format_byte_size(numeric(0)), character(0))
+  expect_argument_error(quote(format_byte_size(c(1, -1))), "size_bytes")
+  expect_argument_error(quote(format_byte_size(c(1, 1.5))), "size_bytes")
+  expect_argument_error(quote(format_byte_size(c(TRUE, FALSE))), "size_bytes")
+})
+
 test_that("dvs_bytes + and - preserve class", {
   x <- new_dvs_bytes(c(1024, 2048))
   y <- new_dvs_bytes(c(100, 200))
@@ -110,6 +119,26 @@ test_that("pillar_shaft.dvs_bytes renders NA as NA", {
   expect_true(any(grepl("NA", out)))
 })
 
+test_that("pillar_shaft.dvs_bytes prints a difference below zero with a sign", {
+  x <- new_dvs_bytes(c(41943048, 44040200)) - 50e6
+  shaft <- pillar::pillar_shaft(x)
+  out <- trimws(as.character(format(shaft, width = pillar::get_max_extent(shaft))))
+  expect_equal(out, paste0("-", c(format_byte_size(8056952), format_byte_size(5959800))))
+})
+
+test_that("a tibble prints dvs_bytes that arithmetic made fractional or infinite", {
+  tbl <- tibble::tibble(size = new_dvs_bytes(c(1024, 2048)))
+  tbl$shrunk <- tbl$size - tbl$size * 0.1
+  tbl$diff <- tbl$size - 4096
+  tbl$inf <- tbl$size + Inf
+  out <- capture.output(print(tbl))
+  expect_true(any(grepl("-3.0 KB", out, fixed = TRUE)))
+  expect_true(any(grepl("Inf", out, fixed = TRUE)))
+  shaft <- pillar::pillar_shaft(tbl$shrunk)
+  formatted <- trimws(as.character(format(shaft, width = pillar::get_max_extent(shaft))))
+  expect_equal(formatted, c(format_byte_size(922), format_byte_size(1843)))
+})
+
 test_that("type_sum.dvs_bytes returns 'bytes'", {
   expect_equal(pillar::type_sum(new_dvs_bytes(100)), "bytes")
 })
@@ -137,4 +166,31 @@ test_that("format_byte_size refuses TRUE and FALSE, as set_dvs_threads does", {
   cnd <- tryCatch(format_byte_size(TRUE), error = identity)
   expect_identical(conditionMessage(cnd), "`size_bytes` must be a number, not TRUE, FALSE or NA")
   expect_identical(format_byte_size(1L), "1 B")
+})
+
+test_that("format and print give the sizes as the CLI prints them", {
+  x <- new_dvs_bytes(c(1170491, 512004, NA))
+  expect_identical(format(x), c("1.1 MB", "500.0 KB", NA))
+  expect_identical(format(x), format_bytes_for_print(unclass(x)))
+  expect_identical(format(new_dvs_bytes(c(a = 512, b = -2048))), c(a = "512 B", b = "-2.0 KB"))
+  expect_output(print(new_dvs_bytes(c(41943048, 44040200))), "40.0 MB +42.0 MB")
+  expect_output(print(new_dvs_bytes(numeric(0))), "<dvs_bytes[0]>", fixed = TRUE)
+  expect_false(any(grepl("attr", capture.output(print(new_dvs_bytes(1024))))))
+  expect_invisible(print(new_dvs_bytes(1)))
+})
+
+test_that("[ and [[ keep the dvs_bytes class", {
+  x <- new_dvs_bytes(c(a = 41943048, b = 44040200))
+  expect_s3_class(x[2], "dvs_bytes")
+  expect_s3_class(x[[2]], "dvs_bytes")
+  expect_s3_class(x[2] - x[1], "dvs_bytes")
+  expect_identical(names(x["b"]), "b")
+  expect_equal(unclass(x[2] - x[1]), c(b = 2097152))
+  expect_identical(format(x[2] - x[1]), c(b = "2.0 MB"))
+})
+
+test_that("a sliced size column stays dvs_bytes in a tibble", {
+  sizes <- tibble::tibble(size = new_dvs_bytes(c(100, 2048, 5e6)))
+  expect_s3_class(sizes[2:3, ]$size, "dvs_bytes")
+  expect_s3_class(sizes[sizes$size > 1000, ]$size, "dvs_bytes")
 })

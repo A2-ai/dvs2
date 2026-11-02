@@ -3,7 +3,7 @@
 refuses_na <- function(call, param) {
   expect_argument_error(call, param)
   cnd <- tryCatch(eval(call), error = identity)
-  what <- if (param == "paths") "contain" else "be"
+  what <- if (param %in% c("paths", "size_bytes")) "contain" else "be"
   expect_identical(conditionMessage(cnd), sprintf("'%s' must not %s NA", param, what))
 }
 
@@ -43,6 +43,7 @@ test_that("an NA among several values of a choice says it must not be NA", {
   new_dvs_test_repo()
   withr::local_options(dvs.num_threads = NULL, dvs.on_error = NULL)
   refuses_na(quote(dvs_init(tempfile(), compression = c("zstd", NA))), "compression")
+  refuses_na(quote(format_byte_size(c(1, NA))), "size_bytes")
   refuses_na(quote(dvs_status(status = c("current", NA))), "status")
   refuses_na(quote(dvs_get(on_conflict = c("skip", NA))), "on_conflict")
   refuses_na(quote(dvs_get(on_error = c("return", NA))), "on_error")
