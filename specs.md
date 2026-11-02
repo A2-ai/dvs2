@@ -176,7 +176,8 @@ the add's message.
 Backend and credentials failures share one set of codes, at the top level (`error.code`) and per row (`code`):
 `auth_required` (no token, not logged in), `auth_expired` (the server said 401), `access_denied` (403),
 `server_unavailable` (transport error, timeout, 5xx), `server_too_old` (an endpoint that should exist answered
-404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs` record, e.g. git conflict
+404/405), `project_not_found` (project 404), `project_locked` (the server refuses changes to a locked project,
+423, and the message gives its reason), `bad_metadata` (an unreadable `.dvs` record, e.g. git conflict
 markers) and `credentials_unreadable` (the store exists but cannot be read). A row can also have
 `code: "cancelled"` (the file never started, see Cancellation), which is not a failure. Command-level codes:
 `not_in_project`, `invalid_configuration`, `invalid_arguments`, `no_files_selected` (also `get` when no tracked
