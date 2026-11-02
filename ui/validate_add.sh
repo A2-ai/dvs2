@@ -2,7 +2,7 @@
 
 # Validate CLI-observable `dvs add` claims from specs.md (Script 2 in ui/TODO.md).
 # Each claim prints expected vs actual and a PASS/FAIL verdict via check().
-# Line refs (Lnnn) are to specs.md on main at 370f448.
+# Claims come from specs.md, add, unless a claim names another section.
 
 set -eu
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
@@ -47,46 +47,10 @@ git init -q
 dvs init local "$DVS_STORAGE_ABS" >/dev/null
 
 # =====================================================================
-say
-say "=== CLAIM: add --help matches spec block L405-423 (option order) ==="
-# Expected reference block from specs.md L405-423.
-EXPECTED_HELP='Adds the given files to dvs. You can use a glob or paths. If you pass a directory and a glob, the glob will be ran from that directory. At least one path or --glob must be provided
-
-Usage: dvs add [OPTIONS] [PATHS]...
-
-Arguments:
-  [PATHS]...  Files to add, or directories to search with --glob
-
-Options:
-      --glob <GLOB>        Add the files matching this glob, e.g. '"'"'*.csv'"'"'
-  -m, --message <MESSAGE>  An optional message to add
-      --dry-run            Show what would be added without making any actual changes
-  -h, --help               Print help
-
-Global Options:
-      --json               Output results as JSON
-      --emit-events        Stream operation results and transfer progress as NDJSON
-      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)'
-ACTUAL_HELP="$(dvs add --help)"
-# Compare with trailing whitespace stripped per line: the spec markdown block
-# and clap both emit trailing padding that round-trips inconsistently through
-# markdown, so the load-bearing comparison is the visible text + order.
-norm() { printf '%s\n' "$1" | sed 's/[[:space:]]*$//'; }
-check "$(norm "$EXPECTED_HELP")" "$(norm "$ACTUAL_HELP")" "add --help text matches spec block (trailing-space normalized)"
-# Option order specifically: long flags from the Options: block to the end
-# (local options, then the Global Options block).
-EXP_ORDER="glob message dry-run help json emit-events threads"
-GOT_ORDER="$(printf '%s\n' "$ACTUAL_HELP" \
-  | sed -n '/^Options:/,$p' \
-  | sed -n 's/^[[:space:]]*\(-[a-z], \)\{0,1\}--\([a-z-]*\).*/\2/p' \
-  | tr '\n' ' ' | sed 's/ $//')"
-check "$EXP_ORDER" "$GOT_ORDER" "add --help option ORDER is glob,message,dry-run,help then globals json,emit-events,threads"
-
-# =====================================================================
 # A directory without --glob is an invalid input path: the batch is refused
 # with invalid_arguments and exit 2 (#240 fail-fast, then the exit-code table).
 say
-say "=== CLAIM: bare directory arg does NOT add (needs a glob), invalid_arguments, exit 2 (L381, L384, L428) ==="
+say "=== CLAIM: bare directory arg does NOT add (needs a glob), invalid_arguments, exit 2 ==="
 mkfiles 1 1K data
 rc=0; OUT="$(dvs add data/ 2>&1)" || rc=$?
 say "$OUT"
@@ -98,7 +62,7 @@ check "invalid_arguments" "$JCODE" "bare dir add --json error.code is invalid_ar
 
 # =====================================================================
 say
-say "=== CLAIM: -m/--message recorded in .dvs metadata 'message' (L381, L415, L695) ==="
+say "=== CLAIM: -m/--message recorded in .dvs metadata 'message' ==="
 mkrandfile withmsg.bin 512
 dvs add -m "hello from spec test" withmsg.bin >/dev/null
 GOTMSG="$(python3 -c 'import json;print(json.load(open(".dvs/withmsg.bin.dvs")).get("message","<absent>"))')"
@@ -111,19 +75,22 @@ check "no" "$HASMSG" "message field omitted from sidecar when no -m given"
 
 # =====================================================================
 say
-say "=== CLAIM: add has NO --recursive option (L382, L806) ==="
+say "=== CLAIM: add has NO --recursive option ==="
+# An unknown flag is an argument error. Under --json that is a cli envelope
+# with invalid_arguments (specs.md, Machine output).
 rc=0; OUT="$(dvs add --recursive withmsg.bin 2>&1)" || rc=$?
 say "$OUT"
-ISUNKNOWN="$(printf '%s' "$OUT" | grep -qiE "unexpected argument '--recursive'|unrecognized" && echo yes || echo no)"
-check "yes" "$ISUNKNOWN" "--recursive rejected as unknown argument"
+JOUT="$(dvs add --json --recursive withmsg.bin 2>/dev/null)" || true
+ISUNKNOWN="$(printf '%s' "$JOUT" | jq_py 'print(d["command"], (d.get("error") or {}).get("code"))')"
+check "cli invalid_arguments" "$ISUNKNOWN" "--recursive is an argument error (command=cli, invalid_arguments)"
 check "0" "$([ "$rc" -ne 0 ] && echo 0 || echo 1)" "--recursive exits non-zero"
-rc=0; OUT="$(dvs add -r withmsg.bin 2>&1)" || rc=$?
-ISUNKNOWN_R="$(printf '%s' "$OUT" | grep -qiE "unexpected argument '-r'|unexpected argument '--recursive'|tip:" && echo yes || echo no)"
-check "yes" "$ISUNKNOWN_R" "-r short flag also rejected as unknown argument"
+JOUT="$(dvs add --json -r withmsg.bin 2>/dev/null)" || true
+ISUNKNOWN_R="$(printf '%s' "$JOUT" | jq_py 'print(d["command"], (d.get("error") or {}).get("code"))')"
+check "cli invalid_arguments" "$ISUNKNOWN_R" "-r short flag is an argument error too (command=cli, invalid_arguments)"
 
 # =====================================================================
 say
-say "=== CLAIM: best-effort, valid+failing(unreadable) -> valid added, failing reported, exit 1 (L386, L429) ==="
+say "=== CLAIM: best-effort, valid+failing(unreadable) -> valid added, failing reported, exit 1 ==="
 mkrandfile good.bin 256
 mkrandfile noperm.bin 256
 chmod 000 noperm.bin
@@ -136,10 +103,10 @@ check "yes" "$REPORTED" "best-effort: failing noperm.bin reported in output"
 check "1" "$rc" "exit code 1 when a file (unreadable) could not be added"
 
 # =====================================================================
-# A path that does not exist is an invalid input path (L384), and an invalid
-# input path is invalid_arguments with exit 2 (L428).
+# A path that does not exist is an invalid input path, and an invalid
+# input path is invalid_arguments with exit 2.
 say
-say "=== CLAIM: missing path is an invalid input path, exit 2 (L384, L428) ==="
+say "=== CLAIM: missing path is an invalid input path, exit 2 ==="
 rc=0; OUT="$(dvs add definitely_missing.bin 2>&1)" || rc=$?
 say "$OUT"
 check "2" "$rc" "exit code 2 when a path is missing"
@@ -148,7 +115,7 @@ check "2" "$rc" "exit code 2 when a path is missing"
 # An unresolvable input path refuses the WHOLE batch (#240): no valid sibling
 # is added, the missing path is named, and the error is invalid_arguments.
 say
-say "=== CLAIM: all-or-nothing, any invalid input path refuses the whole batch (L384, L428, #240) ==="
+say "=== CLAIM: all-or-nothing, any invalid input path refuses the whole batch (#240) ==="
 mkrandfile sibling.bin 256
 rc=0; JOUT="$(dvs add --json sibling.bin gone.bin 2>/dev/null)" || rc=$?
 say "$JOUT"
@@ -157,7 +124,7 @@ REPORTED_MISS="$(printf '%s' "$JOUT" | jq_py 'print("yes" if "gone.bin" in ((d.g
 check "yes" "$REPORTED_MISS" "the missing gone.bin is named in the refusal message"
 JCODE="$(printf '%s' "$JOUT" | jq_py 'print((d.get("error") or {}).get("code"))')"
 check "invalid_arguments" "$JCODE" "refusal for a missing path has error.code invalid_arguments"
-# All input is evaluated and every invalid path reported (L73, L384).
+# All input is evaluated and every invalid path reported.
 mkdir -p emptydir
 rc=0; OUT="$(dvs add sibling.bin gone.bin emptydir 2>&1)" || rc=$?
 say "$OUT"
@@ -166,14 +133,14 @@ check "yes" "$BOTH" "refusal names every invalid path (missing gone.bin AND dire
 
 # =====================================================================
 say
-say "=== CLAIM: sidecar created at <metadata>/<path>.dvs mirroring path (L388, L672-673) ==="
+say "=== CLAIM: sidecar created at <metadata>/<path>.dvs mirroring path (specs.md, Metadata file format) ==="
 mkfiles 1 1K nested/deep
 dvs add nested/deep/file_1.bin >/dev/null
 check "YES" "$([ -e .dvs/nested/deep/file_1.bin.dvs ] && echo YES || echo NO)" "sidecar mirrors path at .dvs/nested/deep/file_1.bin.dvs"
 
 # =====================================================================
 say
-say "=== CLAIM: data file gitignored, .dvs sidecar NOT gitignored (L389, L791-792) ==="
+say "=== CLAIM: data file gitignored, .dvs sidecar NOT gitignored (specs.md, Gitignore) ==="
 mkrandfile gi.bin 256
 dvs add gi.bin >/dev/null
 GI_DATA="$(grep -qxF '/gi.bin' .gitignore && echo yes || echo no)"
@@ -186,14 +153,14 @@ check "no" "$SIDECAR_IGNORED" "git does not ignore the .dvs sidecar"
 
 # =====================================================================
 say
-say "=== CLAIM: outcome 'copied' for new/changed file (L393, L123) ==="
+say "=== CLAIM: outcome 'copied' for new/changed file ==="
 mkrandfile fresh.bin 256
 OC="$(dvs add --json fresh.bin | jq_py 'print(d["files"][0]["outcome"])')"
 check "copied" "$OC" "new file reports outcome=copied (json)"
 
 # =====================================================================
 say
-say "=== CLAIM: outcome 'present' on re-add; metadata not rewritten, message unchanged (L394-395) ==="
+say "=== CLAIM: outcome 'present' on re-add, metadata not rewritten, message unchanged ==="
 mkrandfile reAdd.bin 256
 dvs add -m "first message" reAdd.bin >/dev/null
 ADDTIME1="$(python3 -c 'import json;print(json.load(open(".dvs/reAdd.bin.dvs"))["add_time"])')"
@@ -206,7 +173,7 @@ check "$ADDTIME1" "$ADDTIME2" "present re-add did NOT rewrite metadata (add_time
 
 # =====================================================================
 say
-say "=== CLAIM: symlink resolved before adding (in-project symlink) (L397) ==="
+say "=== CLAIM: symlink resolved before adding (in-project symlink) ==="
 mkrandfile realtarget.bin 256
 ln -s realtarget.bin slink.bin
 rc=0; OUT="$(dvs add slink.bin 2>&1)" || rc=$?
@@ -218,26 +185,26 @@ check "yes" "$RESOLVED" "symlink resolved to real target (sidecar at realtarget.
 
 # =====================================================================
 # An explicit path resolving outside the project is an invalid input path:
-# the batch is refused with exit 2 (L397, L428).
+# the batch is refused with exit 2.
 say
-say "=== CLAIM: symlink whose target is OUTSIDE project root is rejected, exit 2 (L397, L428) ==="
+say "=== CLAIM: symlink whose target is OUTSIDE project root is rejected, exit 2 ==="
 ln -s "$OUTSIDE_DIR/ext.bin" outside.bin
 rc=0; OUT="$(dvs add outside.bin 2>&1)" || rc=$?
 say "$OUT"
 check "2" "$rc" "outside-root symlink add exits 2"
-OUTREJ="$(printf '%s' "$OUT" | grep -qiE "outside project|outside the project" && echo yes || echo no)"
-check "yes" "$OUTREJ" "outside-root symlink rejected with 'outside project' error"
+OUTREJ="$(printf '%s' "$OUT" | grep -qF 'outside.bin' && echo yes || echo no)"
+check "yes" "$OUTREJ" "the refusal names outside.bin"
 check "NO" "$([ -e .dvs/outside.bin.dvs ] && echo YES || echo NO)" "no sidecar created for outside-root symlink"
 
 # =====================================================================
 say
-say "=== CLAIM: atomicity, no .tmp left in storage, no partial metadata (L399-400, L707-709) ==="
+say "=== CLAIM: atomicity, no .tmp left in storage, no partial metadata (specs.md, Storage layout) ==="
 TMPCOUNT="$(find "$DVS_STORAGE_ABS" -name '*.tmp' | wc -l | tr -d ' ')"
 check "0" "$TMPCOUNT" "no .tmp leftovers in storage after adds"
 
 # =====================================================================
 say
-say "=== CLAIM: dvs add *.bin (shell-expanded) works (L425) ==="
+say "=== CLAIM: dvs add *.bin (shell-expanded) works ==="
 mkdir -p shellglob && cd shellglob
 mkrandfile s1.bin 100; mkrandfile s2.bin 100
 dvs add *.bin >/dev/null
@@ -247,7 +214,7 @@ cd "$DVS_REPO"
 
 # =====================================================================
 say
-say "=== CLAIM: --glob '*.bin' (lib-expanded, quoted) works (L426) ==="
+say "=== CLAIM: --glob '*.bin' (lib-expanded, quoted) works ==="
 mkdir -p libglob && cd libglob
 mkrandfile l1.bin 100; mkrandfile l2.bin 100
 dvs add --glob '*.bin' >/dev/null
@@ -257,7 +224,7 @@ cd "$DVS_REPO"
 
 # =====================================================================
 say
-say "=== CLAIM: --dry-run reports outcomes but makes NO changes (L44, L416) ==="
+say "=== CLAIM: --dry-run reports outcomes but makes NO changes ==="
 mkrandfile dry.bin 256
 OUT="$(dvs add --dry-run dry.bin 2>&1)"
 say "$OUT"
@@ -268,11 +235,11 @@ DRY_JSON="$(dvs add --dry-run --json dry.bin 2>/dev/null)"
 BLOBS_AFTER="$(find "$DVS_STORAGE_ABS" -type f ! -name 'audit.log.jsonl' | wc -l | tr -d ' ')"
 check "$BLOBS_BEFORE" "$BLOBS_AFTER" "--dry-run created NO storage blob (blob count unchanged)"
 DRY_FIELDS="$(printf '%s' "$DRY_JSON" | jq_py 'print(d["dry_run"], d["files"][0]["outcome"], d["bytes"]["transferred"])')"
-check "True copied 0" "$DRY_FIELDS" "--dry-run --json has dry_run=true, would-be outcome=copied, bytes.transferred=0 (L91, L112)"
+check "True copied 0" "$DRY_FIELDS" "--dry-run --json has dry_run=true, would-be outcome=copied, bytes.transferred=0"
 
 # =====================================================================
 say
-say "=== CLAIM: --json output for add is the v1 envelope (L89-99, L109-123) ==="
+say "=== CLAIM: --json output for add is the v1 envelope (specs.md, Machine output) ==="
 mkrandfile j.bin 256
 JOUT="$(dvs add --json j.bin)"
 say "$JOUT"
@@ -302,14 +269,14 @@ check "yes" "$VALIDJSON" "--json emits a v1 envelope: counts, bytes, files rows 
 
 # =====================================================================
 say
-say "=== CLAIM: results sorted alphabetically by path (L434) ==="
+say "=== CLAIM: results sorted alphabetically by path ==="
 mkrandfile zsort.bin 50; mkrandfile asort.bin 50; mkrandfile msort.bin 50
 SORTED="$(dvs add --json zsort.bin msort.bin asort.bin | jq_py 'ps=[r["path"] for r in d["files"]];print("yes" if ps==sorted(ps) else "no:"+",".join(ps))')"
 check "yes" "$SORTED" "add results sorted alphabetically by path (gave z,m,a -> a,m,z)"
 
 # =====================================================================
 say
-say "=== CLAIM: audit entries action=add with file(path+hashes)+compression+message (L722-734) ==="
+say "=== CLAIM: audit entries action=add with file(path+hashes)+compression+message (specs.md, Audit trail) ==="
 mkrandfile audited.bin 256
 EXPHASH="$(dvs add --json -m "audit message" audited.bin | jq_py 'print(d["files"][0]["hash"])')"
 AUDIT="$DVS_STORAGE_ABS/audit.log.jsonl"

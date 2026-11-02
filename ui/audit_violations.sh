@@ -3,8 +3,7 @@
 # Regression audit for the CLI spec violations found by the validate_*.sh sweep.
 # Re-run this later to check whether each known divergence still holds.
 #
-# Each case asserts the SPEC-CORRECT behavior. Line refs (Lnnn) are to
-# specs.md on main at 370f448.
+# Each case asserts the SPEC-CORRECT behavior.
 #   Section A — clear CLI bugs (#216, #217, #240): FATAL. Flip to PASS once the
 #               CLI is fixed; the script's exit code = number of Section A failures.
 #   Section B — spec/CLI divergences (#218, #220): INFORMATIONAL. These are
@@ -62,9 +61,9 @@ ok=1
 verdict "$ok" "#217 'get data --glob \"*.bin\"' retrieves the files (like 'add')"
 
 # ── #219/#240 — add valid + unresolvable (missing) path refuses the batch ──
-# A missing path is an invalid input path (L384), and a batch refused for an
-# invalid input path exits 2 (L428).
-note "#240 add valid + missing path refuses the whole batch (all-or-nothing, specs.md L384/L428)"
+# A missing path is an invalid input path, and a batch refused for an
+# invalid input path exits 2.
+note "#240 add valid + missing path refuses the whole batch (all-or-nothing, specs.md, add)"
 fresh_project
 head -c 1024 /dev/urandom > ok.bin
 rc=0; out="$(dvs add ok.bin missing.bin --json)" || rc=$?
@@ -78,18 +77,19 @@ verdict "$ok" "#240 all-or-nothing: ok.bin NOT added, missing.bin named, exit 2"
 echo
 echo "######## Section B: spec divergences (informational) ########"
 
-# ── #218 — spec says status accepts --glob (L797); the June CLI rejected it ──
+# ── #218: specs.md says status accepts --glob. The June CLI rejected it. ──
 note "#218 status --glob"
 fresh_project
-out="$(dvs status --glob '*.bin' 2>&1)" || true
-if printf '%s' "$out" | grep -q 'unexpected argument'; then
-  echo "DIVERGES: #218 'status' rejects --glob, but specs.md L797 lists it (likely fix: edit spec)"
+# A rejected flag is a usage error, exit 2. Check the exit, not clap's wording.
+rc=0; dvs status --glob '*.bin' >/dev/null 2>&1 || rc=$?
+if [ "$rc" -eq 2 ]; then
+  echo "DIVERGES: #218 'status' rejects --glob (exit 2), but specs.md, Globbing, lists it (likely fix: edit spec)"
 else
   echo "ALIGNED:  #218 'status' accepts --glob"
 fi
 
 # ── #220/#240 — get refuses the batch on an explicitly-requested unknown path ──
-# not_tracked is a known problem: on_conflict=abort writes nothing (L472), exit 1 (L569).
+# not_tracked is a known problem: on_conflict=abort writes nothing, exit 1.
 note "#240 get valid + unknown path refuses the batch"
 fresh_project
 head -c 1024 /dev/urandom > f.bin

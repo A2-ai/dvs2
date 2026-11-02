@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
 
-# Validate the Globbing claims in specs.md (L795-806) plus the glob mentions in
-# add (L425-426), get (L513), and status (L619). CLI only.
-# Line refs (Lnnn) are to specs.md on main at 370f448.
+# Validate the Globbing claims in specs.md plus the glob mentions in
+# add, get, and status. CLI only.
 #
 # Claims under test (Script 5 in ui/TODO.md):
-#   1. explicit files: glob ignored, files added/retrieved directly (L799)
-#   2. explicit directory + glob: directory walked, filtered by glob (L800)
-#   3. no paths + glob: walks current directory filtered by glob (L801)
-#   4. literal separator: '*.bin' matches only target dir, NOT subdir (L803-804)
-#   5. '**/*.bin' matches recursively across subdirs (L804)
-#   6. same glob rules hold for add, status, AND get (L797)
-#   7. --recursive and --glob are mutually exclusive for status and get (L806)
+#   1. explicit files: glob ignored, files added/retrieved directly
+#   2. explicit directory + glob: directory walked, filtered by glob
+#   3. no paths + glob: walks current directory filtered by glob
+#   4. literal separator: '*.bin' matches only target dir, NOT subdir
+#   5. '**/*.bin' matches recursively across subdirs
+#   6. same glob rules hold for add, status, AND get
+#   7. --recursive and --glob are mutually exclusive for status and get
 #
 # IMPORTANT: every glob passed to --glob/-g is QUOTED so the shell does not
 # expand it; the spec requires lib-side expansion. One deliberate UNQUOTED case
-# is included to contrast shell-expansion (add only, per L425).
+# is included to contrast shell-expansion (add only, as specs.md, add, shows).
 
 set -eu
 trap 'printf "ERROR at %s:%d\n" "${BASH_SOURCE[0]}" "$LINENO" >&2' ERR
@@ -43,7 +42,7 @@ check() {
 }
 
 # Sorted, comma-joined list of the "path" of every row that succeeded (code
-# null, L114-115) in a --json envelope. A failed row (say get's not_tracked or
+# null) in a --json envelope. A failed row (say get's not_tracked or
 # hash_mismatch) drops out, so a check tests retrieval, not only selection.
 json_paths() {
   { set +x; } 2>/dev/null
@@ -103,7 +102,7 @@ EXPLICIT_TXT="keep1.txt,keep2.txt"
 # ADD claims
 # ═══════════════════════════════════════════════════════════════════════════
 
-# ── Claim 4 (add): literal separator '*.bin' -> top-level only (L803-804) ──
+# ── Claim 4 (add): literal separator '*.bin' -> top-level only ──
 say
 say "=== ADD claim 4: --glob '*.bin' literal separator (top-level only) ==="
 out="$(dvs add --glob '*.bin' --json)"
@@ -122,7 +121,7 @@ reset_repo() {
 
 reset_repo
 
-# ── Claim 5 (add): '**/*.bin' recursive (L804) ──
+# ── Claim 5 (add): '**/*.bin' recursive ──
 say
 say "=== ADD claim 5: --glob '**/*.bin' recursive ==="
 out="$(dvs add --glob '**/*.bin' --json)"
@@ -131,7 +130,7 @@ check "$ALL_BIN" "$(sidecar_paths)" "add '**/*.bin' wrote sidecars for all *.bin
 
 reset_repo
 
-# ── Claim 2 (add): explicit directory + glob -> dir walked, filtered (L800) ──
+# ── Claim 2 (add): explicit directory + glob -> dir walked, filtered ──
 say
 say "=== ADD claim 2: explicit dir 'data' + --glob '*.bin' ==="
 out="$(dvs add data --glob '*.bin' --json)"
@@ -139,7 +138,7 @@ check "$DATA_DIR_BIN" "$(printf '%s' "$out" | json_paths)" "add data --glob '*.b
 
 reset_repo
 
-# ── Claim 1 (add): explicit files -> glob ignored (L799) ──
+# ── Claim 1 (add): explicit files -> glob ignored ──
 say
 say "=== ADD claim 1: explicit files keep1.txt keep2.txt + --glob '*.bin' (glob ignored) ==="
 out="$(dvs add keep1.txt keep2.txt --glob '*.bin' --json)"
@@ -147,7 +146,7 @@ check "$EXPLICIT_TXT" "$(printf '%s' "$out" | json_paths)" "add explicit files i
 
 reset_repo
 
-# ── Claim 3 (add): no paths + glob -> walks cwd filtered (L801) ──
+# ── Claim 3 (add): no paths + glob -> walks cwd filtered ──
 # (Same invocation form as claim 4/5; assert it walked the CURRENT dir.)
 say
 say "=== ADD claim 3: no paths, --glob '*.bin' walks current dir ==="
@@ -156,9 +155,9 @@ check "$TOP_ONLY" "$(printf '%s' "$out" | json_paths)" "add (no paths) --glob wa
 
 reset_repo
 
-# ── add bonus: UNQUOTED *.bin is expanded by the SHELL (L425) ──
+# ── add bonus: UNQUOTED *.bin is expanded by the SHELL ──
 say
-say "=== ADD bonus: unquoted *.bin (shell expansion, L425) ==="
+say "=== ADD bonus: unquoted *.bin (shell expansion) ==="
 # Shell expands *.bin at top level only -> top1.bin top2.bin as explicit paths.
 out="$(dvs add *.bin --json)"
 check "$TOP_ONLY" "$(printf '%s' "$out" | json_paths)" "add *.bin (shell-expanded) adds top-level matches"
@@ -173,7 +172,7 @@ dvs add --glob '**/*.bin' --json | json_paths
 check "$ALL_BIN" "$(sidecar_paths)" "seed: all 6 *.bin sidecars present for get/status tests"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# GET claims (get uses -g/--glob, L513; resolves against the metadata folder, L42)
+# GET claims (get uses -g/--glob and resolves against the metadata folder)
 # ═══════════════════════════════════════════════════════════════════════════
 
 del_locals() {
@@ -204,7 +203,7 @@ out="$(dvs get top1.bin top2.bin --glob '**/*.bin' --json)"
 check "$TOP_ONLY" "$(printf '%s' "$out" | json_paths)" "get explicit files ignores --glob, retrieves exact files"
 
 # ── Claim 2 (get): explicit dir + glob -> dir walked filtered (#217 fixed) ──
-# Spec L797: get glob resolution works the same way as add; L800: an explicit
+# Globbing: get resolves a glob the same way as add, and an explicit
 # directory arg is walked and filtered by the glob. (#217, which had get return
 # "No files to get" for the positional-dir form, is fixed.)
 say
@@ -228,15 +227,15 @@ check "$TOP_ONLY" "$(printf '%s' "$out" | json_paths)" "get (no paths) --glob wa
 dvs get -g '**/*.bin' --json >/dev/null
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STATUS glob claims (spec L797 lists status among --glob commands)
+# STATUS glob claims (specs.md, Globbing, lists status among the --glob commands)
 # ═══════════════════════════════════════════════════════════════════════════
 say
-say "=== STATUS: accepts --glob and follows the literal-separator rule (spec L797, #218) ==="
+say "=== STATUS: accepts --glob and follows the literal-separator rule (#218) ==="
 rc=0
 status_out="$(dvs status --glob '*.bin' --json)" || rc=$?
 say "status --glob exit code: $rc"
 say "status --glob stdout: $status_out"
-# Spec L797: add, status, get all accept --glob. (#218, which had status reject
+# Globbing: add, status, get all accept --glob. (#218, which had status reject
 # the flag, is fixed.) The literal `*` does not cross directory separators, so
 # '*.bin' matches only top-level .bin files.
 check "0" "$rc" "status --glob is accepted (exit 0), not rejected (#218)"
@@ -251,17 +250,17 @@ dvs status -g '*.bin' >/dev/null 2>&1 || rc=$?
 check "0" "$rc" "status -g accepted (exit 0), short form of --glob (#218)"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# --recursive and --glob are mutually exclusive (L806): a usage error, exit 2
-# (L216), for both commands that take -r.
+# --recursive and --glob are mutually exclusive: a usage error, exit 2
+#, for both commands that take -r.
 # ═══════════════════════════════════════════════════════════════════════════
 say
-say "=== STATUS/GET: -r with --glob is refused (L806) ==="
+say "=== STATUS/GET: -r with --glob is refused ==="
 rc=0
 dvs status -r data --glob '*.bin' >/dev/null 2>&1 || rc=$?
-check "2" "$rc" "status -r --glob is a usage error, exit 2 (L806)"
+check "2" "$rc" "status -r --glob is a usage error, exit 2"
 rc=0
 dvs get -r data --glob '*.bin' >/dev/null 2>&1 || rc=$?
-check "2" "$rc" "get -r --glob is a usage error, exit 2 (L806)"
+check "2" "$rc" "get -r --glob is a usage error, exit 2"
 
 # ═══════════════════════════════════════════════════════════════════════════
 say

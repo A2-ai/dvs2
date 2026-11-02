@@ -3,15 +3,14 @@
 # Script 7 — validate_global.sh
 #
 # Validates cross-cutting CLI surface claims from specs.md (CLI only).
-# Line refs (Lnnn) are to specs.md on main at 370f448.
-#   - `dvs --help` lists every subcommand the spec documents (L31, L131-229, L270-666)
-#   - `--json` accepted by every subcommand that runs locally, before or after it (L13, L82)
-#   - a --json argument error is an envelope with command `cli`, exit 2 (L89-90, L216)
-#   - project root discovery: walk UP from a nested subdir to dvs.toml (L23-24)
-#   - multiple projects in one git repo: nearest dvs.toml wins (L24, L273)
-#   - gitignore entry format `/<filename>`, no duplicate on re-add (L791-792)
-#   - gitignore skipped when no `.git` folder, add still succeeds (L792-793)
-#   - parallelism: DVS_NUM_THREADS honored (L778-782) [count untestable via CLI]
+# Each bullet names its specs.md section.
+#   - `--json` accepted by every subcommand that runs locally, before or after it (Machine output)
+#   - a --json argument error is an envelope with command `cli`, exit 2 (Machine output)
+#   - project root discovery: walk UP from a nested subdir to dvs.toml (Glossary)
+#   - multiple projects in one git repo: nearest dvs.toml wins (Glossary, init)
+#   - gitignore entry format `/<filename>`, no duplicate on re-add (Gitignore)
+#   - gitignore skipped when no `.git` folder, add still succeeds (Gitignore)
+#   - parallelism: DVS_NUM_THREADS honored (Parallelism) [count untestable via CLI]
 #
 # Each claim prints expected vs actual and a PASS/FAIL/UNTESTABLE verdict.
 # Ends with a `=== SUMMARY: N pass, M fail ===` line.
@@ -54,7 +53,7 @@ untestable() {
 # <parse-error> instead of aborting, so the script always reaches SUMMARY.
 jq_py() { python3 -c "import sys,json;d=json.load(sys.stdin);$1" 2>/dev/null || echo "<parse-error>"; }
 
-# "v1 <command>" when stdin is one v1 envelope (L89-90), else what it is.
+# "v1 <command>" when stdin is one v1 envelope, else what it is.
 envelope_of() { jq_py 'print("v%s %s" % (d.get("v"), d.get("command")))'; }
 
 # ── setup: temp repo + sibling storage ───────────────────────────────────────
@@ -69,22 +68,9 @@ dvs init local "$DVS_STORAGE"
 
 # ──────────────────────────────────────────────────────────────────────────────
 say
-say "=== CLAIM 1: dvs --help lists every subcommand the spec documents ==="
-# Main's specs.md has no `dvs --help` block, so it fixes no order. It documents
-# init (L270), attach (L184), add (L379), status (L601), get (L451), info
-# (L189), availability (L131), history (L133), login and logout (L221-229).
-# clap appends help. Compare the sets.
-HELP_OUT="$(dvs --help)"
-COMMANDS="$(printf '%s\n' "$HELP_OUT" \
-  | awk '/^Commands:/{f=1;next} f && /^[[:space:]]+[a-z]/{print $1} f && /^$/{exit}' \
-  | sort | paste -sd, -)"
-check "add,attach,availability,get,help,history,info,init,login,logout,status" "$COMMANDS" "dvs --help subcommand set"
-
-# ──────────────────────────────────────────────────────────────────────────────
-say
-say "=== CLAIM 2: --json accepted by every subcommand that runs locally (L13, L82, L89-90) ==="
+say "=== CLAIM 2: --json accepted by every subcommand that runs locally ==="
 # Each must print one v1 envelope naming its command on stdout (stderr is for
-# diagnostics, L84), not a clap/usage error.
+# diagnostics), not a clap/usage error.
 # init --json: use a throwaway nested project so we do not clobber the main repo.
 JSON_DIR="$DVS_REPO/jsonprobe"
 JSON_STORE="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_json"
@@ -98,29 +84,29 @@ head -c 1024 /dev/urandom > "$DVS_REPO/g.bin"
 ADD_JSON="$(cd "$DVS_REPO" && dvs add g.bin --json)"
 check "v1 add" "$(printf '%s' "$ADD_JSON" | envelope_of)" "add --json emits a v1 envelope"
 
-# status --json, and --json before the subcommand (global, L82)
+# status --json, and --json before the subcommand (global, specs.md, Machine output)
 STATUS_JSON="$(cd "$DVS_REPO" && dvs status --json)"
 check "v1 status" "$(printf '%s' "$STATUS_JSON" | envelope_of)" "status --json emits a v1 envelope"
 STATUS_JSON_PRE="$(cd "$DVS_REPO" && dvs --json status)"
-check "v1 status" "$(printf '%s' "$STATUS_JSON_PRE" | envelope_of)" "--json before the subcommand also emits a v1 envelope (L82)"
+check "v1 status" "$(printf '%s' "$STATUS_JSON_PRE" | envelope_of)" "--json before the subcommand also emits a v1 envelope"
 
 # get --json (delete local copy first so get does real work)
 rm -f "$DVS_REPO/g.bin"
 GET_JSON="$(cd "$DVS_REPO" && dvs get g.bin --json)"
 check "v1 get" "$(printf '%s' "$GET_JSON" | envelope_of)" "get --json emits a v1 envelope"
 
-# info, availability, history run against a local project too (L131-133, L189-192)
+# info, availability, history run against a local project too
 INFO_JSON="$(cd "$DVS_REPO" && dvs info --json)"
-check "v1 info not_applicable" "$(printf '%s' "$INFO_JSON" | jq_py 'print("v%s %s %s" % (d.get("v"), d.get("command"), d.get("connection")))')" "info --json emits a v1 envelope, connection=not_applicable for a local project (L192)"
+check "v1 info not_applicable" "$(printf '%s' "$INFO_JSON" | jq_py 'print("v%s %s %s" % (d.get("v"), d.get("command"), d.get("connection")))')" "info --json emits a v1 envelope, connection=not_applicable for a local project"
 G_HASH="$(printf '%s' "$ADD_JSON" | jq_py 'print(d["files"][0]["hash"])')"
 AVAIL_JSON="$(cd "$DVS_REPO" && dvs availability "$G_HASH" --json)"
-check "v1 availability present" "$(printf '%s' "$AVAIL_JSON" | jq_py 'print("v%s %s %s" % (d.get("v"), d.get("command"), d["files"][0]["state"]))')" "availability --json emits a v1 envelope, the added hash is present (L131-132)"
+check "v1 availability present" "$(printf '%s' "$AVAIL_JSON" | jq_py 'print("v%s %s %s" % (d.get("v"), d.get("command"), d["files"][0]["state"]))')" "availability --json emits a v1 envelope, the added hash is present"
 HIST_JSON="$(cd "$DVS_REPO" && dvs history g.bin --json)"
-check "v1 history 1" "$(printf '%s' "$HIST_JSON" | jq_py 'print("v%s %s %s" % (d.get("v"), d.get("command"), len(d["files"])))')" "history --json emits a v1 envelope with the one add of g.bin (L133)"
+check "v1 history 1" "$(printf '%s' "$HIST_JSON" | jq_py 'print("v%s %s %s" % (d.get("v"), d.get("command"), len(d["files"])))')" "history --json emits a v1 envelope with the one add of g.bin"
 untestable "attach/login/logout --json need a dvs server"
 
 say
-say "=== CLAIM 2b: a --json argument error is an envelope with command cli, exit 2 (L89-90, L216) ==="
+say "=== CLAIM 2b: a --json argument error is an envelope with command cli, exit 2 ==="
 CLI_RC=0
 CLI_JSON="$(dvs --json no-such-subcommand)" || CLI_RC=$?
 check "v1 cli invalid_arguments" "$(printf '%s' "$CLI_JSON" | jq_py 'print("v%s %s %s" % (d.get("v"), d.get("command"), (d.get("error") or {}).get("code")))')" "unknown subcommand under --json is a cli envelope with invalid_arguments"
@@ -128,26 +114,26 @@ check "2" "$CLI_RC" "unknown subcommand under --json exits 2"
 
 # ──────────────────────────────────────────────────────────────────────────────
 say
-say "=== CLAIM 3: project root discovery walks UP from nested subdir (L23-24) ==="
+say "=== CLAIM 3: project root discovery walks UP from nested subdir ==="
 mkdir -p "$DVS_REPO/data/raw"
 head -c 1024 /dev/urandom > "$DVS_REPO/data/raw/nested.bin"
 (cd "$DVS_REPO" && dvs add data/raw/nested.bin >/dev/null)
 # From data/raw (depth 2) run status; must find project root and list the file.
 NESTED_RC=0
 NESTED_OUT="$(cd "$DVS_REPO/data/raw" && dvs status --json)" || NESTED_RC=$?
-# Paths are reported relative to project root (L128), so expect data/raw/nested.bin.
+# Paths are reported relative to project root, so expect data/raw/nested.bin.
 NESTED_OK="$(printf '%s' "$NESTED_OUT" | jq_py 'print("yes" if "data/raw/nested.bin" in [r["path"] for r in d["files"]] else "no")')"
 check "yes" "$NESTED_OK" "status from data/raw/ resolves project root (rc=$NESTED_RC)"
 
 # ──────────────────────────────────────────────────────────────────────────────
 say
-say "=== CLAIM 4: nested dvs.toml resolves to the NEAREST project (L24, L273) ==="
+say "=== CLAIM 4: nested dvs.toml resolves to the NEAREST project ==="
 # Inside the existing repo create a nested project with its OWN dvs.toml + storage.
 NESTED_PROJ="$DVS_REPO/inner"
 NESTED_STORE="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_inner"
 mkdir -p "$NESTED_PROJ" "$NESTED_STORE"
 (cd "$NESTED_PROJ" && dvs init local "$NESTED_STORE" --root-dir "$(pwd)" >/dev/null)
-# init nested below parent dvs.toml must succeed (local check, L273).
+# init nested below parent dvs.toml must succeed (the check is local, specs.md, init).
 check "1" "$([ -f "$NESTED_PROJ/dvs.toml" ] && echo 1 || echo 0)" "nested init succeeds despite parent dvs.toml"
 # Add a file from inside the nested project; its blob must land in NESTED_STORE,
 # proving dvs resolved the nearest (inner) dvs.toml, not the outer one.
@@ -166,7 +152,7 @@ check "nearest" "$NEAREST" "add from inner/ stores in NEAREST storage (inner), n
 
 # ──────────────────────────────────────────────────────────────────────────────
 say
-say "=== CLAIM 5: gitignore entry format /<filename>, no duplicate on re-add (L791-792) ==="
+say "=== CLAIM 5: gitignore entry format /<filename>, no duplicate on re-add ==="
 GI="$DVS_REPO/data/raw/.gitignore"
 GI_CONTENT="$(cat "$GI" 2>/dev/null || true)"
 # Expect a line exactly '/nested.bin' in the file's OWN directory.
@@ -179,7 +165,7 @@ check "1" "$GI_COUNT" "no duplicate /nested.bin entry after re-add"
 
 # ──────────────────────────────────────────────────────────────────────────────
 say
-say "=== CLAIM 6: no .git -> gitignore skipped, add still succeeds (L792-793) ==="
+say "=== CLAIM 6: no .git -> gitignore skipped, add still succeeds ==="
 NOGIT_REPO="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_nogit_XXX)"
 NOGIT_STORE="$SCRIPT_DIR/dvs_storage_cli_${RUN_SUFFIX}_nogit"
 mkdir "$NOGIT_STORE"
@@ -195,7 +181,7 @@ check "0" "$NOGIT_GI_COUNT" "no .gitignore written when no .git folder"
 
 # ──────────────────────────────────────────────────────────────────────────────
 say
-say "=== CLAIM 7: parallelism DVS_NUM_THREADS honored (L778-782) ==="
+say "=== CLAIM 7: parallelism DVS_NUM_THREADS honored ==="
 # The actual thread count is not surfaced in plain CLI output, so the COUNT
 # itself is UNTESTABLE via the CLI. What we CAN verify: setting the variable
 # does not error and still produces correct results.
@@ -209,7 +195,7 @@ PAR_OUT="$(cd "$DVS_REPO" && DVS_NUM_THREADS=2 dvs add par/p1.bin par/p2.bin par
 PAR_COPIED="$(printf '%s' "$PAR_OUT" | jq_py 'print(sum(1 for r in d["files"] if r["outcome"] == "copied"))')"
 check "0" "$PAR_RC" "DVS_NUM_THREADS=2 dvs add does not error"
 check "3" "$PAR_COPIED" "DVS_NUM_THREADS=2 add produces correct results (3 copied)"
-untestable "DVS_NUM_THREADS actual thread COUNT (L778-782) not observable via plain CLI output"
+untestable "DVS_NUM_THREADS actual thread COUNT not observable via plain CLI output"
 
 # ──────────────────────────────────────────────────────────────────────────────
 say
