@@ -23,6 +23,12 @@ pub enum ErrorCode {
     OperationFailed,
     /// A row that failed without a more specific code
     FileFailed,
+    /// The working path is a directory, a symbolic link or another file that
+    /// is not a regular file. get's code of the same name
+    NotAFile,
+    /// A parent directory of the working path is a symbolic link. get's code
+    /// of the same name
+    UnsafePath,
     RevokeFailed,
     /// A row a cancel stopped before it started: a row state, not a failure
     Cancelled,
@@ -46,6 +52,8 @@ impl ErrorCode {
             ErrorCode::IoError => "io_error",
             ErrorCode::OperationFailed => "operation_failed",
             ErrorCode::FileFailed => "file_failed",
+            ErrorCode::NotAFile => "not_a_file",
+            ErrorCode::UnsafePath => "unsafe_path",
             ErrorCode::RevokeFailed => "revoke_failed",
             ErrorCode::Cancelled => "cancelled",
         }

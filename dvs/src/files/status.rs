@@ -33,6 +33,9 @@ pub struct StatusFacts {
     pub baseline: Option<Baseline>,
     pub code: Option<ErrorCode>,
     pub error: Option<String>,
+    /// What to do about an error row, in words without commands, so every
+    /// front end can show it
+    pub hint: Option<String>,
 }
 
 impl StatusFacts {
@@ -49,7 +52,7 @@ impl StatusFacts {
 
 impl Serialize for StatusFacts {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut row = s.serialize_struct("StatusFacts", 7)?;
+        let mut row = s.serialize_struct("StatusFacts", 8)?;
         row.serialize_field("path", &self.path)?;
         row.serialize_field("status", &self.status_name())?;
         row.serialize_field("metadata", &self.metadata)?;
@@ -57,6 +60,7 @@ impl Serialize for StatusFacts {
         row.serialize_field("baseline", &self.baseline)?;
         row.serialize_field("code", &self.code)?;
         row.serialize_field("error", &self.error)?;
+        row.serialize_field("hint", &self.hint)?;
         row.end()
     }
 }
@@ -186,6 +190,7 @@ fn cancelled_row(path: PathBuf) -> StatusFacts {
         baseline: None,
         code: Some(ErrorCode::Cancelled),
         error: Some("cancelled before this file was checked".to_string()),
+        hint: None,
     }
 }
 
@@ -234,6 +239,7 @@ fn inspect_path(
         baseline: None,
         code: None,
         error: None,
+        hint: None,
     };
     let facts = (|| -> Result<()> {
         row.code = Some(ErrorCode::BadMetadata);
@@ -247,13 +253,26 @@ fn inspect_path(
             .and_then(|c| c.lock().ok()?.baseline(&key).ok().flatten())
             .map(|(blake3, size)| Baseline { blake3, size });
         let full = paths.file_path(&path);
-        // Never hash a symlink or traverse a symlinked parent outside the project.
+        // Never hash a symlink or read through a symlinked parent, even one
+        // that stays in the project.
         let mut component = paths.repo_root().to_path_buf();
-        for part in path.components() {
+        let mut parts = path.components().peekable();
+        while let Some(part) = parts.next() {
             component.push(part.as_os_str());
             match fs::symlink_metadata(&component) {
                 Ok(meta) if meta.file_type().is_symlink() => {
-                    anyhow::bail!("working path contains a symlink")
+                    if parts.peek().is_none() {
+                        row.code = Some(ErrorCode::NotAFile);
+                        row.hint = Some("Replace the link with the file it points to.".into());
+                        anyhow::bail!("is a symbolic link, and dvs does not follow links")
+                    }
+                    let parent = component.strip_prefix(paths.repo_root())?;
+                    row.code = Some(ErrorCode::UnsafePath);
+                    row.hint = Some("Replace the link with the directory it points to.".into());
+                    anyhow::bail!(
+                        "{} is a symbolic link, and dvs does not follow links",
+                        parent.display()
+                    )
                 }
                 Ok(_) => (),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
@@ -272,7 +291,15 @@ fn inspect_path(
             }
             Err(e) => return Err(e),
         };
-        anyhow::ensure!(full.is_file(), "working path is not a regular file");
+        if !full.is_file() {
+            row.code = Some(ErrorCode::NotAFile);
+            row.hint = Some("Move it out of the way, then get the tracked file.".into());
+            anyhow::bail!(if full.is_dir() {
+                "is a directory"
+            } else {
+                "is not a regular file"
+            })
+        }
         row.working.size = Some(stat.size);
         // Hashing starts here: a cache lookup counts, while
         // absent and failed rows never start hashing.
@@ -400,6 +427,96 @@ mod tests {
         assert_eq!(rows[0].status, None);
         assert_eq!(serde_json::to_value(&rows[0]).unwrap()["status"], "error");
         assert_eq!(rows[0].code, Some(ErrorCode::BadMetadata));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_symlink_or_a_directory_at_the_path_is_never_read() {
+        let (_temp, paths) = fixture();
+        let root = paths.repo_root().to_path_buf();
+        let status = || {
+            inspect_status(&paths, None, None, &OperationContext::new())
+                .unwrap()
+                .files
+                .remove(0)
+        };
+        // The file moved to scratch space, and a link took its place
+        let scratch = tempfile::tempdir().unwrap();
+        fs::copy(root.join("data.txt"), scratch.path().join("data.txt")).unwrap();
+        fs::remove_file(root.join("data.txt")).unwrap();
+        std::os::unix::fs::symlink(scratch.path().join("data.txt"), root.join("data.txt")).unwrap();
+        let row = status();
+        assert_eq!((row.status, row.code), (None, Some(ErrorCode::NotAFile)));
+        assert_eq!(
+            row.error.as_deref(),
+            Some("is a symbolic link, and dvs does not follow links")
+        );
+        assert_eq!(
+            row.hint.as_deref(),
+            Some("Replace the link with the file it points to.")
+        );
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(
+            (&json["status"], &json["code"]),
+            (&"error".into(), &"not_a_file".into())
+        );
+        assert_eq!(json["hint"], "Replace the link with the file it points to.");
+
+        // A link that leads nowhere is refused the same way, not reported absent
+        fs::remove_file(scratch.path().join("data.txt")).unwrap();
+        assert_eq!(status().code, Some(ErrorCode::NotAFile));
+
+        fs::remove_file(root.join("data.txt")).unwrap();
+        fs::create_dir(root.join("data.txt")).unwrap();
+        let row = status();
+        assert_eq!((row.status, row.code), (None, Some(ErrorCode::NotAFile)));
+        assert_eq!(row.error.as_deref(), Some("is a directory"));
+        assert!(row.hint.is_some());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_symlinked_parent_is_never_read_through() {
+        let (_tmp, paths) = setup_filtered_repo();
+        let root = paths.repo_root().to_path_buf();
+        // To a folder in the project
+        fs::rename(root.join("dir1/sub"), root.join("moved")).unwrap();
+        std::os::unix::fs::symlink(root.join("moved"), root.join("dir1/sub")).unwrap();
+        // To a folder outside it
+        let scratch = tempfile::tempdir().unwrap();
+        fs::create_dir(scratch.path().join("dir2")).unwrap();
+        fs::copy(root.join("dir2/d.txt"), scratch.path().join("dir2/d.txt")).unwrap();
+        fs::remove_dir_all(root.join("dir2")).unwrap();
+        std::os::unix::fs::symlink(scratch.path().join("dir2"), root.join("dir2")).unwrap();
+
+        let rows = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
+        let got: Vec<_> = rows
+            .iter()
+            .map(|r| (r.path.to_str().unwrap(), r.code, r.error.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("a.txt", None, None),
+                ("dir1/b.txt", None, None),
+                (
+                    "dir1/sub/c.txt",
+                    Some(ErrorCode::UnsafePath),
+                    Some("dir1/sub is a symbolic link, and dvs does not follow links")
+                ),
+                (
+                    "dir2/d.txt",
+                    Some(ErrorCode::UnsafePath),
+                    Some("dir2 is a symbolic link, and dvs does not follow links")
+                ),
+            ]
+        );
+        assert_eq!(
+            rows[3].hint.as_deref(),
+            Some("Replace the link with the directory it points to.")
+        );
     }
 
     #[test]

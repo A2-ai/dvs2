@@ -736,6 +736,9 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                     if let Some(error) = &row.error {
                         eprintln!("Error getting status for {}: {error}", row.path.display());
                     }
+                    if let Some(hint) = &row.hint {
+                        eprintln!("  {hint}");
+                    }
                 }
 
                 if with_metadata {

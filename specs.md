@@ -118,7 +118,7 @@ keys: a field that does not apply is `null`, never missing (an `add` error row h
 cancel stopped, see Cancellation) and `succeeded` (the rest), so `total = succeeded + failed + cancelled`; get
 adds its detailed counts and defines `succeeded` itself. All are computed by the library. `error` is a
 failure of the whole command; per-file failures stay in the rows, so a `partial` result normally has
-`error: null`. A `hint` is the next thing to try, for people (only `get` fills row hints today).
+`error: null`. A `hint` is the next thing to try, for people (only `get` and `status` fill row hints today).
 
 Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; `get` see get;
 `status` `path`, `status` (`error` on an error row, `cancelled` on a cancelled one), `metadata`, `working` (`state` `present`, `absent` or
@@ -183,8 +183,8 @@ markers) and `credentials_unreadable` (the store exists but cannot be read). A r
 file matched), `io_error`, and `operation_failed`, the honest fallback when nothing more specific is known.
 `auth_required` is also what `login`, `init` and `attach` report in machine mode when device login would be
 needed. Row codes besides the shared ones: `add`, `status` and `availability` `io_error` and
-`operation_failed` (`file_failed` if a failure has no code), get's codes (see get), and `logout` `warnings`
-`revoke_failed`.
+`operation_failed` (`file_failed` if a failure has no code), `status` also `not_a_file` and `unsafe_path`
+(see status), get's codes (see get), and `logout` `warnings` `revoke_failed`.
 
 `dvs info --json` finds the project from the working directory. `project_root` and `metadata_directory` are
 absolute native paths. For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
@@ -394,7 +394,7 @@ Each file in an `add` result reports an outcome:
 - `present`: the file's hash and size match the existing metadata -> no-op. The metadata file is not
   rewritten, so fields like `message` are not updated
 
-Symlinks are resolved before adding. If an explicitly named path resolves to a location outside the project root, it is rejected and the batch refused. When a directory is expanded by a glob, a matched file whose symlink target resolves outside the project root is skipped with a warning rather than aborting the batch.
+Symlinks are resolved before adding. If an explicitly named path resolves to a location outside the project root, it is rejected and the batch refused. The error says when a symbolic link led it outside. When a directory is expanded by a glob, a matched file whose symlink target resolves outside the project root is skipped with a warning rather than aborting the batch.
 
 Each `add` operation is atomic: the storage write and metadata update either both succeed or both roll back. A
 failure writing to storage will not leave behind a partial metadata file, and vice versa.
@@ -637,6 +637,11 @@ By default (no flags), `dvs status` shows all tracked files regardless of state.
 Human output ends, after a blank line, with a summary line ("Checked 3, 1 failed"), which also counts
 cancelled files. This will exit with `1` if one or more files could not be inspected.
 
+`status` never reads through a symbolic link. A link at the path, a directory or another file that is not a regular
+file is an error row with the code `not_a_file`. A symbolic link among its parent directories, inside or outside the
+project, is an error row with `unsafe_path`. These are get's codes. Both rows have a `hint`. An error row is kept
+whatever status flags are given, because dvs cannot tell which state the file is in.
+
 Each named path filters independently. A path that matches no tracked file is dropped silently rather than
 failing the command, so a partly misspelled invocation such as `dvs status good.bin bogus.bin` still exits
 `0` and shows only the paths that matched.
@@ -663,7 +668,7 @@ dvs_status(
   A differing working file is `stale` when it still matches the local baseline, and `modified` when it differs from that baseline.
   Without a baseline, DVS reports `unsynced` because it cannot determine why the file differs from metadata. When omitted, all statuses are returned.
 
-Returns a data frame with one row per tracked file.
+Returns a data frame with one row per tracked file. A row that failed has `code`, `error` and `hint`.
 
 ## Internals
 

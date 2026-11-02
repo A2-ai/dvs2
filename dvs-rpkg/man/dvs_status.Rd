@@ -47,8 +47,8 @@ A tibble with one row per tracked file and always the same
 columns: \code{path} (relative to the project root), \code{status}, \code{hash} (the
 blake3 hash of the tracked version), \code{size} (\code{dvs_bytes}, the size of the
 tracked version), \code{created_by} (who added it), \code{compression}, \code{message}
-(the message given at add, \code{NA} without one), \code{code} and \code{error} (\code{NA}
-unless \code{status} is \code{"error"}) and \code{add_time} (POSIXct, UTC). Files that
+(the message given at add, \code{NA} without one), \code{code}, \code{error} and \code{hint}
+(\code{NA} unless \code{status} is \code{"error"}) and \code{add_time} (POSIXct, UTC). Files that
 dvs does not track are not listed. A row whose metadata cannot be read has
 \code{NA} in the metadata columns.
 }
@@ -57,5 +57,6 @@ Reports the sync status of DVS-managed files. By default all statuses
 are shown. Pass a character vector of status names, such as
 \code{c("current", "absent")}, to show only those.
 A file whose status cannot be read is always kept, with status \code{"error"},
-the kind of failure in \code{code} and the reason in \code{error}.
+the kind of failure in \code{code}, the reason in \code{error} and what to do about
+it in \code{hint}.
 }

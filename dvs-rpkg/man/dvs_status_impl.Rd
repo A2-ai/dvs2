@@ -50,6 +50,7 @@ Reports the sync status of DVS-managed files. By default all statuses
 are shown. Pass a character vector of status names, such as
 \code{c("current", "absent")}, to show only those.
 A file whose status cannot be read is always kept, with status \code{"error"},
-the kind of failure in \code{code} and the reason in \code{error}.
+the kind of failure in \code{code}, the reason in \code{error} and what to do about
+it in \code{hint}.
 }
 \keyword{internal}

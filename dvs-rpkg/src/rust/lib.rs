@@ -302,7 +302,8 @@ impl From<StatusChoice> for Status {
 /// are shown. Pass a character vector of status names, such as
 /// `c("current", "absent")`, to show only those.
 /// A file whose status cannot be read is always kept, with status `"error"`,
-/// the kind of failure in `code` and the reason in `error`.
+/// the kind of failure in `code`, the reason in `error` and what to do about
+/// it in `hint`.
 ///
 /// @param paths Files or directories to report, relative to the working
 ///   directory. `NULL` is the same as `character(0)`.
@@ -434,6 +435,7 @@ struct StatusRow {
     message: Option<String>,
     code: Option<String>,
     error: Option<String>,
+    hint: Option<String>,
     add_time: Option<miniextendr_api::jiff::Timestamp>,
 }
 
@@ -451,6 +453,7 @@ impl From<&dvs::StatusFacts> for StatusRow {
             baseline: _,
             code,
             error,
+            hint,
         } = row;
         let metadata = metadata.as_ref();
         StatusRow {
@@ -463,6 +466,7 @@ impl From<&dvs::StatusFacts> for StatusRow {
             message: metadata.and_then(|m| m.message.clone()),
             code: code.map(|c| c.as_str().to_string()),
             error: error.clone(),
+            hint: hint.clone(),
             add_time: metadata.map(|m| m.add_time),
         }
     }
