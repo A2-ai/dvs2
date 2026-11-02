@@ -110,6 +110,8 @@ as the record stores it. The only exception is event `ts` (unix milliseconds).
 `total` is the sizes of the rows whose size is known; `to_transfer` the bytes that need moving (`add`: upload;
 `get`: see get); `already_stored` the rest (`add`: the server already has the content), so
 `to_transfer + already_stored = total`; `transferred` what actually moved, so `0` in a dry run.
+`add` counts content that several of its files share once. The first of them by path is in `to_transfer` and
+`transferred`. The others are in `already_stored`.
 
 Errors have one shape. The envelope's `error` is `null` or `{code, message, hint}`; every row of every command
 has `code`, `message` and `hint` (all `null` on success; `hint` is `null` where there is none). Rows have fixed
@@ -393,6 +395,10 @@ Each file in an `add` result reports an outcome:
 - `copied`: the file was new or had changed and was copied to storage
 - `present`: the file's hash and size match the existing metadata -> no-op. The metadata file is not
   rewritten, so fields like `message` are not updated
+
+Files of one `add` that share content storage does not have are stored once. The first of them by path stores
+it. The others are added after it, as if an earlier add had stored it: their outcome is `copied`, and they move
+no bytes.
 
 Symlinks are resolved before adding. If an explicitly named path resolves to a location outside the project root, it is rejected and the batch refused. When a directory is expanded by a glob, a matched file whose symlink target resolves outside the project root is skipped with a warning rather than aborting the batch.
 

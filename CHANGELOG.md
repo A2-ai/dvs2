@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- `dvs add` of several files with the same new content stores it once and counts it once. `bytes.to_transfer` and `bytes.transferred` counted every copy, and the files could compress (local storage) or upload (server) the same content at the same time. The first file by path stores it. The others are added after it and count in `already_stored`. Their rows are unchanged, with outcome `copied`.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
