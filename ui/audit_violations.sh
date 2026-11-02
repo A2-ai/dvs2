@@ -80,9 +80,10 @@ echo "######## Section B: spec divergences (informational) ########"
 # ── #218: specs.md says status accepts --glob. The June CLI rejected it. ──
 note "#218 status --glob"
 fresh_project
-out="$(dvs status --glob '*.bin' 2>&1)" || true
-if printf '%s' "$out" | grep -q 'unexpected argument'; then
-  echo "DIVERGES: #218 'status' rejects --glob, but specs.md, Globbing, lists it (likely fix: edit spec)"
+# A rejected flag is a usage error, exit 2. Check the exit, not clap's wording.
+rc=0; dvs status --glob '*.bin' >/dev/null 2>&1 || rc=$?
+if [ "$rc" -eq 2 ]; then
+  echo "DIVERGES: #218 'status' rejects --glob (exit 2), but specs.md, Globbing, lists it (likely fix: edit spec)"
 else
   echo "ALIGNED:  #218 'status' accepts --glob"
 fi

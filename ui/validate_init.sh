@@ -56,9 +56,10 @@ rc=0
 old_out="$(dvs init "$DVS_STORAGE_OLD" 2>&1)" || rc=$?
 say "$old_out"
 check "2" "$rc" "'dvs init <PATH>' exits 2"
+# The hint's key tokens are the subcommand and the path, not its wording.
 suggests=no
-printf '%s' "$old_out" | grep -qF "dvs init local $DVS_STORAGE_OLD" && suggests=yes
-check "yes" "$suggests" "'dvs init <PATH>' suggests 'dvs init local <PATH>'"
+printf '%s' "$old_out" | grep -qF "init local" && printf '%s' "$old_out" | grep -qF "$DVS_STORAGE_OLD" && suggests=yes
+check "yes" "$suggests" "'dvs init <PATH>' suggests 'init local' with the same <PATH>"
 old_toml=absent; [ -f "$OLD_REPO/dvs.toml" ] && old_toml=present
 check "absent" "$old_toml" "'dvs init <PATH>' writes no dvs.toml"
 
@@ -121,7 +122,7 @@ dvs init local --metadata-folder-name .mymeta "$DVS_STORAGE_MFN"
 custom_meta=no; [ -d "$MFN_REPO/.mymeta" ] && custom_meta=yes
 default_meta=absent; [ -d "$MFN_REPO/.dvs" ] && default_meta=present
 toml_has_mfn=no
-grep -q 'metadata_folder_name = ".mymeta"' "$MFN_REPO/dvs.toml" && toml_has_mfn=yes
+[ "$(grep -E '^metadata_folder_name' "$MFN_REPO/dvs.toml" | tr -d ' "' | cut -d= -f2)" = ".mymeta" ] && toml_has_mfn=yes
 check "yes" "$custom_meta" "--metadata-folder-name creates custom .mymeta folder"
 check "absent" "$default_meta" "default .dvs folder NOT created when custom name given"
 check "yes" "$toml_has_mfn" "dvs.toml records metadata_folder_name = .mymeta"

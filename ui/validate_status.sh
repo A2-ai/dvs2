@@ -34,18 +34,54 @@ check() {
 # <parse-error> instead of aborting, so the script always reaches SUMMARY.
 jq_py() { python3 -c "import sys,json;d=json.load(sys.stdin);$1" 2>/dev/null || echo "<parse-error>"; }
 
-# Count data rows in a status table (rows whose first column is a known path).
-# Counts table lines beginning with "| " excluding the header row "| path".
+# The row and filter claims read `status --json`. The human table is display
+# text, so only its paths and its summary count are checked.
+
+# Number of rows in a status --json envelope.
 count_rows() {
   { set +x; } 2>/dev/null
-  grep -c '^| [^p]' <<<"$1" || true
+  printf '%s' "$1" | jq_py 'print(len(d["files"]))'
   { set -x; } 2>/dev/null
 }
 
-# Does the table contain a row for PATH with STATE?  Prints yes/no.
+# Does a status --json envelope have a row for PATH with STATE? Prints yes/no.
 has_row() {
   { set +x; } 2>/dev/null
-  if grep -Eq "^\| $2 +\| $3 " <<<"$1"; then echo yes; else echo no; fi
+  printf '%s' "$1" | jq_py "print('yes' if any(f['path'] == '$2' and f['status'] == '$3' for f in d['files']) else 'no')"
+  { set -x; } 2>/dev/null
+}
+
+# The rows of a status --json envelope, one "path status" line each.
+show_rows() {
+  { set +x; } 2>/dev/null
+  printf '%s' "$1" | jq_py 'print("\n".join("%s %s" % (f["path"], f["status"]) for f in d["files"]))'
+  { set -x; } 2>/dev/null
+}
+
+# How many of the paths after the first argument a human output names.
+named_paths() {
+  { set +x; } 2>/dev/null
+  local out="$1" n=0 p
+  shift
+  for p in "$@"; do grep -qFw -- "$p" <<<"$out" && n=$((n + 1)); done
+  echo "$n"
+  { set -x; } 2>/dev/null
+}
+
+# The first number on the last line of a human output (its summary line).
+summary_count() {
+  { set +x; } 2>/dev/null
+  printf '%s\n' "$1" | tail -1 | grep -oE '[0-9]+' | head -1 || true
+  { set -x; } 2>/dev/null
+}
+
+# Which of the words after the first argument a human output carries, as words.
+words_in() {
+  { set +x; } 2>/dev/null
+  local out="$1" found="" w
+  shift
+  for w in "$@"; do grep -qw -- "$w" <<<"$out" && found="$found $w"; done
+  echo "${found# }"
   { set -x; } 2>/dev/null
 }
 
@@ -95,11 +131,14 @@ rm .dvs/other/donor.bin.dvs other/donor.bin
 # ── Claim: default (no flags) shows ALL tracked files ─────────────────────────
 say
 say "=== CLAIM: default no-flags shows all 7 tracked files regardless of state ==="
-ALL="$(dvs status)"
-echo "$ALL"
-check "7" "$(count_rows "$ALL")" "default shows all 7 tracked rows"
-# Human output ends with a summary line.
-check "Checked 7" "$(printf '%s\n' "$ALL" | tail -1)" "human output ends with the summary line 'Checked 7'"
+ALL_HR="$(dvs status)"
+echo "$ALL_HR"
+TRACKED="data/file_1.bin data/raw/file_1.bin data/raw/file_2.bin data/derived/file_1.bin models/v1/file_1.bin other/stale.bin other/unsynced.bin"
+# shellcheck disable=SC2086
+check "7" "$(named_paths "$ALL_HR" $TRACKED)" "default human output names all 7 tracked files"
+# Human output ends with a summary line. Check its count, not its wording.
+check "7" "$(summary_count "$ALL_HR")" "the human summary line counts 7 files"
+ALL="$(dvs status --json)"
 
 # ── Claim: five states reported correctly ─────────────────────────────────────
 say
@@ -115,8 +154,8 @@ check "yes" "$(has_row "$ALL" "other/unsynced.bin" "unsynced")"       "other/uns
 # ── Claim: --current filters to current only ──────────────────────────────────
 say
 say "=== CLAIM: --current filters to current only ==="
-CUR="$(dvs status --current)"
-echo "$CUR"
+CUR="$(dvs status --current --json)"
+show_rows "$CUR"
 check "3" "$(count_rows "$CUR")" "--current shows 3 rows"
 check "no" "$(has_row "$CUR" "data/raw/file_1.bin" "modified")" "--current excludes modified"
 check "no" "$(has_row "$CUR" "data/derived/file_1.bin" "absent")" "--current excludes absent"
@@ -124,62 +163,62 @@ check "no" "$(has_row "$CUR" "data/derived/file_1.bin" "absent")" "--current exc
 # ── Claim: --absent filters to absent only ────────────────────────────────────
 say
 say "=== CLAIM: --absent filters to absent only ==="
-ABS="$(dvs status --absent)"
-echo "$ABS"
+ABS="$(dvs status --absent --json)"
+show_rows "$ABS"
 check "1" "$(count_rows "$ABS")" "--absent shows 1 row"
 check "yes" "$(has_row "$ABS" "data/derived/file_1.bin" "absent")" "--absent shows the absent file"
 
 # ── Claim: --stale, --modified, --unsynced filter to their state ──────────────
 say
 say "=== CLAIM: --stale filters to stale only ==="
-STA="$(dvs status --stale)"
-echo "$STA"
+STA="$(dvs status --stale --json)"
+show_rows "$STA"
 check "1" "$(count_rows "$STA")" "--stale shows 1 row"
 check "yes" "$(has_row "$STA" "other/stale.bin" "stale")" "--stale shows the stale file"
 
 say
 say "=== CLAIM: --modified filters to modified only ==="
-MOD="$(dvs status --modified)"
-echo "$MOD"
+MOD="$(dvs status --modified --json)"
+show_rows "$MOD"
 check "1" "$(count_rows "$MOD")" "--modified shows 1 row"
 check "yes" "$(has_row "$MOD" "data/raw/file_1.bin" "modified")" "--modified shows the modified file"
 
 say
 say "=== CLAIM: --unsynced filters to unsynced only ==="
-UNS="$(dvs status --unsynced)"
-echo "$UNS"
+UNS="$(dvs status --unsynced --json)"
+show_rows "$UNS"
 check "1" "$(count_rows "$UNS")" "--unsynced shows 1 row"
 check "yes" "$(has_row "$UNS" "other/unsynced.bin" "unsynced")" "--unsynced shows the unsynced file"
 
 # ── Claim: multiple filters combine as a union ────────────────────────────────
 say
 say "=== CLAIM: --current --absent combine (union) ==="
-UNION="$(dvs status --current --absent)"
-echo "$UNION"
+UNION="$(dvs status --current --absent --json)"
+show_rows "$UNION"
 check "4" "$(count_rows "$UNION")" "--current --absent shows 3 current + 1 absent = 4 rows"
 check "no" "$(has_row "$UNION" "data/raw/file_1.bin" "modified")" "union excludes modified"
 
 # ── Claim: path filter to a single file ───────────────────────────────────────
 say
 say "=== CLAIM: path filter to a single file ==="
-ONE="$(dvs status data/raw/file_2.bin)"
-echo "$ONE"
+ONE="$(dvs status --json data/raw/file_2.bin)"
+show_rows "$ONE"
 check "1" "$(count_rows "$ONE")" "single-file path filter shows exactly 1 row"
 check "yes" "$(has_row "$ONE" "data/raw/file_2.bin" "current")" "single-file path shows that file"
 
 # ── Claim: a path matching no tracked file is dropped silently ────────────────
 say
 say "=== CLAIM: a path matching no tracked file is dropped silently, exit 0 ==="
-rc=0; BOGUS="$(dvs status data/raw/file_2.bin bogus.bin)" || rc=$?
-echo "$BOGUS"
+rc=0; BOGUS="$(dvs status --json data/raw/file_2.bin bogus.bin)" || rc=$?
+show_rows "$BOGUS"
 check "0" "$rc" "'status good bogus' exits 0"
 check "1" "$(count_rows "$BOGUS")" "'status good bogus' shows only the matching path"
 
 # ── Claim: directory path, non-recursive = direct children only ───────────────
 say
 say "=== CLAIM: directory non-recursive = direct children only ==="
-DIR="$(dvs status data/)"
-echo "$DIR"
+DIR="$(dvs status --json data/)"
+show_rows "$DIR"
 check "1" "$(count_rows "$DIR")" "data/ non-recursive shows only direct child (1 row)"
 check "yes" "$(has_row "$DIR" "data/file_1.bin" "current")" "data/ non-recursive includes direct child data/file_1.bin"
 check "no" "$(has_row "$DIR" "data/raw/file_2.bin" "current")" "data/ non-recursive excludes data/raw descendant"
@@ -187,26 +226,27 @@ check "no" "$(has_row "$DIR" "data/raw/file_2.bin" "current")" "data/ non-recurs
 # ── Claim: -r/--recursive includes all descendants ────────────────────────────
 say
 say "=== CLAIM: -r/--recursive includes all descendants of a directory ==="
-REC="$(dvs status -r data/)"
-echo "$REC"
+REC="$(dvs status --json -r data/)"
+show_rows "$REC"
 check "4" "$(count_rows "$REC")" "-r data/ shows all 4 descendants (top + raw1 + raw2 + derived)"
 check "yes" "$(has_row "$REC" "data/raw/file_2.bin" "current")" "-r data/ includes nested data/raw/file_2.bin"
 check "yes" "$(has_row "$REC" "data/derived/file_1.bin" "absent")" "-r data/ includes nested data/derived/file_1.bin"
 # long form parity
-REC_LONG="$(dvs status --recursive data/)"
+REC_LONG="$(dvs status --json --recursive data/)"
 check "$(count_rows "$REC")" "$(count_rows "$REC_LONG")" "--recursive matches -r row count"
 
 # ── Claim: --with-metadata adds metadata columns ──────────────────────────────
 say
 say "=== CLAIM: --with-metadata shows all metadata columns vs default ==="
+# The metadata column names as words, in any order and at any width.
+META_COLS="hash created_by add_time compression message"
 DEFAULT_TBL="$(dvs status)"
 META_TBL="$(dvs status --with-metadata)"
-DEFAULT_HDR="$({ set +x; } 2>/dev/null; grep '^| path' <<<"$DEFAULT_TBL" | head -1 | tr -d ' ' )"
-META_HDR="$({ set +x; } 2>/dev/null; grep '^| path' <<<"$META_TBL" | head -1 | tr -d ' ' )"
-echo "default header : $DEFAULT_HDR"
-echo "metadata header: $META_HDR"
-check "|path|status|size|" "$DEFAULT_HDR" "default table columns are path/status/size"
-check "|path|status|size|hash|created_by|add_time|compression|message|" "$META_HDR" "--with-metadata adds hash/created_by/add_time/compression/message"
+echo "$META_TBL"
+# shellcheck disable=SC2086
+check "" "$(words_in "$DEFAULT_TBL" $META_COLS)" "default table has no metadata columns"
+# shellcheck disable=SC2086
+check "$META_COLS" "$(words_in "$META_TBL" $META_COLS)" "--with-metadata adds hash, created_by, add_time, compression, message"
 
 # ── Claim: --json output shape ────────────────────────────────────────────────
 say
@@ -247,8 +287,8 @@ ERR_OUT="$(dvs status 2>&1)" || rc=$?
 echo "$ERR_OUT"
 echo "EXIT(malformed)=$rc"
 check "1" "$rc" "malformed .dvs sidecar -> exit 1"
-PERFILE="$({ set +x; } 2>/dev/null; grep -c 'Error getting status for data/raw/file_2.bin' <<<"$ERR_OUT" )"
-check "1" "$PERFILE" "per-file error reported for the broken sidecar"
+PERFILE="$({ set +x; } 2>/dev/null; grep -qF 'data/raw/file_2.bin' <<<"$ERR_OUT" && echo yes || echo no)"
+check "yes" "$PERFILE" "per-file error names data/raw/file_2.bin, the broken sidecar"
 # The same failure as a --json row: status=error and code bad_metadata.
 rc=0; ERR_JSON="$(dvs status --json 2>/dev/null)" || rc=$?
 ERR_ROW="$({ set +x; } 2>/dev/null; printf '%s' "$ERR_JSON" | jq_py 'r=[f for f in d["files"] if f["path"]=="data/raw/file_2.bin"][0];print(d["outcome"], d["counts"]["failed"], r["status"], r["code"])' )"

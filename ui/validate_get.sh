@@ -79,8 +79,8 @@ COPIED_OUTCOME="$(printf '%s' "$COPIED_JSON" | jq_py 'r=d["files"][0];print(r["b
 check "absent restored" "$COPIED_OUTCOME" "before=absent, action=restored (JSON) for retrieved file_2.bin"
 # Human-readable confirmation for file_1 (deleted above)
 HR="$(dvs get data/raw/file_1.bin)"
-HAS_FILE1="$(printf '%s' "$HR" | grep -c 'file_1.bin' || true)"
-check "1" "$HAS_FILE1" "human-readable get lists restored file_1.bin"
+HAS_FILE1="$(printf '%s' "$HR" | grep -qF 'file_1.bin' && echo yes || echo no)"
+check "yes" "$HAS_FILE1" "human-readable get names the restored file_1.bin"
 check "yes" "$([ -f data/raw/file_1.bin ] && echo yes || echo no)" "local file_1.bin restored on disk"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -118,8 +118,8 @@ say
 say "=== Claim: --dry-run reports outcomes but makes NO changes ==="
 rm -f data/raw/file_1.bin
 DRY_HR="$(dvs get --dry-run data/raw/file_1.bin)"
-DRY_LISTS="$(printf '%s' "$DRY_HR" | grep -c 'file_1.bin' || true)"
-check "1" "$DRY_LISTS" "--dry-run reports file_1.bin in output"
+DRY_LISTS="$(printf '%s' "$DRY_HR" | grep -qF 'file_1.bin' && echo yes || echo no)"
+check "yes" "$DRY_LISTS" "--dry-run names file_1.bin in its output"
 check "no" "$([ -f data/raw/file_1.bin ] && echo yes || echo no)" "--dry-run wrote NO local file"
 # JSON dry-run still shows the would-be action but writes nothing.
 DRY_JSON="$(dvs get --dry-run --json data/raw/file_1.bin)"

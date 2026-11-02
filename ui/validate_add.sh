@@ -76,14 +76,17 @@ check "no" "$HASMSG" "message field omitted from sidecar when no -m given"
 # =====================================================================
 say
 say "=== CLAIM: add has NO --recursive option ==="
+# An unknown flag is an argument error. Under --json that is a cli envelope
+# with invalid_arguments (specs.md, Machine output).
 rc=0; OUT="$(dvs add --recursive withmsg.bin 2>&1)" || rc=$?
 say "$OUT"
-ISUNKNOWN="$(printf '%s' "$OUT" | grep -qiE "unexpected argument '--recursive'|unrecognized" && echo yes || echo no)"
-check "yes" "$ISUNKNOWN" "--recursive rejected as unknown argument"
+JOUT="$(dvs add --json --recursive withmsg.bin 2>/dev/null)" || true
+ISUNKNOWN="$(printf '%s' "$JOUT" | jq_py 'print(d["command"], (d.get("error") or {}).get("code"))')"
+check "cli invalid_arguments" "$ISUNKNOWN" "--recursive is an argument error (command=cli, invalid_arguments)"
 check "0" "$([ "$rc" -ne 0 ] && echo 0 || echo 1)" "--recursive exits non-zero"
-rc=0; OUT="$(dvs add -r withmsg.bin 2>&1)" || rc=$?
-ISUNKNOWN_R="$(printf '%s' "$OUT" | grep -qiE "unexpected argument '-r'|unexpected argument '--recursive'|tip:" && echo yes || echo no)"
-check "yes" "$ISUNKNOWN_R" "-r short flag also rejected as unknown argument"
+JOUT="$(dvs add --json -r withmsg.bin 2>/dev/null)" || true
+ISUNKNOWN_R="$(printf '%s' "$JOUT" | jq_py 'print(d["command"], (d.get("error") or {}).get("code"))')"
+check "cli invalid_arguments" "$ISUNKNOWN_R" "-r short flag is an argument error too (command=cli, invalid_arguments)"
 
 # =====================================================================
 say
@@ -189,8 +192,8 @@ ln -s "$OUTSIDE_DIR/ext.bin" outside.bin
 rc=0; OUT="$(dvs add outside.bin 2>&1)" || rc=$?
 say "$OUT"
 check "2" "$rc" "outside-root symlink add exits 2"
-OUTREJ="$(printf '%s' "$OUT" | grep -qiE "outside project|outside the project" && echo yes || echo no)"
-check "yes" "$OUTREJ" "outside-root symlink rejected with 'outside project' error"
+OUTREJ="$(printf '%s' "$OUT" | grep -qF 'outside.bin' && echo yes || echo no)"
+check "yes" "$OUTREJ" "the refusal names outside.bin"
 check "NO" "$([ -e .dvs/outside.bin.dvs ] && echo YES || echo NO)" "no sidecar created for outside-root symlink"
 
 # =====================================================================
