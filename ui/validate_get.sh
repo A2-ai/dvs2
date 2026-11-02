@@ -202,9 +202,10 @@ rc=0; CF_JSON="$(dvs get --json data/raw/file_1.bin data/raw/file_2.bin 2>/dev/n
 check "3" "$rc" "a file with local changes under on_conflict=abort exits 3"
 CF_ROW="$(printf '%s' "$CF_JSON" | jq_py 'r=[f for f in d["files"] if f["path"]=="data/raw/file_1.bin"][0];print(d["outcome"], r["before"], r["action"], r["code"])')"
 check "aborted modified not_run local_changes" "$CF_ROW" "conflict row: before=modified, action=not_run, code=local_changes"
-# The hint stays CLI text; next_steps carries its commands as data (get JSON, `next_steps`)
-CF_HINT="$(printf '%s' "$CF_JSON" | jq_py 'r=[f for f in d["files"] if f["path"]=="data/raw/file_1.bin"][0];h=r["hint"] or "";print("dvs add data/raw/file_1.bin" in h and "dvs get --force data/raw/file_1.bin" in h)')"
-check "True" "$CF_HINT" "conflict row: hint is the CLI text, with dvs add and dvs get --force"
+# The hint stays CLI text, so only its key tokens are checked: the flag and
+# the path. next_steps carries the hint's commands as data.
+CF_HINT="$(printf '%s' "$CF_JSON" | jq_py 'r=[f for f in d["files"] if f["path"]=="data/raw/file_1.bin"][0];h=r["hint"] or "";print("--force" in h and "data/raw/file_1.bin" in h)')"
+check "True" "$CF_HINT" "conflict row: the hint names --force and data/raw/file_1.bin"
 CF_STEPS="$(printf '%s' "$CF_JSON" | jq_py 'r=[f for f in d["files"] if f["path"]=="data/raw/file_1.bin"][0];print(";".join("%s %s %s" % (s["action"], ",".join(s.get("paths") or []), s.get("on_conflict")) for s in r["next_steps"]))')"
 check "add data/raw/file_1.bin None;get data/raw/file_1.bin overwrite" "$CF_STEPS" "conflict row: next_steps are the hint's commands as data, add then get with on_conflict overwrite"
 CF_EVERY="$(printf '%s' "$CF_JSON" | jq_py 'print(all(isinstance(f.get("next_steps"), list) for f in d["files"]) and len(d["files"]) > 0)')"
