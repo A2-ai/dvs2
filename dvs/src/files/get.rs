@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use crate::cache::{FileStat, HashCache, baseline_for, record_baseline, try_open_cache};
 use crate::config::{OnConflict, SettingSource};
 use crate::error::{Error, ErrorCode, backend_error_code};
-use crate::files::metadata::FileMetadata;
+use crate::files::metadata::{FileMetadata, read_record};
 use crate::globbing::GetSelection;
 use crate::operation::{
     ByteTotals, FileRow, Hashing, OperationContext, OperationPlan, RunOutcome, millis,
@@ -634,10 +634,7 @@ fn plan_file(
     };
 
     let metadata_path = paths.metadata_path(relative_path);
-    let metadata: FileMetadata = match fs::File::open(&metadata_path)
-        .map_err(anyhow::Error::from)
-        .and_then(|f| serde_json::from_reader(f).map_err(anyhow::Error::from))
-    {
+    let metadata: FileMetadata = match read_record(&metadata_path) {
         Ok(m) => m,
         Err(e) => {
             return fail(

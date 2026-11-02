@@ -105,8 +105,12 @@ impl FileMetadata {
 
         if dvs_file_exists && storage_exists {
             // we read the file anyway to make sure it's not 2 files having the same hash
-            let existing: FileMetadata = serde_json::from_reader(fs::File::open(&dvs_file_path)?)
-                .map_err(|e| {
+            let raw = fs::read(&dvs_file_path)?;
+            if is_empty_record(&raw) {
+                log::debug!("Replacing the empty record of {}", relative_path.display());
+                return Ok(false);
+            }
+            let existing: FileMetadata = serde_json::from_slice(&raw).map_err(|e| {
                 Error::new(
                     ErrorCode::BadMetadata,
                     format!("cannot read {}: {e}", dvs_file_path.display()),
@@ -227,6 +231,22 @@ impl FileMetadata {
             }
         }
     }
+}
+
+/// Reads a metadata file. An empty one says so: a dvs from before atomic
+/// writes, killed while writing it, left it, and adding the file again
+/// replaces it.
+pub(crate) fn read_record(path: &Path) -> Result<FileMetadata> {
+    let raw = fs::read(path)?;
+    if is_empty_record(&raw) {
+        bail!("the .dvs file is empty. Add the file again to repair it");
+    }
+    Ok(serde_json::from_slice(&raw)?)
+}
+
+/// Whether a metadata file holds nothing at all.
+fn is_empty_record(raw: &[u8]) -> bool {
+    raw.iter().all(u8::is_ascii_whitespace)
 }
 
 /// Writes a metadata file through a temp file next to it and a rename, so a
@@ -415,6 +435,45 @@ mod tests {
             crate::backend_error_code(&error),
             Some(ErrorCode::BadMetadata)
         );
+    }
+
+    // A dvs from before atomic writes could leave an empty record. Adding
+    // the file again replaces it, also when storage has the content
+    #[test]
+    fn save_replaces_an_empty_record() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, dvs_dir) = init_dvs_repo(&root);
+        let backend = config.backend();
+        let paths = make_paths(&root, &config);
+        let file_path = create_file(&root, "data.bin", b"binary data");
+        let mut metadata = FileMetadata::from_file(&file_path, Compression::Zstd, None).unwrap();
+        metadata
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                None,
+            )
+            .unwrap();
+        let record = dvs_dir.join("data.bin.dvs");
+        fs::write(&record, b"").unwrap();
+        let error = read_record(&record).unwrap_err();
+        assert!(error.to_string().contains("is empty"), "{error}");
+
+        let (outcome, _) = metadata
+            .save(
+                Uuid::new_v4(),
+                &file_path,
+                backend,
+                &paths,
+                "data.bin",
+                None,
+            )
+            .unwrap();
+        assert_eq!(outcome, Outcome::Copied);
+        assert_eq!(read_record(&record).unwrap(), metadata);
     }
 
     #[test]

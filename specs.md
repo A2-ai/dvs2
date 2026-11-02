@@ -391,7 +391,9 @@ Each added file gets a metadata sidecar at `<metadata folder>/<path to file>.dvs
 `.dvs`), mirroring the added file. The sidecar must be committed to version control (e.g. `git`). The data file itself is gitignored.
 A sidecar is written to a temp file next to it, then renamed over it, so a killed `dvs` never leaves an empty or
 half-written sidecar. A killed `dvs` can leave a temp file (`<name>.dvs-tmp.<uuid>`). dvs never reads it as a
-sidecar, and it is safe to delete.
+sidecar, and it is safe to delete. An empty sidecar, which a `dvs` from before atomic writes could leave, fails
+that file in `status` and `get` with "the .dvs file is empty. Add the file again to repair it", and `add` replaces
+it.
 
 Each file in an `add` result reports an outcome:
 
