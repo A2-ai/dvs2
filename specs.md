@@ -272,8 +272,10 @@ explore.
 init will always error if a `dvs.toml` already exists in the target directory.
 This check is local: a `dvs.toml` in a parent directory does not prevent initializing a nested project.
 
-init also rejects a storage path inside the repository root. This guard applies to local-filesystem backends.
-Backends with no local directory (such as a future remote backend) skip it.
+init also rejects a storage path inside the project root, or inside the git repository that holds the project: the
+nearest directory at or above the project root that has a `.git` (a folder, or the file of a worktree or submodule).
+git would otherwise see the stored data. This guard applies to local-filesystem backends. Backends with no local
+directory (such as a future remote backend) skip it.
 
 On partial failure (e.g., metadata folder or storage creation fails after `dvs.toml` is written),
 init attempts best-effort cleanup of local artifacts (`dvs.toml` and, if it didn't exist beforehand, the metadata folder) so that a retry is possible.

@@ -4,6 +4,7 @@
 
 ### Breaking
 
+- `dvs init` refuses a storage directory inside the git repository that holds the project, not only inside the project. A project in a subfolder of a repository could keep its storage elsewhere in that repository, and git could then commit the stored data.
 - R package: requires R 4.4 or later.
 - R package: `dvs_audit_log()` spreads each entry's action into columns: `action_variant` ("init" or "add") and one `action_<field>` column per field that the actions carry, `NA` where an action has none. The action was a list-column. `timestamp` is a date-time (UTC), not unix seconds.
 - R package: `NA` is never a value. An `NA` in any argument raises an error that says it must not be `NA`, also among several values, as in `on_error = c("return", NA)`. An `NA` `message`, `group`, `root_dir` or `metadata_folder_name` meant the argument was not given. Use `NULL` or leave the argument out.

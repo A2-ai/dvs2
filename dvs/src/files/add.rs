@@ -594,7 +594,11 @@ mod tests {
         let (_tmp, repo) = create_temp_git_repo();
         let root = repo.join("study");
         fs::create_dir(&root).unwrap();
-        let (config, _dvs_dir) = init_dvs_repo(&root);
+        // Storage outside the repository, which init requires
+        let config =
+            crate::config::Config::new_local(repo.parent().unwrap().join(".storage"), None)
+                .unwrap();
+        crate::init::init(&root, config.clone()).unwrap();
         let paths =
             DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name()).unwrap();
         create_file(&root, "data/dm.csv", b"USUBJID,AGE\n01,54\n");
