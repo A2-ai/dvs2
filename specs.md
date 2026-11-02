@@ -201,6 +201,10 @@ a rejected login (401, `auth_expired`) is an error envelope. Every project also 
 `on_conflict_source`, what `get` does with local changes and where that was set (`null` when the setting is
 invalid; human `info` shows the error on its `on_conflict` line).
 
+R's `dvs_info()` returns the same fields as a list, built by the same library function (`dvs::info::project_info`).
+`NULL` stands for `null`, and `groups` is a character vector. A credentials store that cannot be read or a rejected
+login raises a `dvs_error` with that code.
+
 ```shell
 ❯ dvs info --help
 Show the project configuration, and the server info when the project uses a dvs-server backend

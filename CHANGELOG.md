@@ -13,6 +13,7 @@
 
 ### Added
 
+- R package: `dvs_info()` returns the fields of `dvs info --json` as a list: the backend, the storage or server, the compression, and for a server project the login, the connection, the user, the access and the groups. The CLI's JSON and R build them with one library function, `dvs::info::project_info`.
 - R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
 - R package: `just rpkg-reference` builds the HTML reference manual. The one in `dist/reference/` is for users and leaves out the internal pages, as R's help index does. The one in `dvs-rpkg/rust-target/doc/r/` is for development and keeps them.
 - R package: `dvs_status()` has a `code` column, the kind of failure of a row that failed, as in the CLI's JSON.

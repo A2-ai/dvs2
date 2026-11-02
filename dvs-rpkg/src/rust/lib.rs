@@ -3,6 +3,7 @@
 //! This crate provides R bindings for the DVS (Data Version Control System).
 
 mod cli_progress;
+mod server;
 mod test_support;
 
 use std::path::PathBuf;
