@@ -250,6 +250,23 @@ check "1" "$rc" "exit 1 on partial failure: 1 good + 1 hash-mismatch file"
 check "yes" "$([ -f data/raw/file_1.bin ] && echo yes || echo no)" "good file still retrieved during partial failure"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# This claim comes from specs.md, get, as on dvs2 feat/both-modified.
+say
+say "=== Claim: an edit here after the tracked version moved on is before=both_modified, code local_changes, and next_steps put get before add ==="
+# Metadata advances as after a git pull, then the file is edited here.
+mkrandfile other/donor.bin 400
+dvs add other/donor.bin >/dev/null
+cp .dvs/other/donor.bin.dvs .dvs/data/raw/file_2.bin.dvs
+rm .dvs/other/donor.bin.dvs other/donor.bin
+printf 'MINE' >> data/raw/file_2.bin
+BOTH_HASH="$(shasum data/raw/file_2.bin | cut -d' ' -f1)"
+rc=0; BOTH_JSON="$(dvs get --json data/raw/file_2.bin 2>/dev/null)" || rc=$?
+check "3" "$rc" "both changed under on_conflict=abort exits 3, as local changes do"
+BOTH_ROW="$(printf '%s' "$BOTH_JSON" | jq_py 'r=d["files"][0];print(r["before"], r["action"], r["code"], ",".join(s["action"] for s in r["next_steps"]))')"
+check "both_modified not_run local_changes get,add" "$BOTH_ROW" "row: before=both_modified, code=local_changes, next_steps get (overwrite) then add"
+check "$BOTH_HASH" "$(shasum data/raw/file_2.bin | cut -d' ' -f1)" "abort kept the local edit unchanged"
+
+# ─────────────────────────────────────────────────────────────────────────────
 say
 say "=== SUMMARY: $PASS pass, $FAIL fail ==="
 printf '\nCleanup: bash %s/cleanup.sh\n' "$SCRIPT_DIR"
