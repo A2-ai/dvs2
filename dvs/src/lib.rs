@@ -9,6 +9,7 @@ pub mod git;
 mod gitignore;
 pub mod globbing;
 mod hashes;
+pub mod info;
 pub mod init;
 pub mod operation;
 pub mod paths;

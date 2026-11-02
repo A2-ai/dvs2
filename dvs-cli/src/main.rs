@@ -845,151 +845,66 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
         }
         Command::Info => {
             let config = find_config(&current_dir)?;
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
+            if cli.json {
+                let info = dvs::info::project_info(&config, &dvs_paths)?;
+                let mut result = output::envelope("info", false);
+                let fields = serde_json::to_value(&info)?;
+                for (key, value) in fields.as_object().expect("info fields are an object") {
+                    result[key] = value.clone();
+                }
+                output::emit(result);
+                return Ok(());
+            }
             let compression = info_compression(&config);
             let ignored = ignored_compression(&config);
             // What get does with local changes, and where that was set. An
             // invalid setting is shown, not an error: only get refuses to run
-            let on_conflict = config.get_on_conflict(None);
-            let on_conflict_line = match &on_conflict {
+            let on_conflict_line = match config.get_on_conflict(None) {
                 Ok((policy, source)) => format!("on_conflict {policy} ({source})"),
                 Err(error) => format!("on_conflict invalid: {error}"),
-            };
-            let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let info_json = |fields: serde_json::Value| {
-                let mut result = output::envelope("info", false);
-                for (key, value) in fields.as_object().expect("info fields are an object") {
-                    result[key] = value.clone();
-                }
-                result["on_conflict"] = json!(on_conflict.as_ref().ok().map(|(p, _)| p));
-                result["on_conflict_source"] =
-                    json!(on_conflict.as_ref().ok().map(|(_, s)| s.as_str()));
-                result["project_root"] = json!(dvs_paths.repo_root());
-                result["metadata_directory"] = json!(dvs_paths.metadata_folder());
-                output::emit(result);
             };
 
             match config.backend() {
                 Backend::Local(l) => {
-                    if cli.json {
-                        info_json(json!({
-                            "version": dvs::VERSION,
-                            "backend": "local",
-                            "storage": l.path,
-                            "compression": compression,
-                            "connection": "not_applicable",
-                        }));
-                    } else {
-                        println!("dvs {}", dvs::VERSION);
-                        println!("backend     local");
-                        println!("storage     {}", l.path.display());
-                        println!("compression {}", compression.as_deref().unwrap_or_default());
-                        println!("{on_conflict_line}");
-                    }
+                    println!("dvs {}", dvs::VERSION);
+                    println!("backend     local");
+                    println!("storage     {}", l.path.display());
+                    println!("compression {}", compression.as_deref().unwrap_or_default());
+                    println!("{on_conflict_line}");
                 }
                 Backend::Server(s) => {
-                    // Not logged in is an answer, not an error
-                    let logged_in = if cli.json {
-                        match get_token(&s.url) {
-                            Ok(token) => token.is_some(),
-                            Err(error)
-                                if dvs::backend_error_code(&error)
-                                    == Some(ErrorCode::AuthRequired) =>
-                            {
-                                false
-                            }
-                            Err(error) => {
-                                return Err(output::coded(
-                                    ErrorCode::CredentialsUnreadable,
-                                    format!("Cannot read credentials: {error}"),
-                                ));
-                            }
-                        }
-                    } else {
-                        get_token(&s.url)?.is_some()
+                    let logged_in = get_token(&s.url)?.is_some();
+                    let access = if logged_in { s.access()? } else { None };
+                    let project = match (&access, logged_in) {
+                        (Some(a), true) => format!("{} ({})", s.name, a.access),
+                        (None, true) => format!("{} (no access)", s.name),
+                        _ => s.name.clone(),
                     };
-                    let (access, connection, connection_error) = if logged_in {
-                        match s.access() {
-                            Ok(access) => (access, "available", None),
-                            // A 403 is an answer (no membership); a rejected login stays an error
-                            Err(error) if cli.json => match dvs::backend_error_code(&error) {
-                                Some(ErrorCode::AccessDenied) => (None, "available", None),
-                                Some(
-                                    code @ (ErrorCode::ServerUnavailable
-                                    | ErrorCode::ProjectNotFound
-                                    | ErrorCode::ServerTooOld),
-                                ) => (
-                                    None,
-                                    "unavailable",
-                                    Some(json!({
-                                        "code": code,
-                                        "message": format!("{error:#}"),
-                                    })),
-                                ),
-                                _ => return Err(error),
-                            },
-                            Err(error) => return Err(error),
-                        }
-                    } else {
-                        (None, "unknown", None)
-                    };
-                    if cli.json {
-                        info_json(json!({
-                            "version": dvs::VERSION,
-                            "backend": "server",
-                            "project": s.name,
-                            "server": s.url,
-                            "compression": compression,
-                            "ignored_compression": ignored,
-                            "logged_in": logged_in,
-                            "connection": connection,
-                            "connection_error": connection_error,
-                            "user": access.as_ref().map(|a| &a.user),
-                            "access": if !logged_in {
-                                json!("not_logged_in")
-                            } else if connection == "available" {
-                                json!(access.as_ref().map_or("none", |a| a.access.as_str()))
-                            } else {
-                                serde_json::Value::Null
-                            },
-                            "groups": if connection == "unavailable" {
-                                serde_json::Value::Null
-                            } else {
-                                json!(access.as_ref().map_or(&[][..], |a| &a.groups))
-                            },
-                        }));
-                    } else {
-                        let project = match (&access, logged_in) {
-                            (Some(a), true) => format!("{} ({})", s.name, a.access),
-                            (None, true) if connection == "available" => {
-                                format!("{} (no access)", s.name)
+                    println!("dvs {}", dvs::VERSION);
+                    println!("backend     server");
+                    println!("project     {project}");
+                    println!("server      {}", s.url);
+                    if !logged_in {
+                        println!("user        not logged in, run `dvs login`");
+                    } else if let Some(a) = &access {
+                        match &a.user.email {
+                            Some(email) => {
+                                println!("user        {} ({email})", a.user.username)
                             }
-                            _ => s.name.clone(),
-                        };
-                        println!("dvs {}", dvs::VERSION);
-                        println!("backend     server");
-                        println!("project     {project}");
-                        println!("server      {}", s.url);
-                        if !logged_in {
-                            println!("user        not logged in, run `dvs login`");
-                        } else if let Some(a) = &access {
-                            match &a.user.email {
-                                Some(email) => {
-                                    println!("user        {} ({email})", a.user.username)
-                                }
-                                None => println!("user        {}", a.user.username),
-                            }
-                            if !a.groups.is_empty() {
-                                println!("groups      {}", a.groups.join(", "));
-                            }
+                            None => println!("user        {}", a.user.username),
                         }
-                        match &ignored {
-                            Some(c) => println!(
-                                "compression set by the server (compression = \"{c}\" in dvs.toml is ignored)"
-                            ),
-                            None => println!("compression set by the server"),
+                        if !a.groups.is_empty() {
+                            println!("groups      {}", a.groups.join(", "));
                         }
-                        println!("{on_conflict_line}");
                     }
+                    match &ignored {
+                        Some(c) => println!(
+                            "compression set by the server (compression = \"{c}\" in dvs.toml is ignored)"
+                        ),
+                        None => println!("compression set by the server"),
+                    }
+                    println!("{on_conflict_line}");
                 }
             }
         }
