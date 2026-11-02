@@ -279,7 +279,7 @@ say
 say "=== CLAIM: audit entries action=add with file(path+hashes)+compression+message (specs.md, Audit trail) ==="
 mkrandfile audited.bin 256
 EXPHASH="$(dvs add --json -m "audit message" audited.bin | jq_py 'print(d["files"][0]["hash"])')"
-AUDIT="$DVS_STORAGE_ABS/audit.log.jsonl"
+AUDIT="$(project_store "$DVS_STORAGE_ABS")/audit.log.jsonl"
 check "YES" "$([ -e "$AUDIT" ] && echo YES || echo NO)" "audit.log.jsonl exists in storage"
 AUDIT_OK="$(python3 - "$AUDIT" "$EXPHASH" <<'PY'
 import sys, json

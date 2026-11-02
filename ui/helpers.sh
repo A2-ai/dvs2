@@ -16,6 +16,17 @@ BASH_XTRACEFD=$_say_xtfd
 # Use for blank-line separators and "=== section ===" headers.
 say() { { set +x; } 2>/dev/null; echo "$@"; { set -x; } 2>/dev/null; }
 
+# The folder of the project in a storage directory: its 64-hex subfolder (dvs
+# names a project's folder by the blake3 hash of its name), or the directory
+# itself for a store from before projects. Call it after init.
+project_store() {
+  { set +x; } 2>/dev/null
+  local sub
+  sub="$(ls "$1" 2>/dev/null | grep -E '^[0-9a-f]{64}$' | head -1 || true)"
+  if [ -n "$sub" ]; then printf '%s\n' "$1/$sub"; else printf '%s\n' "$1"; fi
+  { set -x; } 2>/dev/null
+}
+
 print_eval_rscript() {
   tee /dev/stderr | Rscript -
 }

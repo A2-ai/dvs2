@@ -220,7 +220,7 @@ say "=== Claim: downloaded bytes verified before install, a mismatch fails that 
 mkfiles 1 1K data/tamper   # data/tamper/file_1.bin
 dvs add data/tamper/file_1.bin >/dev/null
 THASH="$(python3 -c 'import json;print(json.load(open(".dvs/data/tamper/file_1.bin.dvs"))["hashes"]["blake3"])')"
-TBLOB="$DVS_STORAGE/${THASH:0:2}/${THASH:2}"
+TBLOB="$(project_store "$DVS_STORAGE")/${THASH:0:2}/${THASH:2}"
 say "stored blob: $TBLOB"
 # Build a valid zstd stream of different random bytes and overwrite the blob.
 TMP_RAW="$(mktemp "${TMPDIR:-/tmp}/dvs_tamper_raw_XXXX")"
