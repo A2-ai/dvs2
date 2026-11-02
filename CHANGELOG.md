@@ -10,9 +10,11 @@
 - R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
 - R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
 - R package: `format_byte_size(TRUE)` and `format_byte_size(FALSE)` are errors, as `set_dvs_threads(TRUE)` is. They returned `"1 B"` and `"0 B"`.
+- Rust library: `GetRow.hint` is an `Option<Hint>`, not an `Option<String>`. `GetRow` and `GetReport` no longer implement `Serialize`.
 
 ### Added
 
+- `dvs get --json`: every row has `next_steps`, the commands of its hint as data, such as `{"action": "add", "paths": ["b.csv"]}`. `[]` when there are none. `hint` stays the same text.
 - R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
 - R package: `just rpkg-reference` builds the HTML reference manual. The one in `dist/reference/` is for users and leaves out the internal pages, as R's help index does. The one in `dvs-rpkg/rust-target/doc/r/` is for development and keeps them.
 - R package: `dvs_status()` has a `code` column, the kind of failure of a row that failed, as in the CLI's JSON.
@@ -21,9 +23,11 @@
 - R package: a wrong argument raises a `dvs_error_argument` condition, also a `dvs_error`, with the argument in `param` and the call the user wrote. A `dvs.toml` that does not load raises a `dvs_config_error`, also a `dvs_error`, in every command. One `dvs_error` handler catches them all.
 - R package: a bad `dvs.num_threads` or `dvs.on_error` option raises the same `dvs_error_argument`, and the message names the option.
 - R package: `dvs_result_info()` has `summary`, the summary the CLI prints. A printed `dvs_get()` result and its `on_error` warning or error start with it, so R and the CLI say the same. `on_conflict = <policy> (<source>)` appears only when the policy acted, as in the CLI.
+- Rust library: `Hint`, `HintPart`, `HintSyntax`, `NextStep` and `row_hint()`. A hint is data, and each front end writes its commands in its own syntax.
 
 ### Fixed
 
+- R package: the `hint` column of `dvs_get()` is in R syntax, as `dvs_add("b.csv")` and `dvs_get("b.csv", on_conflict = "overwrite")`. It gave the CLI commands, `dvs add b.csv` and `dvs get --force b.csv`. The library now gives hints as data, and the CLI and R write them.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.

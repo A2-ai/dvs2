@@ -806,7 +806,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
-                FileRow::Get(r) => Some(serde_json::to_value(r).expect("rows serialize")),
+                FileRow::Get(r) => Some(get_cmd::row_json(r)),
                 _ => None,
             });
             if show_progress {

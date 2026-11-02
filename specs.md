@@ -118,7 +118,8 @@ keys: a field that does not apply is `null`, never missing (an `add` error row h
 cancel stopped, see Cancellation) and `succeeded` (the rest), so `total = succeeded + failed + cancelled`; get
 adds its detailed counts and defines `succeeded` itself. All are computed by the library. `error` is a
 failure of the whole command; per-file failures stay in the rows, so a `partial` result normally has
-`error: null`. A `hint` is the next thing to try, for people (only `get` fills row hints today).
+`error: null`. A `hint` is the next thing to try, for people (only `get` fills row hints today). Every `get`
+row also has `next_steps`, the commands of its hint as data (`[]` when there are none), for programs.
 
 Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; `get` see get;
 `status` `path`, `status` (`error` on an error row, `cancelled` on a cancelled one), `metadata`, `working` (`state` `present`, `absent` or
@@ -545,12 +546,24 @@ invalid configuration) it is the shared error envelope, without `on_conflict`/`s
  "error": null,
  "files": [{"path": "data/b.csv", "local_path": "data/b.csv", "before": "modified", "action": "not_run",
             "satisfied": false, "size": 7, "target_hash": "…", "local_hash": "…", "stored_copy": "absent",
-            "code": "local_changes", "message": "…", "hint": "keep your version: dvs add data/b.csv; …"}]}
+            "code": "local_changes", "message": "…", "hint": "keep your version: dvs add data/b.csv; …",
+            "next_steps": [{"action": "add", "paths": ["data/b.csv"]},
+                           {"action": "get", "paths": ["data/b.csv"], "on_conflict": "overwrite"}]}]}
 ```
 
 - `outcome`: `complete`, `aborted` (nothing written), `partial` (also when every file was skipped as
   `on_conflict = skip` asked), `failed` or `cancelled`.
-- `hint`: the next step, in CLI syntax, filled in by the library.
+- `hint`: the next step. The library gives it as data, prose with commands in it, and each front end writes the
+  commands in its own syntax: the CLI as `dvs add data/b.csv`, R as `dvs_add("data/b.csv")`. In R, logging in
+  stays a terminal command.
+- `next_steps`: the commands of the hint, in order, each an object tagged by `action`. Paths are relative to
+  the current directory, as `local_path`. Clients tolerate unknown actions.
+  - `add` (`paths`): make the local files the tracked version.
+  - `get` (`paths`, `on_conflict`, `null` for the default): get these files.
+  - `rerun_with` (`on_conflict`, `recursive`): the same get again, with these options added.
+  - `retry`: the same get again, as it was.
+  - `status`: list the tracked files.
+  - `login`: check the login (`dvs info`), then log in (`dvs login`).
 - `satisfied`: the file is at its tracked version afterwards; in a dry run, that it would be.
 - A shared cause (`access_denied`, `server_unavailable`) is printed once in human output, not per file.
 - `action`: `restored`, `replaced`, `unchanged`, `skipped`, `not_run` (held back), `cancelled`, `failed`, `would_restore`,

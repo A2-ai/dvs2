@@ -116,12 +116,33 @@ test_that("local changes abort by default and are kept", {
   expect_equal(result$action, "not_run")
   expect_equal(result$code, "local_changes")
   expect_false(result$satisfied)
-  expect_match(result$hint, "dvs add t.csv", fixed = TRUE)
+  # The hint is in R syntax, never the CLI's
+  expect_equal(
+    result$hint,
+    paste0(
+      'keep your version: dvs_add("t.csv") (makes it the tracked version); ',
+      'take the tracked version: dvs_get("t.csv", on_conflict = "overwrite") (replaces yours)'
+    )
+  )
   expect_equal(readLines("t.csv"), "my edit")
   info <- dvs_result_info(result)
   expect_equal(info$outcome, "aborted")
   expect_equal(info$on_conflict, "abort")
   expect_equal(info$source, "default")
+})
+
+test_that("hints are in R syntax for every kind of row", {
+  new_dvs_test_repo()
+  switch_branches()
+  writeLines("my edit", "t.csv")
+  dir.create("empty")
+  writeLines("x", "u.csv")
+  dvs_add("u.csv")
+  result <- dvs_get(c("t.csv", "u.csv", "empty", "typo.csv"), on_error = "return")
+  hints <- result$hint[!is.na(result$hint)]
+  expect_true(length(hints) >= 3L)
+  expect_false(any(grepl("\\bdvs (add|get|status)\\b|--", hints)))
+  expect_match(hints, "dvs_add|on_conflict = \"skip\"|recursive = TRUE|dvs_status\\(\\)", all = TRUE)
 })
 
 test_that("on_conflict = 'skip' and 'overwrite'", {
@@ -246,7 +267,7 @@ test_that("printing shows the outcome, what needs attention, and survives subset
   expect_identical(out[2], "# on_conflict = abort (default)")
   expect_false(grepl("NA", out[1], fixed = TRUE))
   # t.csv is listed with the command to keep it; u.csv is only held back
-  expect_true(any(grepl("dvs add t.csv", out[-1], fixed = TRUE)))
+  expect_true(any(grepl('dvs_add("t.csv")', out[-1], fixed = TRUE)))
   expect_false(any(grepl("! u.csv", out, fixed = TRUE)))
 
   expect_match(capture.output(print(res[res$path == "t.csv", ]))[1], "1 of 2 rows", fixed = TRUE)

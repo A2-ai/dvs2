@@ -5,7 +5,7 @@
 mod cli_progress;
 mod test_support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -26,8 +26,9 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
-    OperationContext, PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
+    Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict, HintSyntax,
+    NextStep, OperationContext, PathFilter, Status, TransferObserver, add_files, get_files,
+    set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -669,9 +670,61 @@ impl From<&GetRow> for GetFileRow {
             stored_copy: stored_copy.map(|c| c.as_str().to_string()),
             code: code.map(|c| c.as_str().to_string()),
             message: message.clone(),
-            hint: hint.clone(),
+            hint: hint.as_ref().map(|h| h.render(&RSyntax)),
             duration_ms: duration_ms.map(|d| d as f64),
         }
+    }
+}
+
+/// Hints in R syntax: `dvs_add("b.csv")`, `dvs_get("b.csv", on_conflict =
+/// "overwrite")`. Only functions the package exports. Logging in stays a
+/// terminal command.
+struct RSyntax;
+
+/// An R string literal.
+fn r_string(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// One path as an R string, several as `c(...)`.
+fn r_paths(paths: &[PathBuf]) -> String {
+    let strings: Vec<String> = paths.iter().map(|p| r_string(p)).collect();
+    match strings.as_slice() {
+        [one] => one.clone(),
+        many => format!("c({})", many.join(", ")),
+    }
+}
+
+impl HintSyntax for RSyntax {
+    fn step(&self, step: &NextStep) -> String {
+        match step {
+            NextStep::Add { paths } => format!("dvs_add({})", r_paths(paths)),
+            NextStep::Get { paths, on_conflict } => match on_conflict {
+                Some(policy) => format!("dvs_get({}, on_conflict = \"{policy}\")", r_paths(paths)),
+                None => format!("dvs_get({})", r_paths(paths)),
+            },
+            NextStep::RerunWith {
+                on_conflict,
+                recursive,
+            } => {
+                let mut args = Vec::new();
+                if let Some(policy) = on_conflict {
+                    args.push(format!("on_conflict = \"{policy}\""));
+                }
+                if *recursive {
+                    args.push("recursive = TRUE".to_string());
+                }
+                args.join(", ")
+            }
+            NextStep::Retry => "the same dvs_get() call".to_string(),
+            NextStep::Status => "dvs_status()".to_string(),
+            NextStep::Login => "dvs info, then dvs login, in a terminal".to_string(),
+        }
+    }
+
+    fn path(&self, path: &Path) -> String {
+        path.display().to_string()
     }
 }
 

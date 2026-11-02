@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use crate::cache::{FileStat, HashCache, baseline_for, record_baseline, try_open_cache};
 use crate::config::{OnConflict, SettingSource};
 use crate::error::{Error, ErrorCode, backend_error_code};
+use crate::files::hint::{Hint, NextStep};
 use crate::files::metadata::FileMetadata;
 use crate::globbing::GetSelection;
 use crate::operation::{
@@ -167,8 +168,9 @@ impl Serialize for GetCode {
 }
 
 /// One requested file. Every field is always present (null when not
-/// applicable) so JSON and R consumers get a fixed schema.
-#[derive(Debug, Clone, Serialize)]
+/// applicable) so JSON and R consumers get a fixed schema. Not `Serialize`:
+/// each front end renders `hint` in its own syntax.
+#[derive(Debug, Clone)]
 pub struct GetRow {
     /// Relative to the project root
     pub path: PathBuf,
@@ -186,8 +188,8 @@ pub struct GetRow {
     pub stored_copy: Option<StoredCopy>,
     pub code: Option<GetCode>,
     pub message: Option<String>,
-    /// The next step, in CLI syntax
-    pub hint: Option<String>,
+    /// The next step, as data: see [`Hint`]
+    pub hint: Option<Hint>,
     /// Time spent on this file (hash + transfer + install); `None` for rows
     /// never hashed or transferred (cancelled before the plan included).
     pub duration_ms: Option<u64>,
@@ -249,7 +251,7 @@ pub struct GetCounts {
 }
 
 /// The whole result of a `get`: operation information plus one row per file.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct GetReport {
     pub outcome: GetOutcome,
     pub dry_run: bool,
@@ -473,7 +475,7 @@ impl Planned {
         if !self.emitted {
             self.emitted = true;
             self.fill_hash_duration();
-            self.row.hint = hint(&self.row);
+            self.row.hint = row_hint(&self.row);
             ctx.observer().file_finished(FileRow::Get(&self.row));
         }
     }
@@ -1087,7 +1089,7 @@ pub fn get_files(
                 let result = transfer(p, backend, paths, dry_run, operation_id, ctx);
                 settle(&mut row, p, result, dry_run, paths, cache);
                 row.duration_ms = Some(millis(p.hash_time + started.elapsed()));
-                row.hint = hint(&row);
+                row.hint = row_hint(&row);
                 // Final the moment its own transfer is done, not when the batch is.
                 observer.file_finished(FileRow::Get(&row));
                 (i, row)
@@ -1221,45 +1223,71 @@ pub fn shell_path(path: &Path) -> String {
     }
 }
 
-/// The next command to run for a row.
-fn hint(row: &GetRow) -> Option<String> {
-    let p = shell_path(&row.local_path);
-    let choices = format!(
-        "keep your version: dvs add {p} (makes it the tracked version); \
-         take the tracked version: dvs get --force {p} (replaces yours)"
-    );
+/// The next step for a row, as data. Front ends render the commands: in the
+/// CLI the local-changes hint reads "keep your version: dvs add b.csv (makes it
+/// the tracked version); take the tracked version: dvs get --force b.csv
+/// (replaces yours)".
+pub fn row_hint(row: &GetRow) -> Option<Hint> {
+    let p = || vec![row.local_path.clone()];
+    let text = |t: &str| Hint::default().text(t);
+    let choices = || {
+        text("keep your version: ")
+            .step(NextStep::Add { paths: p() })
+            .text(" (makes it the tracked version); take the tracked version: ")
+            .step(NextStep::Get {
+                paths: p(),
+                on_conflict: Some(OnConflict::Overwrite),
+            })
+            .text(" (replaces yours)")
+    };
+    let again = |t: &str| text(t).step(NextStep::Retry).text(" again");
     match row.code? {
-        GetCode::LocalChanges => Some(choices),
-        GetCode::UnknownLocal => Some(format!(
-            "dvs has no record of writing this file (a clone from before dvs recorded this, \
-             or a cleared cache); {choices}"
+        GetCode::LocalChanges => Some(choices()),
+        GetCode::UnknownLocal => Some(
+            text(
+                "dvs has no record of writing this file (a clone from before dvs recorded this, \
+                 or a cleared cache); ",
+            )
+            .then(choices()),
+        ),
+        GetCode::BatchAborted => Some(text("held back by another file; to get the rest: ").step(
+            NextStep::RerunWith {
+                on_conflict: Some(OnConflict::Skip),
+                recursive: false,
+            },
         )),
-        GetCode::BatchAborted => {
-            Some("held back by another file; to get the rest: --on-conflict skip".into())
-        }
         GetCode::NotTracked if row.local_path.is_dir() => Some(
-            "nothing tracked is selected here; add -r to include subdirectories, or check the path"
-                .into(),
+            text("nothing tracked is selected here; add ")
+                .step(NextStep::RerunWith {
+                    on_conflict: None,
+                    recursive: true,
+                })
+                .text(" to include subdirectories, or check the path"),
         ),
-        GetCode::NotTracked => Some("check the path; list tracked files with: dvs status".into()),
-        GetCode::SourceMissing => Some(
+        GetCode::NotTracked => {
+            Some(text("check the path; list tracked files with: ").step(NextStep::Status))
+        }
+        GetCode::SourceMissing => Some(text(
             "the stored content of this version is missing (probably an interrupted upload); \
-             tell whoever added it"
-                .into(),
-        ),
+             tell whoever added it",
+        )),
         GetCode::Shared(ErrorCode::AccessDenied) => {
-            Some("check you are logged in with access: dvs info, dvs login".into())
+            Some(text("check you are logged in with access: ").step(NextStep::Login))
         }
         GetCode::Shared(ErrorCode::ServerUnavailable) => {
-            Some("check your network or VPN and the server, then run dvs get again".into())
+            Some(again("check your network or VPN and the server, then run "))
         }
-        GetCode::DestinationChanged => Some(format!("run again once nothing is writing {p}")),
-        GetCode::FileInUse => {
-            Some("close the program using the file, then run dvs get again".into())
+        GetCode::DestinationChanged => {
+            Some(text("run again once nothing is writing ").path(&row.local_path))
         }
-        GetCode::Shared(ErrorCode::BadMetadata) => Some(format!(
-            "fix the .dvs file for {p} (for example a git merge conflict), then run dvs get again"
-        )),
+        GetCode::FileInUse => Some(again("close the program using the file, then run ")),
+        GetCode::Shared(ErrorCode::BadMetadata) => Some(
+            text("fix the .dvs file for ")
+                .path(&row.local_path)
+                .text(" (for example a git merge conflict), then run ")
+                .step(NextStep::Retry)
+                .text(" again"),
+        ),
         _ => None,
     }
 }
@@ -1562,7 +1590,10 @@ mod tests {
         assert_eq!(repo.read("a.csv"), b"a2", "nothing may change on abort");
         assert_eq!(repo.read("b.csv"), b"my edits");
         assert_eq!(report.verdict(), GetVerdict::HeldBack);
-        assert!(b.hint.as_deref().unwrap().contains("dvs add b.csv"));
+        assert!(b.hint.as_ref().unwrap().steps().any(|s| s
+            == &NextStep::Add {
+                paths: vec!["b.csv".into()]
+            }));
     }
 
     // Spec 4o
@@ -2004,7 +2035,7 @@ mod tests {
         let expected: Vec<_> = report
             .files
             .iter()
-            .map(|r| serde_json::to_value(r).unwrap())
+            .map(|r| serde_json::json!({"path": r.path, "row": format!("{r:?}")}))
             .collect();
         assert_eq!(rows, expected);
         assert!(row(&report, "c.csv").hint.is_some());
