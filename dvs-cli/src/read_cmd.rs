@@ -1,6 +1,6 @@
 //! Batch, backend-neutral queries for consumers that invoke the CLI.
 use anyhow::Result;
-use dvs::{Backend, DvsPaths, ErrorCode, Hashes, PathFilter};
+use dvs::{Backend, DvsPaths, ErrorCode, PathFilter};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -8,16 +8,6 @@ use crate::output;
 
 fn invalid(message: impl Into<String>) -> anyhow::Error {
     output::coded(ErrorCode::InvalidArguments, message)
-}
-
-fn check_backend(backend: &Backend) -> Result<()> {
-    match backend {
-        Backend::Server(s) => s.check_access()?,
-        Backend::Local(b) => {
-            std::fs::read_dir(&b.path)?;
-        }
-    }
-    Ok(())
 }
 
 fn resolve_paths(paths: &DvsPaths, user_paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
@@ -46,51 +36,6 @@ fn resolve_paths(paths: &DvsPaths, user_paths: Vec<PathBuf>) -> Result<Vec<PathB
         .collect()
 }
 
-fn coded_message(error: &anyhow::Error) -> (ErrorCode, String) {
-    (output::error_code(error), format!("{error:#}"))
-}
-
-/// Validate hashes before I/O and preserve input order and duplicates.
-/// `state` describes blob storage.
-pub fn availability(backend: &Backend, hashes: &[String]) -> Result<(Vec<Value>, usize)> {
-    for hash in hashes {
-        if hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
-            return Err(invalid(format!("invalid BLAKE3 hash: {hash}")));
-        }
-    }
-    let preflight = check_backend(backend).map_err(|error| coded_message(&error));
-
-    let mut rows = Vec::with_capacity(hashes.len());
-    let mut failed = 0;
-    for hash in hashes {
-        let normalized = hash.to_ascii_lowercase();
-        let value = Hashes {
-            blake3: normalized.clone(),
-            md5: None,
-        };
-        let storage = preflight.clone().and_then(|()| {
-            backend
-                .exists(&value)
-                .map_err(|error| coded_message(&error))
-        });
-        let (state, code, message) = match storage {
-            Ok(present) => (if present { "present" } else { "absent" }, None, None),
-            Err((code, message)) => {
-                failed += 1;
-                ("unknown", Some(code), Some(message))
-            }
-        };
-        rows.push(json!({
-            "hash": normalized,
-            "state": state,
-            "code": code,
-            "message": message,
-            "hint": null,
-        }));
-    }
-    Ok((rows, failed))
-}
-
 /// Resolve query paths lexically; the files need not exist in this checkout.
 /// Each entry is the audit entry with `timestamp` as RFC 3339 UTC.
 /// Reject escaping paths rather than silently broadening an invalid query to all history.
@@ -100,7 +45,7 @@ pub fn history(
     user_paths: Vec<PathBuf>,
 ) -> Result<Vec<Value>> {
     let relative = resolve_paths(paths, user_paths)?;
-    check_backend(backend)?;
+    backend.check_readable()?;
     backend
         .get_audit_entries(&relative)?
         .into_iter()

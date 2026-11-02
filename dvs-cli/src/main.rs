@@ -898,9 +898,13 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
         }
         Command::Availability { hashes } => {
             let config = find_config(&current_dir)?;
-            let (files, failed) = read_cmd::availability(config.backend(), &hashes)?;
+            let rows = dvs::availability(config.backend(), &hashes)?;
+            let counts = Counts::of(&rows);
             if cli.json {
-                let counts = Counts::new(files.len(), failed);
+                let files = rows
+                    .iter()
+                    .map(|row| output::row_error_fields(json!(row)))
+                    .collect();
                 let outcome = RunOutcome::of(&counts, false);
                 output::emit(output::rows_envelope(
                     "availability",
@@ -910,18 +914,14 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                     outcome,
                 ));
             } else {
-                for row in files {
-                    println!(
-                        "{} {}",
-                        row["state"].as_str().unwrap_or("unknown"),
-                        row["hash"].as_str().unwrap_or_default()
-                    );
-                    if let Some(message) = row["message"].as_str() {
+                for row in &rows {
+                    println!("{} {}", row.state.as_str(), row.hash);
+                    if let Some(message) = &row.message {
                         eprintln!("{message}");
                     }
                 }
             }
-            if failed != 0 {
+            if counts.failed != 0 {
                 return Err(Exit(1).into());
             }
         }

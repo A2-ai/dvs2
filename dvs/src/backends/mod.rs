@@ -114,6 +114,19 @@ impl Backend {
         }
     }
 
+    /// Check that the storage can be read: access to the server project, or a
+    /// local storage folder that lists. The read-only queries (availability,
+    /// history) run it before they ask for anything.
+    pub fn check_readable(&self) -> Result<()> {
+        match self {
+            Backend::Local(b) => {
+                std::fs::read_dir(&b.path)?;
+                Ok(())
+            }
+            Backend::Server(s) => s.check_access(),
+        }
+    }
+
     /// Store file to backend under `req.hashes`, compressing it.
     /// The source is passed uncompressed, the hash we send is only for (optional) verification by
     /// a server
