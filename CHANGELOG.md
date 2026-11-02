@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- An add to a project that is locked on the server fails with the code `project_locked`, and the message is the server's reason, who locked the project and why. It was `operation_failed` with "manifest failed (423)" in front of the reason.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.

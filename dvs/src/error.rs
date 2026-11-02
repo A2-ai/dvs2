@@ -11,6 +11,8 @@ pub enum ErrorCode {
     ServerUnavailable,
     ServerTooOld,
     ProjectNotFound,
+    /// The server refuses changes to a locked project (423)
+    ProjectLocked,
     /// An unreadable `.dvs` record, including git conflict markers
     BadMetadata,
     CredentialsUnreadable,
@@ -37,6 +39,7 @@ impl ErrorCode {
             ErrorCode::ServerUnavailable => "server_unavailable",
             ErrorCode::ServerTooOld => "server_too_old",
             ErrorCode::ProjectNotFound => "project_not_found",
+            ErrorCode::ProjectLocked => "project_locked",
             ErrorCode::BadMetadata => "bad_metadata",
             ErrorCode::CredentialsUnreadable => "credentials_unreadable",
             ErrorCode::NotInProject => "not_in_project",

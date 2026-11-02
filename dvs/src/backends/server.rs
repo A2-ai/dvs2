@@ -39,13 +39,15 @@ pub(crate) fn join_url(base: &Url, relative: &str) -> anyhow::Result<Url> {
 ///
 /// dvs-server answers a missing project with 404 and a body starting with
 /// `unknown project`; any other 404 (or a 405) is a route this server does
-/// not have yet.
+/// not have yet. A locked project refuses changes with 423, and the body says
+/// who locked it and why.
 pub(crate) fn http_status_code(status: u16, body: &str) -> Option<ErrorCode> {
     match status {
         401 => Some(ErrorCode::AuthExpired),
         403 => Some(ErrorCode::AccessDenied),
         404 if body.trim_start().starts_with("unknown project") => Some(ErrorCode::ProjectNotFound),
         404 | 405 => Some(ErrorCode::ServerTooOld),
+        423 => Some(ErrorCode::ProjectLocked),
         500.. => Some(ErrorCode::ServerUnavailable),
         _ => None,
     }
@@ -83,6 +85,13 @@ pub(crate) fn status_error(base_url: &Url, status: u16, body: &str, what: &str) 
         ),
         ErrorCode::ServerTooOld => format!(
             "the dvs server at {base_url} does not support this request ({status}); it is older than this dvs"
+        ),
+        ErrorCode::ProjectLocked if body.trim().is_empty() => {
+            format!("the project is locked on the dvs server at {base_url}")
+        }
+        ErrorCode::ProjectLocked => format!(
+            "the dvs server at {base_url} refuses changes: {}",
+            body.trim()
         ),
         _ => format!("the dvs server at {base_url} is not working ({status})"),
     };
@@ -538,10 +547,32 @@ mod tests {
             ),
             (404, "", Some(ErrorCode::ServerTooOld)),
             (405, "", Some(ErrorCode::ServerTooOld)),
+            (423, "Project locked", Some(ErrorCode::ProjectLocked)),
             (503, "", Some(ErrorCode::ServerUnavailable)),
             (409, "", None),
         ] {
             assert_eq!(http_status_code(status, body), expected, "{status} {body}");
         }
+    }
+
+    #[test]
+    fn a_locked_project_keeps_the_servers_reason() {
+        let url = Url::parse("https://h/").unwrap();
+        let body = "Project locked by alice on 2026-11-02 13:47 UTC: frozen for review";
+        let error = status_error(&url, 423, body, "manifest");
+        assert_eq!(
+            crate::backend_error_code(&error),
+            Some(ErrorCode::ProjectLocked)
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("the dvs server at https://h/ refuses changes: {body}")
+        );
+
+        let error = status_error(&url, 423, "", "upload");
+        assert_eq!(
+            error.to_string(),
+            "the project is locked on the dvs server at https://h/"
+        );
     }
 }
