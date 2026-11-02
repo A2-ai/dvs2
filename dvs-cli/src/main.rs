@@ -41,6 +41,11 @@ pub enum Init {
     Local {
         /// Where the data will be stored
         path: PathBuf,
+        /// The project's name in the storage directory, which several projects can share.
+        /// Defaults to the project folder's name, lowercased. A name given here joins the
+        /// project of that name if it exists
+        #[clap(long)]
+        name: Option<String>,
         /// If you want to use a root folder other than the current directory
         #[clap(long)]
         root_dir: Option<PathBuf>,
@@ -491,12 +496,16 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             let (config, root_dir, metadata_folder_name) = match init_cmd {
                 Init::Local {
                     path: storage_path,
+                    name,
                     root_dir,
                     metadata_folder_name,
                     group,
                     no_compression,
                 } => {
                     let mut config = Config::new_local(&storage_path, group)?;
+                    if let Backend::Local(b) = config.backend_mut() {
+                        b.set_name(name);
+                    }
                     if no_compression {
                         config.set_compression(Some(Compression::None));
                     }
@@ -534,13 +543,28 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             }
             let root = root_dir.unwrap_or(current_dir);
 
-            let repo_root = init(&root, config)?;
+            let storage = match config.backend() {
+                Backend::Local(b) => Some(b.path.clone()),
+                Backend::Server(_) => None,
+            };
+            let done = init(&root, config).map_err(init_error)?;
             if cli.json {
                 let mut result = output::envelope("init", false);
-                result["project_root"] = json!(repo_root);
+                result["project_root"] = json!(done.root);
+                result["project"] = json!(done.project);
+                result["joined"] = json!(done.joined);
                 output::emit(result);
             } else {
-                println!("DVS Initialized at {}", repo_root.display());
+                if let (Some(project), Some(storage)) = (&done.project, &storage) {
+                    let storage = std::path::absolute(storage).unwrap_or(storage.clone());
+                    let verb = if done.joined {
+                        "Joined the existing"
+                    } else {
+                        "Created the"
+                    };
+                    println!("{verb} project \"{project}\" in {}", storage.display());
+                }
+                println!("DVS Initialized at {}", done.root.display());
             }
         }
         Command::Attach {
@@ -865,6 +889,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                             "version": dvs::VERSION,
                             "backend": "local",
                             "storage": l.path,
+                            "project": l.name(),
                             "compression": compression,
                             "connection": "not_applicable",
                         }));
@@ -872,6 +897,9 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                         println!("dvs {}", dvs::VERSION);
                         println!("backend     local");
                         println!("storage     {}", l.path.display());
+                        if let Some(name) = l.name() {
+                            println!("project     {name}");
+                        }
                         println!("compression {}", compression.as_deref().unwrap_or_default());
                         println!("{on_conflict_line}");
                     }
@@ -1147,6 +1175,26 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
 /// `dvs init <path>` predates backends: name the command that does it now. A
 /// bare name alone can be a backend typo or a directory, so the message covers
 /// both. With more words after it, it is most likely a mistyped backend.
+/// The commands to join or start a project, for a name init refused.
+fn init_error(error: anyhow::Error) -> anyhow::Error {
+    if let Some(exists) = error.downcast_ref::<dvs::init::ProjectExists>() {
+        let storage = dvs::shell_path(&exists.storage);
+        let message = format!(
+            "{exists}\n  join it:          dvs init local {storage} --name {}\n  \
+             start a new one:  dvs init local {storage} --name <other>",
+            exists.name
+        );
+        return output::coded(ErrorCode::InvalidArguments, message);
+    }
+    if error
+        .downcast_ref::<dvs::backends::local::InvalidProjectName>()
+        .is_some()
+    {
+        return output::coded(ErrorCode::InvalidArguments, error.to_string());
+    }
+    error
+}
+
 fn init_backend_error(args: &[String]) -> String {
     let first = args.first().map(String::as_str).unwrap_or_default();
     let looks_like_path =

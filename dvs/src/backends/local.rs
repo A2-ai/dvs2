@@ -74,9 +74,93 @@ fn ensure_mode(_path: impl AsRef<Path>, _mode: u32) -> Result<()> {
     Ok(())
 }
 
+/// Whether this user owns `path`, and so may change its group and mode.
+#[cfg(unix)]
+fn owned_by_me(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(path).is_ok_and(|m| m.uid() == nix::unistd::geteuid().as_raw())
+}
+
+#[cfg(not(unix))]
+fn owned_by_me(_path: &Path) -> bool {
+    true
+}
+
+/// The rule dvs-server applies to project names.
+const MAX_PROJECT_NAME_LEN: usize = 100;
+const RESERVED_PROJECT_NAMES: &[&str] = &["project"];
+
+/// A project name that breaks the rule dvs-server applies.
+#[derive(Debug)]
+pub struct InvalidProjectName(pub String);
+
+impl std::fmt::Display for InvalidProjectName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if RESERVED_PROJECT_NAMES.contains(&self.0.as_str()) {
+            write!(
+                f,
+                "invalid project name {:?}: this name is reserved",
+                self.0
+            )
+        } else {
+            write!(
+                f,
+                "invalid project name {:?}: use 1 to {MAX_PROJECT_NAME_LEN} lowercase letters, \
+                 digits and dashes, starting with a letter or a digit",
+                self.0
+            )
+        }
+    }
+}
+
+impl std::error::Error for InvalidProjectName {}
+
+/// Checks a project name against the rule of dvs-server, `^[a-z0-9][a-z0-9-]{0,99}$`.
+pub fn validate_project_name(name: &str) -> Result<(), InvalidProjectName> {
+    let mut chars = name.chars();
+    let valid = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && name.len() <= MAX_PROJECT_NAME_LEN
+        && !RESERVED_PROJECT_NAMES.contains(&name);
+    if valid {
+        Ok(())
+    } else {
+        Err(InvalidProjectName(name.to_string()))
+    }
+}
+
+/// The project name made from a folder name: lowercase, with every run of
+/// other characters turned into one dash. `None` when nothing valid is left.
+pub fn project_name_from_folder(folder: &str) -> Option<String> {
+    let mut name = String::new();
+    for c in folder.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            name.push(c);
+        } else if !name.is_empty() && !name.ends_with('-') {
+            name.push('-');
+        }
+    }
+    name.truncate(MAX_PROJECT_NAME_LEN);
+    let name = name.trim_end_matches('-').to_string();
+    validate_project_name(&name).is_ok().then_some(name)
+}
+
+/// The folder of a project in the storage directory, as dvs-server names it.
+pub fn project_folder_name(name: &str) -> String {
+    blake3::hash(name.as_bytes()).to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct LocalBackend {
+    /// The storage directory. Without a project name it holds the blobs and
+    /// the audit log itself, the layout from before projects.
     pub path: PathBuf,
+    /// The project's name: its blobs and audit log are in
+    /// `path/<blake3 of the name>/`, so several projects can share `path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     group: Option<String>,
     #[serde(default, skip_serializing_if = "core::ops::Not::not")]
     open: bool,
@@ -112,9 +196,27 @@ impl LocalBackend {
 
         Ok(Self {
             path: path.as_ref().to_path_buf(),
+            name: None,
             group,
             open: false,
         })
+    }
+
+    /// The project name, `None` for a store from before projects.
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn set_name(&mut self, name: Option<String>) {
+        self.name = name;
+    }
+
+    /// Where this project's blobs and audit log are.
+    pub fn project_dir(&self) -> PathBuf {
+        match &self.name {
+            Some(name) => self.path.join(project_folder_name(name)),
+            None => self.path.clone(),
+        }
     }
 
     /// Apply configured group ownership to a path.
@@ -188,7 +290,7 @@ impl LocalBackend {
             bail!("Invalid hash: {hash}");
         }
         let (prefix, suffix) = hash.split_at(2);
-        Ok(self.path.join(prefix).join(suffix))
+        Ok(self.project_dir().join(prefix).join(suffix))
     }
 
     pub fn log_audit_entry(&self, entry: &AuditEntry) -> Result<()> {
@@ -197,9 +299,10 @@ impl LocalBackend {
             .expect("audit log lock should not be poisoned");
         log::debug!("Appending {entry:?} to audit log");
 
-        fs::create_dir_all(&self.path)?;
-        self.ensure_group_and_mode(&self.path, self.dir_mode())?;
-        let audit_path = self.path.join(AUDIT_LOG_FILENAME);
+        let project_dir = self.project_dir();
+        fs::create_dir_all(&project_dir)?;
+        self.ensure_group_and_mode(&project_dir, self.dir_mode())?;
+        let audit_path = project_dir.join(AUDIT_LOG_FILENAME);
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -210,16 +313,24 @@ impl LocalBackend {
         Ok(())
     }
 
+    /// Returns `true` when the project (or, without a name, the store) exists.
     pub fn init(&self, _: Compression) -> Result<bool> {
-        let already_initialized = self.path.join(AUDIT_LOG_FILENAME).exists();
-        if already_initialized {
+        let project_dir = self.project_dir();
+        if project_dir.join(AUDIT_LOG_FILENAME).exists() {
             return Ok(true);
         }
 
-        log::debug!("Creating storage directory: {}", self.path.display());
-        fs::create_dir_all(&self.path)?;
-        self.ensure_group_and_mode(&self.path, self.dir_mode())?;
-        log::info!("Initialized local storage at {}", self.path.display());
+        // Set the storage directory's group and mode only while it holds no
+        // project: other projects' users rely on what it has, and another
+        // user who owns it would make the change fail
+        let fresh_root = !self.path.exists() || fs::read_dir(&self.path)?.next().is_none();
+        log::debug!("Creating storage directory: {}", project_dir.display());
+        fs::create_dir_all(&project_dir)?;
+        if self.name.is_some() && fresh_root && owned_by_me(&self.path) {
+            self.ensure_group_and_mode(&self.path, self.dir_mode())?;
+        }
+        self.ensure_group_and_mode(&project_dir, self.dir_mode())?;
+        log::info!("Initialized local storage at {}", project_dir.display());
         Ok(false)
     }
 
@@ -243,7 +354,7 @@ impl LocalBackend {
         } else {
             if let Some(parent) = blob_path.parent() {
                 fs::create_dir_all(parent)?;
-                self.ensure_group_and_mode(&self.path, self.dir_mode())?;
+                self.ensure_group_and_mode(self.project_dir(), self.dir_mode())?;
                 self.ensure_group_and_mode(parent, self.dir_mode())?;
             }
 
@@ -322,7 +433,7 @@ impl LocalBackend {
     /// [`parse_audit_log`] for the filtering rules.
     pub fn get_audit_entries(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>> {
         let files_to_include: HashSet<_> = HashSet::from_iter(files.iter().cloned());
-        let audit_path = self.path.join(AUDIT_LOG_FILENAME);
+        let audit_path = self.project_dir().join(AUDIT_LOG_FILENAME);
         let f = fs::File::open(&audit_path)?;
         let entries = parse_audit_log(BufReader::new(f), &files_to_include)?;
         Ok(entries)
@@ -333,6 +444,48 @@ impl LocalBackend {
 mod tests {
     use super::*;
     use crate::ProjectPath;
+
+    /// A second project never changes the storage directory that the
+    /// first one's users rely on.
+    #[cfg(unix)]
+    #[test]
+    fn a_storage_directory_in_use_keeps_its_group_and_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("store");
+        fs::create_dir(&storage).unwrap();
+        fs::write(storage.join("other"), b"").unwrap();
+        fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut backend = LocalBackend::new(&storage, None).unwrap();
+        assert!(backend.group.is_some(), "the mode path runs with a group");
+        backend.set_name(Some("pk2".into()));
+        backend.init(Compression::Zstd).unwrap();
+
+        let mode = fs::metadata(&storage).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o755);
+        let project = fs::metadata(backend.project_dir()).unwrap();
+        assert_eq!(project.permissions().mode() & 0o7777, SHARED_DIRECTORY_MODE);
+    }
+
+    #[test]
+    fn folder_names_make_server_names() {
+        for (folder, name) in [
+            ("analysis", Some("analysis")),
+            ("My_Analysis 2", Some("my-analysis-2")),
+            ("--pk--", Some("pk")),
+            ("Étude", Some("tude")),
+            ("___", None),
+            ("project", None),
+        ] {
+            assert_eq!(
+                project_name_from_folder(folder).as_deref(),
+                name,
+                "{folder}"
+            );
+        }
+        assert!(project_name_from_folder(&"a".repeat(150)).is_some_and(|n| n.len() == 100));
+    }
     use crate::audit::{Action, AuditEntry, AuditFile, parse_audit_log};
     use crate::config::Compression;
     use crate::hashes::Hashes;

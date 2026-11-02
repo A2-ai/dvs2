@@ -146,14 +146,22 @@ impl From<CompressionChoice> for Compression {
 /// Creates the `.dvs` metadata folder and configures storage for versioned files.
 ///
 /// @param storage_path Path to the storage directory where file contents are kept.
+///   Several projects can share it. Each keeps its files and audit log in its
+///   own folder there.
 /// @param root_dir Repository root directory. Defaults to the current working directory.
 /// @param group Unix group name to set on stored files for shared access.
 ///   `NULL` uses your primary group.
 /// @param metadata_folder_name Name of the metadata folder. Defaults to `.dvs`.
 /// @param compression Compression method for stored files. One of `"zstd"`
 ///   (default) or `"none"`.
+/// @param name The project's name in the storage directory: lowercase letters,
+///   digits and dashes. `NULL` (the default) uses the name of the project
+///   folder, lowercased. A name given here joins the project of that name if
+///   it exists. A name taken from the folder that exists is an error, since
+///   two unrelated projects can have the same folder name.
 /// @return A single-row data frame describing the resulting configuration:
-///   `compression`, `metadata_folder_name`, `backend_path`, `backend_group`.
+///   `compression`, `metadata_folder_name`, `backend_path`, `backend_name`,
+///   `backend_group`.
 ///   An optional config field that was not set comes back as `NA`.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_init_impl", internal, call = caller)]
@@ -163,12 +171,16 @@ pub(crate) fn dvs_init(
     #[miniextendr(default = "NULL", no_na)] group: Option<String>,
     #[miniextendr(default = "NULL", no_na)] metadata_folder_name: Option<String>,
     #[miniextendr(match_arg, default = "\"zstd\"")] compression: CompressionChoice,
+    #[miniextendr(default = "NULL", no_na)] name: Option<String>,
 ) -> Result<BuiltDataFrame> {
     let root_dir = match root_dir {
         Some(d) => d,
         None => std::env::current_dir()?,
     };
     let mut config = Config::new_local(&storage_path, group)?;
+    if let dvs::Backend::Local(b) = config.backend_mut() {
+        b.set_name(name);
+    }
 
     config.set_compression(Some(compression.into()));
     if let Some(m) = metadata_folder_name {
@@ -179,7 +191,26 @@ pub(crate) fn dvs_init(
     // exactly what was persisted to dvs.toml — notably the absolute
     // `backend_path` that dvs core canonicalizes — rather than the pre-init
     // input. Keeps this rpkg-only: core canonicalizes, we just read the result.
-    let repo_root = init(&root_dir, config)?;
+    let repo_root = match init(&root_dir, config) {
+        Ok(done) => done.root,
+        Err(error) => {
+            if let Some(exists) = error.downcast_ref::<dvs::init::ProjectExists>() {
+                miniextendr_api::arg_error!(
+                    param = "name",
+                    "{exists}\n  join it:          dvs_init(storage_path, name = \"{}\")\n  \
+                     start a new one:  dvs_init(storage_path, name = \"<other>\")",
+                    exists.name
+                );
+            }
+            if error
+                .downcast_ref::<dvs::backends::local::InvalidProjectName>()
+                .is_some()
+            {
+                miniextendr_api::arg_error!(param = "name", "{error}");
+            }
+            return Err(error);
+        }
+    };
     let config = Config::find(&repo_root)
         .ok_or_else(|| anyhow!("dvs.toml not found after init at {}", repo_root.display()))??;
 

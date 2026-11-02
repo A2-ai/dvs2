@@ -275,6 +275,39 @@ This check is local: a `dvs.toml` in a parent directory does not prevent initial
 init also rejects a storage path inside the repository root. This guard applies to local-filesystem backends.
 Backends with no local directory (such as a future remote backend) skip it.
 
+#### Projects in a storage directory
+
+Several projects can share one local storage directory, as they share a dvs server. Each project has a name
+and keeps its blobs and its audit log in its own folder, `<storage>/<blake3 hash of the name>/`, the folder
+name dvs-server uses. Projects do not share blobs: the same content added in two projects is stored twice.
+
+- The name follows the rule of dvs-server: 1 to 100 lowercase letters, digits and dashes, starting with a
+  letter or a digit, and not `project`. Any other name is an `invalid_arguments` error, and nothing is written.
+- Without a name, init uses the name of the project folder, lowercased, with every run of other characters
+  turned into one dash (`My_Analysis 2` becomes `my-analysis-2`). A folder that leaves no valid name is an
+  error that asks for one.
+- A name that is given joins the project of that name when it exists, as `dvs init server` does on the
+  server. The join is logged in the project's audit log. It is refused when the compression differs from the
+  project's: "project pk1 already exists with compression zstd, not none".
+- A name taken from the folder that exists is refused (`invalid_arguments`), since two unrelated projects can
+  have the same folder name. The error gives the two ways on: name it to join it, or name another project.
+- `dvs.toml` keeps the storage directory as `path` and the name as `name`:
+
+  ```toml
+  [backend]
+  path = "/shared/store"
+  name = "my-analysis"
+  ```
+
+- A `dvs.toml` without `name`, written before projects, keeps the earlier layout: the blobs and
+  `audit.log.jsonl` are in `path` itself. Such a store and project folders can share a directory, because
+  blob folders have 2-character names and project folders 64.
+- A dvs older than projects ignores `name` and uses `path` itself. Every user of a named project needs a
+  dvs that knows projects.
+- init gives the storage directory the group and mode the project folder gets only while it holds nothing: when
+  init creates it, or it is empty, and the user running init owns it. A storage directory that already holds a
+  project or a store is left as it is, since other projects' users rely on its group and mode.
+
 On partial failure (e.g., metadata folder or storage creation fails after `dvs.toml` is written),
 init attempts best-effort cleanup of local artifacts (`dvs.toml` and, if it didn't exist beforehand, the metadata folder) so that a retry is possible.
 
@@ -311,6 +344,8 @@ Arguments:
   <PATH>  Where the data will be stored
 
 Options:
+      --name <NAME>
+          The project's name in the storage directory, which several projects can share. Defaults to the project folder's name, lowercased. A name given here joins the project of that name if it exists
       --root-dir <ROOT_DIR>
           If you want to use a root folder other than the current directory
       --metadata-folder-name <METADATA_FOLDER_NAME>
@@ -352,9 +387,24 @@ Global Options:
       --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
 ```
 
+Human output names the project before the usual line: `Created the project "my-analysis" in /shared/store`,
+or `Joined the existing project "my-analysis" in /shared/store`. With `--json`, the envelope has
+`project_root`, `project` (the name, `null` on a server) and `joined`. A refused name prints the two commands:
+
+```shell
+❯ dvs init local /shared/store
+Error: a project named "analysis" already exists in /shared/store. Give its name to join it, or another name to start a new project
+  join it:          dvs init local /shared/store --name analysis
+  start a new one:  dvs init local /shared/store --name <other>
+```
+
+`dvs info` shows the project name (`project` in JSON, `null` for a store from before projects).
+
 #### Rust library
 
-Library takes a project directory and the configuration of the backend to initiate repository.
+Library takes a project directory and the configuration of the backend to initiate repository. `init` returns
+`Initialized { root, project, joined }`. A refused folder name is a `ProjectExists { name, storage }` error, and a
+name that breaks the rule an `InvalidProjectName`.
 
 #### R package
 
@@ -364,7 +414,8 @@ dvs_init(
   root_dir = NULL,
   group = NULL,
   metadata_folder_name = NULL,
-  compression = c("zstd", "none")
+  compression = c("zstd", "none"),
+  name = NULL
 )
 ```
 
@@ -373,8 +424,11 @@ dvs_init(
 - `group`: Unix group to set on storage directory and files
 - `metadata_folder_name`: custom name for the metadata folder (default `.dvs`)
 - `compression`: desired compression for the stored data (default `zstd`)
+- `name`: the project's name in the storage directory (same as CLI's `--name`). `NULL` uses the folder's name.
+  A refused or invalid name raises a `dvs_error_argument` with `param = "name"`. For a refused name the message
+  ends with `dvs_init(storage_path, name = "analysis")` and `dvs_init(storage_path, name = "<other>")`.
 
-Returns a single-row data frame describing the resulting configuration.
+Returns a single-row data frame describing the resulting configuration, with the name in `backend_name`.
 
 ### add
 
@@ -702,7 +756,9 @@ Storage is content-addressable: files with identical content share the same stor
 their path or name. Files are stored using their blake3 hash split into a 2-character directory prefix
 and the remaining characters as the filename.
 For example, a file with blake3 hash `af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262` is stored at
-`<storage-path>/af/1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262`.
+`<project folder>/af/1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262`. The project folder is
+`<storage-path>/<blake3 hash of the project name>`, or `<storage-path>` itself for a store from before projects
+(see Projects in a storage directory).
 
 Writes to storage are atomic: data is first written to a temporary file (with a `.tmp` extension) in the
 same directory, then renamed into place. Since rename is atomic on POSIX within the same filesystem, this
@@ -719,7 +775,7 @@ affect previously added files.
 
 ### Audit trail
 
-Every `add` and `init` operation is logged to an append-only audit file (`audit.log.jsonl`) in the storage directory.
+Every `add` and `init` operation is logged to an append-only audit file (`audit.log.jsonl`) in the project folder, so each project has its own.
 Each entry records:
 
 - `operation_id`: a UUID grouping all files from one operation

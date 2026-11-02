@@ -9,11 +9,14 @@ dvs_init(
   root_dir = NULL,
   group = NULL,
   metadata_folder_name = NULL,
-  compression = c("zstd", "none")
+  compression = c("zstd", "none"),
+  name = NULL
 )
 }
 \arguments{
-\item{storage_path}{Path to the storage directory where file contents are kept.}
+\item{storage_path}{Path to the storage directory where file contents are kept.
+Several projects can share it. Each keeps its files and audit log in its
+own folder there.}
 
 \item{root_dir}{Repository root directory. Defaults to the current working directory.}
 
@@ -24,13 +27,20 @@ dvs_init(
 
 \item{compression}{Compression method for stored files. One of \code{"zstd"}
 (default) or \code{"none"}.}
+
+\item{name}{The project's name in the storage directory: lowercase letters,
+digits and dashes. \code{NULL} (the default) uses the name of the project
+folder, lowercased. A name given here joins the project of that name if
+it exists. A name taken from the folder that exists is an error, since
+two unrelated projects can have the same folder name.}
 }
 \value{
 A one-row tibble with the configuration written to \code{dvs.toml}:
 \code{compression} (\code{"zstd"} or \code{"none"}), \code{metadata_folder_name} (\code{NA} when
 it was not given, so the folder is \code{.dvs}), \code{backend_path} (the absolute
-path of the storage directory) and \code{backend_group} (\code{NA} when no group was
-given and your primary group could not be found).
+path of the storage directory), \code{backend_name} (the project's name there)
+and \code{backend_group} (\code{NA} when no group was given and your primary group
+could not be found).
 }
 \description{
 Creates the \code{.dvs} metadata folder and configures storage for versioned files.

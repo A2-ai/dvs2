@@ -329,6 +329,10 @@ impl Config {
         self.compression = compression;
     }
 
+    pub fn backend_mut(&mut self) -> &mut Backend {
+        &mut self.backend
+    }
+
     pub fn backend(&self) -> &Backend {
         &self.backend
     }

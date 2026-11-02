@@ -3,8 +3,9 @@
 #' @return A one-row tibble with the configuration written to `dvs.toml`:
 #'   `compression` (`"zstd"` or `"none"`), `metadata_folder_name` (`NA` when
 #'   it was not given, so the folder is `.dvs`), `backend_path` (the absolute
-#'   path of the storage directory) and `backend_group` (`NA` when no group was
-#'   given and your primary group could not be found).
+#'   path of the storage directory), `backend_name` (the project's name there)
+#'   and `backend_group` (`NA` when no group was given and your primary group
+#'   could not be found).
 #' @rdname dvs_init
 #' @export
 dvs_init <- function(
@@ -12,14 +13,16 @@ dvs_init <- function(
   root_dir = NULL,
   group = NULL,
   metadata_folder_name = NULL,
-  compression = c("zstd", "none")
+  compression = c("zstd", "none"),
+  name = NULL
 ) {
   result <- dvs_init_impl(
     storage_path = storage_path,
     root_dir = root_dir,
     group = group,
     metadata_folder_name = metadata_folder_name,
-    compression = compression
+    compression = compression,
+    name = name
   )
   tibble::as_tibble(result)
 }

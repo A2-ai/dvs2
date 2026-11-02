@@ -1459,7 +1459,7 @@ mod tests {
             let meta: FileMetadata = serde_json::from_slice(&self.metadata_bytes(name)).unwrap();
             let hash = meta.hashes.blake3;
             let storage = match &self.config.backend {
-                Backend::Local(b) => b.path.clone(),
+                Backend::Local(b) => b.project_dir(),
                 Backend::Server(_) => unreachable!(),
             };
             let blob = storage.join(&hash[..2]).join(&hash[2..]);
@@ -1686,7 +1686,7 @@ mod tests {
         repo.add("a.csv", b"a");
         repo.add("b.csv", b"b");
         let storage = match &repo.config.backend {
-            Backend::Local(b) => b.path.clone(),
+            Backend::Local(b) => b.project_dir(),
             Backend::Server(_) => unreachable!(),
         };
         let meta: FileMetadata = serde_json::from_slice(&repo.metadata_bytes("b.csv")).unwrap();

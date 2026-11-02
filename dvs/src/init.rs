@@ -4,10 +4,43 @@ use anyhow::{Result, bail};
 use fs_err as fs;
 use uuid::Uuid;
 
-use crate::audit::AuditEntry;
+use crate::audit::{Action, AuditEntry};
 use crate::backends::Backend;
+use crate::backends::local::{project_name_from_folder, validate_project_name};
 use crate::config::Config;
 use crate::paths;
+
+/// A project of that name is in the storage directory, and the name was not
+/// given: it came from the folder, so joining it may be an accident.
+#[derive(Debug)]
+pub struct ProjectExists {
+    pub name: String,
+    pub storage: PathBuf,
+}
+
+impl std::fmt::Display for ProjectExists {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "a project named \"{}\" already exists in {}. Give its name to join it, \
+             or another name to start a new project",
+            self.name,
+            self.storage.display()
+        )
+    }
+}
+
+impl std::error::Error for ProjectExists {}
+
+/// What `init` did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Initialized {
+    pub root: PathBuf,
+    /// The project in the storage directory, `None` on a server
+    pub project: Option<String>,
+    /// The project was there already, and this project joined it
+    pub joined: bool,
+}
 
 /// Creates the metadata folder of the project in `root_dir`, if it doesn't exist yet.
 /// Both `init` and `attach` need it: the commands that track files expect it.
@@ -24,8 +57,13 @@ pub fn create_metadata_folder(root_dir: impl AsRef<Path>, config: &Config) -> Re
 
 /// Starts a new dvs project.
 /// We need a ready to use Config object + the current directory the user is in
-pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
+///
+/// A local project goes in its own folder of the storage directory. Without a
+/// name, it takes the name of `root_dir`'s folder. A given name joins the
+/// project of that name when it exists, a name taken from the folder refuses.
+pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<Initialized> {
     let root_dir = root_dir.as_ref();
+    let mut name_given = false;
 
     // The storage directory must not live inside the repository, otherwise it
     // would be tracked alongside the user's files.
@@ -44,6 +82,28 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
                 bail!("The given storage path is within the repository.");
             }
             b.path = abs_storage;
+
+            let name = match b.name() {
+                Some(name) => {
+                    validate_project_name(name)?;
+                    name_given = true;
+                    name.to_string()
+                }
+                None => {
+                    let folder = abs_root.file_name().map(|f| f.to_string_lossy());
+                    folder
+                        .as_deref()
+                        .and_then(project_name_from_folder)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "no project name can be made from the folder name {:?}: give a \
+                                 name of lowercase letters, digits and dashes",
+                                folder.as_deref().unwrap_or_default()
+                            )
+                        })?
+                }
+            };
+            b.set_name(Some(name));
         }
         Backend::Server(_) => { /* nothing to do here */ }
     }
@@ -62,11 +122,42 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
     }
 
     log::debug!("Initializing backend");
+    let mut joined = false;
     if config.backend().init(config.compression())? {
-        if let Backend::Server(s) = config.backend() {
-            bail!("the project {} already exists on {}", s.name, s.url);
+        match config.backend() {
+            Backend::Server(s) => bail!("the project {} already exists on {}", s.name, s.url),
+            Backend::Local(b) => {
+                let name = b
+                    .name()
+                    .expect("init names every local project")
+                    .to_string();
+                if !name_given {
+                    return Err(ProjectExists {
+                        name,
+                        storage: b.path.clone(),
+                    }
+                    .into());
+                }
+                // As dvs-server: a project keeps the compression it was created with
+                let created_with = config
+                    .backend()
+                    .get_audit_entries(&[])?
+                    .into_iter()
+                    .find_map(|e| match e.action {
+                        Action::Init { settings, .. } => Some(settings.compression()),
+                        _ => None,
+                    });
+                if let Some(existing) = created_with
+                    && existing != config.compression()
+                {
+                    bail!(
+                        "project {name} already exists with compression {existing}, not {}",
+                        config.compression()
+                    );
+                }
+                joined = true;
+            }
         }
-        bail!("dvs is already initialized (backend storage exists)");
     }
 
     // The server decides the compression, so there is nothing to keep past init
@@ -96,7 +187,15 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
     }
 
     log::info!("DVS repository initialized successfully");
-    Ok(root_dir.to_path_buf())
+    let project = match config.backend() {
+        Backend::Local(b) => b.name().map(str::to_string),
+        Backend::Server(_) => None,
+    };
+    Ok(Initialized {
+        root: root_dir.to_path_buf(),
+        project,
+        joined,
+    })
 }
 
 #[cfg(test)]
@@ -126,8 +225,9 @@ mod tests {
         let storage = root.parent().unwrap().join(".storage");
 
         let config = Config::new_local(&storage, None).unwrap();
-        init(&root, config.clone()).unwrap();
+        init(&root, config).unwrap();
 
+        let config = Config::find(&root).unwrap().unwrap();
         let entries = config.backend().get_audit_entries(&[]).unwrap();
         assert_eq!(entries.len(), 1);
         assert!(matches!(
@@ -161,11 +261,140 @@ mod tests {
         fs::remove_file(root.join("dvs.toml")).unwrap();
         fs::remove_dir_all(root.join(".dvs")).unwrap();
 
-        let result = init(&root, config);
-        assert!(
-            result.is_err(),
-            "should detect backend is already initialized"
+        let error = init(&root, config).unwrap_err();
+        let exists = error.downcast_ref::<ProjectExists>().unwrap();
+        assert_eq!(exists.name, "repo");
+    }
+
+    fn local(storage: &Path, name: Option<&str>) -> Config {
+        let mut config = Config::new_local(storage, None).unwrap();
+        if let Backend::Local(b) = config.backend_mut() {
+            b.set_name(name.map(str::to_string));
+        }
+        config
+    }
+
+    fn repo(tmp: &tempfile::TempDir, folder: &str) -> PathBuf {
+        let root = fs::canonicalize(tmp.path()).unwrap().join(folder);
+        fs::create_dir_all(root.join(".git")).unwrap();
+        root
+    }
+
+    #[test]
+    fn a_project_gets_its_own_folder_named_as_on_the_server() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = repo(&tmp, "My_Analysis 2");
+        let storage = tmp.path().join("store");
+
+        let done = init(&root, local(&storage, None)).unwrap();
+        assert_eq!(done.project.as_deref(), Some("my-analysis-2"));
+        assert!(!done.joined);
+        // As dvs-server: the folder is the blake3 hash of the name
+        let folder = storage.join(blake3::hash(b"my-analysis-2").to_string());
+        assert!(folder.join("audit.log.jsonl").is_file());
+        assert!(!storage.join("audit.log.jsonl").exists());
+
+        let saved = Config::find(&root).unwrap().unwrap();
+        let Backend::Local(b) = saved.backend() else {
+            unreachable!()
+        };
+        assert_eq!(b.name(), Some("my-analysis-2"));
+        assert_eq!(b.path, fs::canonicalize(&storage).unwrap());
+        assert_eq!(b.project_dir(), fs::canonicalize(&folder).unwrap());
+    }
+
+    #[test]
+    fn projects_share_a_store_and_keep_their_own_audit_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("store");
+        init(&repo(&tmp, "pk1"), local(&storage, None)).unwrap();
+        init(&repo(&tmp, "pk2"), local(&storage, None)).unwrap();
+
+        for root in [repo(&tmp, "pk1"), repo(&tmp, "pk2")] {
+            let config = Config::find(&root).unwrap().unwrap();
+            assert_eq!(config.backend().get_audit_entries(&[]).unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_given_name_joins_and_a_folder_name_refuses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("store");
+        init(&repo(&tmp, "a/analysis"), local(&storage, None)).unwrap();
+
+        // Same folder name, name not given: maybe an accident
+        let error = init(&repo(&tmp, "b/analysis"), local(&storage, None)).unwrap_err();
+        let exists = error.downcast_ref::<ProjectExists>().unwrap();
+        assert_eq!(exists.name, "analysis");
+        assert_eq!(exists.storage, fs::canonicalize(&storage).unwrap());
+        assert!(!repo(&tmp, "b/analysis").join("dvs.toml").exists());
+
+        // Given: joins, as on dvs-server
+        let other = repo(&tmp, "c/elsewhere");
+        let done = init(&other, local(&storage, Some("analysis"))).unwrap();
+        assert!(done.joined);
+        let config = Config::find(&other).unwrap().unwrap();
+        let inits = config.backend().get_audit_entries(&[]).unwrap();
+        assert_eq!(inits.len(), 2, "the join is in the project's audit log");
+    }
+
+    #[test]
+    fn a_join_keeps_the_compression_of_the_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("store");
+        init(&repo(&tmp, "pk1"), local(&storage, None)).unwrap();
+
+        let mut config = local(&storage, Some("pk1"));
+        config.set_compression(Some(crate::Compression::None));
+        let error = init(&repo(&tmp, "other"), config).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "project pk1 already exists with compression zstd, not none"
         );
+    }
+
+    #[test]
+    fn names_follow_the_server_rule() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("store");
+        for bad in ["Analysis", "-a", "a_b", "project", ""] {
+            let error = init(&repo(&tmp, "pk1"), local(&storage, Some(bad))).unwrap_err();
+            assert!(
+                error
+                    .downcast_ref::<crate::backends::local::InvalidProjectName>()
+                    .is_some(),
+                "{bad:?}: {error}"
+            );
+        }
+        // A folder that leaves no name asks for one
+        let error = init(&repo(&tmp, "___"), local(&storage, None)).unwrap_err();
+        assert!(error.to_string().contains("give a name"), "{error}");
+    }
+
+    #[test]
+    fn a_store_from_before_projects_keeps_its_layout_next_to_new_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = tmp.path().join("store");
+        // A dvs.toml with no name, as written before projects
+        let old = repo(&tmp, "old");
+        let mut flat = Config::new_local(&storage, None).unwrap();
+        if let Backend::Local(b) = flat.backend_mut() {
+            b.path = fs::canonicalize(tmp.path()).unwrap().join("store");
+        }
+        fs::create_dir_all(&storage).unwrap();
+        flat.save(&old).unwrap();
+        fs::write(storage.join("audit.log.jsonl"), "").unwrap();
+        let saved = Config::find(&old).unwrap().unwrap();
+        let Backend::Local(b) = saved.backend() else {
+            unreachable!()
+        };
+        assert_eq!(b.name(), None);
+        assert_eq!(b.project_dir(), b.path);
+
+        // A new project in the same storage directory gets its own folder
+        let done = init(&repo(&tmp, "new"), local(&storage, None)).unwrap();
+        assert_eq!(done.project.as_deref(), Some("new"));
+        assert!(storage.join(blake3::hash(b"new").to_string()).is_dir());
     }
 
     #[test]
