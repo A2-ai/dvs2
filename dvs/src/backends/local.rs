@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::{BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -72,6 +72,34 @@ fn ensure_mode(path: impl AsRef<Path>, mode: u32) -> Result<()> {
 #[cfg(not(unix))]
 fn ensure_mode(_path: impl AsRef<Path>, _mode: u32) -> Result<()> {
     Ok(())
+}
+
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
+/// How an existing blob was stored. An uncompressed blob is the file itself, so it has
+/// the file's size and hash; the hash is only checked when the file starts with the zstd magic.
+fn existing_compression(
+    blob_path: &Path,
+    blob_size: u64,
+    source: &Path,
+    hashes: &Hashes,
+) -> Result<Compression> {
+    let mut magic = Vec::with_capacity(ZSTD_MAGIC.len());
+    fs::File::open(blob_path)?
+        .take(ZSTD_MAGIC.len() as u64)
+        .read_to_end(&mut magic)?;
+    if magic != ZSTD_MAGIC {
+        return Ok(Compression::None);
+    }
+    if blob_size != fs::metadata(source)?.len() {
+        return Ok(Compression::Zstd);
+    }
+    let (blob_hashes, _) = Hashes::compute_from_path(blob_path, &[])?;
+    if blob_hashes.blake3 == hashes.blake3 {
+        Ok(Compression::None)
+    } else {
+        Ok(Compression::Zstd)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -238,8 +266,13 @@ impl LocalBackend {
 
         // Store the blob unless it is already present (dedup).
         let created = !blob_path.is_file();
-        let stored_size = if !created {
-            fs::metadata(&blob_path)?.len()
+        let (stored_size, compression) = if !created {
+            let stored_size = fs::metadata(&blob_path)?.len();
+            let existing = existing_compression(&blob_path, stored_size, source, hashes)?;
+            if existing != compression {
+                log::debug!("{} is already stored with {existing}", blob_path.display());
+            }
+            (stored_size, existing)
         } else {
             if let Some(parent) = blob_path.parent() {
                 fs::create_dir_all(parent)?;
@@ -264,7 +297,7 @@ impl LocalBackend {
             if result.is_err() {
                 let _ = fs::remove_file(&tmp_path);
             }
-            result?
+            (result?, compression)
         };
 
         let entry = AuditEntry::new_add(
@@ -404,6 +437,44 @@ mod tests {
         let stored = storage.join("d4").join("1d8cd98f00b204e9800998ecf8427e");
         assert!(stored.is_file());
         assert_eq!(fs::read(&stored).unwrap(), b"test content");
+    }
+
+    #[test]
+    fn store_dedup_reports_existing_compression() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(tmp.path().join("storage"), None).unwrap();
+        let cases = [
+            (
+                b"plain content".to_vec(),
+                Compression::Zstd,
+                Compression::None,
+            ),
+            // a raw file that is itself a zstd frame
+            (
+                zstd::encode_all(&b"inner"[..], 0).unwrap(),
+                Compression::None,
+                Compression::Zstd,
+            ),
+        ];
+        for (content, first, second) in cases {
+            let source = tmp.path().join("source.bin");
+            fs::write(&source, &content).unwrap();
+            let (hash, _) = Hashes::compute_from_path(&source, &[]).unwrap();
+            let store = |compression| {
+                backend
+                    .store(StoreRequest::new_local(
+                        &hash,
+                        &source,
+                        project_path("source.bin"),
+                        compression,
+                    ))
+                    .unwrap()
+            };
+            store(first);
+            let res = store(second);
+            assert!(!res.created);
+            assert_eq!(res.compression, first);
+        }
     }
 
     #[test]
