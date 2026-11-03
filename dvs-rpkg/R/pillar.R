@@ -107,3 +107,21 @@ print.dvs_hash <- function(x, ...) {
   print(unclass(x), ...)
   invisible(x)
 }
+
+# How dvs_hash combines with plain strings, as dvs_bytes does with plain
+# numbers. Two dvs_hash stay dvs_hash. With a character vector the result is
+# a plain character vector.
+
+#' @export
+vec_ptype2.dvs_hash.dvs_hash <- function(x, y, ...) new_dvs_hash(character())
+#' @export
+vec_ptype2.dvs_hash.character <- function(x, y, ...) character()
+#' @export
+vec_ptype2.character.dvs_hash <- function(x, y, ...) character()
+
+#' @export
+vec_cast.dvs_hash.dvs_hash <- function(x, to, ...) x
+#' @export
+vec_cast.dvs_hash.character <- function(x, to, ...) new_dvs_hash(x)
+#' @export
+vec_cast.character.dvs_hash <- function(x, to, ...) unclass(x)

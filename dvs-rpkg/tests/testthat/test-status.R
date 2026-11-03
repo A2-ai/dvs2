@@ -324,3 +324,22 @@ test_that("hash columns are dvs_hash: full hashes, printed as 12 characters", {
   expect_output(print(res$hash), full, fixed = TRUE)
   expect_false(any(grepl("attr", utils::capture.output(print(res$hash)))))
 })
+
+test_that("dvs_hash combines with plain strings in vctrs, so bind_rows() and joins work", {
+  full <- c(strrep("a", 64), strrep("b", 64))
+  h <- new_dvs_hash(full)
+  plain <- strrep("c", 64)
+  expect_identical(vctrs::vec_c(h, h), new_dvs_hash(c(full, full)))
+  expect_identical(vctrs::vec_c(h, NA), new_dvs_hash(c(full, NA)))
+  expect_identical(vctrs::vec_c(h, plain), c(full, plain))
+  expect_identical(vctrs::vec_c(plain, h), c(plain, full))
+  expect_identical(vctrs::vec_ptype2(h, plain), character())
+
+  stacked <- vctrs::vec_rbind(tibble::tibble(hash = h), tibble::tibble(hash = plain))
+  expect_identical(stacked$hash, c(full, plain))
+  same <- vctrs::vec_rbind(tibble::tibble(hash = h), tibble::tibble(hash = vctrs::vec_slice(h, 1)))
+  expect_s3_class(same$hash, "dvs_hash")
+
+  expect_identical(vctrs::vec_cast(plain, new_dvs_hash(character())), new_dvs_hash(plain))
+  expect_identical(vctrs::vec_cast(h, character()), full)
+})
