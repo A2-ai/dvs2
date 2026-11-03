@@ -237,7 +237,9 @@ fn inspect_path(
     };
     let facts = (|| -> Result<()> {
         row.code = Some(ErrorCode::BadMetadata);
-        row.metadata = Some(FileMetadata::read(paths, &path)?);
+        row.metadata = Some(serde_json::from_reader(fs::File::open(
+            paths.metadata_path(&path),
+        )?)?);
         row.code = Some(ErrorCode::IoError);
         let key = path.to_string_lossy();
         row.baseline = cache
@@ -314,8 +316,7 @@ mod tests {
     use super::*;
     use crate::Compression;
     use crate::operation::OperationObserver;
-    use crate::paths::MetadataLayout;
-    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo, init_dvs1_repo};
+    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
     use std::sync::mpsc;
     use uuid::Uuid;
     fn fixture() -> (tempfile::TempDir, DvsPaths) {
@@ -399,29 +400,6 @@ mod tests {
         assert_eq!(rows[0].status, None);
         assert_eq!(serde_json::to_value(&rows[0]).unwrap()["status"], "error");
         assert_eq!(rows[0].code, Some(ErrorCode::BadMetadata));
-    }
-
-    #[test]
-    fn a_dvs1_checkout_reports_its_sidecar_records() {
-        let (_temp, root) = create_temp_git_repo();
-        init_dvs1_repo(&root, &[("a.csv", b"a"), ("sub/b.csv", b"b")]);
-        create_file(&root, "a.csv", b"a");
-        let paths = DvsPaths::new(root.clone(), root, ".dvs")
-            .unwrap()
-            .with_metadata_layout(MetadataLayout::Dvs1);
-
-        let rows = inspect_status(&paths, None, None, &OperationContext::new())
-            .unwrap()
-            .files;
-        let statuses: Vec<_> = rows.iter().map(|r| (r.path.clone(), r.status)).collect();
-        assert_eq!(
-            statuses,
-            [
-                (PathBuf::from("a.csv"), Some(Status::Current)),
-                (PathBuf::from("sub/b.csv"), Some(Status::Absent)),
-            ]
-        );
-        assert_eq!(rows[0].metadata.as_ref().unwrap().created_by, "tester");
     }
 
     #[test]

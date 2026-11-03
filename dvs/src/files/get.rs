@@ -633,17 +633,18 @@ fn plan_file(
         planned
     };
 
-    let metadata = match FileMetadata::read(paths, relative_path) {
+    let metadata_path = paths.metadata_path(relative_path);
+    let metadata: FileMetadata = match fs::File::open(&metadata_path)
+        .map_err(anyhow::Error::from)
+        .and_then(|f| serde_json::from_reader(f).map_err(anyhow::Error::from))
+    {
         Ok(m) => m,
         Err(e) => {
             return fail(
                 planned,
                 Before::Unknown,
                 GetCode::Shared(ErrorCode::BadMetadata),
-                format!(
-                    "cannot read {}: {e}",
-                    paths.metadata_path(relative_path).display()
-                ),
+                format!("cannot read {}: {e}", metadata_path.display()),
             );
         }
     };
@@ -1370,7 +1371,7 @@ mod tests {
     use super::*;
     use crate::add_files;
     use crate::config::Config;
-    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo, init_dvs1_repo};
+    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
     use std::collections::HashSet;
     use tempfile::TempDir;
 
@@ -1769,39 +1770,6 @@ mod tests {
         assert_eq!(r.code, Some(GetCode::SourceMissing));
         let hint = r.hint.as_deref().unwrap();
         assert!(hint.starts_with("the stored content of this version is missing"));
-    }
-
-    #[test]
-    fn a_dvs1_checkout_is_read_from_its_storage_dir_without_writing_dvs1_files() {
-        let (_tmp, root) = create_temp_git_repo();
-        let storage = init_dvs1_repo(&root, &[("data/x.csv", b"dvs1 bytes")]);
-        let record = fs::read(root.join("data/x.csv.dvs")).unwrap();
-        let config = Config::find(&root).unwrap().unwrap();
-        let paths = DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name())
-            .unwrap()
-            .with_metadata_layout(config.metadata_layout());
-        let selection = GetSelection {
-            tracked: paths.tracked_paths().into_iter().collect(),
-            unmatched: Vec::new(),
-        };
-
-        let report = get_files(
-            selection,
-            &paths,
-            config.backend(),
-            GetOptions::default(),
-            &OperationContext::new(),
-        );
-        assert_eq!(row(&report, "data/x.csv").action, Action::Restored);
-        assert_eq!(fs::read(root.join("data/x.csv")).unwrap(), b"dvs1 bytes");
-        assert_eq!(fs::read(root.join("data/x.csv.dvs")).unwrap(), record);
-        assert!(!root.join(crate::paths::CONFIG_FILE_NAME).exists());
-        assert!(!root.join(".dvs/data").exists());
-        let stored: Vec<_> = fs::read_dir(&storage)
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .collect();
-        assert_eq!(stored.len(), 1, "storage gained {stored:?}");
     }
 
     // Spec 11

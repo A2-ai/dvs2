@@ -5,8 +5,8 @@ use std::path::Path;
 use crate::backends::Backend;
 use crate::backends::local::LocalBackend;
 use crate::backends::server::ServerBackend;
-use crate::dvs1::{self, Dvs1Config};
-use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, MetadataLayout, find_repo_root};
+use crate::dvs1::Dvs1Config;
+use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, find_repo_root};
 use crate::progress::ProgressReader;
 use crate::utils::parse_size;
 use anyhow::Result;
@@ -259,8 +259,6 @@ pub struct Config {
     cli: Option<CliConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     get: Option<GetConfig>,
-    #[serde(skip)]
-    metadata_layout: MetadataLayout,
 }
 
 impl Config {
@@ -272,7 +270,6 @@ impl Config {
             backend: Backend::Local(backend),
             cli: None,
             get: None,
-            metadata_layout: MetadataLayout::Folder,
         })
     }
 
@@ -284,27 +281,24 @@ impl Config {
             backend: Backend::Server(backend),
             cli: None,
             get: None,
-            metadata_layout: MetadataLayout::Folder,
         }
     }
 
-    /// A dvs1 checkout read as a local project. It is never saved as it is:
-    /// dvs1 projects only change through `dvs migrate`.
+    /// The config `dvs migrate` starts a dvs1 checkout from: its storage as a
+    /// raw local project.
     pub(crate) fn from_dvs1(repo_root: &Path) -> Result<Config> {
         let dvs1 = Dvs1Config::read(repo_root)?;
-        // The dvs1 group is not passed: reads never apply a group, and one
-        // missing on this machine must not stop them
+        // The dvs1 group is not passed: one missing on this machine must not
+        // stop the migration
         let mut config = Config::new_local(&dvs1.storage_dir, None)?;
         config.compression = Some(Compression::None);
-        config.metadata_layout = MetadataLayout::Dvs1;
         Ok(config)
     }
 
-    /// Puts the data in `backend`, keeping the other settings, in the folder layout.
+    /// Puts the data in `backend`, keeping the other settings.
     pub(crate) fn set_backend(&mut self, backend: Backend, compression: Option<Compression>) {
         self.backend = backend;
         self.compression = compression;
-        self.metadata_layout = MetadataLayout::Folder;
     }
 
     pub fn save(&self, directory: impl AsRef<Path>) -> Result<()> {
@@ -327,8 +321,6 @@ impl Config {
             Some(toml::from_str(&content).map_err(|e| {
                 ConfigError(format!("Failed to parse {}: {e}", config_path.display())).into()
             }))
-        } else if dvs1::is_dvs1(&repo_root) {
-            Some(Self::from_dvs1(&repo_root))
         } else {
             log::debug!("No config file found at {}", config_path.display());
             None
@@ -345,10 +337,6 @@ impl Config {
         } else {
             DEFAULT_FOLDER_NAME
         }
-    }
-
-    pub fn metadata_layout(&self) -> MetadataLayout {
-        self.metadata_layout
     }
 
     pub fn compression(&self) -> Compression {
@@ -394,7 +382,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{create_temp_git_repo, init_dvs1_repo};
+    use crate::testutil::create_temp_git_repo;
 
     #[test]
     fn config_save_and_find_roundtrip() {
@@ -412,22 +400,6 @@ mod tests {
     fn config_find_returns_none_without_config_file() {
         let (_tmp, root) = create_temp_git_repo();
         assert!(Config::find(&root).is_none());
-    }
-
-    #[test]
-    fn config_find_reads_a_dvs1_checkout_as_an_unsaved_raw_local_project() {
-        let (_tmp, root) = create_temp_git_repo();
-        let storage = init_dvs1_repo(&root, &[]);
-        fs::create_dir(root.join("sub")).unwrap();
-
-        let config = Config::find(root.join("sub")).unwrap().unwrap();
-        assert_eq!(config.metadata_layout(), MetadataLayout::Dvs1);
-        assert_eq!(config.compression(), Compression::None);
-        let Backend::Local(local) = config.backend() else {
-            panic!("dvs1 storage is local");
-        };
-        assert_eq!(local.path, storage);
-        assert!(!root.join(CONFIG_FILE_NAME).exists());
     }
 
     #[cfg(unix)]

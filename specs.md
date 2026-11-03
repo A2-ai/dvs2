@@ -405,9 +405,6 @@ Symlinks are resolved before adding. If an explicitly named path resolves to a l
 Each `add` operation is atomic: the storage write and metadata update either both succeed or both roll back. A
 failure writing to storage will not leave behind a partial metadata file, and vice versa.
 
-`add` refuses a dvs1 checkout (see migrate) with `invalid_configuration` and adds nothing: dvs reads dvs1
-checkouts, and only `dvs migrate` changes them. The error suggests `dvs migrate local` or `dvs migrate server`.
-
 #### CLI
 
 ```shell
@@ -435,7 +432,7 @@ You can run `dvs add *.csv` and it will be expanded by your shell before calling
 To ensure globs are consistent with the R package, you can use the `--glob` parameter which will be expanded by the library. The glob string must be quoted (for example `--glob '*.csv'`) so the shell does not expand it before `dvs` sees it.
 
 A batch refused for an invalid input path (including a directory without `--glob`) is `invalid_arguments`,
-exits with `2` and adds nothing. A dvs1 checkout also exits with `2`. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`. A cancelled batch exits with `130` (see Cancellation).
+exits with `2` and adds nothing. A batch that runs but has one or more files fail during copy (for example no permissions) adds the rest and also exits with `1`. A cancelled batch exits with `130` (see Cancellation).
 
 #### Rust library
 
@@ -461,10 +458,9 @@ It raises an error if no files match, or if any input path is invalid (the whole
 
 `get` retrieves files from the storage into the project.
 
-At a dvs1 checkout it reads the dvs1 records next to the data and fetches their raw content from the dvs1
-`storage_dir` (see migrate). A file whose content is not in storage is `source_missing`; when one of the sources
-in the project's `.dvs/migrated-from` holds that content, its hint names `dvs migrate` and those sources, and
-otherwise it is the usual missing-content hint.
+A file whose content is not in storage is `source_missing`; when one of the sources in the project's
+`.dvs/migrated-from` holds that content, its hint names `dvs migrate` and those sources, and otherwise it is the
+usual missing-content hint.
 
 #### Before, and what dvs does
 
@@ -617,7 +613,7 @@ are the only immediate errors.
 This returns the status (mentioned in the high level overview above)
  of the tracked files in the project.
 
-At a dvs1 checkout it reports the dvs1 records next to the data (see migrate). When a dvs1 `dvs.yaml` sits
+When a dvs1 `dvs.yaml` sits
 beside `dvs.toml`, dvs1 files came in with a merge of an unmigrated branch, and `status` warns to run
 `dvs migrate` (human output on stderr; `--json` adds `warnings: [{code, message}]`). The check is local: `status`
 never reads storage.
@@ -768,8 +764,9 @@ A dvs1 checkout has a `dvs.yaml` (`storage_dir`, `permissions`, `group`; a relat
 the project root) and an `x.csv.dvs` next to each data file (`blake3_checksum`, `size`, `add_time`, `message`,
 `saved_by`). Its content is stored raw, laid out like local storage (`<storage_dir>/ab/cdef…`).
 
-`get` and `status` read a dvs1 checkout through the same reader `migrate` uses: the working tree only, never
-git history. `add` refuses it and suggests `dvs migrate`.
+Only `migrate` reads a dvs1 checkout, from the working tree only, never git history. Every other command treats
+it as not a project (`not_in_project`, exit `1`), with an error that suggests `dvs migrate local` or
+`dvs migrate server`.
 
 #### CLI
 

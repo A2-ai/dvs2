@@ -1290,8 +1290,17 @@ impl std::fmt::Display for Exit {
 impl std::error::Error for Exit {}
 
 fn find_config(current_dir: &std::path::Path) -> Result<Config> {
-    Config::find(current_dir)
-        .ok_or_else(|| output::coded(ErrorCode::NotInProject, "Not in a DVS repository"))?
+    Config::find(current_dir).ok_or_else(|| {
+        output::coded(ErrorCode::NotInProject, not_in_project_message(current_dir))
+    })?
+}
+
+fn not_in_project_message(current_dir: &std::path::Path) -> &'static str {
+    if dvs::dvs1::is_dvs1(&find_repo_root(current_dir)) {
+        "this is a dvs1 project (dvs.yaml); convert it first with dvs migrate local or dvs migrate server"
+    } else {
+        "Not in a DVS repository"
+    }
 }
 
 impl Command {
@@ -1467,6 +1476,23 @@ mod tests {
         assert_eq!(
             leftover_dvs1_warning(root),
             Some("dvs1 files came in from a merge; run dvs migrate")
+        );
+    }
+
+    #[test]
+    fn not_in_project_at_a_dvs1_checkout_names_dvs_migrate() {
+        let root = tempfile::tempdir().unwrap();
+        let sub = root.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        assert_eq!(not_in_project_message(&sub), "Not in a DVS repository");
+        std::fs::write(
+            root.path().join(dvs::dvs1::CONFIG_FILE_NAME),
+            "storage_dir: /old\n",
+        )
+        .unwrap();
+        assert_eq!(
+            not_in_project_message(&sub),
+            "this is a dvs1 project (dvs.yaml); convert it first with dvs migrate local or dvs migrate server"
         );
     }
 
