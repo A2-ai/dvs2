@@ -76,8 +76,7 @@ fn ensure_mode(_path: impl AsRef<Path>, _mode: u32) -> Result<()> {
 
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
-/// How an existing blob was stored. An uncompressed blob is the file itself, so it has
-/// the file's size and hash; the hash is only checked when the file starts with the zstd magic.
+/// An uncompressed blob is the file itself, so it matches the source's size and hash.
 fn existing_compression(
     blob_path: &Path,
     blob_size: u64,
@@ -268,11 +267,10 @@ impl LocalBackend {
         let created = !blob_path.is_file();
         let (stored_size, compression) = if !created {
             let stored_size = fs::metadata(&blob_path)?.len();
-            let existing = existing_compression(&blob_path, stored_size, source, hashes)?;
-            if existing != compression {
-                log::debug!("{} is already stored with {existing}", blob_path.display());
-            }
-            (stored_size, existing)
+            (
+                stored_size,
+                existing_compression(&blob_path, stored_size, source, hashes)?,
+            )
         } else {
             if let Some(parent) = blob_path.parent() {
                 fs::create_dir_all(parent)?;
