@@ -9,10 +9,18 @@ dvs_audit_log(paths = character(0))
 \arguments{
 \item{paths}{Character vector of repo-root-relative file paths recorded at
 add time. The filter keeps only \code{add} entries for those files. An empty
-vector (the default) returns the whole log, including \code{init} entries. A
-non-empty filter drops all \code{init} entries.}
+vector (the default) or \code{NULL} returns the whole log, including \code{init}
+entries. A non-empty filter drops all \code{init} entries.}
 }
 \description{
-Reads the audit log of the DVS repository containing the working directory and returns one row per entry. The column structure is inherited directly from \verb{dvs::audit::AuditEntry}'s serde representation, so the rpkg never reaches into the dvs crate's internal types. The \code{action} enum currently surfaces as a nested list-column. Flattening it through serde without re-encoding dvs internals is tracked as miniextendr#1056, with a builder-based alternative in miniextendr#1055.
+Reads the audit log of the DVS repository containing the working
+directory and returns one row per entry: \code{operation_id}, \code{timestamp}
+(POSIXct, UTC) and \code{user}, then the entry's action flattened into
+columns. \code{action_variant} is \code{"init"} or \code{"add"}. The other \code{action_}
+columns hold that action's fields, for an add \code{action_file_path},
+\code{action_file_hashes_blake3}, \code{action_compression} and \code{action_message},
+and are \code{NA} where the action has no such field. The columns follow
+\verb{dvs::audit::AuditEntry}'s serde representation, so the rpkg never
+reaches into the dvs crate's internal types.
 }
 \keyword{internal}

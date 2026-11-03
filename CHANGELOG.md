@@ -2,10 +2,37 @@
 
 ## Unreleased
 
+### Breaking
+
+- R package: requires R 4.4 or later.
+- R package: `dvs_audit_log()` spreads each entry's action into columns: `action_variant` ("init" or "add") and one `action_<field>` column per field that the actions carry, `NA` where an action has none. The action was a list-column. `timestamp` is a date-time (UTC), not unix seconds.
+- R package: `NA` is never a value. An `NA` in any argument raises an error that says it must not be `NA`, also among several values, as in `on_error = c("return", NA)`. An `NA` `message`, `group`, `root_dir` or `metadata_folder_name` meant the argument was not given. Use `NULL` or leave the argument out.
+- R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
+- R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
+- R package: `format_byte_size(TRUE)` and `format_byte_size(FALSE)` are errors, as `set_dvs_threads(TRUE)` is. They returned `"1 B"` and `"0 B"`.
+
 ### Added
 
 - `dvs migrate`: converts a checkout to newer storage, leaving the old storage untouched. `dvs migrate local` moves a dvs1 project to local storage (its dvs1 folder in place, or a copy at a path), `dvs migrate server` moves a dvs1 or local project to a dvs server, and a bare `dvs migrate` copies what a migrated checkout still lacks, for example after merging an unmigrated branch. It never commits: it lists the changed files to commit.
-- `dvs get` and `dvs status` read dvs1 checkouts (`dvs.yaml`). `dvs add` refuses them and suggests `dvs migrate`.
+- R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
+- R package: `just rpkg-reference` builds the HTML reference manual. The one in `dist/reference/` is for users and leaves out the internal pages, as R's help index does. The one in `dvs-rpkg/rust-target/doc/r/` is for development and keeps them.
+- R package: `dvs_status()` has a `code` column, the kind of failure of a row that failed, as in the CLI's JSON.
+- R package: `dvs_get()` has a `duration_ms` column.
+- R package: the counts of `dvs_result_info()` include `total`, `succeeded` and `cancelled`, as in the CLI's JSON.
+- R package: a wrong argument raises a `dvs_error_argument` condition, also a `dvs_error`, with the argument in `param` and the call the user wrote. A `dvs.toml` that does not load raises a `dvs_config_error`, also a `dvs_error`, in every command. One `dvs_error` handler catches them all.
+- R package: a bad `dvs.num_threads` or `dvs.on_error` option raises the same `dvs_error_argument`, and the message names the option.
+- R package: `dvs_result_info()` has `summary`, the summary the CLI prints. A printed `dvs_get()` result and its `on_error` warning or error start with it, so R and the CLI say the same. `on_conflict = <policy> (<source>)` appears only when the policy acted, as in the CLI.
+
+### Fixed
+
+- `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
+- R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
+- R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
+- R package: `dvs_status()` had no `message` column when the first file had no message. It now returns the same columns for every repository, also one with no tracked files.
+- R package: `dvs_status()` with a repeated `status` choice could show every status.
+- R package: `NULL` in an optional argument means the default, as leaving it out does. `paths = NULL` raised an error, and `dvs_get(on_error = NULL)` skipped the `dvs.on_error` option.
+- R package: `character(0)` in `paths` or `status` means the default. `dvs_status(status = character(0))` raised an error.
+- R package: `dvs_status(paths = NA)` reported on the working directory.
 
 ## 0.5.1
 

@@ -17,12 +17,20 @@ dvs_init(
 
 \item{root_dir}{Repository root directory. Defaults to the current working directory.}
 
-\item{group}{Unix group name to set on stored files for shared access.}
+\item{group}{Unix group name to set on stored files for shared access.
+\code{NULL} uses your primary group.}
 
 \item{metadata_folder_name}{Name of the metadata folder. Defaults to \code{.dvs}.}
 
 \item{compression}{Compression method for stored files. One of \code{"zstd"}
 (default) or \code{"none"}.}
+}
+\value{
+A one-row tibble with the configuration written to \code{dvs.toml}:
+\code{compression} (\code{"zstd"} or \code{"none"}), \code{metadata_folder_name} (\code{NA} when
+it was not given, so the folder is \code{.dvs}), \code{backend_path} (the absolute
+path of the storage directory) and \code{backend_group} (\code{NA} when no group was
+given and your primary group could not be found).
 }
 \description{
 Creates the \code{.dvs} metadata folder and configures storage for versioned files.

@@ -21,7 +21,8 @@ switch_branches <- function() {
 
 get_columns <- c(
   "path", "local_path", "before", "action", "satisfied", "size",
-  "target_hash", "local_hash", "stored_copy", "code", "message", "hint"
+  "target_hash", "local_hash", "stored_copy", "code", "message", "hint",
+  "duration_ms"
 )
 
 test_that("dvs_get restores deleted files with identical content", {
@@ -37,6 +38,8 @@ test_that("dvs_get restores deleted files with identical content", {
   expect_s3_class(result, "tbl_df")
   expect_equal(names(result), get_columns)
   expect_s3_class(result$size, "dvs_bytes")
+  expect_type(result$duration_ms, "double")
+  expect_false(anyNA(result$duration_ms))
   expect_equal(result$action, c("restored", "restored"))
   expect_equal(lapply(c("a.csv", "b.csv"), readLines), original)
   expect_equal(dvs_result_info(result)$outcome, "complete")
@@ -91,6 +94,7 @@ test_that("an untracked path is a row, and holds the batch back by default", {
 
   result <- dvs_get(paths = c("tracked.csv", "untracked.csv"), on_conflict = "skip")
   expect_equal(result$action[result$path == "tracked.csv"], "restored")
+  expect_true(is.na(result$duration_ms[result$path == "untracked.csv"]))
 })
 
 test_that("after a branch switch, files dvs wrote are replaced without asking", {
@@ -155,11 +159,15 @@ test_that("on_error controls signalling, and conditions carry the result", {
   writeLines("my edit", "t.csv")
   expect_silent(res <- dvs_get("t.csv"))
   expect_warning(dvs_get("t.csv", on_error = "warn"), class = "dvs_get_incomplete")
+  # A unique prefix matches, as with match.arg()
+  expect_warning(dvs_get("t.csv", on_error = "w"), class = "dvs_get_incomplete")
   cnd <- tryCatch(dvs_get("t.csv", on_error = "error"), dvs_get_incomplete = identity)
   expect_s3_class(cnd, "dvs_error")
   expect_equal(cnd$result$code, "local_changes")
   withr::local_options(dvs.on_error = "error")
   expect_error(dvs_get("t.csv"), class = "dvs_get_incomplete")
+  # NULL is not given, so the option applies as it does when on_error is missing
+  expect_error(dvs_get("t.csv", on_error = NULL), class = "dvs_get_incomplete")
 
   # The default only returns, so options(warn = 2) cannot prevent assignment
   withr::local_options(dvs.on_error = NULL, warn = 2)
@@ -167,10 +175,59 @@ test_that("on_error controls signalling, and conditions carry the result", {
   expect_equal(res$code, "local_changes")
 })
 
+test_that("dvs_get raises a wrong argument as a dvs_error_argument", {
+  new_dvs_test_repo()
+  expect_argument_error(quote(dvs_get(paths = 1)), "paths")
+  # NA is no path. Read as "", it would select the working directory.
+  expect_argument_error(quote(dvs_get(paths = NA_character_)), "paths")
+  expect_argument_error(quote(dvs_get(glob = NA_character_)), "glob")
+  expect_argument_error(quote(dvs_get(recursive = NA)), "recursive")
+  expect_argument_error(quote(dvs_get(dry_run = "yes")), "dry_run")
+  expect_argument_error(quote(dvs_get(on_conflict = "bogus")), "on_conflict")
+  expect_argument_error(quote(dvs_get(on_error = "bogus")), "on_error")
+  withr::local_options(dvs.on_error = "bogus")
+  expect_argument_error(quote(dvs_get()), "on_error")
+  # The value came from the option, so the message names it
+  cnd <- tryCatch(dvs_get(), error = identity)
+  expect_match(conditionMessage(cnd), "`options(dvs.on_error)` should be one of", fixed = TRUE)
+  # An on_error the user passed keeps its own name
+  cnd <- tryCatch(dvs_get(on_error = "bogus"), error = identity)
+  expect_match(conditionMessage(cnd), "'on_error' should be one of", fixed = TRUE)
+})
+
+test_that("dvs_get takes paths = NULL as no paths", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add("a.csv")
+  unlink("a.csv")
+  res <- dvs_get(paths = NULL, dry_run = TRUE)
+  expect_equal(res$path, "a.csv")
+  expect_equal(res$action, "would_restore")
+})
+
+test_that("dvs_result_info refuses anything but a dvs result", {
+  expect_argument_error(quote(dvs_result_info(data.frame(a = 1))), "x")
+  expect_argument_error(quote(dvs_result_info(1)), "x")
+  expect_argument_error(quote(dvs_result_info(NA)), "x")
+  expect_argument_error(quote(dvs_result_info(NULL)), "x")
+  cnd <- tryCatch(dvs_result_info(data.frame(a = 1)), error = identity)
+  expect_equal(conditionMessage(cnd), "`x` is not a dvs result")
+})
+
 test_that("overwrite in dvs.toml is a configuration error", {
   new_dvs_test_repo()
   cat('\n[get]\non_conflict = "overwrite"\n', file = "dvs.toml", append = TRUE)
   expect_error(dvs_get(), class = "dvs_config_error")
+  expect_error(dvs_get(), class = "dvs_error")
+})
+
+test_that("every command raises a dvs.toml that does not load as a dvs_config_error", {
+  new_dvs_test_repo()
+  cat("[[[broken\n", file = "dvs.toml", append = TRUE)
+  expect_error(dvs_get(), class = "dvs_config_error")
+  expect_error(dvs_status(), class = "dvs_config_error")
+  expect_error(dvs_add("t.csv"), class = "dvs_config_error")
+  expect_error(dvs_audit_log(), class = "dvs_config_error")
 })
 
 test_that("printing shows the outcome, what needs attention, and survives subsetting", {
@@ -182,8 +239,11 @@ test_that("printing shows the outcome, what needs attention, and survives subset
   file.remove("u.csv")
   res <- dvs_get(c("t.csv", "u.csv"))
   out <- capture.output(print(res))
-  expect_match(out[1], "aborted", fixed = TRUE)
-  expect_match(out[1], "on_conflict = abort (default)", fixed = TRUE)
+  expect_identical(out[1], "# Aborted, nothing changed: 1 file has local changes")
+  # The whole result prints its summary, not the line for a subset.
+  expect_false(grepl("rows from", out[1], fixed = TRUE))
+  # The policy decided something, so it is named, as in the CLI.
+  expect_identical(out[2], "# on_conflict = abort (default)")
   expect_false(grepl("NA", out[1], fixed = TRUE))
   # t.csv is listed with the command to keep it; u.csv is only held back
   expect_true(any(grepl("dvs add t.csv", out[-1], fixed = TRUE)))
@@ -194,4 +254,59 @@ test_that("printing shows the outcome, what needs attention, and survives subset
 
   cnd <- tryCatch(dvs_get(c("t.csv", "u.csv"), on_error = "error"), error = identity)
   expect_match(conditionMessage(cnd), "t.csv", fixed = TRUE)
+})
+
+test_that("the dvs_get result survives a collection at every allocation", {
+  skip_on_cran()
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add("a.csv")
+  file.remove("a.csv")
+
+  gctorture(TRUE)
+  on.exit(gctorture(FALSE), add = TRUE)
+  raw <- dvs_get_impl(paths = c("a.csv", "missing.csv"), on_conflict = "skip")
+  gctorture(FALSE)
+
+  expect_named(raw, c("files", "info", "on_error"))
+  expect_identical(raw$on_error, "return")
+  expect_equal(names(raw$files), get_columns)
+  expect_equal(raw$files$action, c("restored", "failed"))
+  expect_identical(raw$info$counts$restored, 1L)
+  expect_identical(raw$info$problem, NA_character_)
+})
+
+test_that("dvs_get counts carry the core's fields", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add("a.csv")
+  file.remove("a.csv")
+
+  counts <- dvs_result_info(dvs_get(c("a.csv", "missing.csv"), on_conflict = "skip"))$counts
+  expect_named(counts, c(
+    "total", "succeeded", "restored", "replaced", "unchanged", "skipped",
+    "not_run", "cancelled", "failed", "would_restore", "would_replace"
+  ))
+  expect_identical(counts$total, 2L)
+  expect_identical(counts$succeeded, 1L)
+  expect_identical(counts$restored, 1L)
+  expect_identical(counts$failed, 1L)
+  expect_identical(counts$cancelled, 0L)
+})
+
+test_that("the summary is the one the CLI prints", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add("a.csv")
+  file.remove("a.csv")
+
+  info <- dvs_result_info(dvs_get(c("a.csv", "missing.csv"), on_conflict = "skip"))
+  expect_identical(info$summary, "Partial: restored 1, 1 failed")
+  # The policy decided nothing, so it is not named.
+  expect_identical(
+    dvs_result_info(dvs_get("a.csv"))$summary,
+    "Nothing to do, 1 already current"
+  )
+  out <- capture.output(print(dvs_get("a.csv", dry_run = TRUE)))
+  expect_identical(out[1], "# Nothing to do, 1 already current")
 })

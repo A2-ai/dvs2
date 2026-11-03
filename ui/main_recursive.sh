@@ -30,7 +30,7 @@ mkdir "$DVS_STORAGE_CLI" "$DVS_REPO_RPKG" "$DVS_STORAGE_RPKG"
 # ── Init ──
 
 cd "$DVS_REPO_CLI"
-dvs init "$DVS_STORAGE_CLI"
+dvs init local "$DVS_STORAGE_CLI"
 
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
@@ -89,12 +89,12 @@ tree --noreport
 # **/*.bin recurses into subdirectories.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── 1.A  dvs add data/ — bare directory, no glob → no-op ──
+# ── 1.A  dvs add data/: bare directory, no glob, refused (#240) ──
 
 say
-say "=== CLI 1.A: dvs add data/ (bare directory — no glob match → error, nothing tracked) ==="
+say "=== CLI 1.A: dvs add data/ (bare directory without --glob: refused with exit 2, nothing tracked) ==="
 cd "$DVS_REPO_CLI"
-dvs add data/ || echo "(expected: no files matched — bare directory without glob)"
+dvs add data/ || echo "(expected: refused, data/ is a directory and no --glob was given)"
 
 say
 say "=== CLI 1.A: dvs status after bare-dir add (should show zero tracked files) ==="
@@ -103,13 +103,13 @@ dvs status
 # ── 1.A.R  R mirror ──
 
 say
-say "=== R 1.A.R: dvs_add(paths = 'data/') (bare directory — expected no-op/error) ==="
+say "=== R 1.A.R: dvs_add(paths = 'data/') (bare directory without glob: expected error) ==="
 cd "$DVS_REPO_RPKG"
 print_eval_rscript <<EOF
 library(dvs)
 tryCatch(
   dvs_add(paths = "data/"),
-  error = function(e) message("(expected: no files matched — ", conditionMessage(e), ")")
+  error = function(e) message("(expected: refused. ", conditionMessage(e), ")")
 )
 EOF
 
@@ -361,16 +361,17 @@ EOF
 say "--- R 2.C.R tree (expect every tracked file restored at every depth) ---"
 tree --noreport
 
-# ── 2.D  No paths AND no glob — CLI suggests, R scopes to cwd ──
-# `dvs get` (CLI) refuses with a suggestion to use `--glob '**/*'`, since
-# restoring everything by accident is a footgun on the command line.
+# ── 2.D  No paths AND no glob: CLI refuses, R scopes to cwd ──
+# `dvs get` (CLI) refuses with clap's missing-argument error. `dvs get --help`
+# names `--glob '**/*'` as the way to restore everything. Restoring everything
+# by accident is a footgun on the command line.
 # `dvs_get()` (R) defers to `resolve_paths_for_get`'s empty-paths semantics:
 # the paths default to cwd (repo root here), and `recursive` still applies.
 # So `dvs_get()` restores only the files DIRECTLY under cwd (top_a.bin); to
 # reach deeper files with no explicit path, pass `recursive = TRUE`.
 
 say
-say "=== CLI 2.D: dvs get (no args — should refuse with a suggestion) ==="
+say "=== CLI 2.D: dvs get (no args: clap refuses, missing <PATHS>) ==="
 cd "$DVS_REPO_CLI"
 dvs get || echo "(exit nonzero as expected)"
 

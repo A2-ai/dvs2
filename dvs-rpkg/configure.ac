@@ -42,29 +42,12 @@ abs_rpkg_src="$abs_top_srcdir/src"
 AC_SUBST([ABS_RPKG_SRCDIR], ["$abs_rpkg_src"])
 RUST_SRC_DIR="$abs_rpkg_src/rust"
 
-dnl ---- install-mode self-repair ----
-dnl Goal: a tarball that arrives missing inst/vendor.tar.xz becomes self-repairing
-dnl at install time, so end users (who don't have `just`) get an offline-mode
-dnl build automatically without manual vendoring.
-dnl
-dnl Triggers cargo-revendor when ALL of these hold:
-dnl   1. inst/vendor.tar.xz is absent (nothing to install offline from)
-dnl   2. cargo-revendor is on PATH (end user has the toolchain to do it)
-dnl   3. we are NOT in a developer source tree (no .git ancestor)
-dnl
-dnl Skipping in git-tracked source trees keeps `bash ./configure` from devsource
-dnl fast: the dev workflow uses explicit `miniextendr_vendor()` to produce the
-dnl tarball when needed, and dev iteration runs in source-mode against
-dnl whichever path overrides the .cargo/config.toml provides.
-dnl
-dnl Failure mode: if cargo-revendor itself fails, fall through to source mode
-dnl rather than aborting — installs without network or without a working cargo
-dnl-revendor still proceed via cargo's network resolution at compile time.
-dnl
-dnl On CRAN's offline build farm the auto-vendor branch is never taken
-dnl (cargo-revendor isn't installed there), so a maintainer who ships a tarball
-dnl missing inst/vendor.tar.xz fails CRAN's offline check loudly. That is the
-dnl intended canary.
+dnl ---- source-tree classification ----
+dnl Configure never creates inst/vendor.tar.xz. It only consumes that explicit
+dnl install-mode signal. Vendoring belongs to the explicit tarball workflow
+dnl (miniextendr_vendor(), miniextendr_build_tarball()).
+dnl SOURCE_IS_GIT exists solely for the leaked-tarball guard; SOURCE_IS_BUILT
+dnl also gates the post-link cleanup in src/Makevars.in.
 SOURCE_IS_GIT=false
 _walk_dir="$abs_top_srcdir"
 while test -n "$_walk_dir" && test "$_walk_dir" != "/"; do
@@ -76,36 +59,40 @@ while test -n "$_walk_dir" && test "$_walk_dir" != "/"; do
 done
 
 dnl Distinguish a checked-out source tree from a package produced by
-dnl `R CMD build` / installed by `R CMD INSTALL`. R stamps a `Packaged:` field
+dnl 'R CMD build' / installed by 'R CMD INSTALL'. R stamps a 'Packaged:' field
 dnl into the DESCRIPTION it seals (tools:::.build_packages, unconditional) and
-dnl `R CMD INSTALL` adds `Built:`. A git working tree's DESCRIPTION has neither.
+dnl 'R CMD INSTALL' adds 'Built:'. A git working tree's DESCRIPTION has neither.
 dnl Used by the leaked-tarball guard below to avoid misfiring on a legitimate
 dnl built-tarball install that happens to be extracted into a dir nested under
-dnl the repo .git (e.g. <pkg>.Rcheck/<pkg>/ during `R CMD check`).
+dnl the repo .git (e.g. <pkg>.Rcheck/<pkg>/ during 'R CMD check').
+dnl src/Makevars.in reads it too: a built package is a throwaway unpack, so its
+dnl install removes the package-local target directories after the link, as a
+dnl vendored install does. From R 4.5 the symbol-table pass of 'R CMD INSTALL'
+dnl (run when 'R CMD check' sets _R_SHLIB_BUILD_OBJECTS_SYMBOL_TABLES_) also
+dnl reads a static library named in PKG_LIBS that is still inside the package,
+dnl and the compiled-code check then attributes libc's exit, abort and _exit
+dnl from Rust's std to the package (A2-ai/miniextendr#1795).
 SOURCE_IS_BUILT=false
 if grep -Eq '^(Packaged|Built):' "$abs_top_srcdir/DESCRIPTION" 2>/dev/null; then
   SOURCE_IS_BUILT=true
 fi
+AC_SUBST([SOURCE_IS_BUILT])
 
-dnl ---- leaked-tarball guard (#1029) ----
+dnl ---- leaked-tarball guard (A2-ai/miniextendr#1029) ----
 dnl A vendor tarball sitting in a git-tracked source tree is almost always a
 dnl LEAK: a previous build that produced inst/vendor.tar.xz was interrupted
 dnl before its cleanup ran. configure would silently flip to tarball mode and
 dnl build against the frozen vendored sources, ignoring local source edits.
 dnl Fail loud instead. The guard fires only for a real source tree: the
-dnl SOURCE_IS_BUILT gate (no `Packaged:`/`Built:` in DESCRIPTION) suppresses it
-dnl on a legitimate built-tarball install — e.g. `R CMD check` extracts the
+dnl SOURCE_IS_BUILT gate (no 'Packaged:'/'Built:' in DESCRIPTION) suppresses it
+dnl on a legitimate built-tarball install — e.g. 'R CMD check' extracts the
 dnl built tarball into <pkg>.Rcheck/<pkg>/, which is nested under the repo .git
-dnl (SOURCE_IS_GIT=true) yet ships the bundled tarball on purpose. bootstrap.R
-dnl also exports MINIEXTENDR_BOOTSTRAP=1 when it invokes configure (after
-dnl deliberately producing the tarball for the build, in a not-yet-built source
-dnl tree), so this guard stays silent on that legitimate produce-then-consume
-dnl path too. End-user tarball installs extract to a dir with no .git, so the
-dnl guard never fires for them either (SOURCE_IS_GIT=false).
+dnl (SOURCE_IS_GIT=true) yet ships the bundled tarball on purpose. End-user
+dnl tarball installs extract to a dir with no .git, so the guard never fires
+dnl for them either (SOURCE_IS_GIT=false).
 if test -f "$abs_top_srcdir/inst/vendor.tar.xz" \
    && test "$SOURCE_IS_GIT" = "true" \
-   && test "$SOURCE_IS_BUILT" = "false" \
-   && test -z "${MINIEXTENDR_BOOTSTRAP+x}"; then
+   && test "$SOURCE_IS_BUILT" = "false"; then
   AC_MSG_ERROR([leaked vendor tarball detected in a git-tracked source tree.
 
   inst/vendor.tar.xz is present AND this is a git working tree, so configure
@@ -113,43 +100,30 @@ if test -f "$abs_top_srcdir/inst/vendor.tar.xz" \
   ignoring any local source edits. This is almost always a leftover from an
   interrupted build.
 
-  Remove it before building from source:
-    rm -f inst/vendor.tar.xz
+  Recover with, in R:
+    minirextendr::miniextendr_clean_vendor_leak("$abs_top_srcdir")
+  It removes the archive and, if vendoring rewrote src/rust/Cargo.toml
+  (cargo revendor --freeze), restores it from src/rust/.Cargo.toml.prefreeze.
+  src/rust/Cargo.lock is left as is: cargo re-resolves it on the next
+  build from source (or restore it with git). Without a snapshot, restore the
+  original dependency paths and patch entries by hand (git diff).
 
-  Or run miniextendr_clean_vendor_leak, or minirextendr::miniextendr_doctor
-  to diagnose.])
-fi
-
-if test ! -f "$abs_top_srcdir/inst/vendor.tar.xz" \
-   && test "$SOURCE_IS_GIT" = "false" \
-   && command -v cargo-revendor >/dev/null 2>&1; then
-  AC_MSG_NOTICE([auto-vendor: inst/vendor.tar.xz absent, running cargo-revendor])
-  mkdir -p "$abs_top_srcdir/inst"
-  if (cd "$abs_top_srcdir" && cargo revendor \
-        --manifest-path src/rust/Cargo.toml \
-        --output vendor \
-        --compress inst/vendor.tar.xz \
-        --blank-md --source-marker --force) >&2; then
-    AC_MSG_NOTICE([auto-vendor: produced inst/vendor.tar.xz])
-  else
-    AC_MSG_WARN([auto-vendor: cargo-revendor failed; falling through to source mode])
-    rm -f "$abs_top_srcdir/inst/vendor.tar.xz"
-  fi
+  Removing inst/vendor.tar.xz alone does not repair a frozen manifest.
+  minirextendr::miniextendr_doctor("$abs_top_srcdir") reports both.])
 fi
 
 dnl ---- install-mode detection ----
-dnl Single signal: presence of inst/vendor.tar.xz (possibly produced by the
-dnl self-repair block above, by bootstrap.R at build time, or by an explicit
-dnl `miniextendr_vendor()` call).
+dnl Single signal: presence of inst/vendor.tar.xz, produced only by the explicit
+dnl tarball workflow (miniextendr_vendor()).
 dnl   Tarball install (R CMD INSTALL <built-tarball>): tarball is in the
 dnl     artifact. configure unpacks it, writes a vendored cargo source
 dnl     replacement, and builds offline.
-dnl   Source install (R CMD INSTALL ., devtools::install, install_github, etc.,
-dnl     in a git-tracked source tree): no tarball, no auto-vendor. configure
-dnl     leaves vendoring alone and lets cargo resolve deps over the network
+dnl   Source install (R CMD INSTALL ., devtools::install, install_github, etc.):
+dnl     no tarball. configure leaves vendoring alone and lets cargo resolve deps
+dnl     over the network
 dnl     (or via monorepo path overrides — see below).
 dnl
-dnl See docs/CRAN_COMPATIBILITY.md for the full decision table.
+dnl See https://a2-ai.github.io/miniextendr/manual/cran-compatibility/ for the full decision table.
 if test -f "$abs_top_srcdir/inst/vendor.tar.xz"; then
   IS_TARBALL_INSTALL=true
   _install_mode_label="tarball install (offline, vendored)"
@@ -201,6 +175,21 @@ else
 fi
 AC_SUBST([CARGO_FEATURES_FLAG])
 
+dnl ---- R's BLAS/LAPACK (the package's `blas-lapack` feature) ----
+dnl miniextendr-api's `blas-lapack` feature declares R's own dgemm_/dgesv_.
+dnl A staticlib carries no link directives, so the package links R's
+dnl libraries itself, as Writing R Extensions prescribes for BLAS/LAPACK
+dnl callers. The value is literal make syntax: make expands the three
+dnl variables from R's Makeconf (or an R_MAKEVARS_USER override, such as the
+dnl webR build's) when it links. Keyed on the package's own feature name in
+dnl CARGO_FEATURES: enabling miniextendr-api/blas-lapack only on the
+dnl dependency line bypasses this, so packages forward a feature of their own.
+case ",$CARGO_FEATURES," in
+  *,blas-lapack,*) BLAS_LAPACK_PKG_LIBS='$(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)' ;;
+  *)               BLAS_LAPACK_PKG_LIBS="" ;;
+esac
+AC_SUBST([BLAS_LAPACK_PKG_LIBS])
+
 dnl ---- tool discovery ----
 AC_PATH_TOOL([CARGO],[cargo],[no])
 AC_PATH_TOOL([RUSTC],[rustc],[no])
@@ -240,6 +229,23 @@ if test "$RUSTC_MAJOR" -lt "$MIN_RUSTC_MAJOR" || \
   AC_MSG_ERROR([rustc $MIN_RUSTC_MAJOR.$MIN_RUSTC_MINOR+ required for Rust edition 2024, found $RUSTC_VERSION_NUM])
 fi
 
+dnl ---- path dependencies outside the package ----
+dnl A path dependency outside the package directory is not source-replaceable:
+dnl bootstrap.R stages it under src/rust/vendor while the package still sits in
+dnl its repository. An installer that takes the package directory out without
+dnl running bootstrap.R (older rv releases, a plain R CMD build of the package
+dnl directory) strands it, and cargo would fail later with an opaque manifest
+dnl error. The check stops here naming the missing path and the installs that
+dnl work, or, when this build directory is a tree of symlinks into the package,
+dnl stages the dependencies from there into this tree. Tarball mode is
+dnl vendored, so it is skipped.
+if test "$IS_TARBALL_INSTALL" != "true"; then
+  test -f "${srcdir}/tools/dev-bootstrap.R" || \
+    AC_MSG_ERROR([tools/dev-bootstrap.R not found. It ships with the package template; restore it, e.g. with minirextendr::upgrade_miniextendr_package().])
+  "${R_HOME}/bin/Rscript" "${srcdir}/tools/dev-bootstrap.R" configure || \
+    AC_MSG_ERROR([a path dependency outside the package is missing; see the message above])
+fi
+
 dnl Allow explicit toolchain (e.g. +nightly); default empty (use default toolchain)
 AC_ARG_VAR([RUST_TOOLCHAIN],[Rust toolchain selector like '+stable' or '+nightly'])
 : ${RUST_TOOLCHAIN=""}
@@ -271,7 +277,7 @@ if test "$is_wasm_install" = true; then
   if test ! -f "$srcdir/src/rust/wasm_registry.rs"; then
     AC_MSG_ERROR([wasm32 install requires src/rust/wasm_registry.rs.
 Run 'R CMD INSTALL' (or minirextendr::miniextendr_build()) on the host first to
-regenerate it from the cdylib slice contents, then ship the source tree to the
+regenerate it from the linkme slice contents, then ship the source tree to the
 wasm builder.])
   fi
 fi
@@ -286,12 +292,23 @@ dnl ---- Cargo target/profile configuration ----
 dnl IMPORTANT: target directory MUST be outside src/ to avoid pkgbuild scanning
 dnl generated .rs files in target/build/.../out/ during needs_compile() checks.
 AC_ARG_VAR([CARGO_TARGET_DIR], [Cargo target directory (default: rust-target, outside src/)])
-: ${CARGO_TARGET_DIR="$abs_top_srcdir/rust-target"}
+CARGO_TARGET_DIR_USER_SET=false
+if test -n "$CARGO_TARGET_DIR"; then
+  CARGO_TARGET_DIR_USER_SET=true
+  mkdir -p "$CARGO_TARGET_DIR" || AC_MSG_ERROR([Cannot create CARGO_TARGET_DIR])
+  CARGO_TARGET_DIR="$(cd "$CARGO_TARGET_DIR" && pwd)"
+else
+  CARGO_TARGET_DIR="$abs_top_srcdir/rust-target"
+fi
+AC_SUBST([CARGO_TARGET_DIR_USER_SET])
 AC_SUBST([CARGO_TARGET_DIR])
 
 dnl Cargo-specific paths (Windows-native on MSYS2, same as shell paths otherwise)
 dnl These are used in .cargo/config.toml which Cargo reads directly
-CARGO_TARGET_DIR_CARGO="$abs_top_srcdir_cargo/rust-target"
+CARGO_TARGET_DIR_CARGO="$CARGO_TARGET_DIR"
+if test "x$CYGPATH" != "xno"; then
+  CARGO_TARGET_DIR_CARGO="$($CYGPATH -m "$CARGO_TARGET_DIR")"
+fi
 AC_SUBST([CARGO_TARGET_DIR_CARGO])
 
 AC_ARG_VAR([CARGO_PROFILE], [Cargo build profile (dev or release)])
@@ -322,13 +339,13 @@ dnl
 dnl -Zdefault-visibility=hidden
 dnl    Without it, the Rust staticlib drags thousands of mangled stdlib/dep
 dnl    symbols into the side-module's EXPORT table and webR's dyn.load fails.
-dnl    Hiding all symbols by default leaves only your `#[no_mangle] extern "C"`
+dnl    Hiding all symbols by default leaves only your '#[no_mangle] extern "C"'
 dnl    entry points exported. This is a nightly -Z flag, but the wasm target
 dnl    already requires nightly via -Z build-std, so it adds no new constraint.
 dnl    (savvy's approach; endorsed by webR's maintainer, r-wasm/webr#532.)
 dnl
-dnl (`-C relocation-model=pic` was dropped — wasm32-unknown-emscripten is
-dnl position-independent by default, so it was a no-op. See miniextendr #745.)
+dnl ('-C relocation-model=pic' was dropped — wasm32-unknown-emscripten is
+dnl position-independent by default, so it was a no-op. See A2-ai/miniextendr#745.)
 if test "$is_wasm_install" = true; then
   ENV_RUSTFLAGS="$ENV_RUSTFLAGS -Zdefault-visibility=hidden"
 fi
@@ -377,6 +394,8 @@ AS_IF([test -n "$CARGO_BUILD_TARGET"],
       [AC_MSG_NOTICE([CARGO_BUILD_TARGET    = $CARGO_BUILD_TARGET])])
 AS_IF([test -n "$CARGO_FEATURES"],
       [AC_MSG_NOTICE([CARGO_FEATURES  = $CARGO_FEATURES])])
+AS_IF([test -n "$BLAS_LAPACK_PKG_LIBS"],
+      [AC_MSG_NOTICE([BLAS_LAPACK_PKG_LIBS  = $BLAS_LAPACK_PKG_LIBS])])
 AS_IF([test "$IS_WASM_INSTALL" = "true"],  [AC_MSG_NOTICE([IS_WASM_INSTALL      = true (CC=emcc detected)])])
 AS_IF([test -n "$CARGO_BUILD_STD_FLAG"],   [AC_MSG_NOTICE([CARGO_BUILD_STD_FLAG = $CARGO_BUILD_STD_FLAG])])
 
@@ -396,15 +415,6 @@ case "$host_os" in
 esac
 AC_SUBST([TAR_FORCE_LOCAL])
 
-dnl ---- cdylib platform extension (for R wrapper generation) ----
-case "$host_os" in
-  darwin*)                  CDYLIB_PREFIX="lib"; CDYLIB_EXT="dylib" ;;
-  *mingw*|*msys*|*cygwin*)  CDYLIB_PREFIX="";    CDYLIB_EXT="dll" ;;
-  *)                        CDYLIB_PREFIX="lib"; CDYLIB_EXT="so" ;;
-esac
-AC_SUBST([CDYLIB_PREFIX])
-AC_SUBST([CDYLIB_EXT])
-
 dnl ---- Native R package include paths (for bindgen C shim compilation) ----
 dnl Populated by minirextendr::use_native_package(). Each native package
 dnl adds -I<path> for its inst/include/ headers so the C compiler can
@@ -422,8 +432,19 @@ dnl ---- vendor directory paths (used in tarball mode only) ----
 dnl IMPORTANT: vendor directory MUST be outside src/ to avoid pkgbuild scanning
 dnl thousands of .rs files in vendor/ during needs_compile() checks (same reasoning
 dnl as CARGO_TARGET_DIR above).
-VENDOR_OUT="$abs_top_srcdir/vendor"
-VENDOR_OUT_CARGO="$abs_top_srcdir_cargo/vendor"
+AC_ARG_VAR([VENDOR_OUT], [Shared vendor cache root (optional; entries are keyed by vendor.tar.xz contents)])
+VENDOR_OUT_USER_SET=false
+if test -n "$VENDOR_OUT" && test "$IS_TARBALL_INSTALL" = "true"; then
+  VENDOR_OUT_USER_SET=true
+  VENDOR_OUT=$("${R_HOME}/bin/Rscript" "$abs_top_srcdir_cargo/tools/vendor-cache.R" prepare "$abs_top_srcdir_cargo" "$VENDOR_OUT") || AC_MSG_ERROR([Failed to prepare shared vendor cache])
+else
+  VENDOR_OUT="$abs_top_srcdir/vendor"
+fi
+VENDOR_OUT_CARGO="$VENDOR_OUT"
+if test "x$CYGPATH" != "xno"; then
+  VENDOR_OUT_CARGO="$($CYGPATH -m "$VENDOR_OUT")"
+fi
+AC_SUBST([VENDOR_OUT_USER_SET])
 AC_SUBST([VENDOR_OUT])
 AC_SUBST([VENDOR_OUT_CARGO])
 
@@ -482,8 +503,8 @@ dnl ---- derive Cargo [env] block (R-ABI matching) ----
 dnl Goal: every cargo invocation (local dev, CI, end-user R CMD INSTALL) inherits
 dnl R-compatible toolchain settings so the Rust staticlib's ABI matches R's build.
 dnl
-dnl Shell env wins over `[env]` (no `force = true`) — users can still override
-dnl via `MACOSX_DEPLOYMENT_TARGET=12.0 R CMD INSTALL .` etc.
+dnl Shell env wins over '[env]' (no 'force = true') — users can still override
+dnl via 'MACOSX_DEPLOYMENT_TARGET=12.0 R CMD INSTALL .' etc.
 dnl
 dnl Per-platform derivations:
 dnl   macOS   : MACOSX_DEPLOYMENT_TARGET (4-step fallback: env → R config → otool → arch default).
@@ -505,6 +526,15 @@ fi
 dnl Uppercase + s/-/_/g, e.g. aarch64-apple-darwin -> AARCH64_APPLE_DARWIN.
 CARGO_ENV_RUST_TARGET_UPPER=`echo "$CARGO_ENV_RUST_TARGET" | tr 'a-z-' 'A-Z_'`
 
+dnl Default CARGO_NET_GIT_FETCH_WITH_CLI to "true" (works around in-tree
+dnl rustls/CA failures) but let a value set outside configure win, via the same
+dnl AC_ARG_VAR + ': ${VAR=default}' idiom used for CARGO_PROFILE / CARGO_HOME
+dnl above. '=' (not ':=') defaults only when unset, so an externally-set value —
+dnl including an explicit empty one — is preserved.
+AC_ARG_VAR([CARGO_NET_GIT_FETCH_WITH_CLI],
+  [Fetch cargo git deps via the system git CLI; "true" works around in-tree rustls/CA issues (default true)])
+: ${CARGO_NET_GIT_FETCH_WITH_CLI="true"}
+
 dnl --- macOS: derive MACOSX_DEPLOYMENT_TARGET ----
 dnl Derivation order (first match wins, logged via AC_MSG_NOTICE):
 dnl   1. Shell env MACOSX_DEPLOYMENT_TARGET (caller's value)
@@ -524,7 +554,7 @@ case "$host_os" in
     fi
 
     dnl Step 2: parse R CMD config CC / CXX / FC. clang spells it
-    dnl `-mmacos-version-min`; legacy gfortran / older clang use `-mmacosx-version-min`.
+    dnl '-mmacos-version-min'; legacy gfortran / older clang use '-mmacosx-version-min'.
     if test -z "$CARGO_ENV_MACOS_DEPLOY_TARGET"; then
       for _cfg_key in CC CXX FC; do
         _flag_val=`"${R_HOME}/bin/R" CMD config "$_cfg_key" 2>/dev/null \
@@ -538,7 +568,7 @@ case "$host_os" in
       done
     fi
 
-    dnl Step 3: otool -l on R binary. LC_BUILD_VERSION's `minos` field is
+    dnl Step 3: otool -l on R binary. LC_BUILD_VERSION's 'minos' field is
     dnl the authoritative target R was linked against.
     if test -z "$CARGO_ENV_MACOS_DEPLOY_TARGET"; then
       if command -v otool >/dev/null 2>&1; then
@@ -567,7 +597,7 @@ esac
 
 dnl --- Windows: derive rtools gcc linker path ----
 dnl Strategy: R CMD config CC's first token is the C compiler path. If its
-dnl sibling `gcc` (or `gcc.exe`) exists, use that as the cargo linker for
+dnl sibling 'gcc' (or 'gcc.exe') exists, use that as the cargo linker for
 dnl x86_64-pc-windows-gnu / aarch64-pc-windows-gnu. This pins cargo to rtools'
 dnl gcc rather than whichever gcc happens to be on PATH (MSYS2's, etc).
 CARGO_ENV_WIN_LINKER=""
@@ -579,7 +609,7 @@ case "$host_os" in
       for _gcc_cand in "$_r_cc_bindir/gcc.exe" "$_r_cc_bindir/gcc"; do
         if test -x "$_gcc_cand"; then
           dnl Cargo's [env] consumes the path raw; TOML needs forward slashes.
-          dnl `cygpath -m` produces a Windows-native path with forward slashes,
+          dnl 'cygpath -m' produces a Windows-native path with forward slashes,
           dnl which is exactly what cargo's TOML parser wants.
           _gcc_native="$_gcc_cand"
           if test "x$CYGPATH" != "xno"; then
@@ -600,14 +630,14 @@ esac
 
 dnl --- AR / RANLIB overrides (all platforms, only if non-default) ----
 dnl R may be configured with a non-default AR/RANLIB (e.g. a cross-toolchain
-dnl prefix). Cargo's default is `ar` / `ranlib`, so we only emit overrides
+dnl prefix). Cargo's default is 'ar' / 'ranlib', so we only emit overrides
 dnl when R's values differ — otherwise we'd just add noise to the config.
 CARGO_ENV_R_AR=`"${R_HOME}/bin/R" CMD config AR 2>/dev/null`
 CARGO_ENV_R_RANLIB=`"${R_HOME}/bin/R" CMD config RANLIB 2>/dev/null`
 
 dnl --- LTO: mirror R's --enable-lto into cargo profile LTO ----
-dnl R's `--enable-lto` substitutes a value into the LTO make variable
-dnl (typically `-flto`, but users can pass `LTO=-flto=thin` etc).
+dnl R's '--enable-lto' substitutes a value into the LTO make variable
+dnl (typically '-flto', but users can pass 'LTO=-flto=thin' etc).
 dnl We map the flag space onto cargo's profile.lto values:
 dnl   -flto=thin              -> "thin"
 dnl   -flto=fat | -flto=full  -> "fat"
@@ -630,7 +660,7 @@ dnl Cargo applies CFLAGS_<target> and CXXFLAGS_<target> to *every* transitive
 dnl C/C++ build script (cc, cmake, etc.). R's raw CFLAGS contain R-specific
 dnl -I paths, R-private defines, and warning flags that have no business in
 dnl cargo deps. We allowlist a small set of ABI-affecting flags; everything
-dnl else is stripped. See issue #598 for the full rationale table.
+dnl else is stripped. See issue A2-ai/miniextendr#598 for the full rationale table.
 CARGO_ENV_ABI_CFLAGS=""
 CARGO_ENV_ABI_CXXFLAGS=""
 
@@ -640,7 +670,7 @@ _r_cxxflags=`"${R_HOME}/bin/R" CMD config CXXFLAGS 2>/dev/null`
 dnl Allowlist regex. Keep ABI-affecting flags only:
 dnl   -march=, -mtune=, -mfpmath=, -mfpu=, -mfloat-abi=, -mabi=, -m{sse,avx,ssse,pclmul,aes},
 dnl   -pthread, -D_REENTRANT, -fopenmp[=…]
-dnl No character classes are used (no `[...]`), so no m4 bracket escaping needed.
+dnl No character classes are used (no '[...]'), so no m4 bracket escaping needed.
 _abi_allow_re='^-march=|^-mtune=|^-mfpmath=|^-mfpu=|^-mfloat-abi=|^-mabi=|^-msse|^-mavx|^-mssse|^-mpclmul|^-maes|^-pthread$|^-D_REENTRANT$|^-fopenmp'
 
 if test -n "$_r_cflags"; then
@@ -652,18 +682,18 @@ fi
 
 dnl wasm32/webR: force -fPIC into the cargo C/C++ build-script flags.
 dnl
-dnl cc-rs hard-excludes the wasm32/wasm64 arch from its default `-fPIC` logic
-dnl (cc 1.2 src/lib.rs: the PIC default is `... && target.arch != "wasm32" &&
-dnl target.arch != "wasm64"`), and `-C relocation-model=pic` does NOT change
+dnl cc-rs hard-excludes the wasm32/wasm64 arch from its default '-fPIC' logic
+dnl (cc 1.2 src/lib.rs: the PIC default is '... && target.arch != "wasm32" &&
+dnl target.arch != "wasm64"'), and '-C relocation-model=pic' does NOT change
 dnl this — cc keys off the arch, not CARGO_CFG_RELOCATION_MODEL. Pure-Rust deps
 dnl are fine (the emscripten target emits PIC by default), but any cc-built C
 dnl dependency (e.g. zstd-sys's bundled libzstd) then produces non-PIC objects.
 dnl emscripten SIDE_MODULE links demand position-independent objects, so the
-dnl link fails: `relocation R_WASM_MEMORY_ADDR_SLEB cannot be used against
-dnl symbol .L.str.N; recompile with -fPIC`. cc reads CFLAGS_<target> (form #1,
+dnl link fails: 'relocation R_WASM_MEMORY_ADDR_SLEB cannot be used against
+dnl symbol .L.str.N; recompile with -fPIC'. cc reads CFLAGS_<target> (form #1,
 dnl literal dashed triple) and appends it verbatim, so this reaches every
 dnl transitive C/C++ build script. Native builds are untouched (gated on
-dnl is_wasm_install). Surfaced by the zstd optional integration (#1005).
+dnl is_wasm_install). Surfaced by the zstd optional integration (A2-ai/miniextendr#1005).
 if test "$is_wasm_install" = true; then
   if test -n "$CARGO_ENV_ABI_CFLAGS"; then
     CARGO_ENV_ABI_CFLAGS="$CARGO_ENV_ABI_CFLAGS -fPIC"
@@ -688,7 +718,7 @@ dnl Individual env-derivation variables are propagated to AC_CONFIG_COMMANDS
 dnl via the trailing variable-pass list, and the [env] block body is composed
 dnl inline inside that shell context. Pre-composing here and passing a single
 dnl newline-separated string trips on AC_CONFIG_COMMANDS' heredoc-style
-dnl variable propagation (embedded `"` breaks the outer assignment quoting).
+dnl variable propagation (embedded '"' breaks the outer assignment quoting).
 
 dnl ---- output files ----
 dnl Create .cargo directory (it's a hidden dir not included in tarball)
@@ -719,11 +749,11 @@ AC_CONFIG_COMMANDS([unpack-vendor-tarball],
     else
       echo "configure: tarball install — vendor/ already populated"
     fi
-    dnl AUDIT-427: checksum strip removed. PR #408 rewrote cargo-revendor to
-    dnl preserve the original `package` field in each .cargo-checksum.json
-    dnl (matching the lockfile's `checksum = "..."` line). Cargo can therefore
+    dnl AUDIT-427: checksum strip removed. PR A2-ai/miniextendr#408 rewrote cargo-revendor to
+    dnl preserve the original 'package' field in each .cargo-checksum.json
+    dnl (matching the lockfile's 'checksum = "..."' line). Cargo can therefore
     dnl verify checksums end-to-end; stripping them discards a valid integrity
-    dnl check. See issue #427 and tools/lock-shape-check.R which explicitly
+    dnl check. See issue A2-ai/miniextendr#427 and tools/lock-shape-check.R which explicitly
     dnl documents that checksum lines are allowed in tarball-shape locks.
   fi
 ],
@@ -736,9 +766,10 @@ AC_CONFIG_COMMANDS([unpack-vendor-tarball],
 
 dnl ---- 2) Write .cargo/config.toml per install mode ----
 dnl
-dnl Tarball install:
+dnl Tarball install (the [source.*] tables are vendor/.cargo-config.toml,
+dnl as cargo-revendor wrote it, with only its directory relocated):
 dnl   [source.crates-io]                      replace-with = "vendored-sources"
-dnl   [source."git+https://github.com/A2-ai/miniextendr"]
+dnl   [source."git+<url>[?rev=|?branch=|?tag=...]"]
 dnl                                           replace-with = "vendored-sources"
 dnl   [source.vendored-sources]               directory = "<vendor>"
 dnl   [build]                                 target-dir = "<rust-target>"
@@ -755,23 +786,19 @@ dnl   [build]                                 target-dir = "<rust-target>"
 dnl   (cargo follows the git URL declared in Cargo.toml)
 dnl
 dnl WARNING: stale inst/vendor.tar.xz hazard.
-dnl   miniextendr_vendor() / a CRAN-prep build create inst/vendor.tar.xz
-dnl   transiently and remove it via a `trap ... EXIT` handler; if the process is killed
-dnl   before the trap fires, the file is left behind.  Configure then detects
-dnl   it and sets IS_TARBALL_INSTALL=true, which (a) writes a tarball-mode
-dnl   config.toml here and (b) makes Makevars.in's post-build cleanup delete
-dnl   src/rust/.cargo/ from the SOURCE TREE on the next `R CMD INSTALL .`.
-dnl   Recovery: rm inst/vendor.tar.xz && bash ./configure
+dnl   The source-checkout guard above rejects a leaked archive. Recovery must
+dnl   restore a frozen src/rust/Cargo.toml as well as remove the archive: see
+dnl   the guard's message.
 AC_CONFIG_COMMANDS([cargo-config],
 [
   RPKG_CFG="src/rust/.cargo/config.toml"
   rm -f "$RPKG_CFG"
 
-  dnl `[env]` is emitted as the FIRST table in every branch. TOML table-scoping
-  dnl makes any later `[…]` heading end the previous table — so `[env]` must
-  dnl precede `[source.*]` / `[patch.*]` / `[build]` to stay independent.
+  dnl '[env]' is emitted as the FIRST table in every branch. TOML table-scoping
+  dnl makes any later '[…]' heading end the previous table — so '[env]' must
+  dnl precede '[source.*]' / '[patch.*]' / '[build]' to stay independent.
   dnl Cargo applies these to every cargo invocation in this package. Shell env
-  dnl wins (no `force = true`), so users can override case-by-case.
+  dnl wins (no 'force = true'), so users can override case-by-case.
   dnl
   dnl Derivation variables are passed individually via the variable-pass list
   dnl (see second arg) — composing the body here keeps quoting predictable.
@@ -790,7 +817,7 @@ AC_CONFIG_COMMANDS([cargo-config],
           ;;
       esac
     fi
-    echo 'CARGO_NET_GIT_FETCH_WITH_CLI = "true"'
+    echo "CARGO_NET_GIT_FETCH_WITH_CLI = \"$CARGO_NET_GIT_FETCH_WITH_CLI\""
     if test -n "$CARGO_ENV_R_AR" && test "$CARGO_ENV_R_AR" != "ar"; then
       echo "AR_$CARGO_ENV_RUST_TARGET = \"$CARGO_ENV_R_AR\""
     fi
@@ -811,29 +838,40 @@ AC_CONFIG_COMMANDS([cargo-config],
   }
 
   if test "$IS_TARBALL_INSTALL" = "true"; then
+    dnl cargo-revendor stores the source replacements 'cargo vendor' printed
+    dnl in vendor/.cargo-config.toml. Cargo matches a replacement by the exact
+    dnl source id, so only that list covers Git dependencies pinned by rev,
+    dnl branch or tag and Git dependencies reached only transitively; a scan
+    dnl of Cargo.toml cannot see either (A2-ai/miniextendr#1555). An archive without the file
+    dnl was not made by cargo-revendor and cannot build offline.
+    if test ! -r "$VENDOR_OUT/.cargo-config.toml"; then
+      echo "configure: error: inst/vendor.tar.xz has no vendor/.cargo-config.toml, so the" >&2
+      echo "  vendored sources cannot be mapped for an offline build. Rebuild the archive" >&2
+      echo "  with cargo-revendor (minirextendr::miniextendr_vendor() runs it), then" >&2
+      echo "  rebuild the package tarball." >&2
+      exit 1
+    fi
     {
       echo "# Autogenerated by configure — DO NOT EDIT"
-      echo "# Tarball install: redirect crates.io and the miniextendr git source"
-      echo "# to the unpacked inst/vendor.tar.xz."
+      echo "# Tarball install: the source replacements cargo-revendor recorded in"
+      echo "# vendor/.cargo-config.toml, redirected to the unpacked inst/vendor.tar.xz."
       echo ""
       emit_env_block
-      echo "@<:@source.crates-io@:>@"
-      echo 'replace-with = "vendored-sources"'
-      echo ""
-      dnl Scan Cargo.toml for git URLs and emit one [source."git+<url>"] per
-      dnl unique URL. Keeps the config self-consistent if more git deps are
-      dnl added later.
-      for _url in $("$SED" -n 's/.*git = "\(https:\/\/@<:@^"@:>@*\)".*/\1/p' src/rust/Cargo.toml | sort -u); do
-        echo "@<:@source.\"git+$_url\"@:>@"
-        echo "git = \"$_url\""
-        echo 'replace-with = "vendored-sources"'
-        echo ""
-      done
-      echo "@<:@source.vendored-sources@:>@"
-      echo "directory = \"$VENDOR_OUT_CARGO\""
+      dnl Copy the file verbatim and relocate only its vendored-sources
+      dnl directory, which names the vendor/ of the machine that built it.
+      while IFS= read -r _line || test -n "$_line"; do
+        case "$_line" in
+          'directory = '*) printf '%s\n' "directory = \"$VENDOR_OUT_CARGO\"" ;;
+          *) printf '%s\n' "$_line" ;;
+        esac
+      done < "$VENDOR_OUT/.cargo-config.toml"
       echo ""
       echo "@<:@build@:>@"
       echo "target-dir = \"$CARGO_TARGET_DIR_CARGO\""
+      if test "$VENDOR_OUT_USER_SET" = "true"; then
+        echo ""
+        "$R_HOME/bin/Rscript" "$abs_top_srcdir_cargo/tools/vendor-cache.R" config "$abs_top_srcdir_cargo" "$VENDOR_OUT_CARGO" || exit 1
+      fi
     } > "$RPKG_CFG"
     echo "configure: wrote $RPKG_CFG (tarball mode)"
 
@@ -869,11 +907,16 @@ AC_CONFIG_COMMANDS([cargo-config],
   fi
 ],
 [IS_TARBALL_INSTALL="$IS_TARBALL_INSTALL"
+ VENDOR_OUT_USER_SET="$VENDOR_OUT_USER_SET"
+ R_HOME="$R_HOME"
+ abs_top_srcdir_cargo="$abs_top_srcdir_cargo"
  MONOREPO_ROOT="$MONOREPO_ROOT"
  MONOREPO_ROOT_CARGO="$MONOREPO_ROOT_CARGO"
+ VENDOR_OUT="$VENDOR_OUT"
  VENDOR_OUT_CARGO="$VENDOR_OUT_CARGO"
  CARGO_TARGET_DIR_CARGO="$CARGO_TARGET_DIR_CARGO"
  CARGO_ENV_MACOS_DEPLOY_TARGET="$CARGO_ENV_MACOS_DEPLOY_TARGET"
+ CARGO_NET_GIT_FETCH_WITH_CLI="$CARGO_NET_GIT_FETCH_WITH_CLI"
  CARGO_ENV_WIN_LINKER="$CARGO_ENV_WIN_LINKER"
  CARGO_ENV_RUST_TARGET="$CARGO_ENV_RUST_TARGET"
  CARGO_ENV_RUST_TARGET_UPPER="$CARGO_ENV_RUST_TARGET_UPPER"
@@ -882,13 +925,15 @@ AC_CONFIG_COMMANDS([cargo-config],
  CARGO_ENV_PROFILE_LTO="$CARGO_ENV_PROFILE_LTO"
  CARGO_PROFILE="$CARGO_PROFILE"
  CARGO_ENV_ABI_CFLAGS="$CARGO_ENV_ABI_CFLAGS"
- CARGO_ENV_ABI_CXXFLAGS="$CARGO_ENV_ABI_CXXFLAGS"
- SED="$SED"])
+ CARGO_ENV_ABI_CXXFLAGS="$CARGO_ENV_ABI_CXXFLAGS"])
 
 dnl ---- 3) Cargo.lock shape check (tarball mode only) ----
-dnl In tarball mode, the lock must be in tarball-shape: no checksum = lines and
-dnl no path+... sources for framework crates. Drift is fatal at offline install
-dnl time; we catch it here before cargo starts building.
+dnl In tarball mode, tools/lock-shape-check.R rejects any source = "path+..."
+dnl entry: a git dependency must stay locked as git+<url>#<sha> for offline
+dnl source replacement to match it; registry crates keep their registry
+dnl source. checksum = lines are allowed (A2-ai/miniextendr#408). Drift is
+dnl fatal at offline install time; we catch it here before cargo starts
+dnl building.
 dnl In source mode, cargo silently rewrites the lock; drift is tolerated.
 AC_CONFIG_COMMANDS([lock-shape-check],
 [
@@ -955,6 +1000,6 @@ dnl NOTE: vendor.tar.xz is NOT created by configure. It is the canonical
 dnl offline artifact produced by miniextendr_vendor() (cargo revendor --compress).
 dnl A previous repack step here silently created stale tarballs that could
 dnl disagree with Cargo.lock, and also embedded macOS xattr metadata that
-dnl caused warnings on Linux. See #157, #158.
+dnl caused warnings on Linux. See A2-ai/miniextendr#157, A2-ai/miniextendr#158.
 
 AC_OUTPUT

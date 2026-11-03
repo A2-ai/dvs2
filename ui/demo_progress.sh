@@ -20,7 +20,7 @@ mkfiles "$N" "$SIZE" data
 CLI_REPO="$(mktemp -d "$SCRIPT_DIR"/dvs_repo_cli_XXX)"
 CLI_STORAGE="$(mktemp -d "$SCRIPT_DIR"/dvs_storage_cli_XXX)"
 cd "$CLI_REPO" && git init -q .
-dvs init "$CLI_STORAGE" 2>/dev/null
+dvs init local "$CLI_STORAGE" 2>/dev/null
 cp -r "$FIXTURES/data" "$CLI_REPO/data"
 
 echo "=== CLI ADD ==="

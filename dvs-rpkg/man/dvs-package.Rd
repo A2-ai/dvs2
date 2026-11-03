@@ -8,6 +8,22 @@
 \description{
 Provides version control and management system for large binary and text files that are stored either locally or remotely. Uses content-addressable storage with blake3 hashing to efficiently deduplicate files while tracking metadata in Git-friendly .dvs files.
 }
+\section{NULL and NA in arguments}{
+
+\code{NULL} in an optional argument means the argument was not given, and the
+dvs default applies, as when the argument is left out. For example
+\code{root_dir = NULL} in \code{\link[=dvs_init]{dvs_init()}} is the working directory, and
+\code{message = NULL} in \code{\link[=dvs_add]{dvs_add()}} adds no message. \code{character(0)} in \code{paths}
+or \code{status} is the same as \code{NULL}.
+\code{NA} is never a value in an argument of \code{\link[=dvs_init]{dvs_init()}}, \code{\link[=dvs_add]{dvs_add()}},
+\code{\link[=dvs_status]{dvs_status()}}, \code{\link[=dvs_get]{dvs_get()}}, \code{\link[=dvs_result_info]{dvs_result_info()}}, \code{\link[=set_dvs_threads]{set_dvs_threads()}},
+\code{\link[=set_dvs_log_level]{set_dvs_log_level()}} or \code{\link[=format_byte_size]{format_byte_size()}}.
+An \code{NA} there raises a \code{dvs_error_argument} condition, also a \code{dvs_error},
+that names the call. A bad value in the \code{dvs.num_threads} or \code{dvs.on_error}
+option raises the same condition, and its message names the option.
+\code{\link[=new_dvs_bytes]{new_dvs_bytes()}} takes \code{NA} for an unknown size and refuses \code{NULL}.
+}
+
 \author{
 \strong{Maintainer}: Jenna Johnson \email{jenna@a2-ai.com}
 

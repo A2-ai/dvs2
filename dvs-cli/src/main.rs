@@ -138,12 +138,12 @@ pub enum Command {
         #[clap(long)]
         dry_run: bool,
     },
-    /// Gets the status of each files in the current repository
+    /// Gets the status of each file in the current repository
     #[command(next_display_order = 100)]
     Status {
         /// Paths (files or directories) to check status for
         paths: Vec<PathBuf>,
-        /// Recursively include files in subdirectories for given directories
+        /// Recursively include files in subdirectories for given directories.
         /// Without this flag, directories return only their direct children.
         #[clap(long, short, conflicts_with = "glob")]
         recursive: bool,
@@ -191,7 +191,7 @@ pub enum Command {
         /// What to do with files whose local version dvs did not put there
         /// (local changes, or no record): abort changes nothing, skip leaves
         /// them and gets the rest, overwrite replaces them. Defaults to
-        /// DVS_GET_ON_CONFLICT, then [get] on_conflict in dvs.toml, then abort
+        /// DVS_GET_ON_CONFLICT, then `[get] on_conflict` in dvs.toml, then abort
         #[clap(long, value_name = "POLICY", value_parser = clap::builder::PossibleValuesParser::new(OnConflict::CHOICES))]
         on_conflict: Option<String>,
         /// Replace files with local changes (same as --on-conflict overwrite)
@@ -209,7 +209,7 @@ pub enum Command {
         #[clap(long, global = true)]
         dry_run: bool,
     },
-    /// Show the project configuration and the server info is using a dvs-server backend
+    /// Show the project configuration, and the server info when the project uses a dvs-server backend
     Info,
     /// Check whether explicitly named BLAKE3 content is stored, without downloading it
     Availability {
@@ -1253,7 +1253,9 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
     Ok(())
 }
 
-/// `dvs init <path>` predates backends: name the command that does it now.
+/// `dvs init <path>` predates backends: name the command that does it now. A
+/// bare name alone can be a backend typo or a directory, so the message covers
+/// both. With more words after it, it is most likely a mistyped backend.
 fn init_backend_error(args: &[String]) -> String {
     let first = args.first().map(String::as_str).unwrap_or_default();
     let looks_like_path =
@@ -1262,6 +1264,10 @@ fn init_backend_error(args: &[String]) -> String {
         format!(
             "dvs init needs a backend before the storage path: did you mean `dvs init local {}`?",
             args.join(" ")
+        )
+    } else if let [name] = args {
+        format!(
+            "unknown backend '{name}' for dvs init: use `dvs init local {name}` to store the data in the directory {name}, or `dvs init server <NAME> <URL>`"
         )
     } else {
         format!(
@@ -1415,6 +1421,26 @@ mod tests {
             "dvs init needs a backend before the storage path: did you mean `dvs init local ../storage`?"
         );
         assert!(init_backend_error(&["lcoal".into()]).starts_with("unknown backend 'lcoal'"));
+        // A bare name that is not a path yet: still name the local command for it
+        assert_eq!(
+            init_backend_error(&["storage".into()]),
+            "unknown backend 'storage' for dvs init: use `dvs init local storage` to store the data in the directory storage, or `dvs init server <NAME> <URL>`"
+        );
+        // A mistyped backend before its arguments: the generic hint, not
+        // `dvs init local lcoal /srv/store`
+        for args in [
+            &["lcoal", "/srv/store"][..],
+            &["sevrer", "proj", "https://dvs.example.com"],
+        ] {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            assert_eq!(
+                init_backend_error(&args),
+                format!(
+                    "unknown backend '{}' for dvs init: use `dvs init local <PATH>` (a directory) or `dvs init server <NAME> <URL>`",
+                    args[0]
+                )
+            );
+        }
     }
 
     #[test]

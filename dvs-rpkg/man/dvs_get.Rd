@@ -10,19 +10,21 @@ dvs_get(
   recursive = FALSE,
   dry_run = FALSE,
   on_conflict = NULL,
-  on_error = getOption("dvs.on_error", "return")
+  on_error = NULL
 )
 }
 \arguments{
-\item{paths}{Character vector of file paths to retrieve from DVS storage.}
+\item{paths}{Tracked files or directories to retrieve, relative to the
+working directory. \code{NULL} is the same as \code{character(0)}.}
 
-\item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).
-Globs use a literal path separator: \verb{*.csv} only matches files in the
-target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} to
-match recursively across subdirectories. Mutually exclusive with \code{recursive}.}
+\item{glob}{A glob that selects tracked files, such as \code{"*.csv"}. It
+runs from the working directory, or from each directory in \code{paths}. \code{*}
+does not cross a path separator, so \verb{*.csv} matches \code{a.csv} but not
+\code{sub/a.csv}. Use \verb{**/*.csv} to match at any depth. Mutually exclusive
+with \code{recursive}.}
 
-\item{recursive}{If \code{TRUE}, directory inputs include all descendants;
-otherwise only direct children of the directory. With no explicit \code{paths}
+\item{recursive}{If \code{TRUE}, directory inputs include all descendants.
+Otherwise only direct children of the directory. With no explicit \code{paths}
 the directory is the working directory. Mutually exclusive with \code{glob}.}
 
 \item{dry_run}{If \code{TRUE}, report what would happen without writing files.}
@@ -30,13 +32,15 @@ the directory is the working directory. Mutually exclusive with \code{glob}.}
 \item{on_conflict}{\code{NULL} (use \code{DVS_GET_ON_CONFLICT}, then \verb{[get] on_conflict}
 in dvs.toml, then \code{"abort"}), or one of \code{"abort"} (change no files if any
 requested file has local changes or another problem), \code{"skip"} (leave those
-files and get the rest) or \code{"overwrite"} (replace them; local changes are lost).}
+files and get the rest) or \code{"overwrite"} (replace them, and lose the
+local changes).}
 
-\item{on_error}{What to do when get did not do as asked (a file failed, or
-\code{on_conflict = "abort"} held files back; files left by
-\code{on_conflict = "skip"} count as done): \code{"return"} (the default) only
-returns the result, \code{"warn"} also warns and \code{"error"} raises an error. The
-condition has class \code{dvs_get_incomplete} and carries the result as
+\item{on_error}{What to do when get did not do as asked, that is when a
+file failed or \code{on_conflict = "abort"} held files back. Files left by
+\code{on_conflict = "skip"} count as done. \code{"return"} only returns the
+result, \code{"warn"} also warns and \code{"error"} raises an error. \code{NULL} (the
+default) takes the \code{dvs.on_error} option, and \code{"return"} when it is unset.
+The condition has class \code{dvs_get_incomplete} and carries the result as
 \code{cnd$result}. Pipelines can set \code{options(dvs.on_error = "error")}.}
 }
 \value{
@@ -46,10 +50,12 @@ and always the same columns: \code{path}, \code{local_path}, \code{before} (\cod
 \code{"not_a_file"}, \code{"unsafe_path"}), \code{action} (\code{"restored"}, \code{"replaced"},
 \code{"unchanged"}, \code{"skipped"}, \code{"not_run"}, \code{"failed"}, \code{"would_restore"},
 \code{"would_replace"}), \code{satisfied}, \code{size}, \code{target_hash}, \code{local_hash},
-\code{stored_copy}, \code{code}, \code{message} and \code{hint}. \code{\link[=dvs_result_info]{dvs_result_info()}} returns
+\code{stored_copy}, \code{code}, \code{message}, \code{hint} and \code{duration_ms} (the
+milliseconds spent on the file, \code{NA} when it was never hashed or
+copied). \code{\link[=dvs_result_info]{dvs_result_info()}} returns
 the outcome and the policy that applied. Outside a dvs project it raises an
-error; configuration errors (for example \code{on_conflict = "overwrite"} in
-dvs.toml) raise a \code{dvs_config_error}.
+error. A configuration error, for example \code{on_conflict = "overwrite"}
+in dvs.toml, raises a \code{dvs_config_error}.
 
 In a dry run, \code{satisfied} is the prediction: \code{TRUE} when the file would be
 at its tracked version afterwards.
@@ -59,7 +65,21 @@ In scripts and pipelines, use \code{on_error = "error"} (or set
 that was not updated.
 }
 \description{
-Fetches the specified files from DVS storage and writes them to their original paths in the working directory. With no \code{paths} or \code{glob}, \code{dvs_get()} scopes to the working directory: it restores the files directly under it, and \code{dvs_get(recursive = TRUE)} restores every tracked file beneath it at any depth.
+Fetches the specified files from DVS storage and writes them
+to their original paths in the working directory. With no \code{paths}
+or \code{glob}, \code{dvs_get()} scopes to the working directory: it restores
+the files directly under it, and \code{dvs_get(recursive = TRUE)} restores
+every tracked file beneath it at any depth.
+
+A working file that differs from the tracked version is replaced without
+asking only when dvs itself put it there (for example after switching git
+branches). Otherwise it is a conflict, handled by \code{on_conflict}.
+}
+\details{
+In an interactive session, \code{dvs_get()} shows a progress bar while it
+copies files. It shows none in a dry run or in a non-interactive session,
+such as \code{Rscript}. The cli options for progress bars, such as
+\code{cli.progress_show_after}, do not change this.
 }
 \examples{
 \dontrun{

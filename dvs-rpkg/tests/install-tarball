@@ -6,35 +6,40 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RPKG_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ROOT_DIR="$(cd "${RPKG_DIR}/.." && pwd)"
 
-TMPDIR="$(mktemp -d)"
-LIB="$TMPDIR/Rlib"
+# The scratch directory is not named TMPDIR. TMPDIR is exported, so the name
+# would hand this directory to every child process as its temp directory, and
+# a server one of them starts (sccache) keeps it after the trap deletes it.
+WORK_DIR="$(mktemp -d)"
+LIB="$WORK_DIR/Rlib"
 mkdir -p "$LIB"
 
-RESTORE_PATHS=("dvs-rpkg/src/rust/Cargo.toml" "dvs-rpkg/src/rust/Cargo.lock")
-cleanup() {
-  rm -rf "$TMPDIR"
-  ( cd "$ROOT_DIR" && git checkout HEAD -- "${RESTORE_PATHS[@]}" 2>/dev/null || true )
-}
-trap cleanup EXIT
+trap 'rm -rf "$WORK_DIR"' EXIT
 
-echo "=== just vendor (populate inst/vendor.tar.xz) ==="
-( cd "$ROOT_DIR" && just vendor )
-
-echo "=== R CMD build dvs-rpkg ==="
-cd "$TMPDIR"
-R CMD build "$RPKG_DIR"
-TARBALL="$(find . -maxdepth 1 -name 'dvs_*.tar.gz' -print -quit)"
+# The release path: minirextendr's tarball build is the one step that
+# vendors. It restores the source tree on exit.
+echo "=== miniextendr_build_tarball (vendor, build, restore) ==="
+cd "$ROOT_DIR"
+RV_LIB="$RPKG_DIR/$(cd "$RPKG_DIR" && rv library)"
+BEFORE="$(shasum dvs-rpkg/src/rust/Cargo.toml dvs-rpkg/src/rust/Cargo.lock)"
+R_LIBS="$RV_LIB" Rscript -e 'minirextendr::miniextendr_build_tarball("dvs-rpkg", dest_path = commandArgs(TRUE)[[1]])' "$WORK_DIR"
+TARBALL="$(find "$WORK_DIR" -maxdepth 1 -name 'dvs_*.tar.gz' -print -quit)"
 test -n "$TARBALL"
 echo "Built: $TARBALL"
 
+echo "=== source tree restored ==="
+test "$(shasum dvs-rpkg/src/rust/Cargo.toml dvs-rpkg/src/rust/Cargo.lock)" = "$BEFORE"
+test ! -e dvs-rpkg/inst/vendor.tar.xz
+test ! -e dvs-rpkg/src/rust/.Cargo.toml.prefreeze
+
 echo "=== R CMD INSTALL --library=$LIB (offline) ==="
-CARGO_HOME="$TMPDIR/cargo-home" \
+cd "$WORK_DIR"
+CARGO_HOME="$WORK_DIR/cargo-home" \
 CARGO_NET_OFFLINE=1 \
   R CMD INSTALL --no-test-load --library="$LIB" "$TARBALL"
 
 echo "=== FFI smoke: dvs_init ==="
-SMOKE_ROOT="$(mktemp -d)"
-SMOKE_STORE="$(mktemp -d)"
+SMOKE_ROOT="$(mktemp -d "$WORK_DIR/smoke-root.XXXXXX")"
+SMOKE_STORE="$(mktemp -d "$WORK_DIR/smoke-store.XXXXXX")"
 Rscript -e "
   .libPaths(c('$LIB', .libPaths()))
   dvs::dvs_init('$SMOKE_STORE', root_dir = '$SMOKE_ROOT')

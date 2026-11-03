@@ -21,8 +21,7 @@ jobs:
       # macOS and Windows are temporarily disabled; see #129 for re-enable
       # before the next release. To restore the full matrix, add `macos` and
       # `windows` back to `build:` and uncomment the two include blocks
-      # below. The Windows --xz skip in the "Vendor rpkg deps" step is
-      # retained so the matrix can be restored without extra surgery.
+      # below.
       matrix:
         build: [linux]
         # build: [linux, macos, windows]
@@ -49,54 +48,6 @@ jobs:
 
       - name: Build System Info
         run: rustc --version
-
-      - name: Cache cargo-revendor
-        id: revendor-cache
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/bin/cargo-revendor
-            ~/.cargo/bin/cargo-revendor.exe
-          key: ${{ runner.os }}-cargo-revendor-v1
-
-      - name: Install cargo-revendor
-        if: steps.revendor-cache.outputs.cache-hit != 'true'
-        run: cargo install --git https://github.com/A2-ai/miniextendr cargo-revendor
-
-      # Share the vendored output across the matrix. Key is OS-independent, so
-      # the first matrix job that finishes populates the cache for the others.
-      # The dvs core is a path dependency (../../../dvs), so changes to its
-      # source do not show up in Cargo.lock. Include the core tree in the key
-      # so a core change busts the stale vendor and re-vendors.
-      - name: Cache rpkg vendor output
-        id: rpkg-vendor-cache
-        uses: actions/cache@v6
-        with:
-          path: |
-            dvs-rpkg/vendor
-            dvs-rpkg/src/rust/Cargo.toml
-            dvs-rpkg/src/rust/Cargo.lock
-            dvs-rpkg/inst/vendor.tar.xz
-          key: rpkg-vendor-${{ hashFiles('dvs-rpkg/src/rust/Cargo.toml', 'dvs-rpkg/src/rust/Cargo.lock', 'dvs/**/*.rs', 'dvs/Cargo.toml') }}
-
-      - name: Vendor rpkg deps
-        if: steps.rpkg-vendor-cache.outputs.cache-hit != 'true'
-        shell: bash
-        env:
-          # Windows runners ship a BSD tar that lacks --xz; skip the tarball
-          # there. The tarball is only shipped from linux/macos builds.
-          COMPRESS_FLAG: ${{ runner.os == 'Windows' && ' ' || '--compress dvs-rpkg/inst/vendor.tar.xz' }}
-        run: |
-          cargo revendor \
-            --manifest-path dvs-rpkg/src/rust/Cargo.toml \
-            --output dvs-rpkg/vendor \
-            --strip-all \
-            --freeze \
-            $COMPRESS_FLAG \
-            --blank-md \
-            --source-marker \
-            --force \
-            -v
 
       - name: check formatting
         run: |

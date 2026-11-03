@@ -48,7 +48,7 @@ DVS_REPO_CLI="$SCRIPT_DIR/dvs_repo_cli_$RUN_SUFFIX"
 DVS_STORAGE_CLI="$SCRIPT_DIR/dvs_storage_cli_$RUN_SUFFIX"
 mkdir "$DVS_REPO_CLI" "$DVS_STORAGE_CLI"
 cd "$DVS_REPO_CLI"
-dvs init "$DVS_STORAGE_CLI"
+dvs init local "$DVS_STORAGE_CLI"
 cp -r "$FIXTURES/data" "$DVS_REPO_CLI/data"
 
 printf '\n>>> CLI add with DVS_NUM_THREADS=%s\n' "$THREADS"

@@ -6,10 +6,12 @@
   "rust-analyzer.cargo.features": "all",
   "rust-analyzer.cargo.targetDir": "${workspaceFolder}/dvs-rpkg/ra-target",
   "rust-analyzer.files.excludeDirs": [
-    "dvs-rpkg/src/vendor",
+    "dvs-rpkg/vendor",
+    "dvs-rpkg/src/rust/vendor",
     "dvs-rpkg/src/rust/target",
     "dvs-rpkg/rust-target",
-    "dvs-rpkg/ra-target"
+    "dvs-rpkg/ra-target",
+    "dvs-rpkg/rv"
   ],
   "rust-analyzer.check.command": "clippy",
   "rust-analyzer.check.extraArgs": [
@@ -17,14 +19,24 @@
     "-W",
     "clippy::all"
   ],
+  // Integrated terminals only. NOT_CRAN lets a bare testthat::test_dir() or
+  // test_file() run the skip_on_cran() cases (the gctorture tests).
+  // devtools::test() sets it itself. RV_LINK_MODE has rv link packages from
+  // its cache instead of copying them. CARGO_PROFILE stays release: an
+  // unoptimized build hashes far slower.
   "terminal.integrated.env.osx": {
-    "CARGO_TARGET_DIR": "${workspaceFolder}/dvs-rpkg/rust-target"
+    "CARGO_TARGET_DIR": "${workspaceFolder}/dvs-rpkg/rust-target",
+    "NOT_CRAN": "true",
+    "RV_LINK_MODE": "symlink"
   },
   "terminal.integrated.env.linux": {
-    "CARGO_TARGET_DIR": "${workspaceFolder}/dvs-rpkg/rust-target"
+    "CARGO_TARGET_DIR": "${workspaceFolder}/dvs-rpkg/rust-target",
+    "NOT_CRAN": "true",
+    "RV_LINK_MODE": "symlink"
   },
   "terminal.integrated.env.windows": {
-    "CARGO_TARGET_DIR": "${workspaceFolder}/dvs-rpkg/rust-target"
+    "CARGO_TARGET_DIR": "${workspaceFolder}/dvs-rpkg/rust-target",
+    "NOT_CRAN": "true"
   },
   "[rust]": {
     "editor.formatOnSave": true,
@@ -39,7 +51,11 @@
     "NAMESPACE": "r",
     "DESCRIPTION": "yaml"
   },
+  // The scaffold's .gitignore lists R/*-wrappers.R, which dvs tracks. Keep
+  // the generated wrappers visible in the explorer and in search.
+  "explorer.excludeGitIgnore": false,
   "files.exclude": {
+    "**/*-wrappers.R": false,
     "**/target": true,
     "**/rust-target": true,
     "**/ra-target": true,
@@ -48,12 +64,28 @@
     "**/*.so": true,
     "**/*.a": true
   },
+  // Search honours ignore files even for tracked files, which would hide
+  // R/dvs-wrappers.R. They are off, so the large ignored directories are
+  // excluded here instead.
+  "search.useIgnoreFiles": false,
+  "search.useParentIgnoreFiles": false,
+  "search.useGlobalIgnoreFiles": false,
   "search.exclude": {
+    "**/*-wrappers.R": false,
     "**/target": true,
     "**/rust-target": true,
     "**/ra-target": true,
-    "**/dvs-rpkg/src/vendor": true,
-    "**/Cargo.lock": true
+    "**/ra_target": true,
+    "**/autom4te.cache": true,
+    "**/*.Rcheck": true,
+    "**/Cargo.lock": true,
+    "dvs-rpkg/vendor": true,
+    "dvs-rpkg/src/rust/vendor": true,
+    "dvs-rpkg/rv/library": true,
+    "dist": true,
+    "datasets": true,
+    ".claude/worktrees": true,
+    ".miniextendr": true
   },
   "C_Cpp_Runner.msvcBatchPath": ""
 }

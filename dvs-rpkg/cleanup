@@ -1,14 +1,28 @@
 #!/bin/sh
 # Cleanup script for R package (runs during R CMD build and R CMD INSTALL)
 #
+# R CMD build runs cleanup inside its temporary copy. Activate the portable
+# dev manifest there; the origin-path check leaves the checkout untouched.
+if [ -f src/rust/.dev-bootstrap.rds ]; then
+  if [ -n "$R_HOME" ]; then
+    "$R_HOME/bin/Rscript" tools/dev-bootstrap.R activate || exit $?
+  else
+    Rscript tools/dev-bootstrap.R activate || exit $?
+  fi
+fi
+
 # Remove build artifacts and generated files.
 # configure recreates Makevars from Makevars.in, so it's safe to delete.
 
 rm -f  src/Makevars
 rm -rf src/rust/.cargo
-rm -rf src/rust/target
-rm -rf rust-target
-rm -rf ra-target
+# R sets R_INSTALL_PKG for INSTALL, including both cleanup calls. R CMD build
+# must still remove targets from its staged source tree even with the opt-in.
+if [ "${MINIEXTENDR_KEEP_TARGET:-0}" != "1" ] || [ -z "${R_INSTALL_PKG:-}" ]; then
+  rm -rf src/rust/target
+  rm -rf rust-target
+  rm -rf ra-target
+fi
 rm -f  src/*-wrappers.R
 
 # Remove vendor/ if the compressed tarball exists (CRAN tarball prep).

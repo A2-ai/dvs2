@@ -1,5 +1,10 @@
 #' @inherit dvs_init_impl title description
 #' @inherit dvs_init_impl params
+#' @return A one-row tibble with the configuration written to `dvs.toml`:
+#'   `compression` (`"zstd"` or `"none"`), `metadata_folder_name` (`NA` when
+#'   it was not given, so the folder is `.dvs`), `backend_path` (the absolute
+#'   path of the storage directory) and `backend_group` (`NA` when no group was
+#'   given and your primary group could not be found).
 #' @rdname dvs_init
 #' @export
 dvs_init <- function(
@@ -9,7 +14,6 @@ dvs_init <- function(
   metadata_folder_name = NULL,
   compression = c("zstd", "none")
 ) {
-  compression <- match.arg(compression)
   result <- dvs_init_impl(
     storage_path = storage_path,
     root_dir = root_dir,
@@ -21,15 +25,33 @@ dvs_init <- function(
 }
 
 #' @inherit dvs_add_impl title description params
+#' @return A tibble with one row per file: `path` (relative to the project
+#'   root), `outcome`, `hash` (the blake3 hash), `size` (`dvs_bytes`),
+#'   `stored_size` (`dvs_bytes`, the size of the copy in storage after
+#'   compression) and `duration_ms` (the milliseconds spent on the file).
+#'   `outcome` is `"copied"` when the file was stored and its metadata
+#'   written, and `"present"` when dvs already tracked the file at this
+#'   version. In a dry run it is what would happen, and `stored_size` is
+#'   `size`.
+#'
+#'   A file that fails does not stop the others. When one fails, the result
+#'   also has the columns `code` (the kind of failure, for example
+#'   `"io_error"`) and `error` (the reason). That row has `NA` in `outcome`,
+#'   `hash`, `size` and `stored_size`. A path that does not exist raises an
+#'   error and adds nothing.
+#' @details In an interactive session, `dvs_add()` shows a progress bar while it
+#'   copies files. It shows none in a dry run or in a non-interactive session,
+#'   such as `Rscript`. The cli options for progress bars, such as
+#'   `cli.progress_show_after`, do not change this.
 #' @rdname dvs_add
 #' @export
 dvs_add <- function(
   paths = character(0),
   message = NULL,
   glob = NULL,
-  dry_run = NULL
+  dry_run = FALSE
 ) {
-  dvs_set_threads_impl(getOption("dvs.num_threads"))
+  apply_dvs_threads_option()
   progress_callback <- NULL
   # Only show a progress bar in interactive sessions; non-interactive callers
   # should prefer dvs-cli (see #118).
@@ -45,6 +67,17 @@ dvs_add <- function(
     progress_callback = progress_callback
   )
 
+  # The columns come in the order the first row names them, so a first file
+  # that failed put `code` and `error` first. Keep one order.
+  columns <- c(
+    "path", "outcome", "hash", "size", "stored_size", "duration_ms",
+    "code", "error", "message"
+  )
+  result <- result[c(
+    intersect(columns, names(result)),
+    setdiff(names(result), columns)
+  )]
+
   if (!is.null(result$size)) {
     result$size <- new_dvs_bytes(result$size)
   }
@@ -56,17 +89,27 @@ dvs_add <- function(
 }
 
 #' @inherit dvs_status_impl title description params
+#' @return A tibble with one row per tracked file and always the same
+#'   columns: `path` (relative to the project root), `status`, `hash` (the
+#'   blake3 hash of the tracked version), `size` (`dvs_bytes`, the size of the
+#'   tracked version), `created_by` (who added it), `compression`, `message`
+#'   (the message given at add, `NA` without one), `code` and `error` (`NA`
+#'   unless `status` is `"error"`) and `add_time` (POSIXct, UTC). Files that
+#'   dvs does not track are not listed. A row whose metadata cannot be read has
+#'   `NA` in the metadata columns.
 #' @rdname dvs_status
-#'
-#'
 #' @export
 dvs_status <- function(
   paths = character(0),
-  recursive = NULL,
+  recursive = FALSE,
   glob = NULL,
   status = c("current", "absent", "stale", "modified", "unsynced")
 ) {
-  dvs_set_threads_impl(getOption("dvs.num_threads"))
+  apply_dvs_threads_option()
+  # An empty filter is no filter, as NULL is.
+  if (is.character(status) && length(status) == 0L) {
+    status <- NULL
+  }
   status_data_frame <-
     dvs_status_impl(
       paths = paths,
@@ -90,15 +133,16 @@ dvs_audit_log <- function(paths = character(0)) {
 }
 
 #' @inherit dvs_get_impl title description params
-#' @param recursive If `TRUE`, directory inputs include all descendants;
-#'   otherwise only direct children of the directory. With no explicit `paths`
+#' @param recursive If `TRUE`, directory inputs include all descendants.
+#'   Otherwise only direct children of the directory. With no explicit `paths`
 #'   the directory is the working directory. Mutually exclusive with `glob`.
 #' @param dry_run If `TRUE`, report what would happen without writing files.
-#' @param on_error What to do when get did not do as asked (a file failed, or
-#'   `on_conflict = "abort"` held files back; files left by
-#'   `on_conflict = "skip"` count as done): `"return"` (the default) only
-#'   returns the result, `"warn"` also warns and `"error"` raises an error. The
-#'   condition has class `dvs_get_incomplete` and carries the result as
+#' @param on_error What to do when get did not do as asked, that is when a
+#'   file failed or `on_conflict = "abort"` held files back. Files left by
+#'   `on_conflict = "skip"` count as done. `"return"` only returns the
+#'   result, `"warn"` also warns and `"error"` raises an error. `NULL` (the
+#'   default) takes the `dvs.on_error` option, and `"return"` when it is unset.
+#'   The condition has class `dvs_get_incomplete` and carries the result as
 #'   `cnd$result`. Pipelines can set `options(dvs.on_error = "error")`.
 #' @return A tibble of class `dvs_get_result` with one row per requested file
 #'   and always the same columns: `path`, `local_path`, `before` (`"absent"`,
@@ -106,10 +150,12 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   `"not_a_file"`, `"unsafe_path"`), `action` (`"restored"`, `"replaced"`,
 #'   `"unchanged"`, `"skipped"`, `"not_run"`, `"failed"`, `"would_restore"`,
 #'   `"would_replace"`), `satisfied`, `size`, `target_hash`, `local_hash`,
-#'   `stored_copy`, `code`, `message` and `hint`. [dvs_result_info()] returns
+#'   `stored_copy`, `code`, `message`, `hint` and `duration_ms` (the
+#'   milliseconds spent on the file, `NA` when it was never hashed or
+#'   copied). [dvs_result_info()] returns
 #'   the outcome and the policy that applied. Outside a dvs project it raises an
-#'   error; configuration errors (for example `on_conflict = "overwrite"` in
-#'   dvs.toml) raise a `dvs_config_error`.
+#'   error. A configuration error, for example `on_conflict = "overwrite"`
+#'   in dvs.toml, raises a `dvs_config_error`.
 #'
 #'   In a dry run, `satisfied` is the prediction: `TRUE` when the file would be
 #'   at its tracked version afterwards.
@@ -117,6 +163,10 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   In scripts and pipelines, use `on_error = "error"` (or set
 #'   `options(dvs.on_error = "error")`) so the analysis cannot continue on data
 #'   that was not updated.
+#' @details In an interactive session, `dvs_get()` shows a progress bar while it
+#'   copies files. It shows none in a dry run or in a non-interactive session,
+#'   such as `Rscript`. The cli options for progress bars, such as
+#'   `cli.progress_show_after`, do not change this.
 #' @examples
 #' \dontrun{
 #' # In a script: stop unless get did as asked
@@ -135,37 +185,31 @@ dvs_get <- function(
   recursive = FALSE,
   dry_run = FALSE,
   on_conflict = NULL,
-  on_error = getOption("dvs.on_error", "return")
+  on_error = NULL
 ) {
-  if (!is.character(paths) || anyNA(paths)) {
-    stop("`paths` must be a character vector without NA", call. = FALSE)
-  }
-  if (!isTRUE(recursive) && !isFALSE(recursive)) {
-    stop("`recursive` must be TRUE or FALSE", call. = FALSE)
-  }
-  if (!isTRUE(dry_run) && !isFALSE(dry_run)) {
-    stop("`dry_run` must be TRUE or FALSE", call. = FALSE)
-  }
-  if (!is.null(on_conflict)) {
-    on_conflict <- match.arg(on_conflict, c("abort", "skip", "overwrite"))
-  }
-  on_error <- match.arg(on_error, c("return", "warn", "error"))
-
-  dvs_set_threads_impl(getOption("dvs.num_threads"))
+  apply_dvs_threads_option()
   progress_callback <- NULL
   # Only show a progress bar in interactive sessions; non-interactive callers
   # should prefer dvs-cli (see #118).
-  if (!dry_run && interactive()) {
+  if (!isTRUE(dry_run) && interactive()) {
     progress_callback <- ProgressBarCallback$new()
   }
 
-  raw <- dvs_get_impl(
-    paths = paths,
-    glob = glob,
-    recursive = recursive,
-    dry_run = dry_run,
-    on_conflict = on_conflict,
-    progress_callback = progress_callback
+  # NULL is not given: the option applies, then "return". A bad option value
+  # is reported as the option.
+  on_error_option <- if (is.null(on_error)) "dvs.on_error"
+  raw <- rename_option_error(
+    dvs_get_impl(
+      paths = paths,
+      glob = glob,
+      recursive = recursive,
+      dry_run = dry_run,
+      on_conflict = on_conflict,
+      on_error = on_error %||% getOption("dvs.on_error", "return"),
+      progress_callback = progress_callback
+    ),
+    "on_error",
+    on_error_option
   )
   info <- raw$info
 
@@ -173,90 +217,15 @@ dvs_get <- function(
   files$size <- new_dvs_bytes(files$size)
   result <- structure(files, class = c("dvs_get_result", class(files)), dvs_info = info)
 
-  if (on_error != "return" && !info$did_as_asked) {
-    signal_incomplete(result, on_error, sys.call())
+  if (raw$on_error != "return" && !info$did_as_asked) {
+    signal_incomplete(result, raw$on_error, sys.call())
   }
   result
 }
 
-#' Operation information for a dvs result
-#'
-#' The rows of a [dvs_get()] result describe each file. This returns what
-#' applies to the whole operation.
-#'
-#' @param x A result returned by [dvs_get()].
-#' @return A list: `command`, `outcome` (`"complete"`, `"aborted"`,
-#'   `"partial"` or `"failed"`), `did_as_asked` (`TRUE` unless a file failed
-#'   or `on_conflict = "abort"` held files back), `dry_run`, `on_conflict` and
-#'   its `source` (`"argument"`, `"env"`, `"config"` for dvs.toml, or
-#'   `"default"`), `counts` (a named
-#'   list of row counts per action) and `problem` (an operation-level message,
-#'   or `NA` when there is none).
-#' @export
-dvs_result_info <- function(x) {
-  info <- attr(x, "dvs_info", exact = TRUE)
-  if (is.null(info)) {
-    stop("`x` is not a dvs result", call. = FALSE)
-  }
-  info
-}
-
-dvs_get_summary <- function(info, files = NULL) {
-  counts <- info$counts
-  phrases <- c(
-    restored = "restored %d",
-    replaced = "replaced %d",
-    would_restore = "would restore %d",
-    would_replace = "would replace %d",
-    unchanged = "%d already current",
-    skipped = "skipped %d",
-    not_run = "%d held back",
-    failed = "%d failed"
-  )
-  parts <- character(0)
-  for (name in names(phrases)) {
-    n <- counts[[name]]
-    if (!is.null(n) && n > 0) {
-      parts <- c(parts, sprintf(phrases[[name]], n))
-    }
-  }
-  what <- if (!is.na(info$problem)) {
-    info$problem
-  } else if (info$outcome == "aborted") {
-    reasons <- character(0)
-    if (!is.null(files) && "code" %in% names(files)) {
-      n_conflicts <- sum(files$code %in% c("local_changes", "unknown_local"))
-      if (n_conflicts > 0) {
-        reasons <- sprintf("%d with local changes or no record", n_conflicts)
-      }
-      if (counts$failed > 0) {
-        reasons <- c(reasons, sprintf(
-          "%d %s cannot be retrieved",
-          counts$failed,
-          if (counts$failed == 1) "file" else "files"
-        ))
-      }
-    } else {
-      reasons <- parts
-    }
-    sprintf(
-      "nothing %schanged (%s)",
-      if (isTRUE(info$dry_run)) "would be " else "",
-      paste(reasons, collapse = ", ")
-    )
-  } else if (length(parts) == 0) {
-    "nothing to do"
-  } else {
-    paste(parts, collapse = ", ")
-  }
-  policy <- sprintf("; on_conflict = %s (%s)", info$on_conflict, info$source)
-  sprintf(
-    "dvs get%s: %s, %s%s",
-    if (isTRUE(info$dry_run)) " (dry run)" else "",
-    info$outcome,
-    what,
-    policy
-  )
+# The lines of `text` as comments above a printed result.
+comment_lines <- function(text) {
+  paste0("# ", strsplit(text, "\n", fixed = TRUE)[[1L]])
 }
 
 # Rows that need attention, as short lines for print and conditions. Files
@@ -279,7 +248,7 @@ dvs_get_attention <- function(files, max = 5L) {
 signal_incomplete <- function(result, on_error, call) {
   message <- paste(
     c(
-      dvs_get_summary(dvs_result_info(result), result),
+      dvs_result_info(result)$summary,
       dvs_get_attention(result),
       "See the `code`, `message` and `hint` columns of `cnd$result`."
     ),
@@ -297,21 +266,17 @@ signal_incomplete <- function(result, on_error, call) {
 print.dvs_get_result <- function(x, ...) {
   info <- attr(x, "dvs_info", exact = TRUE)
   if (!is.null(info)) {
-    n_request <- sum(unlist(info$counts))
+    n_request <- info$counts$total
     as_returned <- c("local_path", "satisfied", "code", "message", "hint")
     if (nrow(x) == n_request && all(as_returned %in% names(x))) {
-      cat("# ", dvs_get_summary(info, x), "\n", sep = "")
+      cat(comment_lines(info$summary), sep = "\n")
       attention <- dvs_get_attention(x)
       if (length(attention) > 0) {
-        cat(paste0("# ", gsub("\n", "\n# ", attention, fixed = TRUE)), sep = "\n")
+        cat(comment_lines(paste(attention, collapse = "\n")), sep = "\n")
       }
     } else {
       # Filtered or columns selected: the info describes the whole request.
-      cat(
-        "# ", nrow(x), " of ", n_request, " rows from: ",
-        dvs_get_summary(info), "\n",
-        sep = ""
-      )
+      cat(sprintf("# %d of %d rows from:", nrow(x), n_request), comment_lines(info$summary), sep = "\n")
     }
   }
   NextMethod()

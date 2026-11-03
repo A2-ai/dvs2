@@ -356,32 +356,94 @@
       ]
     },
     {
-      "label": "just: vendor",
+      "label": "just: rpkg-sync",
       "type": "shell",
-      "command": "just vendor",
+      "command": "just rpkg-sync",
       "options": {
         "cwd": "${workspaceFolder}"
       },
       "group": "build",
-      "detail": "just vendor",
+      "detail": "rv plan + sync of the pinned minirextendr",
       "presentation": {
-        "group": "vendor"
+        "group": "rpkg-build"
       },
       "problemMatcher": []
     },
     {
-      "label": "just: vendor-lib",
+      "label": "just: rpkg-dev",
       "type": "shell",
-      "command": "just vendor-lib \"${input:vendorLibCrate}\" \"${input:vendorLibDevPath}\"",
+      "command": "just rpkg-dev",
       "options": {
         "cwd": "${workspaceFolder}"
       },
       "group": "build",
-      "detail": "just vendor-lib <crate> <dev_path>",
+      "detail": "minirextendr::miniextendr_build(): configure, wrappers, roxygen2, install",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: rpkg-doctor",
+      "type": "shell",
+      "command": "just rpkg-doctor",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "minirextendr::miniextendr_doctor()",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: rpkg-upgrade",
+      "type": "shell",
+      "command": "just rpkg-upgrade",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "refresh the scaffold, skills and git hooks from the pinned minirextendr",
+      "presentation": {
+        "group": "rpkg-build"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "just: rpkg-build-tarball",
+      "type": "shell",
+      "command": "just rpkg-build-tarball",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "vendored, offline release tarball into dist/ (the only step that vendors)",
       "presentation": {
         "group": "vendor"
       },
-      "problemMatcher": []
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "just: rpkg-check-cran",
+      "type": "shell",
+      "command": "just rpkg-check-cran",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "detail": "R CMD check --as-cran on the release tarball",
+      "presentation": {
+        "group": "vendor"
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
     },
     {
       "label": "just: build-all",
@@ -514,16 +576,6 @@
       "type": "promptString",
       "description": "Optional extra arguments to pass to the just recipe",
       "default": ""
-    },
-    {
-      "id": "vendorLibCrate",
-      "type": "promptString",
-      "description": "Crate name to vendor for the R package"
-    },
-    {
-      "id": "vendorLibDevPath",
-      "type": "promptString",
-      "description": "Development path to the monorepo crate"
     }
   ]
 }

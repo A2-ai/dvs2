@@ -94,6 +94,13 @@ test_that("dvs_add with glob picks up matching files", {
   expect_setequal(basename(result$path), c("data_a.csv", "data_b.csv"))
 })
 
+test_that("dvs_add takes paths = NULL as no paths", {
+  new_dvs_test_repo()
+  write_theoph_shuffled("data_a.csv", seed = 7)
+  result <- dvs_add(paths = NULL, glob = "*.csv")
+  expect_equal(basename(result$path), "data_a.csv")
+})
+
 test_that("dvs_add accepts a message without error", {
   new_dvs_test_repo()
   write_theoph("t.csv")
@@ -142,6 +149,25 @@ test_that("dvs_add reports per-file failures in the result, not as a warning", {
   expect_true(is.na(bad$outcome))
 })
 
+test_that("dvs_add keeps its column order when the first file fails", {
+  # A mode-000 file fails to open, except for root (see the test above)
+  skip_if(system("id -un", intern = TRUE) == "root", "cannot revoke read access from root")
+  new_dvs_test_repo()
+  write_theoph("a_noperm.csv")
+  write_theoph("b_good.csv")
+  Sys.chmod("a_noperm.csv", "000")
+  on.exit(Sys.chmod("a_noperm.csv", "644"), add = TRUE)
+
+  # Rows are sorted by path, so the failed file is the first row
+  result <- dvs_add(paths = c("a_noperm.csv", "b_good.csv"))
+  expect_equal(basename(result$path), c("a_noperm.csv", "b_good.csv"))
+  expect_equal(
+    names(result),
+    c("path", "outcome", "hash", "size", "stored_size", "duration_ms", "code", "error")
+  )
+  expect_s3_class(result$size, "dvs_bytes")
+})
+
 test_that("dvs_add resolves a bare relative path from a nested working directory", {
   repo <- new_dvs_test_repo()$repo
   nested <- file.path(repo, "analysis", "run1")
@@ -159,4 +185,46 @@ test_that("dvs_add resolves a bare relative path from a nested working directory
   expect_true(file.exists(
     file.path(repo, ".dvs", "analysis", "run1", "data.csv.dvs")
   ))
+})
+
+test_that("the progress bar path keeps cli's config rooted", {
+  skip_on_cran()
+  new_dvs_test_repo()
+  files <- file.path(getwd(), sprintf("f%d.bin", 1:3))
+  set.seed(1)
+  for (f in files) writeBin(as.raw(sample(0:255, 600 * 1024, TRUE)), f)
+
+  # dvs_add() shows the bar only in interactive sessions, so call the entry
+  # point with a handle. The bar is rebuilt for each file. Every allocation
+  # collects garbage: an unrooted config list is freed before cli reads it
+  # ("Unknown cli progress bar configuration").
+  gctorture(TRUE)
+  on.exit(gctorture(FALSE), add = TRUE)
+  utils::capture.output(
+    result <- dvs_add_impl(paths = files, progress_callback = ProgressBarCallback$new()),
+    type = "message"
+  )
+  gctorture(FALSE)
+
+  expect_equal(nrow(result), 3L)
+  expect_true(all(result$outcome == "copied"))
+})
+
+test_that("dvs_add raises a wrong argument as a dvs_error_argument", {
+  new_dvs_test_repo()
+  expect_argument_error(quote(dvs_add(paths = NA_character_)), "paths")
+  expect_argument_error(quote(dvs_add("t.csv", dry_run = NA)), "dry_run")
+  # Neither paths nor glob: the CLI requires one of them too
+  expect_argument_error(quote(dvs_add()), "paths")
+  expect_argument_error(quote(dvs_add(paths = NULL)), "paths")
+  cnd <- tryCatch(dvs_add(), error = identity)
+  expect_equal(conditionMessage(cnd), "`paths` or `glob` is required")
+})
+
+test_that("dvs_add takes NULL as no message and refuses NA", {
+  new_dvs_test_repo()
+  write_theoph("t.csv")
+  expect_argument_error(quote(dvs_add("t.csv", message = NA_character_)), "message")
+  dvs_add(paths = file.path(getwd(), "t.csv"), message = NULL)
+  expect_true(is.na(dvs_status()$message))
 })

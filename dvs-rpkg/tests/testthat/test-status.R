@@ -34,6 +34,18 @@ test_that("dvs_status() with no filter shows all three statuses", {
   expect_setequal(result$status, c("current", "absent", "modified"))
 })
 
+test_that("dvs_status takes status = character(0) as no filter", {
+  new_dvs_test_repo()
+  plant_three_statuses()
+  expect_equal(dvs_status(status = character(0)), dvs_status())
+})
+
+test_that("dvs_status takes paths = NULL as no paths", {
+  new_dvs_test_repo()
+  plant_three_statuses()
+  expect_equal(dvs_status(paths = NULL), dvs_status())
+})
+
 test_that("dvs_status(status = 'current') returns only current", {
   new_dvs_test_repo()
   plant_three_statuses()
@@ -162,9 +174,67 @@ test_that("dvs_status returns POSIXct add_time and dvs_bytes size", {
 
   result <- dvs_status()
   expect_s3_class(result$add_time, "POSIXct")
+  expect_equal(attr(result$add_time, "tzone"), "UTC")
   expect_false(any(is.na(result$add_time)))
   expect_s3_class(result$size, "dvs_bytes")
   expect_equal(typeof(unclass(result$size)), "double")
+})
+
+status_columns <- c(
+  "path", "status", "hash", "size", "created_by", "compression",
+  "message", "code", "error", "add_time"
+)
+
+test_that("dvs_status has the same columns whatever the rows", {
+  new_dvs_test_repo()
+  expect_named(dvs_status(), status_columns)
+  expect_s3_class(dvs_status()$add_time, "POSIXct")
+
+  write_theoph("t.csv")
+  dvs_add(paths = file.path(getwd(), "t.csv"))
+  expect_named(dvs_status(), status_columns)
+  expect_true(is.na(dvs_status()$code))
+})
+
+test_that("dvs_status keeps a message that only a later row has", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  writeLines("b", "b.csv")
+  dvs_add(paths = file.path(getwd(), "a.csv"))
+  dvs_add(paths = file.path(getwd(), "b.csv"), message = "why")
+
+  result <- dvs_status()
+  expect_equal(result$message[result$path == "b.csv"], "why")
+  expect_true(is.na(result$message[result$path == "a.csv"]))
+})
+
+test_that("dvs_status keeps add_time rooted while it builds the frame", {
+  skip_on_cran()
+  new_dvs_test_repo()
+  for (i in 1:3) writeLines(paste("row", i), sprintf("f%d.csv", i))
+  dvs_add(paths = file.path(getwd(), sprintf("f%d.csv", 1:3)))
+
+  # Every allocation collects garbage. An unrooted add_time vector is freed
+  # while the frame is built, and the column comes back as another object.
+  gctorture(TRUE)
+  on.exit(gctorture(FALSE), add = TRUE)
+  result <- dvs_status()
+  gctorture(FALSE)
+
+  expect_s3_class(result$add_time, "POSIXct")
+  expect_false(any(is.na(result$add_time)))
+})
+
+test_that("dvs_status shows every status only when every choice is selected", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  dvs_add(paths = file.path(getwd(), "a.csv"))
+  writeLines("changed", "a.csv")
+  expect_equal(dvs_status()$status, "modified")
+
+  # Five entries, but not "modified"
+  result <- dvs_status(status = c("current", "current", "absent", "stale", "stale"))
+  expect_equal(nrow(result), 0L)
 })
 
 test_that("dvs_status keeps an unreadable record as an error row", {
@@ -176,5 +246,42 @@ test_that("dvs_status keeps an unreadable record as an error row", {
   result <- dvs_status(status = "current")
   expect_equal(nrow(result), 1L)
   expect_equal(result$status, "error")
+  expect_equal(result$code, "bad_metadata")
   expect_false(is.na(result$error))
+})
+
+test_that("a wrong argument type is a dvs_error_argument", {
+  new_dvs_test_repo()
+  cnd <- tryCatch(dvs_status(glob = 1), error = identity)
+  expect_s3_class(cnd, "dvs_error_argument")
+  expect_s3_class(cnd, "dvs_error")
+  expect_equal(cnd$param, "glob")
+  # The condition names the call the user wrote, not dvs_status_impl().
+  expect_identical(conditionCall(cnd), quote(dvs_status(glob = 1)))
+  expect_argument_error(quote(dvs_status(paths = NA_character_)), "paths")
+  expect_argument_error(quote(dvs_status(recursive = NA)), "recursive")
+  # The thread count comes from an option the user may set to NA
+  withr::local_options(dvs.num_threads = NA)
+  expect_argument_error(quote(dvs_status()), "threads")
+  # The user passed no `threads`, so the message names the option
+  cnd <- tryCatch(dvs_status(), error = identity)
+  expect_match(conditionMessage(cnd), "`options(dvs.num_threads)` must", fixed = TRUE)
+})
+
+test_that("set_dvs_threads raises a bad value as a dvs_error_argument", {
+  withr::local_options(dvs.num_threads = NULL)
+  expect_argument_error(quote(set_dvs_threads(NA)), "threads")
+  expect_argument_error(quote(set_dvs_threads(-1)), "threads")
+  expect_argument_error(quote(set_dvs_threads(2.5)), "threads")
+  expect_argument_error(quote(set_dvs_threads("4")), "threads")
+  expect_argument_error(quote(set_dvs_threads(TRUE)), "threads")
+  expect_argument_error(quote(set_dvs_threads(c(1, 2))), "threads")
+  expect_null(getOption("dvs.num_threads"))
+
+  expect_null(set_dvs_threads(2))
+  expect_identical(getOption("dvs.num_threads"), 2L)
+  expect_identical(set_dvs_threads(0), 2L)
+  expect_identical(getOption("dvs.num_threads"), 0L)
+  expect_identical(set_dvs_threads(NULL), 0L)
+  expect_null(getOption("dvs.num_threads"))
 })

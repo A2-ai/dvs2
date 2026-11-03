@@ -4,20 +4,47 @@
 \alias{dvs_add}
 \title{Add files to DVS-managed storage}
 \usage{
-dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = NULL)
+dvs_add(paths = character(0), message = NULL, glob = NULL, dry_run = FALSE)
 }
 \arguments{
-\item{paths}{Character vector of file paths to add to DVS storage.}
+\item{paths}{Files to add, or directories to search with \code{glob},
+relative to the working directory. \code{NULL} is the same as
+\code{character(0)}. \code{paths} or \code{glob} is required, and a directory needs
+\code{glob}.}
 
-\item{message}{Optional commit message describing why the files were added.}
+\item{message}{A message stored with the files' metadata, such as why
+they were added.}
 
-\item{glob}{Optional glob pattern to select files (e.g. \code{"data/*.csv"}).
-Globs use a literal path separator: \verb{*.csv} only matches files in the
-target directory and will not match \code{subdir/file.csv}. Use \verb{**/*.csv} to
-match recursively across subdirectories.}
+\item{glob}{A glob that selects the files to add, such as \code{"*.csv"}. It
+runs from the working directory, or from each directory in \code{paths}. A
+file named in \code{paths} is added whether or not it matches. \code{*} does not
+cross a path separator, so \verb{*.csv} matches \code{a.csv} but not
+\code{sub/a.csv}. Use \verb{**/*.csv} to match at any depth.}
 
 \item{dry_run}{If \code{TRUE}, report what would be added without modifying anything.}
 }
+\value{
+A tibble with one row per file: \code{path} (relative to the project
+root), \code{outcome}, \code{hash} (the blake3 hash), \code{size} (\code{dvs_bytes}),
+\code{stored_size} (\code{dvs_bytes}, the size of the copy in storage after
+compression) and \code{duration_ms} (the milliseconds spent on the file).
+\code{outcome} is \code{"copied"} when the file was stored and its metadata
+written, and \code{"present"} when dvs already tracked the file at this
+version. In a dry run it is what would happen, and \code{stored_size} is
+\code{size}.
+
+A file that fails does not stop the others. When one fails, the result
+also has the columns \code{code} (the kind of failure, for example
+\code{"io_error"}) and \code{error} (the reason). That row has \code{NA} in \code{outcome},
+\code{hash}, \code{size} and \code{stored_size}. A path that does not exist raises an
+error and adds nothing.
+}
 \description{
 Hashes and copies the specified files into DVS storage.
+}
+\details{
+In an interactive session, \code{dvs_add()} shows a progress bar while it
+copies files. It shows none in a dry run or in a non-interactive session,
+such as \code{Rscript}. The cli options for progress bars, such as
+\code{cli.progress_show_after}, do not change this.
 }
