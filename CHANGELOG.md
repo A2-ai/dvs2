@@ -32,6 +32,7 @@
 - R package: `NULL` in an optional argument means the default, as leaving it out does. `paths = NULL` raised an error, and `dvs_get(on_error = NULL)` skipped the `dvs.on_error` option.
 - R package: `character(0)` in `paths` or `status` means the default. `dvs_status(status = character(0))` raised an error.
 - R package: `dvs_status(paths = NA)` reported on the working directory.
+- R package: a `dvs_bytes` column combines with a numeric one in `dplyr::bind_rows()`, `dplyr` joins and `vctrs::vec_c()`, and the result is a plain double. It was an error, "Can't combine `..1` <dvs_bytes> and `..2` <double>". Two `dvs_bytes` columns still give `dvs_bytes`.
 
 ## 0.5.1
 
