@@ -34,6 +34,32 @@ type_sum.dvs_bytes <- function(x) {
   "bytes"
 }
 
+# How dvs_bytes combines with plain numbers, so vctrs::vec_c(),
+# dplyr::bind_rows() and dplyr joins accept a dvs_bytes column next to a
+# numeric one. Two dvs_bytes stay dvs_bytes. With a double or an integer the
+# result is a plain double, as for the percent class of vctrs' S3 vignette.
+
+#' @importFrom vctrs vec_ptype2 vec_cast
+#' @export
+vec_ptype2.dvs_bytes.dvs_bytes <- function(x, y, ...) new_dvs_bytes(double())
+#' @export
+vec_ptype2.dvs_bytes.double <- function(x, y, ...) double()
+#' @export
+vec_ptype2.double.dvs_bytes <- function(x, y, ...) double()
+#' @export
+vec_ptype2.dvs_bytes.integer <- function(x, y, ...) double()
+#' @export
+vec_ptype2.integer.dvs_bytes <- function(x, y, ...) double()
+
+#' @export
+vec_cast.dvs_bytes.dvs_bytes <- function(x, to, ...) x
+#' @export
+vec_cast.dvs_bytes.double <- function(x, to, ...) new_dvs_bytes(x)
+#' @export
+vec_cast.dvs_bytes.integer <- function(x, to, ...) new_dvs_bytes(x)
+#' @export
+vec_cast.double.dvs_bytes <- function(x, to, ...) unclass(x)
+
 # Preserve dvs_bytes class for +/- only. For *, /, ^, %%, %/% the result is
 # dimensionally not bytes (e.g. bytes * bytes would be bytes^2), so fall
 # through without reclassing. Comparisons and logical ops already return
@@ -58,3 +84,44 @@ Summary.dvs_bytes <- function(..., na.rm = FALSE) {
   }
   result
 }
+
+# A BLAKE3 hash column: the full hex hashes, which a tibble prints as their
+# first 12 characters, as `dvs history` does. `as.character()` and `==` see
+# the full hashes.
+new_dvs_hash <- function(x) {
+  structure(as.character(x), class = c("dvs_hash", "character"))
+}
+
+#' @export
+pillar_shaft.dvs_hash <- function(x, ...) {
+  pillar::new_pillar_shaft_simple(substr(unclass(x), 1L, 12L), align = "left")
+}
+
+#' @export
+type_sum.dvs_hash <- function(x) {
+  "blake3"
+}
+
+#' @export
+print.dvs_hash <- function(x, ...) {
+  print(unclass(x), ...)
+  invisible(x)
+}
+
+# How dvs_hash combines with plain strings, as dvs_bytes does with plain
+# numbers. Two dvs_hash stay dvs_hash. With a character vector the result is
+# a plain character vector.
+
+#' @export
+vec_ptype2.dvs_hash.dvs_hash <- function(x, y, ...) new_dvs_hash(character())
+#' @export
+vec_ptype2.dvs_hash.character <- function(x, y, ...) character()
+#' @export
+vec_ptype2.character.dvs_hash <- function(x, y, ...) character()
+
+#' @export
+vec_cast.dvs_hash.dvs_hash <- function(x, to, ...) x
+#' @export
+vec_cast.dvs_hash.character <- function(x, to, ...) new_dvs_hash(x)
+#' @export
+vec_cast.character.dvs_hash <- function(x, to, ...) unclass(x)

@@ -181,7 +181,7 @@ test_that("dvs_status returns POSIXct add_time and dvs_bytes size", {
 })
 
 status_columns <- c(
-  "path", "status", "hash", "size", "created_by", "compression",
+  "path", "status", "hash", "local_hash", "baseline_hash", "size", "created_by", "compression",
   "message", "code", "error", "add_time"
 )
 
@@ -284,4 +284,62 @@ test_that("set_dvs_threads raises a bad value as a dvs_error_argument", {
   expect_identical(getOption("dvs.num_threads"), 0L)
   expect_identical(set_dvs_threads(NULL), 0L)
   expect_null(getOption("dvs.num_threads"))
+})
+
+test_that("dvs_status() shows the working file's and the baseline's hashes", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  writeLines("b", "b.csv")
+  dvs_add(c("a.csv", "b.csv"))
+  writeLines("edited", "b.csv")
+  writeLines("c", "c.csv")
+  dvs_add("c.csv")
+  file.remove("c.csv")
+
+  res <- dvs_status()
+  row <- function(p) res[res$path == p, ]
+  expect_equal(row("a.csv")$status, "current")
+  expect_equal(as.character(row("a.csv")$local_hash), as.character(row("a.csv")$hash))
+  expect_equal(as.character(row("a.csv")$baseline_hash), as.character(row("a.csv")$hash))
+  expect_equal(row("b.csv")$status, "modified")
+  expect_false(as.character(row("b.csv")$local_hash) == as.character(row("b.csv")$hash))
+  expect_equal(as.character(row("b.csv")$baseline_hash), as.character(row("b.csv")$hash))
+  expect_equal(row("c.csv")$status, "absent")
+  expect_true(is.na(row("c.csv")$local_hash))
+})
+
+test_that("hash columns are dvs_hash: full hashes, printed as 12 characters", {
+  new_dvs_test_repo()
+  writeLines("a", "a.csv")
+  added <- dvs_add("a.csv")
+  res <- dvs_status()
+  for (column in c("hash", "local_hash", "baseline_hash")) {
+    expect_s3_class(res[[column]], "dvs_hash")
+  }
+  expect_s3_class(added$hash, "dvs_hash")
+  full <- as.character(res$hash)
+  expect_equal(nchar(full), 64L)
+  expect_equal(as.character(format(pillar::pillar_shaft(res$hash), width = 12L)), substr(full, 1L, 12L))
+  expect_equal(pillar::type_sum(res$hash), "blake3")
+  expect_output(print(res$hash), full, fixed = TRUE)
+  expect_false(any(grepl("attr", utils::capture.output(print(res$hash)))))
+})
+
+test_that("dvs_hash combines with plain strings in vctrs, so bind_rows() and joins work", {
+  full <- c(strrep("a", 64), strrep("b", 64))
+  h <- new_dvs_hash(full)
+  plain <- strrep("c", 64)
+  expect_identical(vctrs::vec_c(h, h), new_dvs_hash(c(full, full)))
+  expect_identical(vctrs::vec_c(h, NA), new_dvs_hash(c(full, NA)))
+  expect_identical(vctrs::vec_c(h, plain), c(full, plain))
+  expect_identical(vctrs::vec_c(plain, h), c(plain, full))
+  expect_identical(vctrs::vec_ptype2(h, plain), character())
+
+  stacked <- vctrs::vec_rbind(tibble::tibble(hash = h), tibble::tibble(hash = plain))
+  expect_identical(stacked$hash, c(full, plain))
+  same <- vctrs::vec_rbind(tibble::tibble(hash = h), tibble::tibble(hash = vctrs::vec_slice(h, 1)))
+  expect_s3_class(same$hash, "dvs_hash")
+
+  expect_identical(vctrs::vec_cast(plain, new_dvs_hash(character())), new_dvs_hash(plain))
+  expect_identical(vctrs::vec_cast(h, character()), full)
 })
