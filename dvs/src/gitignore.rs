@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -69,6 +69,46 @@ pub(crate) fn add_to_gitignore(repo_root: &Path, paths: &[PathBuf]) -> Result<()
     Ok(())
 }
 
+/// Drops the `!/x.csv.dvs` lines that kept the dvs1 metadata files `paths`
+/// (relative to `repo_root`) out of their directory's `/x.csv` ignore, which
+/// stays. Returns the `.gitignore` files that change, changing them unless
+/// `dry_run`.
+pub(crate) fn remove_dvs1_exceptions(
+    repo_root: &Path,
+    paths: &[PathBuf],
+    dry_run: bool,
+) -> Result<Vec<PathBuf>> {
+    let mut by_dir: BTreeMap<PathBuf, HashSet<String>> = BTreeMap::new();
+    for p in paths {
+        let dir = p.parent().unwrap_or(Path::new("")).to_path_buf();
+        if let Some(name) = p.file_name() {
+            let line = format!("!/{}", name.to_string_lossy());
+            by_dir.entry(dir).or_default().insert(line);
+        }
+    }
+
+    let mut changed = Vec::new();
+    for (dir, lines) in by_dir {
+        let gitignore = dir.join(".gitignore");
+        let gitignore_path = repo_root.join(&gitignore);
+        if !gitignore_path.is_file() {
+            continue;
+        }
+        let existing = fs::read_to_string(&gitignore_path)?;
+        let kept: String = existing
+            .split_inclusive('\n')
+            .filter(|line| !lines.contains(line.trim_end()))
+            .collect();
+        if kept != existing {
+            if !dry_run {
+                fs::write(&gitignore_path, kept)?;
+            }
+            changed.push(gitignore);
+        }
+    }
+    Ok(changed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +144,36 @@ mod tests {
         let paths = vec![PathBuf::from("data.csv")];
         add_to_gitignore(root, &paths).unwrap();
         assert!(!root.join(".gitignore").exists());
+    }
+
+    #[test]
+    fn dvs1_exceptions_are_dropped_and_ignores_kept() {
+        let (_tmp, root) = create_temp_git_repo();
+        fs::write(
+            root.join(".gitignore"),
+            "*.log\n/x.csv\n!/x.csv.dvs\n!/y.csv.dvs",
+        )
+        .unwrap();
+        fs::create_dir(root.join("sub")).unwrap();
+        fs::write(root.join("sub/.gitignore"), "/z.csv\r\n!/z.csv.dvs\r\n").unwrap();
+        let paths = [
+            PathBuf::from("x.csv.dvs"),
+            PathBuf::from("sub/z.csv.dvs"),
+            PathBuf::from("none/w.csv.dvs"),
+        ];
+
+        let changed = remove_dvs1_exceptions(&root, &paths, true).unwrap();
+        assert_eq!(
+            changed,
+            [PathBuf::from(".gitignore"), PathBuf::from("sub/.gitignore")]
+        );
+        let unchanged = fs::read_to_string(root.join(".gitignore")).unwrap();
+        assert!(unchanged.contains("!/x.csv.dvs"));
+
+        remove_dvs1_exceptions(&root, &paths, false).unwrap();
+        let root_content = fs::read_to_string(root.join(".gitignore")).unwrap();
+        assert_eq!(root_content, "*.log\n/x.csv\n!/y.csv.dvs");
+        let sub_content = fs::read_to_string(root.join("sub/.gitignore")).unwrap();
+        assert_eq!(sub_content, "/z.csv\r\n");
     }
 }

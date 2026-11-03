@@ -20,7 +20,7 @@ use crate::operation::{
     ByteTotals, Counts, FileRow, Hashing, OperationContext, OperationObserver, OperationPlan,
     OperationRow, RowState, RunOutcome, duration_ms, millis,
 };
-use crate::paths::{DvsPaths, ProjectPath};
+use crate::paths::{DvsPaths, MetadataLayout, ProjectPath};
 use crate::utils::get_threadpool;
 use crate::{Outcome, cache};
 
@@ -284,6 +284,14 @@ fn add_all(
     dry_run: bool,
     ctx: &OperationContext,
 ) -> Result<AddReport> {
+    if paths.metadata_layout() == MetadataLayout::Dvs1 {
+        return Err(crate::Error::new(
+            ErrorCode::InvalidConfiguration,
+            "this is a dvs1 project (dvs.yaml), which dvs can read but not add to; \
+             convert it first with dvs migrate local or dvs migrate server",
+        )
+        .into());
+    }
     let observer = ctx.observer();
     let matched_paths = paths.validate_for_add(&files);
     if matched_paths.is_empty() {
@@ -532,7 +540,9 @@ mod tests {
     use super::*;
     use crate::operation::{CancelToken, TransferObserver};
     use crate::progress::FileProgress;
-    use crate::testutil::{Recorder, create_file, create_temp_git_repo, init_dvs_repo};
+    use crate::testutil::{
+        Recorder, create_file, create_temp_git_repo, init_dvs_repo, init_dvs1_repo,
+    };
     use fs_err as fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -557,6 +567,34 @@ mod tests {
         let (config, _dvs_dir) = init_dvs_repo(&root);
         let paths = DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name());
         (tmp, root, config, paths.unwrap())
+    }
+
+    #[test]
+    fn add_refuses_a_dvs1_checkout_and_suggests_migrate() {
+        let (_tmp, root) = create_temp_git_repo();
+        init_dvs1_repo(&root, &[]);
+        create_file(&root, "a.txt", b"a");
+        let config = crate::config::Config::find(&root).unwrap().unwrap();
+        let paths = DvsPaths::new(root.clone(), root.clone(), config.metadata_folder_name())
+            .unwrap()
+            .with_metadata_layout(config.metadata_layout());
+
+        let error = add_files(
+            vec!["a.txt".into()],
+            &paths,
+            config.backend(),
+            None,
+            config.compression(),
+            false,
+            &OperationContext::new(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            backend_error_code(&error),
+            Some(ErrorCode::InvalidConfiguration)
+        );
+        assert!(error.to_string().contains("dvs migrate"), "{error}");
+        assert!(!root.join("a.txt.dvs").exists());
     }
 
     #[test]

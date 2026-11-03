@@ -55,6 +55,21 @@ dvs get data/raw.csv                        # restore it, e.g. in a fresh clone
 dvs history data/raw.csv                    # its upload history
 ```
 
+To move a checkout to newer storage, run `migrate` on it, then commit the files it lists:
+
+```sh
+# A dvs1 project to local storage, keeping its dvs1 folder
+dvs migrate local
+
+# A dvs1 or local project to a dvs server
+dvs migrate server my-project https://dvs.example.com --group my-team
+
+# After merging a branch that was not migrated
+dvs migrate
+```
+
+Each branch is migrated on its own, and the old storage is left as it is for commits that were not migrated.
+
 `dvs init server` and `dvs attach` log you in to the server if needed. When a login expires, run `dvs login` (and `dvs logout` to sign out).
 `dvs info` shows the project's configuration.
 Every command accepts `--json` for machine-readable output. See `dvs --help` and [specs.md](specs.md) for details.
@@ -65,4 +80,3 @@ Every command accepts `--json` for machine-readable output. See `dvs --help` and
 - GC?
 - dvs remove?
 - integrity check? would need to read the file again after saving it
-- migrate from dvs1

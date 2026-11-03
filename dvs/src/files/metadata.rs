@@ -5,8 +5,9 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::dvs1::Dvs1Metadata;
 use crate::error::{Error, ErrorCode};
-use crate::paths::ProjectPath;
+use crate::paths::{MetadataLayout, ProjectPath};
 use crate::{Backend, Compression, DvsPaths, Hashes, Outcome, StoreRequest, StoreResult};
 
 /// The dvs metadata for a given file
@@ -65,6 +66,15 @@ impl FileMetadata {
             message,
             compression,
         })
+    }
+
+    /// Reads the metadata file of `relative_path`, in the project's layout.
+    pub(crate) fn read(paths: &DvsPaths, relative_path: &Path) -> Result<Self> {
+        let file = fs::File::open(paths.metadata_path(relative_path))?;
+        match paths.metadata_layout() {
+            MetadataLayout::Folder => Ok(serde_json::from_reader(file)?),
+            MetadataLayout::Dvs1 => serde_json::from_reader::<_, Dvs1Metadata>(file)?.to_metadata(),
+        }
     }
 
     /// Writes the metadata file, creating its directory if needed.

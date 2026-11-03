@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `dvs migrate`: converts a checkout to newer storage, leaving the old storage untouched. `dvs migrate local` moves a dvs1 project to local storage (its dvs1 folder in place, or a copy at a path), `dvs migrate server` moves a dvs1 or local project to a dvs server, and a bare `dvs migrate` copies what a migrated checkout still lacks, for example after merging an unmigrated branch. It never commits: it lists the changed files to commit.
+- `dvs get` and `dvs status` read dvs1 checkouts (`dvs.yaml`). `dvs add` refuses them and suggests `dvs migrate`.
+
 ## 0.5.1
 
 ### Fixed

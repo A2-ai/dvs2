@@ -137,7 +137,7 @@ pub fn rows_envelope(
 
 pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
     let mut value = match command {
-        "add" | "get" | "status" | "availability" | "history" => rows_envelope(
+        "add" | "get" | "status" | "availability" | "history" | "migrate" => rows_envelope(
             command,
             dry_run,
             vec![],
@@ -146,7 +146,7 @@ pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
         ),
         _ => envelope(command, dry_run),
     };
-    if matches!(command, "add" | "get") {
+    if matches!(command, "add" | "get" | "migrate") {
         value["bytes"] = json!(ByteTotals::default());
     }
     value["outcome"] = json!("failed");

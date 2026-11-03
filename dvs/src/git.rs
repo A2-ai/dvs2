@@ -9,7 +9,8 @@ pub struct Checkout {
     pub commit: Option<String>,
 }
 
-fn git(root: &Path, args: &[&str]) -> Option<String> {
+/// The stdout of `git -C root <args>`, as it is; `None` if it fails.
+pub(crate) fn output(root: &Path, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -19,7 +20,11 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    let value = String::from_utf8(output.stdout).ok()?;
+    String::from_utf8(output.stdout).ok()
+}
+
+fn git(root: &Path, args: &[&str]) -> Option<String> {
+    let value = output(root, args)?;
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
 }

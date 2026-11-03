@@ -13,7 +13,7 @@ use dvs::CancelToken;
 
 use crate::output::EXIT_CANCELLED;
 
-/// Install the handlers for one cancellable run. Only `add`, `get` and
+/// Install the handlers for one cancellable run. Only `add`, `get`, `migrate` and
 /// `status` call this: every other command keeps the default "a signal kills
 /// the process" behaviour, so Ctrl-C still stops `dvs login` polling.
 pub fn install(token: &CancelToken, watch_stdin: bool) {

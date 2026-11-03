@@ -117,6 +117,35 @@ impl LocalBackend {
         })
     }
 
+    /// Storage at `path` with no group, so dvs never changes the group or modes
+    /// of what is already there.
+    pub fn without_group(path: impl AsRef<Path>) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            group: None,
+            open: false,
+        }
+    }
+
+    /// Gives the folder and everything in it the modes and group dvs sets on
+    /// what it creates.
+    pub fn apply_modes(&self) -> Result<()> {
+        for entry in walkdir::WalkDir::new(&self.path) {
+            let entry = entry.map_err(std::io::Error::from)?;
+            let mode = if entry.file_type().is_dir() {
+                self.dir_mode()
+            } else if entry.file_name() == AUDIT_LOG_FILENAME {
+                self.audit_mode()
+            } else if entry.file_type().is_file() {
+                SHARED_BLOB_MODE
+            } else {
+                continue;
+            };
+            self.ensure_group_and_mode(entry.path(), mode)?;
+        }
+        Ok(())
+    }
+
     /// Apply configured group ownership to a path.
     /// No-op on non-Unix or if no group is set.
     #[cfg(unix)]
@@ -182,7 +211,7 @@ impl LocalBackend {
         }
     }
 
-    fn hash_to_path(&self, hashes: &Hashes) -> Result<PathBuf> {
+    pub(crate) fn hash_to_path(&self, hashes: &Hashes) -> Result<PathBuf> {
         let hash = hashes.get_blake3();
         if hash.len() < 3 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
             bail!("Invalid hash: {hash}");

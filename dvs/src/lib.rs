@@ -3,6 +3,7 @@ pub mod auth;
 pub mod backends;
 mod cache;
 pub mod config;
+pub mod dvs1;
 pub mod error;
 mod files;
 pub mod git;
@@ -10,6 +11,7 @@ mod gitignore;
 pub mod globbing;
 mod hashes;
 pub mod init;
+pub mod migrate;
 pub mod operation;
 pub mod paths;
 pub mod progress;
@@ -86,6 +88,31 @@ pub mod testutil {
         (config, dvs_dir)
     }
 
+    /// Makes `repo_root` a dvs1 checkout tracking `files` (`x.csv.dvs` next to
+    /// each), with their raw blobs in a sibling storage folder, which it returns.
+    pub fn init_dvs1_repo(repo_root: &Path, files: &[(&str, &[u8])]) -> PathBuf {
+        let storage = repo_root.parent().unwrap().join("dvs1-storage");
+        let yaml = format!("storage_dir: {}\n", storage.display());
+        create_file(repo_root, crate::dvs1::CONFIG_FILE_NAME, yaml.as_bytes());
+        for (name, content) in files {
+            let hash = blake3::hash(content).to_string();
+            create_file(&storage, &format!("{}/{}", &hash[..2], &hash[2..]), content);
+            let record = serde_json::json!({
+                "blake3_checksum": hash,
+                "size": content.len(),
+                "add_time": "2024-01-02T03:04:05Z",
+                "message": "",
+                "saved_by": "tester",
+            });
+            create_file(
+                repo_root,
+                &format!("{name}.dvs"),
+                record.to_string().as_bytes(),
+            );
+        }
+        storage
+    }
+
     /// An observer that records each call as a short line, in order, plus
     /// every finished row as JSON, and can cancel the operation once a given
     /// number of transfers have started.
@@ -149,6 +176,7 @@ pub mod testutil {
                 crate::FileRow::Add(r) => (&r.path, serde_json::to_value(r)),
                 crate::FileRow::Get(r) => (&r.path, serde_json::to_value(r)),
                 crate::FileRow::Status(r) => (&r.path, serde_json::to_value(r)),
+                crate::FileRow::Migrate(r) => (&r.path, serde_json::to_value(r)),
             };
             self.push(format!("row {}", path.display()));
             self.rows.lock().unwrap().push(json.unwrap());

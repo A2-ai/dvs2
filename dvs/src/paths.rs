@@ -10,6 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use walkdir::WalkDir;
 
 use crate::config::Config;
+use crate::dvs1;
 
 pub const CONFIG_FILE_NAME: &str = "dvs.toml";
 pub const DEFAULT_FOLDER_NAME: &str = ".dvs";
@@ -60,27 +61,27 @@ impl GetPathStatus {
 }
 
 /// Finds the root of a project by walking up from the given directory
-/// until a `dvs.toml` is found
+/// until a `dvs.toml` is found, or failing that a dvs1 `dvs.yaml`
 ///
-/// Returns the `start_dir` if no `dvs.toml` has been found.
+/// Returns the `start_dir` if neither has been found.
 pub fn find_repo_root(start_dir: impl AsRef<Path>) -> PathBuf {
-    let mut dir = start_dir.as_ref();
-    log::debug!("Searching for repo root starting from {}", dir.display());
+    let start_dir = start_dir.as_ref();
+    log::debug!(
+        "Searching for repo root starting from {}",
+        start_dir.display()
+    );
 
-    loop {
-        if dir.join(CONFIG_FILE_NAME).exists() {
+    let ancestors = || start_dir.ancestors();
+    let root = ancestors()
+        .find(|dir| dir.join(CONFIG_FILE_NAME).exists())
+        .or_else(|| ancestors().find(|dir| dvs1::is_dvs1(dir)));
+    match root {
+        Some(dir) => {
             log::debug!("Found repo root at {}", dir.display());
-            return dir.to_path_buf();
+            dir.to_path_buf()
         }
-
-        if let Some(parent) = dir.parent() {
-            dir = parent;
-        } else {
-            break;
-        }
+        None => start_dir.to_path_buf(),
     }
-
-    start_dir.as_ref().to_path_buf()
 }
 
 /// Normalize a path by resolving `.` and `..` components lexically (no
@@ -103,6 +104,16 @@ pub(crate) fn normalize_path(p: PathBuf) -> Option<PathBuf> {
     Some(out)
 }
 
+/// Where a project keeps the metadata file of each tracked file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MetadataLayout {
+    /// `x.csv.dvs` mirrored under the metadata folder
+    #[default]
+    Folder,
+    /// dvs1's `x.csv.dvs` next to `x.csv`, read only
+    Dvs1,
+}
+
 /// We always need to figure out where the user is in a project,
 /// where the root is etc.
 /// This struct handles all of it so the rest of the code doesn't have to
@@ -114,6 +125,7 @@ pub struct DvsPaths {
     repo_root: PathBuf,
     /// Folder name for metadata, defined in the config
     metadata_folder_name: String,
+    metadata_layout: MetadataLayout,
 }
 
 impl DvsPaths {
@@ -127,7 +139,14 @@ impl DvsPaths {
             cwd,
             repo_root: fs::canonicalize(&repo_root)?,
             metadata_folder_name: metadata_folder_name.into(),
+            metadata_layout: MetadataLayout::Folder,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_metadata_layout(mut self, layout: MetadataLayout) -> Self {
+        self.metadata_layout = layout;
+        self
     }
 
     pub fn from_cwd(config: &Config) -> Result<Self> {
@@ -143,7 +162,12 @@ impl DvsPaths {
             cwd,
             repo_root,
             metadata_folder_name: config.metadata_folder_name().to_owned(),
+            metadata_layout: config.metadata_layout(),
         })
+    }
+
+    pub fn metadata_layout(&self) -> MetadataLayout {
+        self.metadata_layout
     }
 
     pub fn metadata_folder(&self) -> PathBuf {
@@ -155,6 +179,9 @@ impl DvsPaths {
     }
 
     pub fn metadata_path(&self, relative: &Path) -> PathBuf {
+        if self.metadata_layout == MetadataLayout::Dvs1 {
+            return dvs1::metadata_path(&self.file_path(relative));
+        }
         let dvs_path = self.metadata_folder().join(relative);
         let mut s = dvs_path.into_os_string();
         s.push(".dvs");
@@ -165,6 +192,9 @@ impl DvsPaths {
     /// the metadata folder, with the `.dvs` extension stripped.
     /// Shared by `get` and `status`
     pub(crate) fn tracked_paths(&self) -> Vec<PathBuf> {
+        if self.metadata_layout == MetadataLayout::Dvs1 {
+            return dvs1::tracked_paths(&self.repo_root, &self.metadata_folder_name);
+        }
         let metadata_root = self.metadata_folder();
         WalkDir::new(&metadata_root)
             .into_iter()
@@ -417,7 +447,16 @@ impl<'de> Deserialize<'de> for ProjectPath {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{create_temp_git_repo, init_dvs_repo};
+    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
+
+    #[test]
+    fn find_repo_root_prefers_a_dvs2_root_over_a_nested_dvs_yaml() {
+        let (_tmp, root) = create_temp_git_repo();
+        init_dvs_repo(&root);
+        create_file(&root, "sub/dvs.yaml", b"unrelated: 1\n");
+
+        assert_eq!(find_repo_root(root.join("sub")), root);
+    }
 
     #[test]
     fn metadata_path_returns_dvs_file_path() {
@@ -426,6 +465,17 @@ mod tests {
 
         let result = paths.metadata_path(Path::new("sub/file.txt"));
         assert_eq!(result, root.join(".meta/sub/file.txt.dvs"));
+    }
+
+    #[test]
+    fn tracked_paths_skip_the_migrated_from_record() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, dvs_dir) = init_dvs_repo(&root);
+        let paths = DvsPaths::new(root.clone(), root, config.metadata_folder_name()).unwrap();
+        create_file(&dvs_dir, "x.csv.dvs", b"{}");
+        crate::migrate::record_migrated_from(&paths, Path::new("/data/old")).unwrap();
+
+        assert_eq!(paths.tracked_paths(), vec![PathBuf::from("x.csv")]);
     }
 
     #[test]
