@@ -250,6 +250,20 @@ test_that("dvs_status keeps an unreadable record as an error row", {
   expect_false(is.na(result$error))
 })
 
+test_that("dvs_status names a git merge conflict in a record", {
+  new_dvs_test_repo()
+  write_theoph("t.csv")
+  dvs_add(paths = file.path(getwd(), "t.csv"))
+  writeLines(
+    c("{", "<<<<<<< HEAD", '  "size": 1', "=======", '  "size": 2', ">>>>>>> theirs", "}"),
+    file.path(".dvs", "t.csv.dvs")
+  )
+
+  result <- dvs_status()
+  expect_equal(result$code, "bad_metadata")
+  expect_match(result$error, "t.csv.dvs: the .dvs file has git merge conflict markers", fixed = TRUE)
+})
+
 test_that("a wrong argument type is a dvs_error_argument", {
   new_dvs_test_repo()
   cnd <- tryCatch(dvs_status(glob = 1), error = identity)
