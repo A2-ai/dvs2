@@ -13,6 +13,10 @@
 
 ### Added
 
+- R package: `dvs_availability(hashes)` reports whether the storage holds each BLAKE3 hash, without downloading it, as `dvs availability` does: a tibble of `hash`, `state` (`present`, `absent` or `unknown`), `code` and `message`.
+- R package: `dvs_init_server()` and `dvs_attach()` create a project on a dvs server or attach to one, as `dvs init server` and `dvs attach` do. Without a token for the server they log in first with `dvs_login()`. Both return the project root.
+- R package: `dvs_login()` and `dvs_logout()` log in to and out of a dvs server, as `dvs login` and `dvs logout` do, and share the CLI's credentials. `dvs_login()` needs an interactive R session. It shows the address and the code to enter, and an interrupt stops its wait. `dvs_logout()` returns `revoked` and a tibble of `warnings`: a token the server could not revoke is deleted all the same, and the reason is a row there, not an R warning.
+- R package: `dvs_info()` returns the fields of `dvs info --json` as a list: the backend, the storage or server, the compression, and for a server project the login, the connection, the user, the access and the groups. The CLI's JSON and R build them with one library function, `dvs::info::project_info`.
 - R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
 - R package: `just rpkg-reference` builds the HTML reference manual. The one in `dist/reference/` is for users and leaves out the internal pages, as R's help index does. The one in `dvs-rpkg/rust-target/doc/r/` is for development and keeps them.
 - R package: `dvs_status()` has a `code` column, the kind of failure of a row that failed, as in the CLI's JSON.
@@ -20,10 +24,13 @@
 - R package: the counts of `dvs_result_info()` include `total`, `succeeded` and `cancelled`, as in the CLI's JSON.
 - R package: a wrong argument raises a `dvs_error_argument` condition, also a `dvs_error`, with the argument in `param` and the call the user wrote. A `dvs.toml` that does not load raises a `dvs_config_error`, also a `dvs_error`, in every command. One `dvs_error` handler catches them all.
 - R package: a bad `dvs.num_threads` or `dvs.on_error` option raises the same `dvs_error_argument`, and the message names the option.
+- R package: a command that fails raises a `dvs_error` with `code`, the code the CLI's JSON gives the same failure (`not_in_project`, `auth_required`, `access_denied`, `project_not_found`, `server_unavailable`, ...), and the CLI's message. It was a `rust_error` with no code, so a script could not tell a missing login from an unreachable server. A `dvs_config_error` has `code` `invalid_configuration`.
 - R package: `dvs_result_info()` has `summary`, the summary the CLI prints. A printed `dvs_get()` result and its `on_error` warning or error start with it, so R and the CLI say the same. `on_conflict = <policy> (<source>)` appears only when the policy acted, as in the CLI.
 
 ### Fixed
 
+- `dvs info` on a server project names a `compression` line in dvs.toml, which the server's compression overrides: `compression set by the server (compression = "none" in dvs.toml is ignored)`, and `ignored_compression` in its JSON. Nothing said that the line had no effect.
+- `dvs init server` refuses a folder dvs already initialized (a `dvs.toml`, or a metadata folder with files) before it starts a login. It asked for a login first, and `--json` reported `auth_required`.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.

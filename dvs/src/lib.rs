@@ -9,6 +9,7 @@ pub mod git;
 mod gitignore;
 pub mod globbing;
 mod hashes;
+pub mod info;
 pub mod init;
 pub mod operation;
 pub mod paths;
@@ -17,8 +18,9 @@ pub(crate) mod utils;
 
 pub use backends::{Backend, RetrieveRequest, StoreRequest, StoreResult};
 pub use config::Compression;
-pub use error::{Error, ErrorCode, backend_error_code};
+pub use error::{Error, ErrorCode, backend_error_code, error_code};
 pub use files::add::{AddDetail, AddReport, AddResult, add_files};
+pub use files::availability::{AvailabilityRow, StoredState, availability};
 pub use files::get::{
     Action, Before, GetCode, GetCounts, GetOptions, GetOutcome, GetReport, GetRow, GetVerdict,
     StoredCopy, get_files, shell_path,

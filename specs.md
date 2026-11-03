@@ -130,6 +130,8 @@ relative to the current directory.
 
 `dvs availability <HASHES>...` takes one or more BLAKE3 hashes (an invalid one is `invalid_arguments`) and
 reports, per hash and in input order, whether storage has that content, without downloading it.
+R's `dvs_availability(hashes)` returns the same rows as a tibble (`hash`, `state`, `code`, `message`), built by
+the same library function (`dvs::availability`). A storage it cannot read is a row, not an R error.
 `dvs history <PATHS>...` takes one or more file paths and reports their stored upload history; the files need
 not exist in this checkout. It takes files, not folders: a path that is a folder is refused with
 `invalid_arguments` (exit `2`), as is a path outside the project.
@@ -190,13 +192,20 @@ needed. Row codes besides the shared ones: `add`, `status` and `availability` `i
 absolute native paths. For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
 `unknown` when not logged in), `connection_error`, `user`, `access` and `groups`; a local project reports
 `connection: "not_applicable"`. `compression` is a local project's (`zstd` or `none`), and `null` for a server
-project, whose compression is set on the server (human `info` prints "set by the server"). `connection_error` is `{code, message}` (`server_unavailable`,
+project, whose compression is set on the server (human `info` prints "set by the server"). A server project's
+dvs.toml can still have a `compression` line, which every dvs before 0.5.0 wrote at init. The server's setting
+wins, so `ignored_compression` names the line (`null` without one) and human `info` adds it to the compression
+line. `connection_error` is `{code, message}` (`server_unavailable`,
 `project_not_found` or `server_too_old`) when `connection` is `unavailable`, else `null`. `access` is the
 server's level (`read`, `write`, `admin`), `not_logged_in` without a token, `none` on a 403 (no membership:
 `connection` is `available`, exit `0`, like human mode's "no access"), or `null` when the server could not say;
 a rejected login (401, `auth_expired`) is an error envelope. Every project also reports `on_conflict` and
 `on_conflict_source`, what `get` does with local changes and where that was set (`null` when the setting is
 invalid; human `info` shows the error on its `on_conflict` line).
+
+R's `dvs_info()` returns the same fields as a list, built by the same library function (`dvs::info::project_info`).
+`NULL` stands for `null`, and `groups` is a character vector. A credentials store that cannot be read or a rejected
+login raises a `dvs_error` with that code.
 
 ```shell
 ❯ dvs info --help
@@ -227,6 +236,12 @@ Credentials and device secrets are never written to results or events.
 `logout --json` deletes the local credential even if remote revocation fails: `revoked` is `true` for a
 confirmed revocation, `false` for a failed revoke call, `null` when there was no token; `warnings` is always an
 array of `{code, message}`.
+
+R's `dvs_login()` and `dvs_logout()` do what `dvs login` and `dvs logout` do, with the same library functions and
+the same credentials store. `dvs_login()` shows the address and the code with `message()` and waits in R, so an
+interrupt stops it. Outside an interactive R session it raises a `dvs_error` with `auth_required`, as
+`login --json` reports it. `dvs_logout()` returns `revoked` (`NULL` for `null`) and `warnings`, a tibble with
+`code` and `message`.
 
 A server URL may carry a path prefix (a proxy, `https://host/dvs`, with or without the trailing slash): every
 request, login included, goes under it.
@@ -375,6 +390,17 @@ dvs_init(
 - `compression`: desired compression for the stored data (default `zstd`)
 
 Returns a single-row data frame describing the resulting configuration.
+
+```r
+dvs_init_server(name, url, group, metadata_folder_name = NULL, compression = c("zstd", "none"))
+dvs_attach(name, url, metadata_folder_name = NULL)
+```
+
+`dvs_init_server()` and `dvs_attach()` do what `dvs init server` and `dvs attach` do, with the same library
+functions, in the working directory. Neither takes `root_dir`, as in the CLI. Without a token for the server they
+log in first with `dvs_login()`, after the checks that need no server: `dvs init server` refuses a `dvs.toml` or a
+metadata folder with files, and `dvs attach` a `dvs.toml`, before any login. Both return the project root, as
+`project_root` in `dvs init --json`.
 
 ### add
 
@@ -597,6 +623,10 @@ It returns a tibble of class `dvs_get_result` with the same columns as the JSON 
 returns the operation information (outcome, `did_as_asked`, policy and its source, counts, problem), and printing
 shows it as a header. Invalid arguments, not being in a dvs project, and configuration errors (`dvs_config_error`)
 are the only immediate errors.
+
+A command that fails raises a `dvs_error` with `code`, the code the CLI's JSON gives the same failure, and the
+CLI's message. A `dvs_config_error` has `code` `invalid_configuration`. An argument error is a `dvs_error_argument`
+with `param`.
 
 ### status
 
