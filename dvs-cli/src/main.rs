@@ -415,10 +415,13 @@ fn info_compression(config: &Config) -> Option<String> {
     }
 }
 
-/// dvs1's `dvs.yaml` beside `dvs.toml` came in with a merge of an unmigrated branch.
-fn leftover_dvs1_warning(repo_root: &std::path::Path) -> Option<&'static str> {
-    (repo_root.join(CONFIG_FILE_NAME).is_file() && dvs::dvs1::is_dvs1(repo_root))
-        .then_some("dvs1 files came in from a merge; run dvs migrate")
+/// dvs1's `dvs.yaml` or `.dvs` files beside `dvs.toml` came in with a merge of an unmigrated branch.
+fn leftover_dvs1_warning(paths: &DvsPaths, metadata_folder_name: &str) -> Option<&'static str> {
+    let root = paths.repo_root();
+    (root.join(CONFIG_FILE_NAME).is_file()
+        && (dvs::dvs1::is_dvs1(root)
+            || !dvs::dvs1::leftover_paths(paths, metadata_folder_name, false).is_empty()))
+    .then_some("dvs1 files came in from a merge; run dvs migrate")
 }
 
 fn status_summary(counts: &Counts) -> String {
@@ -756,7 +759,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             // Over the rows shown
             let counts = Counts::of(&statuses);
             let outcome = RunOutcome::of(&counts, report.cancelled);
-            let warning = leftover_dvs1_warning(dvs_paths.repo_root());
+            let warning = leftover_dvs1_warning(&dvs_paths, config.metadata_folder_name());
             if cli.json {
                 let files = statuses
                     .iter()
@@ -1463,20 +1466,38 @@ mod tests {
     }
 
     #[test]
-    fn status_warns_of_a_dvs1_config_beside_dvs_toml() {
+    fn status_warns_of_a_dvs1_config_or_metadata_beside_dvs_toml() {
         let root = tempfile::tempdir().unwrap();
-        let root = root.path();
+        let paths = DvsPaths::new(root.path().into(), root.path().into(), ".dvs").unwrap();
+        let root = paths.repo_root();
+        let warned = Some("dvs1 files came in from a merge; run dvs migrate");
         std::fs::write(
             root.join(dvs::dvs1::CONFIG_FILE_NAME),
             "storage_dir: /old\n",
         )
         .unwrap();
-        assert_eq!(leftover_dvs1_warning(root), None);
+        assert_eq!(leftover_dvs1_warning(&paths, ".dvs"), None);
         std::fs::write(root.join(CONFIG_FILE_NAME), "").unwrap();
-        assert_eq!(
-            leftover_dvs1_warning(root),
-            Some("dvs1 files came in from a merge; run dvs migrate")
-        );
+        assert_eq!(leftover_dvs1_warning(&paths, ".dvs"), warned);
+
+        // A clean merge brings only the dvs1 metadata, not dvs.yaml
+        std::fs::remove_file(root.join(dvs::dvs1::CONFIG_FILE_NAME)).unwrap();
+        std::fs::write(root.join("notes.dvs"), "not dvs1 metadata").unwrap();
+        assert_eq!(leftover_dvs1_warning(&paths, ".dvs"), None);
+        let record = json!({
+            "blake3_checksum": "abc",
+            "size": 1,
+            "add_time": "2024-01-02T03:04:05Z",
+            "message": "",
+            "saved_by": "tester",
+        });
+        // A .dvs file the project tracks as data is not dvs1 metadata, even if it reads as such
+        std::fs::write(root.join("tracked.dvs"), record.to_string()).unwrap();
+        std::fs::create_dir_all(root.join(".dvs")).unwrap();
+        std::fs::write(root.join(".dvs/tracked.dvs.dvs"), "{}").unwrap();
+        assert_eq!(leftover_dvs1_warning(&paths, ".dvs"), None);
+        std::fs::write(root.join("x.csv.dvs"), record.to_string()).unwrap();
+        assert_eq!(leftover_dvs1_warning(&paths, ".dvs"), warned);
     }
 
     #[test]

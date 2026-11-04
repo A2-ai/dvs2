@@ -613,8 +613,8 @@ are the only immediate errors.
 This returns the status (mentioned in the high level overview above)
  of the tracked files in the project.
 
-When a dvs1 `dvs.yaml` sits
-beside `dvs.toml`, dvs1 files came in with a merge of an unmigrated branch, and `status` warns to run
+When a dvs1 `dvs.yaml`, or a dvs1 record next to a data file, sits
+in a project with `dvs.toml`, dvs1 files came in with a merge of an unmigrated branch, and `status` warns to run
 `dvs migrate` (human output on stderr; `--json` adds `warnings: [{code, message}]`). The check is local: `status`
 never reads storage.
 
@@ -732,7 +732,8 @@ project that does not exist yet needs `--group` to be created
 
 A file whose content is in neither the target nor any old storage was already unfetchable: it is a
 `source_missing` row, its metadata is still converted, and it is not a failure. A record dvs cannot read, or
-content in old storage that does not match its hash, is a `bad_metadata` row and fails. So does a dvs1 record
+content in old storage that decodes to its hash neither as recorded nor with the other compression, is a
+`bad_metadata` row and fails. So does a dvs1 record
 that lists different content from the dvs2 record for the same path.
 
 Migrations repeat and converge: re-running, or migrating another branch into the same target, only copies what
@@ -753,9 +754,11 @@ it. When two branches add different sources, the merge conflict is two adjacent 
 resolves it.
 
 After a merge of an unmigrated branch into a migrated one, `get` and `availability` report the branch's new
-content as not in storage, with a hint naming `dvs migrate` and the listed sources. For a dvs1 branch, `status`
-also warns about the `dvs.yaml` beside `dvs.toml`. A bare `dvs migrate` copies the missing content from the
-listed sources (and from that `dvs.yaml`'s `storage_dir`), converts the dvs1 files and removes `dvs.yaml`. With
+content as not in storage, with a hint naming `dvs migrate` and the listed sources. For a dvs1 branch, the merge
+brings dvs1 records next to the data (and `dvs.yaml` only if the branch changed it); `status` warns about either.
+A bare `dvs migrate` copies the missing content from the listed sources (and from a `dvs.yaml`'s `storage_dir`
+when one came in), converts the dvs1 records and removes `dvs.yaml`. A `.dvs` file the project tracks as data is
+never read as a dvs1 record, and without a `dvs.yaml` neither is one that is not dvs1 metadata. With
 no sources listed, it has nothing to do and exits `0`.
 
 #### dvs1 checkouts

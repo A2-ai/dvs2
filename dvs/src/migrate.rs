@@ -481,8 +481,9 @@ fn error_row(path: PathBuf, error: &anyhow::Error, duration_ms: Option<u64>) -> 
 }
 
 /// The files the checkout lists, from its metadata folder `folder` (`dvs2`)
-/// and dvs1 files next to the data (`dvs1`), plus a row for each that cannot
-/// be read.
+/// and dvs1 files next to the data, plus a row for each that cannot be read.
+/// Without a dvs1 dvs.yaml (`dvs1`), a `.dvs` file beside a dvs.toml is only
+/// dvs1's if it reads as such.
 fn read_entries(
     paths: &DvsPaths,
     folder: &str,
@@ -501,40 +502,43 @@ fn read_entries(
             found.insert(path, entry);
         }
     }
-    if dvs1 {
-        let root = paths.repo_root();
-        for path in dvs1::tracked_paths(root, folder) {
-            let sidecar = dvs1::metadata_path(&path);
-            let read = Dvs1Metadata::read(&root.join(&sidecar)).and_then(|m| m.to_metadata());
-            match (found.get_mut(&path), read) {
-                (None, read) => {
-                    let entry = read.map(|metadata| Entry {
-                        path: path.clone(),
-                        metadata,
-                        sidecar: Some(sidecar),
-                    });
-                    found.insert(path, entry);
-                }
-                (Some(Err(_)), _) => {}
-                (Some(Ok(entry)), Ok(metadata))
-                    if entry.metadata.hashes.blake3 == metadata.hashes.blake3 =>
-                {
-                    entry.sidecar = Some(sidecar);
-                }
-                (Some(slot), read) => {
-                    *slot = Err(read.err().unwrap_or_else(|| {
-                        let dvs2 = paths.metadata_path(&path);
-                        let dvs2 = dvs2.strip_prefix(root).unwrap_or(&dvs2);
-                        refusal(
-                            ErrorCode::BadMetadata,
-                            format!(
-                                "{} and {} list different content; delete the one to drop",
-                                sidecar.display(),
-                                dvs2.display()
-                            ),
-                        )
-                    }));
-                }
+    let root = paths.repo_root();
+    let dvs1_paths = if dvs2 {
+        dvs1::leftover_paths(paths, folder, dvs1)
+    } else {
+        dvs1::tracked_paths(root, folder)
+    };
+    for path in dvs1_paths {
+        let sidecar = dvs1::metadata_path(&path);
+        let read = Dvs1Metadata::read(&root.join(&sidecar)).and_then(|m| m.to_metadata());
+        match (found.get_mut(&path), read) {
+            (None, read) => {
+                let entry = read.map(|metadata| Entry {
+                    path: path.clone(),
+                    metadata,
+                    sidecar: Some(sidecar),
+                });
+                found.insert(path, entry);
+            }
+            (Some(Err(_)), _) => {}
+            (Some(Ok(entry)), Ok(metadata))
+                if entry.metadata.hashes.blake3 == metadata.hashes.blake3 =>
+            {
+                entry.sidecar = Some(sidecar);
+            }
+            (Some(slot), read) => {
+                *slot = Err(read.err().unwrap_or_else(|| {
+                    let dvs2 = paths.metadata_path(&path);
+                    let dvs2 = dvs2.strip_prefix(root).unwrap_or(&dvs2);
+                    refusal(
+                        ErrorCode::BadMetadata,
+                        format!(
+                            "{} and {} list different content; delete the one to drop",
+                            sidecar.display(),
+                            dvs2.display()
+                        ),
+                    )
+                }));
             }
         }
     }
@@ -563,7 +567,7 @@ fn find_blobs(sources: &[PathBuf], hashes: &Hashes) -> Result<Vec<PathBuf>> {
 }
 
 /// Stores the first of `blobs` that, decoded with the compression the source
-/// stored it with, has the entry's hash.
+/// stored it with or else the other one, has the entry's hash.
 fn copy(
     entry: &Entry,
     blobs: &[PathBuf],
@@ -574,35 +578,39 @@ fn copy(
     on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
 ) -> Result<StoreResult> {
     let decoded = tempfile::NamedTempFile::new()?.into_temp_path();
+    let recorded = entry.metadata.compression;
+    let other = match recorded {
+        Compression::None => Compression::Zstd,
+        Compression::Zstd => Compression::None,
+    };
     for blob in blobs {
-        let source = match entry.metadata.compression {
-            Compression::None => blob.as_path(),
-            stored => {
-                if stored.decompress(blob, &decoded, None).is_err() {
-                    continue;
+        for stored in [recorded, other] {
+            let source = match stored {
+                Compression::None => blob.as_path(),
+                stored => {
+                    if stored.decompress(blob, &decoded, None).is_err() {
+                        continue;
+                    }
+                    &*decoded
                 }
-                &*decoded
+            };
+            if Hashes::compute_from_path(source, &[])?.0.blake3 != entry.metadata.hashes.blake3 {
+                continue;
             }
-        };
-        if Hashes::compute_from_path(source, &[])?.0.blake3 != entry.metadata.hashes.blake3 {
-            continue;
+            return backend.store(StoreRequest {
+                hashes: &entry.metadata.hashes,
+                source,
+                compression,
+                path: ProjectPath::from_path(&entry.path).map_err(|e| anyhow!("{e}"))?,
+                operation_id,
+                message: Some(message),
+                on_bytes,
+            });
         }
-        return backend.store(StoreRequest {
-            hashes: &entry.metadata.hashes,
-            source,
-            compression,
-            path: ProjectPath::from_path(&entry.path).map_err(|e| anyhow!("{e}"))?,
-            operation_id,
-            message: Some(message),
-            on_bytes,
-        });
     }
     Err(refusal(
         ErrorCode::BadMetadata,
-        format!(
-            "no old storage has a blob matching its hash with compression = {}",
-            entry.metadata.compression
-        ),
+        "no old storage has a blob that decodes to its hash",
     ))
 }
 
@@ -1373,6 +1381,70 @@ mod tests {
     }
 
     #[test]
+    fn a_rerun_after_a_clean_merge_converts_dvs1_files_without_dvs_yaml() {
+        let (tmp, root) = create_temp_git_repo();
+        let storage = init_dvs1_repo(&root, &[("x.csv", b"x")]);
+        run(&root, to_path(&tmp.path().join("dvs2-storage")));
+        // A dvs1 branch that never changed dvs.yaml merges cleanly: only its
+        // new dvs1 file comes in
+        init_dvs1_repo(&root, &[("z.csv", b"z")]);
+        fs::remove_file(root.join(dvs1::CONFIG_FILE_NAME)).unwrap();
+        // Not dvs1's: a dvs2 data file that reads as dvs1 metadata, and other text
+        let config = Config::find(&root).unwrap().unwrap();
+        let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs").unwrap();
+        let notes = create_file(
+            &root,
+            "notes.dvs",
+            &fs::read(root.join("z.csv.dvs")).unwrap(),
+        );
+        FileMetadata::from_file(&notes, Compression::Zstd, None)
+            .unwrap()
+            .save(
+                Uuid::nil(),
+                &notes,
+                config.backend(),
+                &paths,
+                "notes.dvs",
+                None,
+            )
+            .unwrap();
+        create_file(&root, "readme.dvs", b"not dvs1 metadata");
+        let before = snapshot(&storage);
+
+        let report = run(&root, Target::Configured);
+
+        assert_eq!(snapshot(&storage), before);
+        assert_eq!(
+            outcomes(&report),
+            [
+                ("notes.dvs".into(), "present"),
+                ("x.csv".into(), "present"),
+                ("z.csv".into(), "copied")
+            ]
+        );
+        assert_eq!(fetched(&root, "z.csv"), b"z");
+        assert!(!root.join("z.csv.dvs").exists());
+        assert!(root.join("notes.dvs").exists() && root.join("readme.dvs").exists());
+    }
+
+    #[test]
+    fn a_rerun_copies_a_raw_dvs1_blob_whose_metadata_says_zstd() {
+        let (tmp, root) = create_temp_git_repo();
+        init_dvs1_repo(&root, &[("x.csv", b"x content")]);
+        let new_storage = tmp.path().join("dvs2-storage");
+        run(&root, to_path(&new_storage));
+        let hashes = metadata(&root, "x.csv").hashes;
+        let blob = LocalBackend::without_group(&new_storage).hash_to_path(&hashes);
+        fs::remove_file(blob.unwrap()).unwrap();
+
+        let report = run(&root, Target::Configured);
+
+        assert_eq!(outcomes(&report), [("x.csv".into(), "copied")]);
+        assert_eq!(metadata(&root, "x.csv").compression, Compression::Zstd);
+        assert_eq!(fetched(&root, "x.csv"), b"x content");
+    }
+
+    #[test]
     fn a_rerun_decodes_each_blob_with_the_compression_its_source_used() {
         let (_tmp, root) = create_temp_git_repo();
         zstd_migrated_to_raw(&root, b"zstd in the old folder");
@@ -1402,10 +1474,13 @@ mod tests {
     #[test]
     fn a_blob_that_does_not_decode_to_its_hash_is_not_stored() {
         let (tmp, root) = create_temp_git_repo();
-        let content: &[u8] = b"zstd, but the metadata says none";
-        let (mut stored, paths, config) = zstd_migrated_to_raw(&root, content);
-        stored.compression = Compression::None;
-        stored.write(&paths, "x.csv").unwrap();
+        let content: &[u8] = b"not what the old folder holds";
+        let (stored, paths, config) = zstd_migrated_to_raw(&root, content);
+        let old = migrated_from(&paths).unwrap();
+        let blob = LocalBackend::without_group(&old[0]).hash_to_path(&stored.hashes);
+        let blob = blob.unwrap();
+        fs::remove_file(&blob).unwrap();
+        fs::write(&blob, b"garbage").unwrap();
 
         let report = run(&root, Target::Configured);
 

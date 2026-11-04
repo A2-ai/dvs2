@@ -8,7 +8,7 @@ use walkdir::WalkDir;
 
 use crate::config::ConfigError;
 use crate::error::{Error, ErrorCode};
-use crate::{Compression, FileMetadata, Hashes};
+use crate::{Compression, DvsPaths, FileMetadata, Hashes};
 
 pub const CONFIG_FILE_NAME: &str = "dvs.yaml";
 
@@ -191,6 +191,25 @@ pub fn tracked_paths(repo_root: &Path, metadata_folder_name: &str) -> Vec<PathBu
     // An unmerged file is listed once per conflict stage
     paths.dedup();
     paths
+}
+
+/// The `tracked_paths` a merge brought into the dvs2 checkout `paths`, less
+/// any `.dvs` file it tracks as data and, unless `unreadable`, any that does
+/// not read as dvs1 metadata.
+pub fn leftover_paths(
+    paths: &DvsPaths,
+    metadata_folder_name: &str,
+    unreadable: bool,
+) -> Vec<PathBuf> {
+    let root = paths.repo_root();
+    tracked_paths(root, metadata_folder_name)
+        .into_iter()
+        .filter(|path| {
+            let sidecar = metadata_path(path);
+            !paths.metadata_path(&sidecar).is_file()
+                && (unreadable || Dvs1Metadata::read(&root.join(&sidecar)).is_ok())
+        })
+        .collect()
 }
 
 /// `None` when this is not a git checkout.
