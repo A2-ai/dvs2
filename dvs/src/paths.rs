@@ -10,6 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use walkdir::WalkDir;
 
 use crate::config::Config;
+use crate::dvs1;
 
 pub const CONFIG_FILE_NAME: &str = "dvs.toml";
 pub const DEFAULT_FOLDER_NAME: &str = ".dvs";
@@ -60,27 +61,27 @@ impl GetPathStatus {
 }
 
 /// Finds the root of a project by walking up from the given directory
-/// until a `dvs.toml` is found
+/// until a `dvs.toml` is found, or failing that a dvs1 `dvs.yaml`
 ///
-/// Returns the `start_dir` if no `dvs.toml` has been found.
+/// Returns the `start_dir` if neither has been found.
 pub fn find_repo_root(start_dir: impl AsRef<Path>) -> PathBuf {
-    let mut dir = start_dir.as_ref();
-    log::debug!("Searching for repo root starting from {}", dir.display());
+    let start_dir = start_dir.as_ref();
+    log::debug!(
+        "Searching for repo root starting from {}",
+        start_dir.display()
+    );
 
-    loop {
-        if dir.join(CONFIG_FILE_NAME).exists() {
+    let ancestors = || start_dir.ancestors();
+    let root = ancestors()
+        .find(|dir| dir.join(CONFIG_FILE_NAME).exists())
+        .or_else(|| ancestors().find(|dir| dvs1::is_dvs1(dir)));
+    match root {
+        Some(dir) => {
             log::debug!("Found repo root at {}", dir.display());
-            return dir.to_path_buf();
+            dir.to_path_buf()
         }
-
-        if let Some(parent) = dir.parent() {
-            dir = parent;
-        } else {
-            break;
-        }
+        None => start_dir.to_path_buf(),
     }
-
-    start_dir.as_ref().to_path_buf()
 }
 
 /// Normalize a path by resolving `.` and `..` components lexically (no
@@ -417,7 +418,16 @@ impl<'de> Deserialize<'de> for ProjectPath {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{create_temp_git_repo, init_dvs_repo};
+    use crate::testutil::{create_file, create_temp_git_repo, init_dvs_repo};
+
+    #[test]
+    fn find_repo_root_prefers_a_dvs2_root_over_a_nested_dvs_yaml() {
+        let (_tmp, root) = create_temp_git_repo();
+        init_dvs_repo(&root);
+        create_file(&root, "sub/dvs.yaml", b"unrelated: 1\n");
+
+        assert_eq!(find_repo_root(root.join("sub")), root);
+    }
 
     #[test]
     fn metadata_path_returns_dvs_file_path() {
@@ -426,6 +436,17 @@ mod tests {
 
         let result = paths.metadata_path(Path::new("sub/file.txt"));
         assert_eq!(result, root.join(".meta/sub/file.txt.dvs"));
+    }
+
+    #[test]
+    fn tracked_paths_skip_the_migrated_from_record() {
+        let (_tmp, root) = create_temp_git_repo();
+        let (config, dvs_dir) = init_dvs_repo(&root);
+        let paths = DvsPaths::new(root.clone(), root, config.metadata_folder_name()).unwrap();
+        create_file(&dvs_dir, "x.csv.dvs", b"{}");
+        crate::migrate::record_migrated_from(&paths, Path::new("/data/old")).unwrap();
+
+        assert_eq!(paths.tracked_paths(), vec![PathBuf::from("x.csv")]);
     }
 
     #[test]

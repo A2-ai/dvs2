@@ -315,6 +315,16 @@ impl ServerBackend {
         }
     }
 
+    pub fn project_exists(&self) -> anyhow::Result<bool> {
+        match self.attach() {
+            Ok(()) => Ok(true),
+            Err(e) if crate::backend_error_code(&e) == Some(ErrorCode::ProjectNotFound) => {
+                Ok(false)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// What the current user can do on the project. `None` when they are not a member.
     pub fn access(&self) -> anyhow::Result<Option<AccessResponse>> {
         let mut resp = http_agent()

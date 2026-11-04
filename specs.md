@@ -21,7 +21,8 @@ The Rust library must not contain anything specific to the CLI or the R package:
 ## Glossary
 
 - project: a folder where there is a `dvs.toml` file. `dvs` finds the project root by walking up from the current
-  directory until it finds a `dvs.toml. There may be multiple projects in a single git repository for example if the data needs to be stored differently
+  directory until it finds a `dvs.toml`. Only if there is none does it walk up again for a dvs1 `dvs.yaml` (see
+  migrate), so a `dvs.yaml` inside a dvs2 project never changes its root. There may be multiple projects in a single git repository for example if the data needs to be stored differently
 - storage: where the data files are actually stored, currently only on a local filesystem (typically NFS shared drive)
 - metadata folder: `dvs` will keep files metadata folder in a directory (by default `.dvs`) mimicking the paths to the file
 - hashes: each file will be hashes and content will be stored in a place in the storage following that hash. By default it uses blake3
@@ -88,12 +89,13 @@ them as success. Incompatible semantics need a new protocol version.
 
 Every `--json` result is one envelope, error envelopes included: `v` (`1`), `command` (`cli` for argument
 parsing errors), `outcome` (`complete`, `partial`, `failed` or `cancelled`; `get` also `aborted`), `dry_run` (a requested
-mutation preview), `error`, and for commands with rows (`add`, `get`, `status`, `availability`, `history`)
+mutation preview), `error`, and for commands with rows (`add`, `get`, `status`, `availability`, `history`, `migrate`)
 `counts` and `files` (the per-file, per-hash or per-entry rows; empty in an error envelope), plus the command's
-own fields (`add`/`get` `bytes`, `get` `on_conflict`/`source`, `init` `project_root`, `logout`
-`revoked`/`warnings`, `info` its discovery fields). It carries its timing: `started_at` and `finished_at`
+own fields (`add`/`get`/`migrate` `bytes`, `get` `on_conflict`/`source`, `init` `project_root`, `logout`
+`revoked`/`warnings`, `migrate` `project`/`sources`/`changes`/`warnings`, `status` `warnings` when it warns,
+`info` its discovery fields). It carries its timing: `started_at` and `finished_at`
 (RFC 3339 UTC with milliseconds, e.g. `2026-10-21T14:30:00.123Z`) and `duration_ms` (integer milliseconds).
-`add` and `get` rows have a `duration_ms` for that file's work (hash, transfer, record), `null` for a row that
+`add`, `get` and `migrate` rows have a `duration_ms` for that file's work (hash, transfer, record), `null` for a row that
 did no work. Every time in JSON output is RFC 3339 UTC: `started_at`/`finished_at` and history's `timestamp` with
 milliseconds (the audit log on disk keeps unix seconds), a record's `add_time` is given
 as the record stores it. The only exception is event `ts` (unix milliseconds).
@@ -106,9 +108,10 @@ as the record stores it. The only exception is event `ts` (unix milliseconds).
  "files":[],"started_at":"2026-10-21T14:30:00.120Z","finished_at":"2026-10-21T14:30:00.123Z","duration_ms":3}
 ```
 
-`add` and `get` results have `bytes: {total, to_transfer, already_stored, transferred}` (dry runs too):
+`add`, `get` and `migrate` results have `bytes: {total, to_transfer, already_stored, transferred}` (dry runs too):
 `total` is the sizes of the rows whose size is known; `to_transfer` the bytes that need moving (`add`: upload;
-`get`: see get); `already_stored` the rest (`add`: the server already has the content), so
+`get`: see get; `migrate`: copy into the target); `already_stored` the rest (`add`: the server already has the
+content; `migrate`: the target already has it), so
 `to_transfer + already_stored = total`; `transferred` what actually moved, so `0` in a dry run.
 
 Errors have one shape. The envelope's `error` is `null` or `{code, message, hint}`; every row of every command
@@ -118,18 +121,21 @@ keys: a field that does not apply is `null`, never missing (an `add` error row h
 cancel stopped, see Cancellation) and `succeeded` (the rest), so `total = succeeded + failed + cancelled`; get
 adds its detailed counts and defines `succeeded` itself. All are computed by the library. `error` is a
 failure of the whole command; per-file failures stay in the rows, so a `partial` result normally has
-`error: null`. A `hint` is the next thing to try, for people (only `get` fills row hints today).
+`error: null`. A `hint` is the next thing to try, for people (only `get` and `availability` fill row hints today).
 
 Row keys: `add` `path`, `outcome` (`copied`, `present`), `hash`, `size`, `stored_size`; `get` see get;
 `status` `path`, `status` (`error` on an error row, `cancelled` on a cancelled one), `metadata`, `working` (`state` `present`, `absent` or
 `unknown`, `hashes`, `size`, `hash_source` `cache` or `computed`), `baseline` (`blake3`, `size` of what dvs
 last wrote or added at the path; `null` without one); `availability` `hash`, `state` (`present`,
-`absent`, `unknown`); `history` the audit entries `operation_id`, `timestamp`, `user`, `action` (history never
+`absent`, `unknown`); `migrate` `path`, `outcome` (`copied`, `present`; `null` on a coded row), `hash`, `size`;
+`history` the audit entries `operation_id`, `timestamp`, `user`, `action` (history never
 fails per row). `path` is relative to the project root (`info`'s `project_root`); get's `local_path` is
 relative to the current directory.
 
 `dvs availability <HASHES>...` takes one or more BLAKE3 hashes (an invalid one is `invalid_arguments`) and
-reports, per hash and in input order, whether storage has that content, without downloading it.
+reports, per hash and in input order, whether storage has that content, without downloading it. When the
+project's `.dvs/migrated-from` lists sources and one of them holds that content, an `absent` row's `hint` names
+`dvs migrate` and those sources.
 `dvs history <PATHS>...` takes one or more file paths and reports their stored upload history; the files need
 not exist in this checkout. It takes files, not folders: a path that is a folder is refused with
 `invalid_arguments` (exit `2`), as is a path outside the project.
@@ -182,9 +188,9 @@ markers) and `credentials_unreadable` (the store exists but cannot be read). A r
 `not_in_project`, `invalid_configuration`, `invalid_arguments`, `no_files_selected` (also `get` when no tracked
 file matched), `io_error`, and `operation_failed`, the honest fallback when nothing more specific is known.
 `auth_required` is also what `login`, `init` and `attach` report in machine mode when device login would be
-needed. Row codes besides the shared ones: `add`, `status` and `availability` `io_error` and
-`operation_failed` (`file_failed` if a failure has no code), get's codes (see get), and `logout` `warnings`
-`revoke_failed`.
+needed. Row codes besides the shared ones: `add`, `status`, `availability` and `migrate` `io_error` and
+`operation_failed` (`file_failed` if a failure has no code), get's codes (see get), `migrate` `source_missing`
+(see migrate), and `logout` `warnings` `revoke_failed`.
 
 `dvs info --json` finds the project from the working directory. `project_root` and `metadata_directory` are
 absolute native paths. For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
@@ -250,7 +256,7 @@ succeed and the install still fail).
 
 ##### Cancellation
 
-`add`, `get` and `status` stop on SIGINT (Ctrl-C), SIGTERM or SIGHUP, and with `--emit-events` also
+`add`, `get`, `status` and `migrate` stop on SIGINT (Ctrl-C), SIGTERM or SIGHUP, and with `--emit-events` also
 when stdin, if it is a pipe or socket, reaches end of file (the client went away; Unix only, on Windows use
 Ctrl-C/Ctrl-Break). A signal that was already
 ignored when `dvs` started (for example SIGHUP under `nohup`) stays ignored. They stop *starting* files: a
@@ -452,6 +458,10 @@ It raises an error if no files match, or if any input path is invalid (the whole
 
 `get` retrieves files from the storage into the project.
 
+A file whose content is not in storage is `source_missing`; when one of the sources in the project's
+`.dvs/migrated-from` holds that content, its hint names `dvs migrate` and those sources, and otherwise it is the
+usual missing-content hint.
+
 #### Before, and what dvs does
 
 Each requested file is classified before anything is written:
@@ -603,6 +613,11 @@ are the only immediate errors.
 This returns the status (mentioned in the high level overview above)
  of the tracked files in the project.
 
+When a dvs1 `dvs.yaml`, or a dvs1 record next to a data file, sits
+in a project with `dvs.toml`, dvs1 files came in with a merge of an unmigrated branch, and `status` warns to run
+`dvs migrate` (human output on stderr; `--json` adds `warnings: [{code, message}]`). The check is local: `status`
+never reads storage.
+
 #### CLI
 
 ```shell
@@ -664,6 +679,209 @@ dvs_status(
   Without a baseline, DVS reports `unsynced` because it cannot determine why the file differs from metadata. When omitted, all statuses are returned.
 
 Returns a data frame with one row per tracked file.
+
+### migrate
+
+`migrate` converts one checkout to a newer storage form: dvs1 to local storage, dvs1 to a server, or local
+storage to a server. There is no migration from a server to local storage.
+
+It converts the checked-out tree only: its `dvs.toml`, its metadata files and the content they list. Other
+branches and older commits are untouched, and keep getting their data the way they did at that commit. Each
+branch or commit that matters is migrated on its own, by checking it out and running `migrate`. Every migration
+of a project goes into one target: the first `migrate server` creates the server project, and later ones name
+the same project and add to it.
+
+For every metadata file in the working tree, committed or not, `migrate` copies its content from the old storage
+into the target. Content the target already has is skipped, and nothing else in the old storage is listed or
+copied. Each run's copies are one operation, recorded with the message `migrated from <sources>`.
+
+`migrate` never commits: it leaves working-tree changes to review and commit. It never writes, deletes, moves or
+re-permissions anything in the old storage, with two exceptions: a dvs1 folder migrated in place becomes the
+local storage, so later adds go into it, and `--apply-local-modes` changes its modes when asked.
+
+| Command | From | Does |
+|---|---|---|
+| `dvs migrate local` | dvs1 | uses the dvs1 folder in place as local storage, with `compression = "none"`; nothing is copied |
+| `dvs migrate local <PATH>` | dvs1 | copies the listed content into a new local storage at `<PATH>`, with zstd; the dvs1 folder is only read |
+| `dvs migrate server <NAME> <URL>` | dvs1 or local | creates the server project, or adds to it if it exists |
+| `dvs migrate` | a migrated checkout | copies what the target lacks from the `.dvs/migrated-from` sources, and converts dvs1 files a merge brought in |
+
+The source is detected from `dvs.yaml`, `dvs.toml` and any dvs1 metadata files left in the working tree.
+`migrate local` at a project with a `dvs.toml`, `migrate server` at a server project, and a bare `migrate` at a
+dvs1 checkout that was never migrated are refused with `invalid_configuration`.
+
+The checkout's metadata is rewritten to fit the target:
+
+- each file's `compression` is set to how the target stored it
+- dvs1 metadata is converted to the dvs2 format in the metadata folder
+- `dvs.toml` is written for the target
+- `dvs.yaml` and the dvs1 metadata files are removed, and their `!/x.csv.dvs` lines are dropped from `.gitignore`
+- the source is added to `.dvs/migrated-from`
+
+Old commits keep their old metadata, which only ever meets old storage.
+
+In place, the dvs1 folder keeps its modes, and a dvs1 `permissions` is dropped with a warning.
+`--apply-local-modes` sets dvs2's local storage modes and the dvs1 `group` on the folder instead. A `<PATH>`
+inside the repository or inside the dvs1 folder is refused with `invalid_arguments`, as is `--apply-local-modes`
+with a `<PATH>`. The new storage gets the dvs1 `group` when it can be set.
+
+`migrate server` checks the checkout first (not a project, already on a server) and only then logs in if needed,
+so those refusals need no login; a dry run still logs in, since it asks the server whether the project exists. A
+project that does not exist yet needs `--group` to be created
+(`invalid_arguments` without it). The server decides the compression.
+
+A file whose content is in neither the target nor any old storage was already unfetchable: it is a
+`source_missing` row, its metadata is still converted, and it is not a failure. A record dvs cannot read, or
+content in old storage that decodes to its hash neither as recorded nor with the other compression, is a
+`bad_metadata` row and fails. So does a dvs1 record
+that lists different content from the dvs2 record for the same path.
+
+Migrations repeat and converge: re-running, or migrating another branch into the same target, only copies what
+the target lacks. An interrupted run, re-run, ends as if it had not been interrupted. Once cancelled, no new copy
+starts; the checkout is still converted, and the files not copied keep their old metadata so that a bare
+`dvs migrate` finishes them.
+
+A dry run changes nothing. It reports the files the checkout lists, which the target already has, the bytes to
+copy, whether the server project would be created or added to, the content already missing, and the files it
+would change.
+
+#### `.dvs/migrated-from`
+
+A plain file in the metadata folder listing the old storage each migration copied from, one path per line
+(a dvs1 `storage_dir` or a local storage path). `migrate` adds its source unless it is already listed. It is
+a record, not a setting, so it is committed with the metadata and kept out of `dvs.toml`. Tracked-file walks skip
+it. When two branches add different sources, the merge conflict is two adjacent lines, and keeping both
+resolves it.
+
+After a merge of an unmigrated branch into a migrated one, `get` and `availability` report the branch's new
+content as not in storage, with a hint naming `dvs migrate` and the listed sources. For a dvs1 branch, the merge
+brings dvs1 records next to the data (and `dvs.yaml` only if the branch changed it); `status` warns about either.
+A bare `dvs migrate` copies the missing content from the listed sources (and from a `dvs.yaml`'s `storage_dir`
+when one came in), converts the dvs1 records and removes `dvs.yaml`. A `.dvs` file the project tracks as data is
+never read as a dvs1 record, and without a `dvs.yaml` neither is one that is not dvs1 metadata. With
+no sources listed, it has nothing to do and exits `0`.
+
+#### dvs1 checkouts
+
+A dvs1 checkout has a `dvs.yaml` (`storage_dir`, `permissions`, `group`; a relative `storage_dir` is relative to
+the project root) and an `x.csv.dvs` next to each data file (`blake3_checksum`, `size`, `add_time`, `message`,
+`saved_by`). Its content is stored raw, laid out like local storage (`<storage_dir>/ab/cdef…`).
+
+Only `migrate` reads a dvs1 checkout, from the working tree only, never git history. Every other command treats
+it as not a project (`not_in_project`, exit `1`), with an error that suggests `dvs migrate local` or
+`dvs migrate server`.
+
+#### CLI
+
+```shell
+❯ dvs migrate --help
+Converts this checkout to newer storage, leaving the old storage untouched. Without a subcommand, finishes an earlier migration: copies what the storage lacks from the storage it was migrated from, and converts dvs1 files a merge brought in
+
+Usage: dvs migrate [OPTIONS] [COMMAND]
+
+Commands:
+  local   Convert a dvs1 project to local storage: its dvs1 folder in place, or a copy at a path
+  server  Convert a dvs1 or local project to a dvs server project, creating it if needed
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --dry-run  Show what would be migrated without making any actual changes
+  -h, --help     Print help
+
+Global Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+
+❯ dvs migrate local --help
+Convert a dvs1 project to local storage: its dvs1 folder in place, or a copy at a path
+
+Usage: dvs migrate local [OPTIONS] [PATH]
+
+Arguments:
+  [PATH]  Where to copy the data, as a new storage directory. Without it, the dvs1 folder is used in place
+
+Options:
+      --apply-local-modes  Set dvs2's modes and group on the dvs1 folder used in place
+      --dry-run            Show what would be migrated without making any actual changes
+  -h, --help               Print help
+
+Global Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+
+❯ dvs migrate server --help
+Convert a dvs1 or local project to a dvs server project, creating it if needed
+
+Usage: dvs migrate server [OPTIONS] <NAME> <URL>
+
+Arguments:
+  <NAME>  The project name
+  <URL>   The URL of the dvs server
+
+Options:
+      --group <GROUP>  Unix group to use for permissions, needed to create the project
+      --dry-run        Show what would be migrated without making any actual changes
+  -h, --help           Print help
+
+Global Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+```
+
+`--dry-run` goes before or after the form.
+
+Human output names the sources, then for a server whether the project was (or would be) created or added to,
+then each file (`Copied`, `To copy` in a dry run, `Already stored`; `Missing` and errors on stderr), then, after a
+blank line, a summary ("Copied 1, 1 already stored, 1 missing"; a dry run gives the bytes to copy, "Would copy 2
+[14 B]") and any warnings. It ends with the files it changed (`written` or `removed`) and the
+`git add -- … && git commit` command to commit them. A run that did not complete (cancelled or failed rows) says
+the checkout is partly migrated and that `dvs migrate` finishes it, instead of suggesting a commit. A dry run lists
+the files it would change and says nothing was changed.
+
+`--json` prints one envelope:
+
+```json
+{"v": 1, "command": "migrate", "outcome": "complete", "dry_run": true,
+ "counts": {"total": 2, "succeeded": 2, "failed": 0, "cancelled": 0},
+ "bytes": {"total": 3, "to_transfer": 0, "already_stored": 3, "transferred": 0},
+ "project": null, "sources": ["/shared/data/proj"],
+ "changes": [{"path": ".dvs/a.csv.dvs", "change": "written"}, {"path": "a.csv.dvs", "change": "removed"}, …],
+ "warnings": [{"code": null, "message": "dvs.yaml permissions = 664 was dropped: …"}],
+ "error": null,
+ "files": [{"path": "a.csv", "outcome": "present", "hash": "…", "size": 3, "duration_ms": null,
+            "code": null, "message": null, "hint": null},
+           {"path": "b.csv", "outcome": null, "hash": "…", "size": 4, "duration_ms": null,
+            "code": "source_missing", "message": "in neither the target nor the old storage", "hint": null}]}
+```
+
+- `files`: one row per file the checkout lists, sorted by path. `outcome` is `copied` (or would be, in a dry
+  run) or `present` (the target already has it), and `null` on a row with a `code`. A `source_missing` row keeps
+  its `hash` and `size`; an error row has them `null`.
+- `code`: `source_missing`, `bad_metadata`, `io_error`, `operation_failed`, the shared backend codes and
+  `cancelled`. `source_missing` rows count as `succeeded`.
+- `bytes`: over the rows whose content is somewhere; `source_missing` rows are not counted.
+- `project`: `created` or `added` for a server target, `null` otherwise.
+- `sources`: the old storage read from, as recorded in `.dvs/migrated-from`. Empty when a bare `migrate` had
+  nothing to copy from.
+- `changes`: the working-tree files changed (or that would be), sorted by path, each `written` or `removed`.
+- `warnings`: `{code, message}`, such as a dropped dvs1 `permissions`.
+
+`--emit-events` streams `operation_planned`, the transfer events, `file_result` and `operation_progress` as for
+`add`.
+
+Exit codes: `0` complete, including `source_missing` rows; `1` some rows failed, or the command failed (e.g.
+`not_in_project`, `server_unavailable`); `2` usage or configuration errors (a refused form or path); `130`
+cancelled.
+
+#### Rust library
+
+`migrate(repo_root, target, dry_run, ctx)` takes a `Target` (`Local { path, apply_local_modes }`,
+`Server { name, url, group }`, or `Configured` for the bare form) and returns a `MigrateReport`: the rows sorted
+by path, counts, byte totals, the project action, sources, changes and warnings. A refused form is an error;
+per-file failures are rows. `migrated_from` and `record_migrated_from` read and append `.dvs/migrated-from`.
 
 ## Internals
 
@@ -775,7 +993,7 @@ each path. Unlike the hash cache, `status` never writes it. Deleting it is safe;
 
 ### Parallelism
 
-`add`, `get` and `status` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
+`add`, `get`, `status` and `migrate` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
 variable to control the thread count, if the CLI and R package have not set the number
 of threads directly. If it is unset, the default is `min(available_parallelism * 4, 16)`.
 If it is set to a positive integer, the override is capped at 32. In both cases the final thread count is
@@ -791,6 +1009,8 @@ The threadpool size set directly by the R package takes precedence over the
 After a successful `add`, each data file gets a `/<filename>` entry in its own directory's `.gitignore`, keeping the
 data out of Git while the `.dvs` metadata stays tracked. Existing entries are not duplicated. If there is no `.git`
 folder the update is skipped, and a failed `.gitignore` update is logged as a warning without failing the `add`.
+
+`migrate` drops the `!/x.csv.dvs` lines dvs1 wrote for the metadata files it removes.
 
 ### Globbing
 

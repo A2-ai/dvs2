@@ -13,6 +13,7 @@
 
 ### Added
 
+- `dvs migrate`: converts a checkout to newer storage, leaving the old storage untouched. `dvs migrate local` moves a dvs1 project to local storage (its dvs1 folder in place, or a copy at a path), `dvs migrate server` moves a dvs1 or local project to a dvs server, and a bare `dvs migrate` copies what a migrated checkout still lacks, for example after merging an unmigrated branch. It never commits: it lists the changed files to commit.
 - R package: `just rpkg-build-tarball` builds the release source tarball in `dist/`. It carries every Rust crate, so it installs offline. `just rpkg-check-cran` runs `R CMD check --as-cran` on it.
 - R package: `just rpkg-reference` builds the HTML reference manual. The one in `dist/reference/` is for users and leaves out the internal pages, as R's help index does. The one in `dvs-rpkg/rust-target/doc/r/` is for development and keeps them.
 - R package: `dvs_status()` has a `code` column, the kind of failure of a row that failed, as in the CLI's JSON.

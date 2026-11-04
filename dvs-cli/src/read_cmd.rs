@@ -1,5 +1,6 @@
 //! Batch, backend-neutral queries for consumers that invoke the CLI.
 use anyhow::Result;
+use dvs::migrate::migrate_hint;
 use dvs::{Backend, DvsPaths, ErrorCode, Hashes, PathFilter};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -51,8 +52,13 @@ fn coded_message(error: &anyhow::Error) -> (ErrorCode, String) {
 }
 
 /// Validate hashes before I/O and preserve input order and duplicates.
-/// `state` describes blob storage.
-pub fn availability(backend: &Backend, hashes: &[String]) -> Result<(Vec<Value>, usize)> {
+/// `state` describes blob storage; absent rows that `migrated_from` holds
+/// carry the migrate hint.
+pub fn availability(
+    backend: &Backend,
+    hashes: &[String],
+    migrated_from: &[PathBuf],
+) -> Result<(Vec<Value>, usize)> {
     for hash in hashes {
         if hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
             return Err(invalid(format!("invalid BLAKE3 hash: {hash}")));
@@ -73,11 +79,17 @@ pub fn availability(backend: &Backend, hashes: &[String]) -> Result<(Vec<Value>,
                 .exists(&value)
                 .map_err(|error| coded_message(&error))
         });
-        let (state, code, message) = match storage {
-            Ok(present) => (if present { "present" } else { "absent" }, None, None),
+        let (state, code, message, hint) = match storage {
+            Ok(true) => ("present", None, None, None),
+            Ok(false) => (
+                "absent",
+                None,
+                None,
+                migrate_hint(&normalized, migrated_from),
+            ),
             Err((code, message)) => {
                 failed += 1;
-                ("unknown", Some(code), Some(message))
+                ("unknown", Some(code), Some(message), None)
             }
         };
         rows.push(json!({
@@ -85,7 +97,7 @@ pub fn availability(backend: &Backend, hashes: &[String]) -> Result<(Vec<Value>,
             "state": state,
             "code": code,
             "message": message,
-            "hint": null,
+            "hint": hint,
         }));
     }
     Ok((rows, failed))
@@ -117,6 +129,31 @@ pub fn history(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absent_content_in_a_migrated_source_carries_the_hint() {
+        let storage = tempfile::tempdir().unwrap();
+        let backend = Backend::Local(dvs::backends::local::LocalBackend::without_group(
+            storage.path(),
+        ));
+        let old = tempfile::tempdir().unwrap();
+        let (held, lost) = ("a".repeat(64), "b".repeat(64));
+        std::fs::create_dir(old.path().join("aa")).unwrap();
+        std::fs::write(old.path().join("aa").join(&held[2..]), b"x").unwrap();
+        let sources = [old.path().to_path_buf()];
+        let (rows, failed) = availability(&backend, &[held, lost], &sources).unwrap();
+        assert_eq!(failed, 0);
+        assert_eq!(rows[0]["state"], "absent");
+        assert_eq!(
+            rows[0]["hint"],
+            format!(
+                "not in this project's storage yet; run dvs migrate to copy it from {}",
+                old.path().display()
+            )
+        );
+        assert_eq!(rows[1]["state"], "absent");
+        assert_eq!(rows[1]["hint"], Value::Null);
+    }
 
     #[test]
     fn history_refuses_folders() {

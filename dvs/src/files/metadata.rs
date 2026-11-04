@@ -67,6 +67,12 @@ impl FileMetadata {
         })
     }
 
+    /// Reads the metadata file of `relative_path`.
+    pub(crate) fn read(paths: &DvsPaths, relative_path: &Path) -> Result<Self> {
+        let file = fs::File::open(paths.metadata_path(relative_path))?;
+        Ok(serde_json::from_reader(file)?)
+    }
+
     /// Writes the metadata file, creating its directory if needed.
     pub fn write(&self, paths: &DvsPaths, relative_path: impl AsRef<Path>) -> Result<()> {
         let dvs_file_path = paths.metadata_path(relative_path.as_ref());

@@ -22,7 +22,7 @@ use crate::operation::{
 };
 use crate::paths::ProjectPath;
 use crate::utils::get_threadpool;
-use crate::{Backend, Compression, DvsPaths, RetrieveRequest, cache};
+use crate::{Backend, Compression, DvsPaths, RetrieveRequest, cache, migrate};
 use fs_err as fs;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -469,11 +469,11 @@ impl Planned {
     }
 
     /// Report the row as final, unless it already was.
-    fn emit(&mut self, ctx: &OperationContext) {
+    fn emit(&mut self, ctx: &OperationContext, migrated_from: &[PathBuf]) {
         if !self.emitted {
             self.emitted = true;
             self.fill_hash_duration();
-            self.row.hint = hint(&self.row);
+            self.row.hint = hint(&self.row, migrated_from);
             ctx.observer().file_finished(FileRow::Get(&self.row));
         }
     }
@@ -884,6 +884,8 @@ pub fn get_files(
     };
     let cache = try_open_cache(paths);
     let cache = cache.as_ref();
+    // Only for hints: a file that cannot be read gives none
+    let migrated_from = migrate::migrated_from(paths).unwrap_or_default();
     let observer = ctx.observer();
     let ending = |planned, aborted| {
         finish(
@@ -895,6 +897,7 @@ pub fn get_files(
                 aborted,
             },
             ctx,
+            &migrated_from,
         )
     };
 
@@ -1062,7 +1065,7 @@ pub fn get_files(
     // Everything that will not be transferred is final now.
     for p in planned.iter_mut() {
         if !p.needs_transfer(on_conflict) {
-            p.emit(ctx);
+            p.emit(ctx, &migrated_from);
         }
     }
 
@@ -1087,7 +1090,7 @@ pub fn get_files(
                 let result = transfer(p, backend, paths, dry_run, operation_id, ctx);
                 settle(&mut row, p, result, dry_run, paths, cache);
                 row.duration_ms = Some(millis(p.hash_time + started.elapsed()));
-                row.hint = hint(&row);
+                row.hint = hint(&row, &migrated_from);
                 // Final the moment its own transfer is done, not when the batch is.
                 observer.file_finished(FileRow::Get(&row));
                 (i, row)
@@ -1221,8 +1224,9 @@ pub fn shell_path(path: &Path) -> String {
     }
 }
 
-/// The next command to run for a row.
-fn hint(row: &GetRow) -> Option<String> {
+/// The next command to run for a row. `migrated_from` lists the project's
+/// old storage, which may still hold content not yet copied here.
+fn hint(row: &GetRow, migrated_from: &[PathBuf]) -> Option<String> {
     let p = shell_path(&row.local_path);
     let choices = format!(
         "keep your version: dvs add {p} (makes it the tracked version); \
@@ -1242,11 +1246,17 @@ fn hint(row: &GetRow) -> Option<String> {
                 .into(),
         ),
         GetCode::NotTracked => Some("check the path; list tracked files with: dvs status".into()),
-        GetCode::SourceMissing => Some(
-            "the stored content of this version is missing (probably an interrupted upload); \
-             tell whoever added it"
-                .into(),
-        ),
+        GetCode::SourceMissing => row
+            .target_hash
+            .as_deref()
+            .and_then(|hash| migrate::migrate_hint(hash, migrated_from))
+            .or_else(|| {
+                Some(
+                    "the stored content of this version is missing (probably an interrupted \
+                     upload); tell whoever added it"
+                        .into(),
+                )
+            }),
         GetCode::Shared(ErrorCode::AccessDenied) => {
             Some("check you are logged in with access: dvs info, dvs login".into())
         }
@@ -1284,7 +1294,12 @@ struct Ending {
     aborted: bool,
 }
 
-fn finish(planned: Vec<Planned>, ending: Ending, ctx: &OperationContext) -> GetReport {
+fn finish(
+    planned: Vec<Planned>,
+    ending: Ending,
+    ctx: &OperationContext,
+    migrated_from: &[PathBuf],
+) -> GetReport {
     let Ending {
         dry_run,
         on_conflict,
@@ -1294,7 +1309,7 @@ fn finish(planned: Vec<Planned>, ending: Ending, ctx: &OperationContext) -> GetR
     let files: Vec<GetRow> = planned
         .into_iter()
         .map(|mut p| {
-            p.emit(ctx);
+            p.emit(ctx, migrated_from);
             p.row
         })
         .collect();
@@ -1701,6 +1716,60 @@ mod tests {
         assert_eq!(row(&report, "b.csv").code, Some(GetCode::SourceMissing));
         let c = &report.counts;
         assert_eq!((c.total, c.succeeded, c.failed), (2, 1, 1));
+    }
+
+    #[test]
+    fn missing_content_of_a_migrated_project_names_dvs_migrate() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        let storage = match &repo.config.backend {
+            Backend::Local(b) => b.path.clone(),
+            Backend::Server(_) => unreachable!(),
+        };
+        let meta: FileMetadata = serde_json::from_slice(&repo.metadata_bytes("a.csv")).unwrap();
+        let h = meta.hashes.blake3;
+        let old = TempDir::new().unwrap();
+        fs::create_dir_all(old.path().join(&h[..2])).unwrap();
+        fs::rename(
+            storage.join(&h[..2]).join(&h[2..]),
+            old.path().join(&h[..2]).join(&h[2..]),
+        )
+        .unwrap();
+        fs::remove_file(repo.root.join("a.csv")).unwrap();
+        migrate::record_migrated_from(&repo.paths, old.path()).unwrap();
+
+        let report = repo.get(&["a.csv"], OnConflict::Abort);
+        let r = row(&report, "a.csv");
+        assert_eq!(r.code, Some(GetCode::SourceMissing));
+        assert_eq!(
+            r.hint,
+            Some(format!(
+                "not in this project's storage yet; run dvs migrate to copy it from {}",
+                old.path().display()
+            ))
+        );
+    }
+
+    #[test]
+    fn missing_content_in_no_migrated_source_does_not_name_dvs_migrate() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        let storage = match &repo.config.backend {
+            Backend::Local(b) => b.path.clone(),
+            Backend::Server(_) => unreachable!(),
+        };
+        let meta: FileMetadata = serde_json::from_slice(&repo.metadata_bytes("a.csv")).unwrap();
+        let h = meta.hashes.blake3;
+        fs::remove_file(storage.join(&h[..2]).join(&h[2..])).unwrap();
+        fs::remove_file(repo.root.join("a.csv")).unwrap();
+        let old = TempDir::new().unwrap();
+        migrate::record_migrated_from(&repo.paths, old.path()).unwrap();
+
+        let report = repo.get(&["a.csv"], OnConflict::Abort);
+        let r = row(&report, "a.csv");
+        assert_eq!(r.code, Some(GetCode::SourceMissing));
+        let hint = r.hint.as_deref().unwrap();
+        assert!(hint.starts_with("the stored content of this version is missing"));
     }
 
     // Spec 11

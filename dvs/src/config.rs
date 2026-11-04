@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::backends::Backend;
 use crate::backends::local::LocalBackend;
 use crate::backends::server::ServerBackend;
+use crate::dvs1::Dvs1Config;
 use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, find_repo_root};
 use crate::progress::ProgressReader;
 use crate::utils::parse_size;
@@ -281,6 +282,23 @@ impl Config {
             cli: None,
             get: None,
         }
+    }
+
+    /// The config `dvs migrate` starts a dvs1 checkout from: its storage as a
+    /// raw local project.
+    pub(crate) fn from_dvs1(repo_root: &Path) -> Result<Config> {
+        let dvs1 = Dvs1Config::read(repo_root)?;
+        // The dvs1 group is not passed: one missing on this machine must not
+        // stop the migration
+        let mut config = Config::new_local(&dvs1.storage_dir, None)?;
+        config.compression = Some(Compression::None);
+        Ok(config)
+    }
+
+    /// Puts the data in `backend`, keeping the other settings.
+    pub(crate) fn set_backend(&mut self, backend: Backend, compression: Option<Compression>) {
+        self.backend = backend;
+        self.compression = compression;
     }
 
     pub fn save(&self, directory: impl AsRef<Path>) -> Result<()> {

@@ -1,6 +1,7 @@
 mod cancel;
 mod events;
 mod get_cmd;
+mod migrate_cmd;
 mod observer;
 mod output;
 mod read_cmd;
@@ -25,12 +26,13 @@ use dvs::auth::{
 use dvs::config::{Config, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::{create_metadata_folder, init};
+use dvs::migrate::{Target, check, migrate, migrated_from};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
     FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow,
-    Outcome, PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files,
-    set_num_threads,
+    Outcome, PathFilter, RowState, RunOutcome, Status, add_files, find_repo_root, format_size,
+    get_files, set_num_threads,
 };
 
 use crate::observer::CliObserver;
@@ -73,6 +75,29 @@ pub enum Init {
     /// Catches `dvs init <path>`, the form before backends, to point at `init local`
     #[command(external_subcommand)]
     Other(Vec<String>),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Migrate {
+    /// Convert a dvs1 project to local storage: its dvs1 folder in place, or a copy at a path
+    Local {
+        /// Where to copy the data, as a new storage directory. Without it, the dvs1 folder is
+        /// used in place
+        path: Option<PathBuf>,
+        /// Set dvs2's modes and group on the dvs1 folder used in place
+        #[clap(long)]
+        apply_local_modes: bool,
+    },
+    /// Convert a dvs1 or local project to a dvs server project, creating it if needed
+    Server {
+        /// The project name
+        name: String,
+        /// The URL of the dvs server
+        url: Url,
+        /// Unix group to use for permissions, needed to create the project
+        #[clap(long)]
+        group: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -172,6 +197,17 @@ pub enum Command {
         /// Replace files with local changes (same as --on-conflict overwrite)
         #[clap(long, short, conflicts_with = "on_conflict")]
         force: bool,
+    },
+    /// Converts this checkout to newer storage, leaving the old storage untouched.
+    /// Without a subcommand, finishes an earlier migration: copies what the storage lacks from
+    /// the storage it was migrated from, and converts dvs1 files a merge brought in
+    #[command(next_display_order = 100)]
+    Migrate {
+        #[command(subcommand)]
+        target: Option<Migrate>,
+        /// Show what would be migrated without making any actual changes
+        #[clap(long, global = true)]
+        dry_run: bool,
     },
     /// Show the project configuration, and the server info when the project uses a dvs-server backend
     Info,
@@ -377,6 +413,15 @@ fn info_compression(config: &Config) -> Option<String> {
         Backend::Local(_) => Some(config.compression().to_string()),
         Backend::Server(_) => None,
     }
+}
+
+/// dvs1's `dvs.yaml` or `.dvs` files beside `dvs.toml` came in with a merge of an unmigrated branch.
+fn leftover_dvs1_warning(paths: &DvsPaths, metadata_folder_name: &str) -> Option<&'static str> {
+    let root = paths.repo_root();
+    (root.join(CONFIG_FILE_NAME).is_file()
+        && (dvs::dvs1::is_dvs1(root)
+            || !dvs::dvs1::leftover_paths(paths, metadata_folder_name, false).is_empty()))
+    .then_some("dvs1 files came in from a merge; run dvs migrate")
 }
 
 fn status_summary(counts: &Counts) -> String {
@@ -714,6 +759,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             // Over the rows shown
             let counts = Counts::of(&statuses);
             let outcome = RunOutcome::of(&counts, report.cancelled);
+            let warning = leftover_dvs1_warning(&dvs_paths, config.metadata_folder_name());
             if cli.json {
                 let files = statuses
                     .iter()
@@ -722,9 +768,11 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                         output::file_result(value, has_code)
                     })
                     .collect();
-                output::emit_streamed(output::rows_envelope(
-                    "status", false, files, counts, outcome,
-                ));
+                let mut result = output::rows_envelope("status", false, files, counts, outcome);
+                if let Some(warning) = warning {
+                    result["warnings"] = json!([{"code": null, "message": warning}]);
+                }
+                output::emit_streamed(result);
             } else if statuses.is_empty() {
                 if show_all {
                     println!("No tracked files");
@@ -782,6 +830,11 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                     eprintln!("\n{line}");
                 }
             }
+            if !cli.json
+                && let Some(warning) = warning
+            {
+                eprintln!("Warning: {warning}");
+            }
             summary_exit(outcome)?;
         }
         Command::Get {
@@ -833,6 +886,57 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 get_cmd::print_human(&report);
             }
             summary_exit(report.verdict())?;
+        }
+        Command::Migrate { target, dry_run } => {
+            let (target, server) = match target {
+                None => (Target::Configured, None),
+                Some(Migrate::Local {
+                    path,
+                    apply_local_modes,
+                }) => (
+                    Target::Local {
+                        path,
+                        apply_local_modes,
+                    },
+                    None,
+                ),
+                Some(Migrate::Server { name, url, group }) => {
+                    let server = format!("{name} on {url}");
+                    let target = Target::Server {
+                        name,
+                        url: url.clone(),
+                        group,
+                    };
+                    // Creating or adding to the server project requires authentication, so
+                    // run the login flow first if we don't have a token for it yet, once
+                    // the checkout itself can move.
+                    check(&find_repo_root(&current_dir), &target)?;
+                    if get_token(&url)?.is_none() {
+                        run_device_login(&url, cli.json)?;
+                    }
+                    (target, Some(server))
+                }
+            };
+
+            let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
+            let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
+                FileRow::Migrate(r) => Some(migrate_cmd::row(r)),
+                _ => None,
+            });
+            if show_progress && let Some(Ok(config)) = Config::find(&current_dir) {
+                observer =
+                    observer.with_bars(make_progress_callback(config.progress_bytes_threshold()));
+            }
+            let ctx = OperationContext::new()
+                .with_cancel(cancel.clone())
+                .with_observer(Arc::new(observer));
+            let report = migrate(&find_repo_root(&current_dir), target, dry_run, &ctx)?;
+            if cli.json {
+                output::emit_streamed(migrate_cmd::to_json(&report));
+            } else {
+                migrate_cmd::print_human(&report, server.as_deref());
+            }
+            summary_exit(report.outcome)?;
         }
         Command::Info => {
             let config = find_config(&current_dir)?;
@@ -979,7 +1083,12 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
         }
         Command::Availability { hashes } => {
             let config = find_config(&current_dir)?;
-            let (files, failed) = read_cmd::availability(config.backend(), &hashes)?;
+            // The hint is optional: unreadable paths or migrated-from just mean none
+            let sources = DvsPaths::from_cwd(&config)
+                .ok()
+                .and_then(|paths| migrated_from(&paths).ok())
+                .unwrap_or_default();
+            let (files, failed) = read_cmd::availability(config.backend(), &hashes, &sources)?;
             if cli.json {
                 let counts = Counts::new(files.len(), failed);
                 let outcome = RunOutcome::of(&counts, false);
@@ -999,6 +1108,9 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                     );
                     if let Some(message) = row["message"].as_str() {
                         eprintln!("{message}");
+                    }
+                    if let Some(hint) = row["hint"].as_str() {
+                        eprintln!("  {hint}");
                     }
                 }
             }
@@ -1181,8 +1293,17 @@ impl std::fmt::Display for Exit {
 impl std::error::Error for Exit {}
 
 fn find_config(current_dir: &std::path::Path) -> Result<Config> {
-    Config::find(current_dir)
-        .ok_or_else(|| output::coded(ErrorCode::NotInProject, "Not in a DVS repository"))?
+    Config::find(current_dir).ok_or_else(|| {
+        output::coded(ErrorCode::NotInProject, not_in_project_message(current_dir))
+    })?
+}
+
+fn not_in_project_message(current_dir: &std::path::Path) -> &'static str {
+    if dvs::dvs1::is_dvs1(&find_repo_root(current_dir)) {
+        "this is a dvs1 project (dvs.yaml); convert it first with dvs migrate local or dvs migrate server"
+    } else {
+        "Not in a DVS repository"
+    }
 }
 
 impl Command {
@@ -1193,6 +1314,7 @@ impl Command {
             Self::Add { .. } => "add",
             Self::Status { .. } => "status",
             Self::Get { .. } => "get",
+            Self::Migrate { .. } => "migrate",
             Self::Info => "info",
             Self::Availability { .. } => "availability",
             Self::History { .. } => "history",
@@ -1205,14 +1327,16 @@ impl Command {
     fn cancellable(&self) -> bool {
         matches!(
             self,
-            Self::Add { .. } | Self::Get { .. } | Self::Status { .. }
+            Self::Add { .. } | Self::Get { .. } | Self::Status { .. } | Self::Migrate { .. }
         )
     }
 
     fn dry_run(&self) -> bool {
         matches!(
             self,
-            Self::Add { dry_run: true, .. } | Self::Get { dry_run: true, .. }
+            Self::Add { dry_run: true, .. }
+                | Self::Get { dry_run: true, .. }
+                | Self::Migrate { dry_run: true, .. }
         )
     }
 }
@@ -1339,6 +1463,78 @@ mod tests {
         assert_eq!(info_compression(&config), None);
         let local = Config::new_local("/tmp/store", None).unwrap();
         assert_eq!(info_compression(&local).as_deref(), Some("zstd"));
+    }
+
+    #[test]
+    fn status_warns_of_a_dvs1_config_or_metadata_beside_dvs_toml() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = DvsPaths::new(root.path().into(), root.path().into(), ".dvs").unwrap();
+        let root = paths.repo_root();
+        let warned = Some("dvs1 files came in from a merge; run dvs migrate");
+        std::fs::write(
+            root.join(dvs::dvs1::CONFIG_FILE_NAME),
+            "storage_dir: /old\n",
+        )
+        .unwrap();
+        assert_eq!(leftover_dvs1_warning(&paths, ".dvs"), None);
+        std::fs::write(root.join(CONFIG_FILE_NAME), "").unwrap();
+        assert_eq!(leftover_dvs1_warning(&paths, ".dvs"), warned);
+
+        // A clean merge brings only the dvs1 metadata, not dvs.yaml
+        std::fs::remove_file(root.join(dvs::dvs1::CONFIG_FILE_NAME)).unwrap();
+        std::fs::write(root.join("notes.dvs"), "not dvs1 metadata").unwrap();
+        assert_eq!(leftover_dvs1_warning(&paths, ".dvs"), None);
+        let record = json!({
+            "blake3_checksum": "abc",
+            "size": 1,
+            "add_time": "2024-01-02T03:04:05Z",
+            "message": "",
+            "saved_by": "tester",
+        });
+        // A .dvs file the project tracks as data is not dvs1 metadata, even if it reads as such
+        std::fs::write(root.join("tracked.dvs"), record.to_string()).unwrap();
+        std::fs::create_dir_all(root.join(".dvs")).unwrap();
+        std::fs::write(root.join(".dvs/tracked.dvs.dvs"), "{}").unwrap();
+        assert_eq!(leftover_dvs1_warning(&paths, ".dvs"), None);
+        std::fs::write(root.join("x.csv.dvs"), record.to_string()).unwrap();
+        assert_eq!(leftover_dvs1_warning(&paths, ".dvs"), warned);
+    }
+
+    #[test]
+    fn not_in_project_at_a_dvs1_checkout_names_dvs_migrate() {
+        let root = tempfile::tempdir().unwrap();
+        let sub = root.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        assert_eq!(not_in_project_message(&sub), "Not in a DVS repository");
+        std::fs::write(
+            root.path().join(dvs::dvs1::CONFIG_FILE_NAME),
+            "storage_dir: /old\n",
+        )
+        .unwrap();
+        assert_eq!(
+            not_in_project_message(&sub),
+            "this is a dvs1 project (dvs.yaml); convert it first with dvs migrate local or dvs migrate server"
+        );
+    }
+
+    #[test]
+    fn migrate_takes_dry_run_before_or_after_its_form() {
+        for args in [
+            &["dvs", "migrate", "--dry-run", "local"][..],
+            &["dvs", "migrate", "local", "../new", "--dry-run"],
+            &["dvs", "migrate", "--dry-run"],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(cli.command.dry_run(), "{args:?}");
+        }
+        let cli = Cli::try_parse_from(["dvs", "migrate"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Migrate {
+                target: None,
+                dry_run: false
+            }
+        ));
     }
 
     #[test]

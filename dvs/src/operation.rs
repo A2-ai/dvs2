@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::files::add::AddResult;
 use crate::files::get::GetRow;
 use crate::files::status::StatusFacts;
+use crate::migrate::MigrateRow;
 use crate::progress::FileProgress;
 
 /// A shared "stop starting new files" flag. Cloning shares the flag, so a
@@ -50,9 +51,10 @@ pub trait OperationRow {
 }
 
 /// How an add or status run ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunOutcome {
+    #[default]
     Complete,
     Partial,
     Failed,
@@ -150,6 +152,7 @@ pub enum FileRow<'a> {
     Add(&'a AddResult),
     Get(&'a GetRow),
     Status(&'a StatusFacts),
+    Migrate(&'a MigrateRow),
 }
 
 /// Hooks an operation calls as it runs. Called from worker threads, possibly
