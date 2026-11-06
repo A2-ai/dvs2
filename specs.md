@@ -767,7 +767,10 @@ Example:
 
 `dvs` maintains a SQLite cache at `{metadata_folder}/.cache/dvs.db` to avoid re-hashing files that haven't
 changed. Both `add` and `get` populate the cache after a successful operation, so a subsequent `status`
-check benefits from cache hits. A cache hit is determined by matching the file's `mtime` and `size`. The cache directory is
+check benefits from cache hits. A cache hit is determined by matching the file's `mtime`, `ctime` and `size`. Filesystems
+keep these times in ticks, and a second write of the same size within one tick leaves all three unchanged. So a hash
+is cached only when the file changed at least two seconds before dvs read it. A fresher file is hashed again by the
+next command. `get` caches the files it writes, whose content it has just checked. The cache directory is
 automatically added to `.gitignore` on creation. The cache is optional.
 
 The same database holds the local baseline (`baseline(path, blake3, size)`): what dvs last wrote or added at
