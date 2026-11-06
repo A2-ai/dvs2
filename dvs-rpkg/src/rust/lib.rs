@@ -379,9 +379,9 @@ pub(crate) fn dvs_status(
 /// @title Materialize the audit log as a data frame
 /// @description
 /// Reads the audit log of the DVS repository containing the working
-/// directory and returns one row per entry: `operation_id`, `timestamp`
-/// (POSIXct, UTC) and `user`, then the entry's action flattened into
-/// columns. `action_variant` is `"init"` or `"add"`. The other `action_`
+/// directory and returns one row per entry, newest first as `dvs history`
+/// lists them: `operation_id`, `timestamp` (POSIXct, UTC) and `user`, then
+/// the entry's action flattened into columns. `action_variant` is `"init"` or `"add"`. The other `action_`
 /// columns hold that action's fields, for an add `action_file_path`,
 /// `action_file_hashes_blake3`, `action_compression` and `action_message`,
 /// and are `NA` where the action has no such field. The columns follow

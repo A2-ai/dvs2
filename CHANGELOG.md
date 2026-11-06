@@ -10,6 +10,8 @@
 - R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
 - R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
 - R package: `format_byte_size(TRUE)` and `format_byte_size(FALSE)` are errors, as `set_dvs_threads(TRUE)` is. They returned `"1 B"` and `"0 B"`.
+- A local store gives the audit entries newest first, as a server does. `dvs history --json` listed them oldest first in a local project, so `.files[0]` was the oldest add. The table sorted them by time, which put two adds of one second in log order, older first. Both now read the log backwards. With a server, nothing changes.
+- R package: `dvs_audit_log()` returns the entries newest first, so the `init` entry comes last. It returned them in log order.
 
 ### Added
 

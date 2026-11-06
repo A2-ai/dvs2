@@ -474,6 +474,7 @@ impl ServerBackend {
         Ok(())
     }
 
+    /// The server sends the entries newest first, by upload time.
     pub fn get_audit_entries(&self, files: &[PathBuf]) -> anyhow::Result<Vec<AuditEntry>> {
         let url = self.history_url()?;
 

@@ -49,9 +49,10 @@ test_that("dvs_audit_log flattens the action into columns with a POSIXct timesta
 
   log <- dvs_audit_log()
   expect_s3_class(log$timestamp, "POSIXct")
-  expect_equal(log$action_variant, c("init", "add"))
-  expect_equal(log$action_file_path, c(NA, "a.csv"))
-  expect_equal(log$action_message, c(NA, "why"))
+  # Newest first, as dvs history lists them: the init entry comes last
+  expect_equal(log$action_variant, c("add", "init"))
+  expect_equal(log$action_file_path, c("a.csv", NA))
+  expect_equal(log$action_message, c("why", NA))
   expect_false("action" %in% names(log))
 })
 

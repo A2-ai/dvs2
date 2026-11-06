@@ -1032,12 +1032,9 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             } else if entries.is_empty() {
                 println!("No history");
             } else {
-                // Newest first whatever order the backend returns; timestamps
-                // are UTC whole seconds, so they sort as text
-                let mut entries: Vec<_> = entries.iter().collect();
-                entries.sort_by(|a, b| b["timestamp"].as_str().cmp(&a["timestamp"].as_str()));
+                // The backend gives the entries newest first, for JSON too
                 let rows: Vec<HistoryRow> = entries
-                    .into_iter()
+                    .iter()
                     .map(|entry| {
                         let add = &entry["action"]["add"];
                         let text =

@@ -320,11 +320,16 @@ impl LocalBackend {
 
     /// An empty `files` slice returns the full audit log. See
     /// [`parse_audit_log`] for the filtering rules.
+    ///
+    /// Newest first: the log is appended in the order the entries were
+    /// recorded, so it is read backwards. The timestamps keep whole seconds and
+    /// cannot order two entries of one second.
     pub fn get_audit_entries(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>> {
         let files_to_include: HashSet<_> = HashSet::from_iter(files.iter().cloned());
         let audit_path = self.path.join(AUDIT_LOG_FILENAME);
         let f = fs::File::open(&audit_path)?;
-        let entries = parse_audit_log(BufReader::new(f), &files_to_include)?;
+        let mut entries = parse_audit_log(BufReader::new(f), &files_to_include)?;
+        entries.reverse();
         Ok(entries)
     }
 }
@@ -590,6 +595,40 @@ mod tests {
         assert_eq!(entries[1].operation_id, "op-2");
         assert_eq!(entries[1].timestamp.as_second(), 2000000000);
         assert_eq!(entries[1].user, "bob");
+    }
+
+    // Two adds in one second have the same timestamp. The later one comes
+    // first all the same, since the log is read backwards
+    #[test]
+    fn get_audit_entries_is_newest_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(tmp.path().join("storage"), None).unwrap();
+        backend.init(Compression::None).unwrap();
+        for (id, second) in [("a", 10), ("b", 20), ("c", 20), ("d", 30)] {
+            backend
+                .log_audit_entry(&AuditEntry {
+                    operation_id: id.to_string(),
+                    timestamp: jiff::Timestamp::from_second(second).unwrap(),
+                    user: "alice".to_string(),
+                    action: Action::Add {
+                        file: AuditFile {
+                            path: PathBuf::from("a.csv"),
+                            hashes: test_hash("abc123def456789012345678901234ab"),
+                        },
+                        compression: Compression::Zstd,
+                        message: None,
+                    },
+                })
+                .unwrap();
+        }
+
+        let ids: Vec<_> = backend
+            .get_audit_entries(&[])
+            .unwrap()
+            .into_iter()
+            .map(|e| e.operation_id)
+            .collect();
+        assert_eq!(ids, ["d", "c", "b", "a"]);
     }
 
     #[test]
