@@ -10,6 +10,9 @@
 - R package: `dvs_add()` with neither `paths` nor `glob` is an error, as in the CLI.
 - R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
 - R package: `format_byte_size(TRUE)` and `format_byte_size(FALSE)` are errors, as `set_dvs_threads(TRUE)` is. They returned `"1 B"` and `"0 B"`.
+- `dvs status <paths>` reports each path that selects no tracked file as a failed `not_tracked` row, with get's message and hint, and exits 1, as `dvs get` does. It dropped the path and exited 0, so `dvs status good.bin bogus.bin` hid the typo. A directory with nothing tracked directly in it is reported too, and its hint suggests `-r`. When every row failed, the table is left out. R's `dvs_status()` returns the same row, with no R error or warning.
+- `dvs status --glob` with no paths fails with `no_files_selected` and exits 1 when the glob matches no tracked file, as `dvs get --glob` does. It said "No tracked files" and exited 0. R's `dvs_status()` returns no rows then, as before.
+- Rust library: `inspect_status()` takes the named paths and `recursive` in place of a `PathFilter`, and selects as `select_paths_for_get()` does. `StatusFacts` has `hint`. `ErrorCode` has `NotTracked`.
 
 ### Added
 
@@ -20,6 +23,7 @@
 - R package: the counts of `dvs_result_info()` include `total`, `succeeded` and `cancelled`, as in the CLI's JSON.
 - R package: a wrong argument raises a `dvs_error_argument` condition, also a `dvs_error`, with the argument in `param` and the call the user wrote. A `dvs.toml` that does not load raises a `dvs_config_error`, also a `dvs_error`, in every command. One `dvs_error` handler catches them all.
 - R package: a bad `dvs.num_threads` or `dvs.on_error` option raises the same `dvs_error_argument`, and the message names the option.
+- R package: `dvs_status()` has a `hint` column, what to do about a row that failed.
 - R package: `dvs_result_info()` has `summary`, the summary the CLI prints. A printed `dvs_get()` result and its `on_error` warning or error start with it, so R and the CLI say the same. `on_conflict = <policy> (<source>)` appears only when the policy acted, as in the CLI.
 
 ### Fixed

@@ -18,6 +18,9 @@ pub enum ErrorCode {
     InvalidArguments,
     InvalidConfiguration,
     NoFilesSelected,
+    /// A named path that selects no tracked file: a status row. get's code
+    /// of the same name
+    NotTracked,
     IoError,
     /// The fallback when nothing more specific is known
     OperationFailed,
@@ -43,6 +46,7 @@ impl ErrorCode {
             ErrorCode::InvalidArguments => "invalid_arguments",
             ErrorCode::InvalidConfiguration => "invalid_configuration",
             ErrorCode::NoFilesSelected => "no_files_selected",
+            ErrorCode::NotTracked => "not_tracked",
             ErrorCode::IoError => "io_error",
             ErrorCode::OperationFailed => "operation_failed",
             ErrorCode::FileFailed => "file_failed",

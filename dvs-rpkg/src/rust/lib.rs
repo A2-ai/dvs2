@@ -27,7 +27,7 @@ use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
     Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
-    OperationContext, PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
+    OperationContext, Status, TransferObserver, add_files, get_files, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -302,10 +302,13 @@ impl From<StatusChoice> for Status {
 /// are shown. Pass a character vector of status names, such as
 /// `c("current", "absent")`, to show only those.
 /// A file whose status cannot be read is always kept, with status `"error"`,
-/// the kind of failure in `code` and the reason in `error`.
+/// the kind of failure in `code`, the reason in `error` and what to do about
+/// it in `hint`.
 ///
 /// @param paths Files or directories to report, relative to the working
-///   directory. `NULL` is the same as `character(0)`.
+///   directory. `NULL` is the same as `character(0)`. A path that selects no
+///   tracked file is an error row with code `"not_tracked"`, as in
+///   [dvs_get()].
 /// @param recursive If `TRUE`, directory inputs include all descendants.
 ///   If `FALSE` or `NULL`, only direct children of the directory are
 ///   returned. The flag only constrains descendants of paths passed
@@ -350,18 +353,10 @@ pub(crate) fn dvs_status(
             .all(|choice| status.iter().any(|c| c.to_choice() == *choice));
 
     let paths = paths.unwrap_or_default();
-    let filter = if paths.is_empty() {
-        None
-    } else {
-        Some(PathFilter::from_user_paths(
-            paths,
-            recursive.unwrap_or(false),
-            &dvs_paths,
-        ))
-    };
     let mut statuses = dvs::inspect_status(
         &dvs_paths,
-        filter.as_ref(),
+        &paths,
+        recursive.unwrap_or(false),
         glob.as_deref(),
         &OperationContext::new(),
     )?
@@ -434,6 +429,7 @@ struct StatusRow {
     message: Option<String>,
     code: Option<String>,
     error: Option<String>,
+    hint: Option<String>,
     add_time: Option<miniextendr_api::jiff::Timestamp>,
 }
 
@@ -451,6 +447,7 @@ impl From<&dvs::StatusFacts> for StatusRow {
             baseline: _,
             code,
             error,
+            hint,
         } = row;
         let metadata = metadata.as_ref();
         StatusRow {
@@ -463,6 +460,7 @@ impl From<&dvs::StatusFacts> for StatusRow {
             message: metadata.and_then(|m| m.message.clone()),
             code: code.map(|c| c.as_str().to_string()),
             error: error.clone(),
+            hint: hint.clone(),
             add_time: metadata.map(|m| m.add_time),
         }
     }

@@ -14,7 +14,9 @@ dvs_status_impl(
 }
 \arguments{
 \item{paths}{Files or directories to report, relative to the working
-directory. \code{NULL} is the same as \code{character(0)}.}
+directory. \code{NULL} is the same as \code{character(0)}. A path that selects no
+tracked file is an error row with code \code{"not_tracked"}, as in
+\code{\link[=dvs_get]{dvs_get()}}.}
 
 \item{recursive}{If \code{TRUE}, directory inputs include all descendants.
 If \code{FALSE} or \code{NULL}, only direct children of the directory are
@@ -50,6 +52,7 @@ Reports the sync status of DVS-managed files. By default all statuses
 are shown. Pass a character vector of status names, such as
 \code{c("current", "absent")}, to show only those.
 A file whose status cannot be read is always kept, with status \code{"error"},
-the kind of failure in \code{code} and the reason in \code{error}.
+the kind of failure in \code{code}, the reason in \code{error} and what to do about
+it in \code{hint}.
 }
 \keyword{internal}
