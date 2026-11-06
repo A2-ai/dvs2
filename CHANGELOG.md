@@ -11,6 +11,7 @@
 - R package: `new_dvs_bytes(NULL)` is an error. `numeric(0)` still gives an empty vector.
 - R package: `format_byte_size(TRUE)` and `format_byte_size(FALSE)` are errors, as `set_dvs_threads(TRUE)` is. They returned `"1 B"` and `"0 B"`.
 - `dvs status <paths>` reports each path that selects no tracked file as a failed `not_tracked` row, with get's message and hint, and exits 1, as `dvs get` does. It dropped the path and exited 0, so `dvs status good.bin bogus.bin` hid the typo. A directory with nothing tracked directly in it is reported too, and its hint suggests `-r`. When every row failed, the table is left out. R's `dvs_status()` returns the same row, with no R error or warning.
+- `dvs status --glob` with no paths fails with `no_files_selected` and exits 1 when the glob matches no tracked file, as `dvs get --glob` does. It said "No tracked files" and exited 0. R's `dvs_status()` returns no rows then, as before.
 - Rust library: `inspect_status()` takes the named paths and `recursive` in place of a `PathFilter`, and selects as `select_paths_for_get()` does. `StatusFacts` has `hint`. `ErrorCode` has `NotTracked`.
 
 ### Added

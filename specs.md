@@ -179,8 +179,8 @@ Backend and credentials failures share one set of codes, at the top level (`erro
 404/405), `project_not_found` (project 404), `bad_metadata` (an unreadable `.dvs` record, e.g. git conflict
 markers) and `credentials_unreadable` (the store exists but cannot be read). A row can also have
 `code: "cancelled"` (the file never started, see Cancellation), which is not a failure. Command-level codes:
-`not_in_project`, `invalid_configuration`, `invalid_arguments`, `no_files_selected` (also `get` when no tracked
-file matched), `io_error`, and `operation_failed`, the honest fallback when nothing more specific is known.
+`not_in_project`, `invalid_configuration`, `invalid_arguments`, `no_files_selected` (also `get`, and `status`
+with only a glob, when no tracked file matched), `io_error`, and `operation_failed`, the honest fallback when nothing more specific is known.
 `auth_required` is also what `login`, `init` and `attach` report in machine mode when device login would be
 needed. Row codes besides the shared ones: `add`, `status` and `availability` `io_error` and
 `operation_failed` (`file_failed` if a failure has no code), `status` `not_tracked` (a named path that selects
@@ -641,8 +641,8 @@ Each named path selects tracked files on its own, as in `get`. A path that selec
 row with code `not_tracked`, get's message and a hint, and the command exits `1`. So `dvs status good.bin
 bogus.bin` shows good.bin and reports bogus.bin. A directory with no tracked file directly in it is reported the
 same way without `-r`, and its hint suggests `-r`. With no paths, status reports every tracked file, or with
-`--glob` the tracked files under the working directory that match it. A glob that matches nothing there shows
-no rows and exits `0`.
+`--glob` the tracked files under the working directory that match it. A glob that matches nothing there fails
+with `no_files_selected` and exits `1`, as in `get`.
 
 #### Rust library
 
@@ -668,7 +668,8 @@ dvs_status(
   Without a baseline, DVS reports `unsynced` because it cannot determine why the file differs from metadata. When omitted, all statuses are returned.
 
 Returns a data frame with one row per tracked file, and a `not_tracked` error row for each path in `paths` that
-selects none. It never raises an R error or warning for them.
+selects none. It never raises an R error or warning for them. A `glob` alone that matches nothing returns no
+rows.
 
 ## Internals
 

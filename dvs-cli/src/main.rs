@@ -705,6 +705,18 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             }
             let report =
                 dvs::inspect_status(&dvs_paths, &user_paths, recursive, glob.as_deref(), &ctx)?;
+            // A glob alone that selects nothing fails, as in get. A named path
+            // that selects nothing is a row instead.
+            if user_paths.is_empty()
+                && glob.is_some()
+                && report.files.is_empty()
+                && !report.cancelled
+            {
+                return Err(output::coded(
+                    ErrorCode::NoFilesSelected,
+                    "no tracked files matched",
+                ));
+            }
             let mut statuses = report.files;
             if !show_all {
                 statuses.retain(|row| status_row_selected(row, selection));
