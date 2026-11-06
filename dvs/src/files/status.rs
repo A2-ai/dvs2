@@ -357,6 +357,9 @@ mod tests {
     #[test]
     fn cache_miss_computes_status_facts() {
         let (_temp, paths) = fixture();
+        // Only a file that changed STAT_SETTLE ago gets its hash cached
+        #[cfg(feature = "cache")]
+        std::thread::sleep(cache::STAT_SETTLE + std::time::Duration::from_millis(100));
         let rows = inspect_status(&paths, None, None, &OperationContext::new())
             .unwrap()
             .files;

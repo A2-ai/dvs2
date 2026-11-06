@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::sync::Mutex;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::hashes::Hashes;
 use crate::paths::DvsPaths;
@@ -17,6 +17,13 @@ use rusqlite::Connection;
 /// Bump whenever the cache schema changes; a mismatch drops and rebuilds the table.
 #[cfg(feature = "cache")]
 const SCHEMA_VERSION: i64 = 1;
+
+/// How long a file's stat can still match a later write of the same size.
+/// Filesystems keep timestamps in ticks: Linux takes them from a coarse kernel
+/// clock (a few milliseconds), HFS+ and many NFS servers keep whole seconds,
+/// FAT two seconds. A second write in the tick of the first leaves mtime, ctime
+/// and size as they were.
+pub(crate) const STAT_SETTLE: Duration = Duration::from_secs(2);
 
 /// Filesystem stat used as cache key: mtime + ctime + size.
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +45,19 @@ impl FileStat {
             ctime_ns: ctime_ns(&meta),
             size: meta.len(),
         })
+    }
+
+    /// Whether content read from `checked_at` on is the content this stat
+    /// stands for: the file's last change, the later of mtime and ctime, lies
+    /// at least [`STAT_SETTLE`] before. A fresher file can be written again
+    /// with no change to its stat, and a cached hash would then go stale.
+    fn settled_at(&self, checked_at: SystemTime) -> bool {
+        let checked = checked_at
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as i64;
+        let changed = self.mtime_ns.max(self.ctime_ns);
+        checked.saturating_sub(changed) >= STAT_SETTLE.as_nanos() as i64
     }
 }
 
@@ -232,6 +252,9 @@ pub(crate) fn record_baseline(
 
 /// Compute hashes for a file, using the cache when possible.
 ///
+/// The hash is cached only for a file that changed at least [`STAT_SETTLE`]
+/// before it was read. A fresher one is hashed again next time.
+///
 /// Returns `(Hashes, file_size)`.
 pub fn hashes_for_file(
     full_path: &Path,
@@ -239,6 +262,8 @@ pub fn hashes_for_file(
     cache: Option<&Mutex<HashCache>>,
 ) -> Result<(Hashes, u64)> {
     let stat = FileStat::from_path(full_path)?;
+    // Reading starts after this
+    let checked_at = SystemTime::now();
 
     // Try cache lookup (brief lock)
     if let Some(mtx) = cache {
@@ -259,8 +284,11 @@ pub fn hashes_for_file(
     // Cache miss or no cache — stream-hash the file
     let (hashes, size) = Hashes::compute_from_path(full_path, &[])?;
 
-    // Store in cache (brief lock)
-    if let Some(mtx) = cache {
+    // Store in cache (brief lock), unless a write in the same timestamp tick
+    // could still change the content behind this stat
+    if let Some(mtx) = cache
+        && stat.settled_at(checked_at)
+    {
         if let Err(e) = mtx.lock().unwrap().insert(relative_path, &stat, &hashes) {
             log::warn!("Cache store failed for {relative_path}: {e}");
         }
@@ -417,5 +445,44 @@ mod tests {
 
         let result = cache.lookup("nonexistent.txt", &stat).unwrap();
         assert_eq!(result, None);
+    }
+
+    // The later of mtime and ctime counts, and a time in the future is never
+    // settled
+    #[test]
+    fn a_stat_settles_after_stat_settle() {
+        let changed = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let stat = sample_stat();
+        let later_ctime = FileStat {
+            ctime_ns: stat.ctime_ns + 1_000_000_000,
+            ..stat.clone()
+        };
+        assert!(!stat.settled_at(changed));
+        assert!(!stat.settled_at(changed + STAT_SETTLE - Duration::from_nanos(1)));
+        assert!(stat.settled_at(changed + STAT_SETTLE));
+        assert!(!later_ctime.settled_at(changed + STAT_SETTLE));
+        assert!(!stat.settled_at(changed - Duration::from_secs(60)));
+    }
+
+    // Two writes of one size within one timestamp tick leave the stat as it
+    // was. The first hash must not be cached, or the second read returns it
+    #[test]
+    fn a_fresh_file_is_not_cached() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = Mutex::new(HashCache::open(&tmp.path().join("cache.db")).unwrap());
+        let path = tmp.path().join("a.csv");
+
+        fs::write(&path, b"a1").unwrap();
+        let (first, _) = hashes_for_file(&path, "a.csv", Some(&cache)).unwrap();
+        let stat = FileStat::from_path(&path).unwrap();
+        assert_eq!(cache.lock().unwrap().lookup("a.csv", &stat).unwrap(), None);
+
+        fs::write(&path, b"a2").unwrap();
+        let (second, _) = hashes_for_file(&path, "a.csv", Some(&cache)).unwrap();
+        assert_ne!(first.blake3, second.blake3);
+        assert_eq!(
+            second.blake3,
+            Hashes::compute_from_path(&path, &[]).unwrap().0.blake3
+        );
     }
 }

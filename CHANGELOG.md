@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- The hash cache no longer returns the hash of a file's previous content. A file written twice with the same size within one filesystem timestamp tick (milliseconds on Linux, a second or two on some network and older filesystems) kept its mtime, ctime and size, so `add`, `status` and `get` could report the hash of the first content for the second. dvs now caches a hash only when the file changed at least two seconds before dvs read it. A file changed more recently is hashed again by the next command.
 - `dvs init storage`, with a name that is not a path yet and nothing after it, suggests `dvs init local storage`, as `dvs init ../storage` suggests `dvs init local ../storage`. It gave only the generic `dvs init local <PATH>`.
 - R package: `dvs_add()` returns its columns in one order. When the first file failed, `code` and `error` came before `outcome`.
 - R package: `dvs_add()` and `dvs_get()` with a progress bar could fail with "Unknown cli progress bar configuration", when R collected garbage before the bar started.
