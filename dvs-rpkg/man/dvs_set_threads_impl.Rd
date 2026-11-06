@@ -7,13 +7,14 @@
 dvs_set_threads_impl(threads = NULL, .call = NULL)
 }
 \arguments{
-\item{threads}{A whole number of threads, or \code{0} or \code{NULL} for none.}
+\item{threads}{A whole number of threads, or \code{NULL} for the dvs default.
+\code{0} also gives the default. A count above 32 uses 32.}
 
 \item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }
 \description{
 Controls the thread pool size for add, get, and status operations.
-\code{NULL} or \code{0} sets no thread count. \code{\link[=set_dvs_threads]{set_dvs_threads()}} gives the rule
-that then applies.
+\code{NULL} gives the dvs default, and so does \code{0}. \code{\link[=set_dvs_threads]{set_dvs_threads()}} gives
+the rules.
 }
 \keyword{internal}
