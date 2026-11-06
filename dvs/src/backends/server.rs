@@ -293,6 +293,16 @@ impl ServerBackend {
                     "Server initialization failed: the project already exists with a different group or compression"
                 )
             }
+            // The server says why: project creation is admin only, or the group is not the user's
+            403 => {
+                let body = resp.body_mut().read_to_string().unwrap_or_default();
+                let message = if body.trim().is_empty() {
+                    NOT_ALLOWED.to_string()
+                } else {
+                    format!("Server initialization failed: {}", body.trim())
+                };
+                Err(coded(ErrorCode::AccessDenied, message))
+            }
             _ => Err(response_error(&self.url, &mut resp, "server init")),
         }
     }
