@@ -29,8 +29,7 @@ use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
     FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow,
-    Outcome, PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files,
-    set_num_threads,
+    Outcome, RowState, RunOutcome, Status, add_files, format_size, get_files, set_num_threads,
 };
 
 use crate::observer::CliObserver;
@@ -692,8 +691,6 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 unsynced,
             };
 
-            let filter = (!user_paths.is_empty())
-                .then(|| PathFilter::from_user_paths(user_paths, recursive, &dvs_paths));
             // Rows stream as soon as their local check completes
             let mut ctx = OperationContext::new().with_cancel(cancel.clone());
             if events::active().is_some() {
@@ -706,7 +703,8 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 });
                 ctx = ctx.with_observer(Arc::new(observer));
             }
-            let report = dvs::inspect_status(&dvs_paths, filter.as_ref(), glob.as_deref(), &ctx)?;
+            let report =
+                dvs::inspect_status(&dvs_paths, &user_paths, recursive, glob.as_deref(), &ctx)?;
             let mut statuses = report.files;
             if !show_all {
                 statuses.retain(|row| status_row_selected(row, selection));
@@ -736,6 +734,9 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                     if let Some(error) = &row.error {
                         eprintln!("Error getting status for {}: {error}", row.path.display());
                     }
+                    if let Some(hint) = &row.hint {
+                        eprintln!("  {hint}");
+                    }
                 }
 
                 if with_metadata {
@@ -750,11 +751,14 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                             })
                         })
                         .collect();
-                    let mut table = tabled::Table::new(rows);
-                    table
-                        .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
-                        .with(Modify::new(Rows::first()).with(Alignment::left()));
-                    println!("{table}");
+                    // No table when every row failed: the errors above say it all
+                    if !rows.is_empty() {
+                        let mut table = tabled::Table::new(rows);
+                        table
+                            .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
+                            .with(Modify::new(Rows::first()).with(Alignment::left()));
+                        println!("{table}");
+                    }
                 } else {
                     let rows: Vec<StatusRow> = statuses
                         .iter()
@@ -769,11 +773,14 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                                 .unwrap_or_default(),
                         })
                         .collect();
-                    let mut table = tabled::Table::new(rows);
-                    table
-                        .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
-                        .with(Modify::new(Rows::first()).with(Alignment::left()));
-                    println!("{table}");
+                    // No table when every row failed: the errors above say it all
+                    if !rows.is_empty() {
+                        let mut table = tabled::Table::new(rows);
+                        table
+                            .with(Modify::new(ByColumnName::new("size")).with(Alignment::right()))
+                            .with(Modify::new(Rows::first()).with(Alignment::left()));
+                        println!("{table}");
+                    }
                 }
                 let line = status_summary(&counts);
                 if outcome == RunOutcome::Complete {

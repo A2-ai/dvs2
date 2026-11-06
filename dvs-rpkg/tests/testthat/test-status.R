@@ -182,7 +182,7 @@ test_that("dvs_status returns POSIXct add_time and dvs_bytes size", {
 
 status_columns <- c(
   "path", "status", "hash", "size", "created_by", "compression",
-  "message", "code", "error", "add_time"
+  "message", "code", "error", "hint", "add_time"
 )
 
 test_that("dvs_status has the same columns whatever the rows", {
@@ -235,6 +235,31 @@ test_that("dvs_status shows every status only when every choice is selected", {
   # Five entries, but not "modified"
   result <- dvs_status(status = c("current", "current", "absent", "stale", "stale"))
   expect_equal(nrow(result), 0L)
+})
+
+test_that("dvs_status reports a path that selects nothing as not_tracked", {
+  new_dvs_test_repo()
+  writeLines("a", "good.csv")
+  dvs_add(paths = file.path(getwd(), "good.csv"))
+  dir.create("raw")
+
+  # Never an R error or warning, as dvs_get() reports it
+  expect_no_warning(result <- dvs_status(paths = c("good.csv", "bogus.csv", "raw")))
+  expect_named(result, status_columns)
+  expect_equal(result$path, c("bogus.csv", "good.csv", "raw"))
+  expect_equal(result$status, c("error", "current", "error"))
+  expect_equal(result$code, c("not_tracked", NA, "not_tracked"))
+  expect_equal(result$error[1], "not tracked by dvs")
+  expect_equal(result$error[3], "no tracked files selected in this directory")
+  expect_false(is.na(result$hint[1]))
+  expect_true(is.na(result$hint[2]))
+
+  # Kept by a status filter, as every error row is
+  expect_equal(dvs_status(paths = "bogus.csv", status = "absent")$code, "not_tracked")
+  # And dvs_get() says the same
+  got <- dvs_get(paths = "bogus.csv", on_error = "return")
+  expect_equal(got$code, "not_tracked")
+  expect_equal(got$message, result$error[1])
 })
 
 test_that("dvs_status keeps an unreadable record as an error row", {

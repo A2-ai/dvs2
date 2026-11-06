@@ -183,8 +183,8 @@ markers) and `credentials_unreadable` (the store exists but cannot be read). A r
 file matched), `io_error`, and `operation_failed`, the honest fallback when nothing more specific is known.
 `auth_required` is also what `login`, `init` and `attach` report in machine mode when device login would be
 needed. Row codes besides the shared ones: `add`, `status` and `availability` `io_error` and
-`operation_failed` (`file_failed` if a failure has no code), get's codes (see get), and `logout` `warnings`
-`revoke_failed`.
+`operation_failed` (`file_failed` if a failure has no code), `status` `not_tracked` (a named path that selects
+no tracked file, as in get), get's codes (see get), and `logout` `warnings` `revoke_failed`.
 
 `dvs info --json` finds the project from the working directory. `project_root` and `metadata_directory` are
 absolute native paths. For a server project it reports `logged_in`, `connection` (`available`, `unavailable`, or
@@ -637,15 +637,19 @@ By default (no flags), `dvs status` shows all tracked files regardless of state.
 Human output ends, after a blank line, with a summary line ("Checked 3, 1 failed"), which also counts
 cancelled files. This will exit with `1` if one or more files could not be inspected.
 
-Each named path filters independently. A path that matches no tracked file is dropped silently rather than
-failing the command, so a partly misspelled invocation such as `dvs status good.bin bogus.bin` still exits
-`0` and shows only the paths that matched.
+Each named path selects tracked files on its own, as in `get`. A path that selects no tracked file is a failed
+row with code `not_tracked`, get's message and a hint, and the command exits `1`. So `dvs status good.bin
+bogus.bin` shows good.bin and reports bogus.bin. A directory with no tracked file directly in it is reported the
+same way without `-r`, and its hint suggests `-r`. With no paths, status reports every tracked file, or with
+`--glob` the tracked files under the working directory that match it. A glob that matches nothing there shows
+no rows and exits `0`.
 
 #### Rust library
 
 The library scans all metadata files in the project and returns a result for each one. Like `add` and `get`,
 it never errors as a whole. Individual files that cannot be inspected (e.g. permission errors) are reported
-as per-file errors in the result list.
+as per-file errors in the result list, and so is each named path that selects no tracked file
+(`not_tracked`).
 
 #### R package
 
@@ -663,7 +667,8 @@ dvs_status(
   A differing working file is `stale` when it still matches the local baseline, and `modified` when it differs from that baseline.
   Without a baseline, DVS reports `unsynced` because it cannot determine why the file differs from metadata. When omitted, all statuses are returned.
 
-Returns a data frame with one row per tracked file.
+Returns a data frame with one row per tracked file, and a `not_tracked` error row for each path in `paths` that
+selects none. It never raises an R error or warning for them.
 
 ## Internals
 

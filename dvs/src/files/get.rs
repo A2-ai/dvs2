@@ -531,6 +531,35 @@ fn cancel_row(row: &mut GetRow) {
     );
 }
 
+/// Where a named path that selects no tracked file is reported: from the
+/// project root, or `None` when it is outside the project.
+pub(crate) fn unmatched_path(paths: &DvsPaths, user_path: &Path) -> Option<PathBuf> {
+    if user_path.is_absolute() {
+        project_relative(paths.repo_root(), user_path)
+    } else {
+        let cwd_rel = paths.cwd_relative_to_root().unwrap_or(Path::new(""));
+        Some(normalize(&cwd_rel.join(user_path)))
+    }
+}
+
+/// Why a named path selected no tracked file. get and status say the same.
+pub(crate) fn not_tracked_message(is_dir: bool) -> &'static str {
+    if is_dir {
+        "no tracked files selected in this directory"
+    } else {
+        "not tracked by dvs"
+    }
+}
+
+/// What to do about a named path that selected no tracked file.
+pub(crate) fn not_tracked_hint(is_dir: bool) -> &'static str {
+    if is_dir {
+        "nothing tracked is selected here; add -r to include subdirectories, or check the path"
+    } else {
+        "check the path; list tracked files with: dvs status"
+    }
+}
+
 /// An absolute path as a path from the project root, if it is inside it
 /// (also when one side has symlinks resolved, e.g. macOS /var -> /private/var).
 fn project_relative(root: &Path, absolute: &Path) -> Option<PathBuf> {
@@ -923,18 +952,10 @@ pub fn get_files(
             .collect()
     });
     hashing.finish();
-    let cwd_rel = paths
-        .cwd_relative_to_root()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
     for user_path in selection.unmatched {
         // Report it like a tracked file: `path` from the project root, and
         // `local_path` from the cwd, however the user wrote it.
-        let inside = if user_path.is_absolute() {
-            project_relative(paths.repo_root(), &user_path)
-        } else {
-            Some(normalize(&cwd_rel.join(&user_path)))
-        };
+        let inside = unmatched_path(paths, &user_path);
         let mut p = Planned::new(blank_row(paths, inside.as_deref().unwrap_or(&user_path)));
         let is_dir = paths.file_path(&p.row.path).is_dir();
         if inside.is_none() {
@@ -944,11 +965,7 @@ pub fn get_files(
         p.set(
             Action::Failed,
             Some(GetCode::NotTracked),
-            Some(if is_dir {
-                "no tracked files selected in this directory".to_string()
-            } else {
-                "not tracked by dvs".to_string()
-            }),
+            Some(not_tracked_message(is_dir).to_string()),
         );
         planned.push(p);
     }
@@ -1237,11 +1254,7 @@ fn hint(row: &GetRow) -> Option<String> {
         GetCode::BatchAborted => {
             Some("held back by another file; to get the rest: --on-conflict skip".into())
         }
-        GetCode::NotTracked if row.local_path.is_dir() => Some(
-            "nothing tracked is selected here; add -r to include subdirectories, or check the path"
-                .into(),
-        ),
-        GetCode::NotTracked => Some("check the path; list tracked files with: dvs status".into()),
+        GetCode::NotTracked => Some(not_tracked_hint(row.local_path.is_dir()).into()),
         GetCode::SourceMissing => Some(
             "the stored content of this version is missing (probably an interrupted upload); \
              tell whoever added it"
