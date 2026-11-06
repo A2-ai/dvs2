@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use crate::cache::{FileStat, HashCache, baseline_for, record_baseline, try_open_cache};
 use crate::config::{OnConflict, SettingSource};
 use crate::error::{Error, ErrorCode, backend_error_code};
-use crate::files::metadata::FileMetadata;
+use crate::files::metadata::{FileMetadata, read_record};
 use crate::globbing::GetSelection;
 use crate::operation::{
     ByteTotals, FileRow, Hashing, OperationContext, OperationPlan, RunOutcome, millis,
@@ -634,10 +634,7 @@ fn plan_file(
     };
 
     let metadata_path = paths.metadata_path(relative_path);
-    let metadata: FileMetadata = match fs::File::open(&metadata_path)
-        .map_err(anyhow::Error::from)
-        .and_then(|f| serde_json::from_reader(f).map_err(anyhow::Error::from))
-    {
+    let metadata: FileMetadata = match read_record(&metadata_path) {
         Ok(m) => m,
         Err(e) => {
             return fail(
@@ -1258,7 +1255,8 @@ fn hint(row: &GetRow) -> Option<String> {
             Some("close the program using the file, then run dvs get again".into())
         }
         GetCode::Shared(ErrorCode::BadMetadata) => Some(format!(
-            "fix the .dvs file for {p} (for example a git merge conflict), then run dvs get again"
+            "fix the .dvs file for {p} (resolve a git merge conflict, or add the file again if it \
+             is empty), then run dvs get again"
         )),
         _ => None,
     }
@@ -1650,6 +1648,32 @@ mod tests {
 
         let report = repo.get(&["a.csv", "b.csv"], OnConflict::Skip);
         assert_eq!(row(&report, "a.csv").action, Action::Restored);
+    }
+
+    // An empty record, which a dvs from before atomic writes could leave,
+    // says so, and the hint names the repair
+    #[test]
+    fn an_empty_record_names_its_repair() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"a");
+        repo.set_metadata_bytes("a.csv", b"");
+
+        let report = repo.get(&["a.csv"], OnConflict::Abort);
+        let a = row(&report, "a.csv");
+        assert_eq!(a.code, Some(GetCode::Shared(ErrorCode::BadMetadata)));
+        assert!(
+            a.message
+                .as_deref()
+                .unwrap()
+                .contains("the .dvs file is empty")
+        );
+        assert_eq!(
+            a.hint.as_deref(),
+            Some(
+                "fix the .dvs file for a.csv (resolve a git merge conflict, or add the file \
+                 again if it is empty), then run dvs get again"
+            )
+        );
     }
 
     #[test]

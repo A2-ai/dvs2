@@ -1,5 +1,6 @@
 //! Local facts for machine-readable status, using cached hashes when available.
 use crate::cache::{self, FileStat};
+use crate::files::metadata::read_record;
 use crate::operation::{FileRow, Hashing, OperationContext, OperationPlan, OperationRow, RowState};
 use crate::{DvsPaths, ErrorCode, FileMetadata, Hashes, PathFilter, Status};
 use anyhow::Result;
@@ -237,9 +238,7 @@ fn inspect_path(
     };
     let facts = (|| -> Result<()> {
         row.code = Some(ErrorCode::BadMetadata);
-        row.metadata = Some(serde_json::from_reader(fs::File::open(
-            paths.metadata_path(&path),
-        )?)?);
+        row.metadata = Some(read_record(&paths.metadata_path(&path))?);
         row.code = Some(ErrorCode::IoError);
         let key = path.to_string_lossy();
         row.baseline = cache
@@ -400,6 +399,13 @@ mod tests {
         assert_eq!(rows[0].status, None);
         assert_eq!(serde_json::to_value(&rows[0]).unwrap()["status"], "error");
         assert_eq!(rows[0].code, Some(ErrorCode::BadMetadata));
+        fs::write(paths.metadata_path(std::path::Path::new("data.txt")), b"").unwrap();
+        let rows = inspect_status(&paths, None, None, &OperationContext::new())
+            .unwrap()
+            .files;
+        assert_eq!(rows[0].code, Some(ErrorCode::BadMetadata));
+        let error = rows[0].error.as_deref().unwrap();
+        assert!(error.contains("Add the file again to repair it"), "{error}");
     }
 
     #[test]

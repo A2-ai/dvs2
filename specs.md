@@ -260,7 +260,9 @@ for `add`). Files that never started get `code: "cancelled"` (also `action: "can
 `status: "cancelled"` in `status`); they count in
 `counts.total` and `counts.cancelled`, in neither `succeeded` nor `failed`. The outcome is `cancelled` whenever the request came
 before the operation finished, the full result is still written, and the exit code is `130`, over every
-other exit code. A second signal exits `130` at once, without a result.
+other exit code. A second signal exits `130` at once, without a result. A signal within a quarter second of the first
+is not a second one: one kill can arrive twice, as from GNU `timeout`, which signals the process and then its own
+process group.
 
 #### R package
 
@@ -388,6 +390,11 @@ Once every input resolves, the add is best-effort. A file that fails during the 
 
 Each added file gets a metadata sidecar at `<metadata folder>/<path to file>.dvs` (metadata folder defaults to
 `.dvs`), mirroring the added file. The sidecar must be committed to version control (e.g. `git`). The data file itself is gitignored.
+A sidecar is written to a temp file next to it, then renamed over it, so a killed `dvs` never leaves an empty or
+half-written sidecar. A killed `dvs` can leave a temp file (`<name>.dvs-tmp.<uuid>`). dvs never reads it as a
+sidecar, and it is safe to delete. An empty sidecar, which a `dvs` from before atomic writes could leave, fails
+that file in `status` and `get` with "the .dvs file is empty. Add the file again to repair it", and `add` replaces
+it.
 
 Each file in an `add` result reports an outcome:
 
