@@ -7,9 +7,12 @@
 set_dvs_threads(threads)
 }
 \arguments{
-\item{threads}{A whole number of threads, or \code{NULL} or \code{0} to set no
-thread count. \code{NA}, a negative or fractional number, \code{TRUE}, \code{FALSE}, a
-string or more than one value raises a \code{dvs_error_argument} condition.}
+\item{threads}{A whole number of threads, or \code{NULL} for the dvs default,
+as leaving out \code{--threads} in the CLI does. \code{0} also gives the dvs
+default, as \verb{--threads 0} does. A count above 32 is accepted, and
+operations use 32 threads, without a warning. \code{NA}, a negative or
+fractional number, \code{TRUE}, \code{FALSE}, a string or more than one value
+raises a \code{dvs_error_argument} condition.}
 }
 \value{
 The previous value of \code{dvs.num_threads} (invisibly).
@@ -26,19 +29,41 @@ Each add, get and status operation takes its thread count from the first
 rule that applies:
 \enumerate{
 \item A thread count set here or in the \code{dvs.num_threads} option: that many
-threads, at most 32.
+threads, at most 32. A larger count stays in the option as given, and
+the operation uses 32 threads, without a warning.
 \item The \code{DVS_NUM_THREADS} environment variable, when it is a whole number
-above 0: that many threads, at most 32. Any other value is ignored.
+above 0: that many threads, at most 32. A larger value uses 32. Any
+other value is ignored.
 \item Otherwise 4 threads per CPU, at most 16.
 }
 
-An operation never uses more threads than it has files. \code{NULL} and \code{0} set
-no thread count, so the operation falls through to \code{DVS_NUM_THREADS} or to
-4 threads per CPU. \verb{--threads 0} in the CLI does the same.
+Rules 2 and 3 are the dvs default. \code{NULL} clears a count set before, so
+operations use the dvs default again. An operation never uses more threads
+than it has files.
 }
+\section{The same as the CLI}{
+
+\code{set_dvs_threads()} takes and refuses what \code{--threads} takes and refuses
+in the CLI:\tabular{lll}{
+   R \tab CLI \tab Threads used \cr
+   \code{set_dvs_threads(NULL)} \tab \verb{dvs add} \tab the dvs default \cr
+   \code{set_dvs_threads(0)} \tab \verb{dvs add --threads 0} \tab the dvs default \cr
+   \code{set_dvs_threads(4)} \tab \verb{dvs add --threads 4} \tab 4 \cr
+   \code{set_dvs_threads(100)} \tab \verb{dvs add --threads 100} \tab 32, without a warning \cr
+   \code{set_dvs_threads(-1)} \tab \verb{dvs add --threads -1} \tab refused \cr
+   \code{set_dvs_threads(2.5)} \tab \verb{dvs add --threads 2.5} \tab refused \cr
+}
+}
+
 \examples{
 \dontrun{
 set_dvs_threads(4)
+
+# Accepted. Operations use 32 threads, the most dvs uses
+set_dvs_threads(64)
+
+# Back to the dvs default
+set_dvs_threads(NULL)
 
 # Temporarily use 2 threads
 withr::with_options(list(dvs.num_threads = 2), {
