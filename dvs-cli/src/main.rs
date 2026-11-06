@@ -1032,7 +1032,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             } else if entries.is_empty() {
                 println!("No history");
             } else {
-                // `read_cmd::history` sorts newest first, for JSON too
+                // The backend gives the entries newest first, for JSON too
                 let rows: Vec<HistoryRow> = entries
                     .iter()
                     .map(|entry| {

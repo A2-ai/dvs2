@@ -150,7 +150,10 @@ impl Backend {
     }
 
     /// Read the whole audit file, filtered by the given file paths.
-    /// If `files` is empty, return the full audit log
+    /// If `files` is empty, return the full audit log.
+    ///
+    /// Newest first, in the order storage recorded the entries. A local store
+    /// reads its log backwards. The server sorts by upload time.
     pub fn get_audit_entries(&self, files: &[PathBuf]) -> Result<Vec<AuditEntry>> {
         match self {
             Backend::Local(b) => b.get_audit_entries(files),

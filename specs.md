@@ -131,10 +131,9 @@ relative to the current directory.
 `dvs availability <HASHES>...` takes one or more BLAKE3 hashes (an invalid one is `invalid_arguments`) and
 reports, per hash and in input order, whether storage has that content, without downloading it.
 `dvs history <PATHS>...` takes one or more file paths and reports their stored upload history; the files need
-not exist in this checkout. The table and the JSON `files` give the entries in one order, newest first. The audit
-log keeps whole seconds, so two adds in one second have the same time. In a local store the later one comes first.
-It takes files, not folders: a path that is a folder is refused with `invalid_arguments` (exit `2`), as is a path
-outside the project.
+not exist in this checkout. The table and the JSON `files` give the entries newest first, in the order storage
+recorded them. A local store reads its audit log backwards. The server sorts by upload time. It takes files, not
+folders: a path that is a folder is refused with `invalid_arguments` (exit `2`), as is a path outside the project.
 
 ```shell
 ❯ dvs availability --help
