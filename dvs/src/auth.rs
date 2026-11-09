@@ -135,6 +135,13 @@ pub fn initiate_device_approval(base_url: &Url) -> Result<DeviceAuthorizationRes
         .post(url.as_str())
         .send_empty()
         .map_err(|e| unreachable(base_url, e))?;
+    // Starting a login needs no auth, so a 401 comes from a proxy in front of dvs-server
+    if resp.status().as_u16() == 401 {
+        bail!(
+            "the dvs server at {base_url} refused to start a login: the server or its proxy is \
+             misconfigured, contact your admin"
+        );
+    }
     if !resp.status().is_success() {
         return Err(response_error(base_url, &mut resp, "device login"));
     }

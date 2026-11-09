@@ -76,6 +76,10 @@ pub(crate) fn status_error(base_url: &Url, status: u16, body: &str, what: &str) 
     };
     let message = match code {
         ErrorCode::AuthExpired => LOGIN_EXPIRED.to_string(),
+        // dvs-server says why it refused, eg a proxy misconfiguration or a missing group
+        ErrorCode::AccessDenied if !body.trim().is_empty() => {
+            format!("{what} refused by the dvs server: {}", body.trim())
+        }
         ErrorCode::AccessDenied => NOT_ALLOWED.to_string(),
         ErrorCode::ProjectNotFound => format!(
             "the dvs server at {base_url} does not have this project ({})",
