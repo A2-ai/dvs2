@@ -484,7 +484,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
     if let Some(n) = cli.threads {
         set_num_threads(n);
     }
-    let current_dir = std::env::current_dir()?;
+    let current_dir = dvs::paths::current_dir()?;
 
     match cli.command {
         Command::Init(init_cmd) => {

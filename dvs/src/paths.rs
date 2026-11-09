@@ -3,7 +3,7 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use fs_err as fs;
 use globset::GlobMatcher;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -13,6 +13,14 @@ use crate::config::Config;
 
 pub const CONFIG_FILE_NAME: &str = "dvs.toml";
 pub const DEFAULT_FOLDER_NAME: &str = ".dvs";
+
+/// `std::env::current_dir`, explaining its usual failure: the directory the shell
+/// is in was deleted, which otherwise shows as a bare "No such file or directory".
+pub fn current_dir() -> Result<PathBuf> {
+    std::env::current_dir().context(
+        "cannot read the current directory; it may have been deleted, cd into an existing one",
+    )
+}
 
 /// Result of validating a file path for `add`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +139,7 @@ impl DvsPaths {
     }
 
     pub fn from_cwd(config: &Config) -> Result<Self> {
-        let cwd = fs::canonicalize(std::env::current_dir()?)?;
+        let cwd = fs::canonicalize(current_dir()?)?;
         let repo_root = fs::canonicalize(find_repo_root(&cwd))?;
 
         log::debug!(
