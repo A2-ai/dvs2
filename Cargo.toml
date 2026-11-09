@@ -1,5 +1,5 @@
 [workspace]
-members = ["dvs", "dvs-cli"]
+members = ["dvs", "dvs-cli", "dvs-migrate"]
 resolver = "2"
 
 [profile.release]
@@ -22,6 +22,8 @@ rust-version = '1.85'
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.149"
+# dvs1 configs are YAML; the parser dvs1 itself wrote them with
+serde_yaml = "0.9"
 toml = "1.1.4+spec-1.1.0"
 fs-err = "3"
 log = "0.4.29"

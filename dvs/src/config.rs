@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::backends::Backend;
 use crate::backends::local::LocalBackend;
 use crate::backends::server::ServerBackend;
+use crate::legacy::DVS1_CONFIG_FILE;
 use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, find_repo_root};
 use crate::progress::ProgressReader;
 use crate::utils::parse_size;
@@ -260,6 +261,17 @@ pub struct Config {
     get: Option<GetConfig>,
 }
 
+/// The dvs1 project at or above `dir`, looking no higher than its git root.
+pub(crate) fn dvs1_root(dir: &Path) -> Option<&Path> {
+    let git_root = dir
+        .ancestors()
+        .find(|d| d.join(".git").exists())
+        .unwrap_or(dir);
+    dir.ancestors()
+        .take_while(|d| d.starts_with(git_root))
+        .find(|d| d.join(DVS1_CONFIG_FILE).is_file())
+}
+
 impl Config {
     pub fn new_local(path: impl AsRef<Path>, group: Option<String>) -> Result<Config> {
         let backend = LocalBackend::new(path.as_ref(), group)?;
@@ -292,7 +304,7 @@ impl Config {
     }
 
     pub fn find(current_directory: impl AsRef<Path>) -> Option<Result<Self>> {
-        let repo_root = find_repo_root(current_directory);
+        let repo_root = find_repo_root(&current_directory);
         let config_path = repo_root.join(CONFIG_FILE_NAME);
         log::debug!("Looking for config at {}", config_path.display());
         if config_path.exists() {
@@ -303,9 +315,28 @@ impl Config {
             Some(toml::from_str(&content).map_err(|e| {
                 ConfigError(format!("Failed to parse {}: {e}", config_path.display())).into()
             }))
+        } else if let Err(e) = Self::refuse_dvs1(&current_directory) {
+            Some(Err(e))
         } else {
             log::debug!("No config file found at {}", config_path.display());
             None
+        }
+    }
+
+    /// Refuses a dvs1 project that has no dvs.toml yet: only `dvs migrate` may run there.
+    pub fn refuse_dvs1(dir: impl AsRef<Path>) -> Result<()> {
+        let dir = dir.as_ref();
+        if find_repo_root(dir).join(CONFIG_FILE_NAME).exists() {
+            return Ok(());
+        }
+        match dvs1_root(dir) {
+            Some(dvs1_root) => Err(ConfigError(format!(
+                "{} is a dvs1 project ({DVS1_CONFIG_FILE}, no {CONFIG_FILE_NAME}): convert it with \
+                 `dvs migrate server <NAME> <URL>` or `dvs migrate local`",
+                dvs1_root.display()
+            ))
+            .into()),
+            None => Ok(()),
         }
     }
 
@@ -381,6 +412,32 @@ mod tests {
     #[test]
     fn config_find_returns_none_without_config_file() {
         let (_tmp, root) = create_temp_git_repo();
+        assert!(Config::find(&root).is_none());
+    }
+
+    #[test]
+    fn dvs1_project_without_dvs_toml_names_dvs_migrate() {
+        let (_tmp, root) = create_temp_git_repo();
+        fs::write(root.join(DVS1_CONFIG_FILE), "storage_dir: /store\n").unwrap();
+        fs::create_dir(root.join("data")).unwrap();
+        let err = Config::find(root.join("data")).unwrap().unwrap_err();
+        assert!(err.downcast_ref::<ConfigError>().is_some());
+        assert!(err.to_string().contains("dvs migrate"), "{err}");
+        let err = Config::refuse_dvs1(root.join("data")).unwrap_err();
+        assert!(err.downcast_ref::<ConfigError>().is_some());
+        Config::new_local(root.join("store"), None)
+            .unwrap()
+            .save(&root)
+            .unwrap();
+        Config::refuse_dvs1(root.join("data")).unwrap();
+
+        // A dvs.yaml above the git repo is not this repo's
+        let (_tmp, root) = create_temp_git_repo();
+        fs::write(
+            root.with_file_name(DVS1_CONFIG_FILE),
+            "storage_dir: /store\n",
+        )
+        .unwrap();
         assert!(Config::find(&root).is_none());
     }
 

@@ -76,12 +76,12 @@ fn ensure_mode(_path: impl AsRef<Path>, _mode: u32) -> Result<()> {
 
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
-/// An uncompressed blob is the file itself, so it matches the source's size and hash.
-fn existing_compression(
+/// How the blob of a file with `expected_size` and `expected_blake3` is stored.
+/// An uncompressed blob is the file itself, so it matches both.
+pub fn stored_compression(
     blob_path: &Path,
-    blob_size: u64,
-    source: &Path,
-    hashes: &Hashes,
+    expected_size: u64,
+    expected_blake3: &str,
 ) -> Result<Compression> {
     let mut magic = Vec::with_capacity(ZSTD_MAGIC.len());
     fs::File::open(blob_path)?
@@ -90,11 +90,11 @@ fn existing_compression(
     if magic != ZSTD_MAGIC {
         return Ok(Compression::None);
     }
-    if blob_size != fs::metadata(source)?.len() {
+    if fs::metadata(blob_path)?.len() != expected_size {
         return Ok(Compression::Zstd);
     }
     let (blob_hashes, _) = Hashes::compute_from_path(blob_path, &[])?;
-    if blob_hashes.blake3 == hashes.blake3 {
+    if blob_hashes.blake3 == expected_blake3 {
         Ok(Compression::None)
     } else {
         Ok(Compression::Zstd)
@@ -269,7 +269,7 @@ impl LocalBackend {
             let stored_size = fs::metadata(&blob_path)?.len();
             (
                 stored_size,
-                existing_compression(&blob_path, stored_size, source, hashes)?,
+                stored_compression(&blob_path, fs::metadata(source)?.len(), &hashes.blake3)?,
             )
         } else {
             if let Some(parent) = blob_path.parent() {

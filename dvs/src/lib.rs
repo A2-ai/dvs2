@@ -10,11 +10,14 @@ mod gitignore;
 pub mod globbing;
 mod hashes;
 pub mod init;
+pub mod legacy;
+pub mod migrate;
 pub mod operation;
 pub mod paths;
 pub mod progress;
 pub(crate) mod utils;
 
+pub use backends::local::stored_compression;
 pub use backends::{Backend, RetrieveRequest, StoreRequest, StoreResult};
 pub use config::Compression;
 pub use error::{Error, ErrorCode, backend_error_code};
@@ -33,7 +36,7 @@ pub use operation::{
 };
 pub use paths::{AddPathStatus, DvsPaths, PathFilter, ProjectPath, find_repo_root};
 pub use progress::FileProgress;
-pub use utils::{format_size, set_num_threads};
+pub use utils::{format_size, http_agent, set_num_threads};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

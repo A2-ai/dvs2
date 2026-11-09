@@ -25,6 +25,8 @@ use dvs::auth::{
 use dvs::config::{Config, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::{create_metadata_folder, init};
+use dvs::legacy::DVS1_CONFIG_FILE;
+use dvs::migrate::{Destination, MigrateReport, MissingHash, migrate, prepare};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
@@ -73,6 +75,36 @@ pub enum Init {
     /// Catches `dvs init <path>`, the form before backends, to point at `init local`
     #[command(external_subcommand)]
     Other(Vec<String>),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Migrate {
+    /// Move the project onto a dvs server project, from dvs1 or dvs2 local storage.
+    /// Lists the content the server lacks
+    Server {
+        /// The project name on the server
+        name: String,
+        /// The URL of the dvs server
+        url: Url,
+        /// Upload the content the server lacks that is still in local storage, as your add
+        #[clap(long)]
+        upload_missing: bool,
+        /// The local storage to upload from. Defaults to `storage_dir` in dvs.yaml,
+        /// or the dvs2 local storage being replaced
+        #[clap(long)]
+        storage: Option<PathBuf>,
+        /// Keep dvs.yaml and the converted dvs1 sidecars
+        #[clap(long)]
+        no_clean: bool,
+    },
+    /// Move a dvs1 project onto dvs2 local storage. No data moves
+    Local {
+        /// The storage directory. Defaults to `storage_dir` in dvs.yaml
+        path: Option<PathBuf>,
+        /// Keep dvs.yaml and the converted dvs1 sidecars
+        #[clap(long)]
+        no_clean: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -187,6 +219,10 @@ pub enum Command {
         #[clap(required = true)]
         paths: Vec<PathBuf>,
     },
+    /// Converts a dvs1 or dvs2 local project in this working tree to a dvs2 one.
+    /// Writes dvs.toml and the .dvs sidecars; review and commit the change with git
+    #[command(next_display_order = 100, subcommand)]
+    Migrate(Migrate),
     /// Log in to a DVS server, the one in the config unless a URL is given
     Login {
         /// The URL of the dvs server, if not the project's
@@ -488,6 +524,11 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
 
     match cli.command {
         Command::Init(init_cmd) => {
+            if let Init::Local { root_dir, .. } = &init_cmd {
+                Config::refuse_dvs1(root_dir.as_deref().unwrap_or(&current_dir))?;
+            } else {
+                Config::refuse_dvs1(&current_dir)?;
+            }
             let (config, root_dir, metadata_folder_name) = match init_cmd {
                 Init::Local {
                     path: storage_path,
@@ -552,6 +593,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             if config_path.exists() {
                 bail!("Configuration file already exists");
             }
+            Config::refuse_dvs1(&current_dir)?;
 
             // Initializing on the server requires authentication, so run the
             // login flow first if we don't have a token for it yet.
@@ -1064,6 +1106,49 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 println!("{}", tabled::Table::new(rows));
             }
         }
+        Command::Migrate(to) => {
+            let (destination, clean, upload_missing) = match to {
+                Migrate::Server {
+                    name,
+                    url,
+                    upload_missing,
+                    storage,
+                    no_clean,
+                } => {
+                    let storage = storage.map(std::path::absolute).transpose()?;
+                    let destination = Destination::Server { name, url, storage };
+                    (destination, !no_clean, upload_missing)
+                }
+                Migrate::Local { path, no_clean } => {
+                    let path = path.map(std::path::absolute).transpose()?;
+                    (Destination::Local { path }, !no_clean, false)
+                }
+            };
+            let prepared = prepare(&current_dir, &destination, upload_missing)?;
+            if let Destination::Server { url, .. } = &destination
+                && get_token(url)?.is_none()
+            {
+                run_device_login(url, cli.json)?;
+            }
+            let report = migrate(prepared, clean)?;
+            let outcome = if report.is_partial() {
+                RunOutcome::Partial
+            } else {
+                RunOutcome::Complete
+            };
+            if cli.json {
+                let mut result = output::envelope("migrate", false);
+                result["outcome"] = json!(outcome);
+                let fields = serde_json::to_value(&report)?;
+                for (key, value) in fields.as_object().expect("the report is an object") {
+                    result[key] = value.clone();
+                }
+                output::emit(result);
+            } else {
+                print_migrate(&report, &destination, clean);
+            }
+            summary_exit(outcome)?;
+        }
         Command::Login { url: Some(url) } => {
             run_device_login(&url, cli.json)?;
             if cli.json {
@@ -1144,6 +1229,115 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
     Ok(())
 }
 
+fn print_migrate(report: &MigrateReport, destination: &Destination, clean: bool) {
+    for warning in &report.warnings {
+        eprintln!("Warning: {warning}");
+    }
+    let (uploaded, lacking): (Vec<_>, Vec<_>) = report.missing.iter().partition(|m| m.uploaded);
+    if !report.changed && uploaded.is_empty() {
+        println!("Already migrated: nothing changed");
+    }
+    if report.config_written {
+        match destination {
+            Destination::Server { name, url, .. } => {
+                println!("Wrote {CONFIG_FILE_NAME}: project {name} on {url}")
+            }
+            Destination::Local { .. } => println!("Wrote {CONFIG_FILE_NAME}: local storage"),
+        }
+    }
+    if !report.converted.is_empty() {
+        println!("Converted {} dvs1 sidecars", report.converted.len());
+    }
+    if !report.duplicates.is_empty() {
+        let done = if clean { "Dropped" } else { "Kept" };
+        println!(
+            "{done} {} dvs1 sidecars that match their dvs2 sidecar",
+            report.duplicates.len()
+        );
+    }
+    if report.compression_rewritten > 0 {
+        println!(
+            "Set the server's compression in {} sidecars",
+            report.compression_rewritten
+        );
+    }
+    if !report.removed.is_empty() {
+        println!("Removed {} dvs1 files", report.removed.len());
+    } else if !clean
+        && (report.project_root.join(DVS1_CONFIG_FILE).is_file()
+            || !report.converted.is_empty()
+            || !report.duplicates.is_empty())
+    {
+        println!("Kept dvs.yaml and the dvs1 sidecars (--no-clean)");
+    }
+    if !report.left.is_empty() {
+        eprintln!("Left {} sidecars as they were:", report.left.len());
+        for left in &report.left {
+            eprintln!("  {}: {}", left.sidecar.display(), left.message);
+        }
+    }
+    if let Some(error) = &report.check_error {
+        eprintln!("Could not check the content on the server: {error}");
+    }
+    let paths = |m: &MissingHash| {
+        let paths: Vec<_> = m.paths.iter().map(|p| p.as_str()).collect();
+        paths.join(", ")
+    };
+    if !uploaded.is_empty() {
+        println!("Uploaded from local storage:");
+        for missing in &uploaded {
+            println!("  {} {}", missing.hash, paths(missing));
+        }
+    }
+    if !lacking.is_empty() {
+        eprintln!("The server lacks the content of:");
+        for missing in &lacking {
+            let state = match (&missing.message, missing.in_local_storage) {
+                (Some(error), true) => format!("upload failed: {error}"),
+                (Some(error), false) => error.clone(),
+                (None, true) => "in local storage".to_string(),
+                (None, false) => "not in local storage".to_string(),
+            };
+            eprintln!("  {} {} ({state})", missing.hash, paths(missing));
+        }
+        if let (Destination::Server { name, url, .. }, Some(storage)) =
+            (destination, &report.storage)
+            && lacking
+                .iter()
+                .any(|m| m.in_local_storage && m.message.is_none())
+        {
+            eprintln!(
+                "To upload what local storage has, run: {}",
+                upload_missing_command(name, url, storage)
+            );
+        }
+    }
+    if report.changed {
+        println!("Review the changes and commit them with git");
+    }
+}
+
+fn upload_missing_command(name: &str, url: &Url, storage: &std::path::Path) -> String {
+    format!(
+        "dvs migrate server {} {} --upload-missing --storage {}",
+        shell_quote(name),
+        shell_quote(url.as_str()),
+        shell_quote(&storage.display().to_string())
+    )
+}
+
+/// Quotes `s` for a POSIX shell when it is not a plain word.
+fn shell_quote(s: &str) -> String {
+    let plain = !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/._-+:@=,".contains(&b));
+    if plain {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
 /// `dvs init <path>` predates backends: name the command that does it now. A
 /// bare name alone can be a backend typo or a directory, so the message covers
 /// both. With more words after it, it is most likely a mistyped backend.
@@ -1196,6 +1390,7 @@ impl Command {
             Self::Info => "info",
             Self::Availability { .. } => "availability",
             Self::History { .. } => "history",
+            Self::Migrate(_) => "migrate",
             Self::Login { .. } => "login",
             Self::Logout => "logout",
         }
@@ -1297,6 +1492,15 @@ fn finish_events(command: &str, dry_run: bool, mut code: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upload_missing_command_quotes_every_argument() {
+        let url = Url::parse("https://h/a b?x=1&y").unwrap();
+        assert_eq!(
+            upload_missing_command("my proj", &url, std::path::Path::new("/s/it's")),
+            "dvs migrate server 'my proj' 'https://h/a%20b?x=1&y' --upload-missing --storage '/s/it'\\''s'"
+        );
+    }
 
     #[test]
     fn init_with_a_path_points_at_init_local() {

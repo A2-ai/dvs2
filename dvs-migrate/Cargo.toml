@@ -1,0 +1,24 @@
+[package]
+name = "dvs-migrate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Moves a dvs project's history from local storage onto dvs-server"
+
+[dependencies]
+dvs = { path = "../dvs", default-features = false }
+anyhow.workspace = true
+clap = { version = "4.5.54", features = ["derive", "env"] }
+jiff.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+toml.workspace = true
+ureq.workspace = true
+url.workspace = true
+uuid.workspace = true
+zstd.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["fs", "signal"] }

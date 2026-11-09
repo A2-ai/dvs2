@@ -22,7 +22,7 @@ const LOGIN_EXPIRED: &str = "Your login is no longer valid, run `dvs login`";
 /// Join `relative` under the server URL, keeping any proxy path prefix:
 /// `Url::join` drops it for a leading-slash path or a base without a
 /// trailing slash.
-pub(crate) fn join_url(base: &Url, relative: &str) -> anyhow::Result<Url> {
+pub fn join_url(base: &Url, relative: &str) -> anyhow::Result<Url> {
     debug_assert!(!relative.starts_with('/'), "{relative} must be relative");
     if base.cannot_be_a_base() {
         bail!("{base} cannot be used as a dvs server URL");
@@ -51,18 +51,18 @@ pub(crate) fn http_status_code(status: u16, body: &str) -> Option<ErrorCode> {
     }
 }
 
-fn coded(code: ErrorCode, message: impl Into<String>) -> anyhow::Error {
+pub fn coded(code: ErrorCode, message: impl Into<String>) -> anyhow::Error {
     Error::new(code, message).into()
 }
 
-pub(crate) fn unreachable(base_url: &Url, e: ureq::Error) -> anyhow::Error {
+pub fn unreachable(base_url: &Url, e: ureq::Error) -> anyhow::Error {
     coded(
         ErrorCode::ServerUnavailable,
         format!("cannot reach the dvs server at {base_url}: {e}"),
     )
 }
 
-pub(crate) fn invalid_response(base_url: &Url, e: impl std::fmt::Display) -> anyhow::Error {
+pub fn invalid_response(base_url: &Url, e: impl std::fmt::Display) -> anyhow::Error {
     coded(
         ErrorCode::ServerUnavailable,
         format!("Invalid response from the dvs server at {base_url}: {e}"),
@@ -70,7 +70,7 @@ pub(crate) fn invalid_response(base_url: &Url, e: impl std::fmt::Display) -> any
 }
 
 /// The error for a status the endpoint does not handle itself.
-pub(crate) fn status_error(base_url: &Url, status: u16, body: &str, what: &str) -> anyhow::Error {
+pub fn status_error(base_url: &Url, status: u16, body: &str, what: &str) -> anyhow::Error {
     let Some(code) = http_status_code(status, body) else {
         return anyhow::anyhow!("{what} failed ({status}): {body}");
     };
@@ -201,6 +201,9 @@ pub struct AccessResponse {
     pub access: String,
     pub user: AccessUser,
     pub groups: Vec<String>,
+    /// Absent from servers older than the field
+    #[serde(default)]
+    pub compression: Option<Compression>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -543,5 +546,15 @@ mod tests {
         ] {
             assert_eq!(http_status_code(status, body), expected, "{status} {body}");
         }
+    }
+
+    #[test]
+    fn access_compression_is_optional() {
+        let body = r#"{"access": "read", "user": {"username": "u", "email": null}, "groups": []}"#;
+        let old: AccessResponse = serde_json::from_str(body).unwrap();
+        assert_eq!(old.compression, None);
+        let body = body.replace("[]}", r#"[], "compression": "zstd"}"#);
+        let new: AccessResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(new.compression, Some(Compression::Zstd));
     }
 }
