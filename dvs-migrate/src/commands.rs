@@ -7,11 +7,13 @@ use anyhow::Result;
 use dvs::RunOutcome;
 use serde_json::{Value, json};
 
-use crate::client::{Client, EntryRef, LookupRequest, Upload, chunks};
+use dvs::migration::{EntryRef, LookupRequest, ManifestEntry, Problem, Scope, Totals, WalkKind};
+
+use crate::client::{Client, chunks};
 use crate::git::{self, redact};
-use crate::report::{Content, Problem, Report, ReportEntry, Scope, Totals, WalkKind, plural};
+use crate::report::{Content, Report, ReportEntry, plural};
 use crate::storage::{self, Blob};
-use crate::walk::{self, Entry, StoreKind, Walk};
+use crate::walk::{self, Walk};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Before {
@@ -20,12 +22,23 @@ enum Before {
     Absent,
 }
 
+/// How the server took a blob a run sent
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum After {
+pub enum After {
+    /// 201 if the server stored it now, 200 if it had it already
     Uploaded { created: bool },
+    /// 400: the bytes do not hash to the claimed hash
     Corrupt(String),
+    /// Any other refusal of the bytes themselves, as 413 over the size limit
     Refused(u16, String),
-    Unreadable,
+    /// The local copy could not be read
+    Unreadable(String),
+}
+
+/// A storage folder looked in, and whether it exists here
+struct StorageFolder {
+    path: String,
+    exists: bool,
 }
 
 struct HashInfo {
@@ -34,8 +47,7 @@ struct HashInfo {
     paths: Vec<String>,
     blob: Option<Blob>,
     looked_at: Option<String>,
-    /// The storage folder looked in, and whether it exists here
-    storage: Option<(String, bool)>,
+    storage: Option<StorageFolder>,
     before: Before,
     after: Option<After>,
 }
@@ -44,7 +56,7 @@ impl HashInfo {
     fn content(&self) -> Content {
         match (self.before, &self.after) {
             (Before::OnServer, _) => Content::OnServer,
-            (Before::Absent, _) | (_, Some(After::Unreadable)) => Content::Missing,
+            (Before::Absent, _) | (_, Some(After::Unreadable(_))) => Content::Missing,
             (Before::Local, None) => Content::ToUpload,
             (Before::Local, Some(After::Uploaded { .. })) => Content::Uploaded,
             (Before::Local, Some(After::Corrupt(_))) => Content::Corrupt,
@@ -58,8 +70,15 @@ pub struct Plan {
     scope: Scope,
     walk: Walk,
     hashes: BTreeMap<String, HashInfo>,
-    migrated: HashSet<(String, String)>,
+    migrated: HashSet<EntryRef>,
     unmatched_users: Vec<String>,
+}
+
+/// Whether a plan is filled in as a plan, or as a run that recorded `recorded` versions
+#[derive(Debug, Clone, Copy)]
+pub enum Phase {
+    Plan,
+    Run { recorded: usize },
 }
 
 pub fn progress(quiet: bool, message: impl AsRef<str>) {
@@ -116,7 +135,7 @@ pub fn plan(
             after: None,
         });
         info.sizes.insert(e.size);
-        info.paths.push(e.path.clone());
+        info.paths.push(e.path.as_str().to_string());
     }
     let users: BTreeSet<&str> = walk
         .entries
@@ -126,20 +145,14 @@ pub fn plan(
     let lookup = lookup(
         client,
         hashes.keys().cloned().collect(),
-        walk.entries
-            .iter()
-            .map(|e| EntryRef {
-                path: e.path.clone(),
-                hash: e.hash.clone(),
-            })
-            .collect(),
+        walk.entries.iter().map(entry_ref).collect(),
         users.into_iter().map(str::to_string).collect(),
     )?;
 
-    let mut candidates: HashMap<&str, Vec<(&str, StoreKind)>> = HashMap::new();
+    let mut stores: HashMap<&str, Vec<&str>> = HashMap::new();
     for e in &walk.entries {
-        if let (Some(store), Some(kind)) = (e.storage_path.as_deref(), e.store_kind) {
-            candidates.entry(&e.hash).or_default().push((store, kind));
+        if let Some(store) = e.storage_path.as_deref() {
+            stores.entry(&e.hash).or_default().push(store);
         }
     }
     for (hash, info) in hashes.iter_mut() {
@@ -147,8 +160,8 @@ pub fn plan(
             info.before = Before::OnServer;
             continue;
         }
-        let candidates = candidates.get(hash.as_str()).map_or(&[][..], Vec::as_slice);
-        let (blob, looked_at) = storage::find(hash, info.size, candidates);
+        let stores = stores.get(hash.as_str()).map_or(&[][..], Vec::as_slice);
+        let (blob, looked_at) = storage::find(hash, info.size, stores);
         info.before = if blob.is_some() {
             Before::Local
         } else {
@@ -157,10 +170,13 @@ pub fn plan(
         info.blob = blob;
         info.looked_at = looked_at;
         // Prefer a folder that exists: then the hash is simply not in it
-        info.storage = candidates
+        info.storage = stores
             .iter()
-            .map(|(store, _)| (store.to_string(), Path::new(store).is_dir()))
-            .max_by_key(|(_, exists)| *exists);
+            .map(|store| StorageFolder {
+                path: store.to_string(),
+                exists: Path::new(store).is_dir(),
+            })
+            .max_by_key(|folder| folder.exists);
     }
 
     Ok(Plan {
@@ -172,10 +188,25 @@ pub fn plan(
     })
 }
 
+fn entry_ref(e: &ManifestEntry) -> EntryRef {
+    EntryRef {
+        path: e.path.clone(),
+        hash: e.hash.clone(),
+    }
+}
+
 struct Lookup {
     have: HashSet<String>,
-    migrated: HashSet<(String, String)>,
+    migrated: HashSet<EntryRef>,
     unmatched_users: Vec<String>,
+}
+
+/// The `i`th chunk, or nothing once the list has run out
+fn chunk_at<T: Clone>(chunks: &[&[T]], i: usize) -> Vec<T> {
+    chunks
+        .get(i)
+        .map(|chunk| chunk.to_vec())
+        .unwrap_or_default()
 }
 
 fn lookup(
@@ -184,8 +215,11 @@ fn lookup(
     entries: Vec<EntryRef>,
     users: Vec<String>,
 ) -> Result<Lookup> {
-    let (h, e, u) = (chunks(&hashes), chunks(&entries), chunks(&users));
-    let calls = h.len().max(e.len()).max(u.len()).max(1);
+    let hashes = chunks(&hashes);
+    let entries = chunks(&entries);
+    let users = chunks(&users);
+    // Call `i` takes chunk `i` of each list, and there is always at least one call
+    let calls = hashes.len().max(entries.len()).max(users.len()).max(1);
     let mut found = Lookup {
         have: HashSet::new(),
         migrated: HashSet::new(),
@@ -193,15 +227,13 @@ fn lookup(
     };
     for i in 0..calls {
         let req = LookupRequest {
-            hashes: h.get(i).map(|c| c.to_vec()).unwrap_or_default(),
-            entries: e.get(i).map(|c| c.to_vec()).unwrap_or_default(),
-            users: u.get(i).map(|c| c.to_vec()).unwrap_or_default(),
+            hashes: chunk_at(&hashes, i),
+            entries: chunk_at(&entries, i),
+            users: chunk_at(&users, i),
         };
         let answer = client.lookup(&req)?;
         found.have.extend(answer.have);
-        found
-            .migrated
-            .extend(answer.migrated.into_iter().map(|e| (e.path, e.hash)));
+        found.migrated.extend(answer.migrated);
         found.unmatched_users.extend(answer.unmatched_users);
     }
     found.unmatched_users.sort();
@@ -209,17 +241,25 @@ fn lookup(
 }
 
 impl Plan {
-    fn already_migrated(&self, e: &Entry) -> bool {
-        self.migrated.contains(&(e.path.clone(), e.hash.clone()))
+    fn already_migrated(&self, e: &ManifestEntry) -> bool {
+        self.migrated.contains(&entry_ref(e))
     }
 
-    pub fn totals(&self, run: Option<usize>) -> Totals {
+    pub fn totals(&self, phase: Phase) -> Totals {
         let count = |f: &dyn Fn(&HashInfo) -> bool| self.hashes.values().filter(|h| f(h)).count();
         let missing = |h: &HashInfo| {
             matches!(
                 h.content(),
                 Content::Missing | Content::Corrupt | Content::Refused
             )
+        };
+        let (uploaded, migrated) = match phase {
+            Phase::Plan => (None, None),
+            Phase::Run { recorded } => {
+                let created =
+                    count(&|h| matches!(h.after, Some(After::Uploaded { created: true })));
+                (Some(created), Some(recorded))
+            }
         };
         Totals {
             sidecars: self.walk.sidecars.clone(),
@@ -236,10 +276,8 @@ impl Plan {
                 .filter(|e| self.already_migrated(e))
                 .count(),
             user_mismatches: self.walk.entries.iter().filter(|e| e.user_mismatch).count(),
-            uploaded: run
-                .map(|_| count(&|h| matches!(h.after, Some(After::Uploaded { created: true })))),
-            migrated: run,
-            sent: run.map(|_| count(&|h| matches!(h.after, Some(After::Uploaded { .. })))),
+            uploaded,
+            migrated,
         }
     }
 
@@ -267,8 +305,8 @@ impl Plan {
                     size: h.size,
                     paths,
                     looked_at,
-                    storage: h.storage.as_ref().map(|(store, _)| store.clone()),
-                    storage_exists: h.storage.as_ref().map(|(_, exists)| *exists),
+                    storage: h.storage.as_ref().map(|folder| folder.path.clone()),
+                    storage_exists: h.storage.as_ref().map(|folder| folder.exists),
                 }),
                 _ => {}
             }
@@ -301,10 +339,10 @@ impl Plan {
         problems
     }
 
-    /// Fills the report's scope, totals, entries and problems; `migrated` is a run's count.
-    pub fn fill(&self, report: &mut Report, migrated: Option<usize>) {
+    /// Fills the report's scope, totals, entries and problems
+    pub fn fill(&self, report: &mut Report, phase: Phase) {
         report.scope = Some(self.scope.clone());
-        report.totals = Some(self.totals(migrated));
+        report.totals = Some(self.totals(phase));
         report.entries = self
             .walk
             .entries
@@ -327,15 +365,12 @@ impl Plan {
 /// Opens a run, sends every entry, uploads what the server asks for that is here, and
 /// fills the report. The caller sends it.
 pub fn run(plan: &mut Plan, client: &Client, report: &mut Report, quiet: bool) -> Result<()> {
-    let walk_kind = serde_json::to_value(plan.scope.walk)?;
-    let totals = serde_json::to_value(plan.totals(None))?;
-    let run = client.start_run(walk_kind.as_str().unwrap_or("partial"), &totals)?;
+    let run = client.start_run(plan.scope.walk, plan.totals(Phase::Plan))?;
     report.run_id = Some(run.run_id);
 
-    let entries: Vec<&Entry> = plan.walk.entries.iter().collect();
     let mut wanted = BTreeSet::new();
     let mut recorded = 0;
-    for chunk in chunks(&entries) {
+    for chunk in chunks(&plan.walk.entries) {
         let answer = client.manifest(run.run_id, chunk)?;
         wanted.extend(answer.missing);
         recorded += answer.recorded;
@@ -356,23 +391,15 @@ pub fn run(plan: &mut Plan, client: &Client, report: &mut Report, quiet: bool) -
     );
     for (hash, blob) in to_send {
         let after = match storage::open(&blob) {
-            Err(e) => {
-                eprintln!("warning: cannot read {}: {e:#}", blob.path.display());
-                After::Unreadable
-            }
-            Ok(bytes) => match client.upload(run.run_id, hash, bytes)? {
-                Upload::Stored { created } => After::Uploaded { created },
-                Upload::Corrupt(message) => After::Corrupt(message),
-                Upload::Refused(status, message) => After::Refused(status, message),
-                Upload::Unreadable(message) => {
-                    eprintln!("warning: cannot read {}: {message}", blob.path.display());
-                    After::Unreadable
-                }
-            },
+            Err(e) => After::Unreadable(format!("{e:#}")),
+            Ok(bytes) => client.upload(run.run_id, hash, bytes)?,
         };
+        if let After::Unreadable(message) = &after {
+            eprintln!("warning: cannot read {}: {message}", blob.path.display());
+        }
         plan.hashes.get_mut(hash).expect("listed").after = Some(after);
     }
-    plan.fill(report, Some(recorded));
+    plan.fill(report, Phase::Run { recorded });
     Ok(())
 }
 
@@ -405,40 +432,16 @@ pub fn error_json(error: &anyhow::Error) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::walk::tests::hash;
-    use crate::walk::{EntryCommit, Source, StorageSeen};
+    use dvs::migration::{ProblemKind, StorageSeen, StoreKind};
 
-    fn entry(path: &str, hash: &str) -> Entry {
-        Entry {
-            path: path.into(),
-            hash: hash.into(),
-            size: 5,
-            shape: dvs::legacy::SidecarShape::Dvs1,
-            sidecar_path: format!("{path}.dvs"),
-            storage_path: None,
-            sidecar_user: None,
-            recorded_user: "jdoe".into(),
-            recorded_user_source: Source::Commit,
-            recorded_at: "2023-01-01T00:00:00Z".into(),
-            recorded_at_source: Source::Commit,
-            message: None,
-            commit: EntryCommit {
-                id: "c".into(),
-                author_name: "jdoe".into(),
-                author_email: String::new(),
-                author_date: "2023-01-01T00:00:00Z".into(),
-            },
-            user_mismatch: false,
-            store_kind: None,
-        }
-    }
+    use crate::walk::tests::{hash, manifest_entry};
 
     /// One entry per (hash, before, after); every entry already migrated
     fn plan(hashes: Vec<(String, Before, Option<After>)>, storage: Vec<StorageSeen>) -> Plan {
-        let entries: Vec<Entry> = hashes
+        let entries: Vec<ManifestEntry> = hashes
             .iter()
             .enumerate()
-            .map(|(i, (h, ..))| entry(&format!("f{i}"), h))
+            .map(|(i, (h, ..))| manifest_entry(&format!("f{i}"), h))
             .collect();
         Plan {
             scope: Scope {
@@ -449,10 +452,7 @@ mod tests {
                 commits: 1,
                 storage,
             },
-            migrated: entries
-                .iter()
-                .map(|e| (e.path.clone(), e.hash.clone()))
-                .collect(),
+            migrated: entries.iter().map(entry_ref).collect(),
             hashes: hashes
                 .into_iter()
                 .map(|(h, before, after)| {
@@ -499,14 +499,14 @@ mod tests {
             ],
             Vec::new(),
         );
-        let t = plan.totals(Some(2));
+        let t = plan.totals(Phase::Run { recorded: 2 });
         assert_eq!(
             (t.unique_hashes, t.on_server, t.to_upload, t.missing),
             (4, 1, 1, 2)
         );
         assert_eq!(t.uploaded, Some(1));
-        let kinds: Vec<&str> = plan.problems().iter().map(Problem::kind).collect();
-        assert_eq!(kinds, vec!["corrupt", "missing"]);
+        let kinds: Vec<ProblemKind> = plan.problems().iter().map(Problem::kind).collect();
+        assert_eq!(kinds, vec![ProblemKind::Corrupt, ProblemKind::Missing]);
     }
 
     #[test]
@@ -525,7 +525,7 @@ mod tests {
             Vec::new(),
         );
         let mut report = Report::new(crate::report::Command::Run);
-        plan.fill(&mut report, Some(4));
+        plan.fill(&mut report, Phase::Run { recorded: 4 });
         assert_eq!(report.totals.as_ref().unwrap().uploaded, Some(0));
         let summary = report.summary("repo", None);
         assert!(
@@ -537,10 +537,14 @@ mod tests {
     #[test]
     fn unreadable_content_is_reported_missing() {
         let plan = plan(
-            vec![(hash(1), Before::Local, Some(After::Unreadable))],
+            vec![(
+                hash(1),
+                Before::Local,
+                Some(After::Unreadable("gone".into())),
+            )],
             Vec::new(),
         );
-        assert_eq!(plan.totals(Some(0)).missing, 1);
+        assert_eq!(plan.totals(Phase::Run { recorded: 0 }).missing, 1);
         let missing: Vec<Option<String>> = plan
             .problems()
             .into_iter()
@@ -560,7 +564,7 @@ mod tests {
         assert_eq!(storage_writable_warning(&scope), None);
         scope.storage = vec![StorageSeen {
             path: path.clone(),
-            shape: StoreKind::Dvs1,
+            kind: StoreKind::Dvs1,
             remapped_to: None,
         }];
         let warning = storage_writable_warning(&scope).unwrap();

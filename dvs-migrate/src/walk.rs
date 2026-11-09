@@ -7,84 +7,26 @@ use std::path::Path;
 use std::rc::Rc;
 
 use anyhow::Result;
+use dvs::ProjectPath;
 use dvs::audit::{Action, parse_audit_log};
 use dvs::backends::Backend;
 use dvs::config::Config;
-use dvs::legacy::{
-    DVS1_CONFIG_FILE, Dvs1Config, Sidecar, SidecarShape, classify_sidecar, is_blake3,
+use dvs::legacy::{DVS1_CONFIG_FILE, Dvs1Config, Sidecar, SidecarShape, classify_sidecar};
+use dvs::migration::{
+    AttributionSource, EntryCommit, EntryRef, ManifestEntry, Problem, StorageSeen, StoreKind,
 };
 use dvs::paths::CONFIG_FILE_NAME;
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
 
-use crate::git::{Commit, DvsItem, DvsTree, Objects};
-use crate::report::Problem;
+use crate::git::{BlobId, Commit, DvsItem, DvsTree, Objects};
 
 const AUDIT_LOG: &str = "audit.log.jsonl";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum StoreKind {
-    Dvs1,
-    Dvs2,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StorageSeen {
-    pub path: String,
-    pub shape: StoreKind,
-    pub remapped_to: Option<String>,
-}
-
-impl StorageSeen {
-    pub fn effective(&self) -> &str {
-        self.remapped_to.as_deref().unwrap_or(&self.path)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Source {
-    AuditLog,
-    Sidecar,
-    Commit,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EntryCommit {
-    pub id: String,
-    pub author_name: String,
-    pub author_email: String,
-    pub author_date: String,
-}
-
-/// One (path, hash), as the manifest sends it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Entry {
-    pub path: String,
-    pub hash: String,
-    pub size: u64,
-    pub shape: SidecarShape,
-    pub sidecar_path: String,
-    pub storage_path: Option<String>,
-    pub sidecar_user: Option<String>,
-    pub recorded_user: String,
-    pub recorded_user_source: Source,
-    pub recorded_at: String,
-    pub recorded_at_source: Source,
-    pub message: Option<String>,
-    pub commit: EntryCommit,
-    pub user_mismatch: bool,
-    /// The kind of store `storage_path` is: dvs2-local blobs may be compressed
-    #[serde(skip)]
-    pub store_kind: Option<StoreKind>,
-}
 
 pub struct Walk {
     pub commits: usize,
     pub storage: Vec<StorageSeen>,
     pub sidecars: BTreeMap<SidecarShape, usize>,
-    pub entries: Vec<Entry>,
+    pub entries: Vec<ManifestEntry>,
     pub problems: Vec<Problem>,
 }
 
@@ -98,13 +40,52 @@ struct Parsed {
     message: Option<String>,
 }
 
-/// Where a pair is in one commit: the sidecar path (interned in `Fold::paths`), its blob
-/// (`Objects::blob`) and the store its config names
+/// A sidecar path, interned in `Fold::paths`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct PathId(u32);
+
+/// A pair, interned in `Fold::pairs`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct PairId(u32);
+
+/// A path by the folder it is in, `None` at the top of the tree, and its name
+/// (`Objects::name`)
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct PathKey {
+    folder: Option<PathId>,
+    name: u32,
+}
+
+/// Where a pair is in one commit: the sidecar's path and blob, and the store its config
+/// names (a `Fold::storage` index)
 #[derive(Clone, Copy)]
 struct Site {
-    path: u32,
-    blob: u32,
+    path: PathId,
+    blob: BlobId,
     store: Option<usize>,
+}
+
+/// The commit that introduced a pair, and where the pair is in it
+#[derive(Clone, Copy)]
+struct FirstSeen {
+    time: Timestamp,
+    commit_index: usize,
+    site: Site,
+}
+
+/// A sidecar as read under one metadata folder (a `Fold::folders` index)
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct SiteKey {
+    path: PathId,
+    blob: BlobId,
+    metadata_folder: usize,
+}
+
+/// The pair a sidecar names, and the sidecar's shape
+#[derive(Clone, Copy)]
+struct SidecarPair {
+    pair: PairId,
+    shape: SidecarShape,
 }
 
 /// What a commit's `dvs.toml` or `dvs.yaml` says about where its sidecars and content are
@@ -121,21 +102,85 @@ struct Context {
     dvs2_store: Option<usize>,
 }
 
-/// `Fold::paths` index of a path with no parent folder
-const TOP: u32 = u32::MAX;
+/// The pairs of each walked commit that still has children to walk, to tell whether a
+/// pair was already in a parent. A commit's pairs are dropped once its last child is
+/// walked.
+struct ParentPairs<'c> {
+    children_left: HashMap<&'c str, usize>,
+    /// Sorted, for `binary_search`
+    pairs: HashMap<&'c str, Vec<PairId>>,
+}
 
+impl<'c> ParentPairs<'c> {
+    fn new(commits: &'c [Commit]) -> Self {
+        let mut children_left: HashMap<&str, usize> = HashMap::new();
+        for commit in commits {
+            for parent in &commit.parents {
+                *children_left.entry(parent.as_str()).or_default() += 1;
+            }
+        }
+        Self {
+            children_left,
+            pairs: HashMap::new(),
+        }
+    }
+
+    fn seen_in_parent(&self, commit: &Commit, pair: PairId) -> bool {
+        commit.parents.iter().any(|parent| {
+            self.pairs
+                .get(parent.as_str())
+                .is_some_and(|pairs| pairs.binary_search(&pair).is_ok())
+        })
+    }
+
+    /// Counts `commit` as walked for each of its parents
+    fn release_parents(&mut self, commit: &Commit) {
+        for parent in &commit.parents {
+            if let Some(left) = self.children_left.get_mut(parent.as_str()) {
+                *left -= 1;
+                if *left == 0 {
+                    self.pairs.remove(parent.as_str());
+                }
+            }
+        }
+    }
+
+    /// Keeps `commit`'s sorted pairs if it has children to walk
+    fn keep(&mut self, commit: &'c Commit, pairs: Vec<PairId>) {
+        if self.children_left.contains_key(commit.id.as_str()) {
+            self.pairs.insert(&commit.id, pairs);
+        }
+    }
+}
+
+/// Turns every commit's sidecars into entries, one per *pair*: a (data path, blake3), that
+/// is one version of one file.
+///
+/// Commits are walked parents first. Each `.dvs` file in a commit's tree names a pair and
+/// gives a *site*: where the pair is in that commit (the sidecar's path and blob, and the
+/// store the commit's config names). A pair already in one of the commit's parents is
+/// skipped. Otherwise the commit introduces it: on its own branch, or after the pair was
+/// removed and added back. Of all the commits that introduce a pair, the oldest by author
+/// time wins, the first walked on a tie; its site is where the entry's facts come from.
+///
+/// Each commit's pairs are kept only until its last child is walked (`ParentPairs`).
+/// Sidecar paths (`PathId`), pairs (`PairId`), parsed sidecar blobs (`BlobId`) and config
+/// files are each read once and looked up by id after that.
 struct Fold<'a> {
     objects: &'a mut Objects,
     storage_map: &'a BTreeMap<String, String>,
     storage: Vec<StorageSeen>,
-    pairs: HashMap<(String, String), u32>,
+    pairs: Vec<EntryRef>,
+    pair_ids: HashMap<EntryRef, PairId>,
     paths: Vec<String>,
-    path_ids: HashMap<(u32, u32), u32>,
+    path_ids: HashMap<PathKey, PathId>,
+    /// Each metadata folder a commit's config names; `None` where there is no `dvs.toml`
     folders: Vec<Option<String>>,
-    /// The pair and shape of a sidecar (path, blob) under a metadata folder, if it has one
-    sites: HashMap<(u32, u32, usize), Option<(u32, SidecarShape)>>,
-    blobs: HashMap<u32, std::result::Result<Rc<Parsed>, String>>,
+    /// The pair each sidecar names, if it names one
+    sites: HashMap<SiteKey, Option<SidecarPair>>,
+    blobs: HashMap<BlobId, std::result::Result<Rc<Parsed>, String>>,
     configs: HashMap<String, std::result::Result<ConfigFacts, String>>,
+    /// (sidecar or config path, blob) of each problem reported
     reported: HashSet<(String, String)>,
     problems: Vec<Problem>,
 }
@@ -149,7 +194,8 @@ pub fn walk(
         objects,
         storage_map,
         storage: Vec::new(),
-        pairs: HashMap::new(),
+        pairs: Vec::new(),
+        pair_ids: HashMap::new(),
         paths: Vec::new(),
         path_ids: HashMap::new(),
         folders: Vec::new(),
@@ -160,77 +206,54 @@ pub fn walk(
         problems: Vec::new(),
     };
 
-    // A commit's pairs are kept only until its last child is walked
-    let mut children: HashMap<&str, usize> = HashMap::new();
-    for commit in commits {
-        for parent in &commit.parents {
-            *children.entry(parent.as_str()).or_default() += 1;
-        }
-    }
-    let mut pairs_of: HashMap<&str, Vec<u32>> = HashMap::new();
-    let mut introduced: HashMap<u32, (Timestamp, usize, Site)> = HashMap::new();
-    for (index, commit) in commits.iter().enumerate() {
+    let mut parents = ParentPairs::new(commits);
+    let mut introduced: HashMap<PairId, FirstSeen> = HashMap::new();
+    for (commit_index, commit) in commits.iter().enumerate() {
         let mut found = fold.commit_sites(commit)?;
         // Stable, so a pair keeps its first site in tree order
         found.sort_by_key(|(pair, _)| *pair);
         found.dedup_by_key(|(pair, _)| *pair);
         for (pair, site) in &found {
-            let in_a_parent = commit.parents.iter().any(|p| {
-                pairs_of
-                    .get(p.as_str())
-                    .is_some_and(|pairs| pairs.binary_search(pair).is_ok())
-            });
-            if in_a_parent {
+            if parents.seen_in_parent(commit, *pair) {
                 continue;
             }
             let older = introduced
                 .get(pair)
-                .is_none_or(|(time, _, _)| commit.author_time < *time);
+                .is_none_or(|first| commit.author_time < first.time);
             if older {
-                introduced.insert(*pair, (commit.author_time, index, *site));
+                let first = FirstSeen {
+                    time: commit.author_time,
+                    commit_index,
+                    site: *site,
+                };
+                introduced.insert(*pair, first);
             }
         }
-        for parent in &commit.parents {
-            if let Some(left) = children.get_mut(parent.as_str()) {
-                *left -= 1;
-                if *left == 0 {
-                    pairs_of.remove(parent.as_str());
-                }
-            }
-        }
-        if children.contains_key(commit.id.as_str()) {
-            pairs_of.insert(
-                &commit.id,
-                found.into_iter().map(|(pair, _)| pair).collect(),
-            );
-        }
+        parents.release_parents(commit);
+        parents.keep(commit, found.into_iter().map(|(pair, _)| pair).collect());
     }
 
     let mut audit = AuditLogs::default();
-    let keys: HashMap<u32, (String, String)> =
-        fold.pairs.iter().map(|(k, v)| (*v, k.clone())).collect();
     let mut entries = Vec::with_capacity(introduced.len());
-    for (pair, (_, index, site)) in introduced {
-        let (path, hash) = keys[&pair].clone();
-        let parsed = fold.blobs[&site.blob]
+    for (pair, first) in introduced {
+        let EntryRef { path, hash } = fold.pairs[pair.0 as usize].clone();
+        let parsed = fold.blobs[&first.site.blob]
             .clone()
             .expect("only parsed sidecars have pairs");
-        let store = site.store.map(|i| &fold.storage[i]);
+        let store = first.site.store.map(|i| &fold.storage[i]);
         let logged = match store {
-            Some(s) if s.shape == StoreKind::Dvs2 => audit.find(s.effective(), &path, &hash),
+            Some(s) if s.kind == StoreKind::Dvs2 => audit.find(s.effective(), path.as_str(), &hash),
             _ => None,
         };
-        let mut entry = entry(
+        entries.push(entry(
             path,
             hash,
             &parsed,
-            fold.paths[site.path as usize].clone(),
+            fold.paths[first.site.path.0 as usize].clone(),
             store.map(|s| s.effective().to_string()),
             logged,
-            &commits[index],
-        );
-        entry.store_kind = store.map(|s| s.shape);
-        entries.push(entry);
+            &commits[first.commit_index],
+        ));
     }
     entries.sort_by(|a, b| (&a.path, &a.hash).cmp(&(&b.path, &b.hash)));
 
@@ -264,15 +287,15 @@ pub fn walk(
 
 /// Who added it and when: the store's audit log, then the sidecar, then the commit.
 fn entry(
-    path: String,
+    path: ProjectPath,
     hash: String,
     parsed: &Parsed,
     sidecar_path: String,
     storage_path: Option<String>,
-    logged: Option<(Timestamp, String)>,
+    logged: Option<LoggedAdd>,
     commit: &Commit,
-) -> Entry {
-    let (logged_at, logged_by) = logged.unzip();
+) -> ManifestEntry {
+    let (logged_at, logged_by) = logged.map(|add| (add.time, add.user)).unzip();
     let author = || {
         let name = non_empty(&commit.author_name);
         name.or_else(|| non_empty(&commit.author_email))
@@ -280,16 +303,16 @@ fn entry(
     };
     let (recorded_user, recorded_user_source) =
         match (logged_by.as_deref().and_then(non_empty), &parsed.user) {
-            (Some(user), _) => (user, Source::AuditLog),
-            (None, Some(user)) => (user.clone(), Source::Sidecar),
-            (None, None) => (author(), Source::Commit),
+            (Some(user), _) => (user, AttributionSource::AuditLog),
+            (None, Some(user)) => (user.clone(), AttributionSource::Sidecar),
+            (None, None) => (author(), AttributionSource::Commit),
         };
     let (recorded_at, recorded_at_source) = match (logged_at, parsed.time) {
-        (Some(time), _) => (time, Source::AuditLog),
-        (None, Some(time)) => (time, Source::Sidecar),
-        (None, None) => (commit.author_time, Source::Commit),
+        (Some(time), _) => (time, AttributionSource::AuditLog),
+        (None, Some(time)) => (time, AttributionSource::Sidecar),
+        (None, None) => (commit.author_time, AttributionSource::Commit),
     };
-    Entry {
+    ManifestEntry {
         user_mismatch: parsed
             .user
             .as_deref()
@@ -303,16 +326,15 @@ fn entry(
         sidecar_user: parsed.user.clone(),
         recorded_user,
         recorded_user_source,
-        recorded_at: recorded_at.to_string(),
+        recorded_at,
         recorded_at_source,
         message: parsed.message.clone(),
         commit: EntryCommit {
             id: commit.id.clone(),
             author_name: commit.author_name.clone(),
             author_email: commit.author_email.clone(),
-            author_date: commit.author_time.to_string(),
+            author_date: commit.author_time,
         },
-        store_kind: None,
     }
 }
 
@@ -330,7 +352,7 @@ fn non_empty(s: &str) -> Option<String> {
 
 impl Fold<'_> {
     /// The pair and site of each sidecar in a commit's tree, in tree order
-    fn commit_sites(&mut self, commit: &Commit) -> Result<Vec<(u32, Site)>> {
+    fn commit_sites(&mut self, commit: &Commit) -> Result<Vec<(PairId, Site)>> {
         let mut folder = None;
         let mut dvs2_store = None;
         if let Some(blob) = self.objects.root_file(&commit.tree, CONFIG_FILE_NAME)? {
@@ -359,31 +381,30 @@ impl Fold<'_> {
 
         let tree = self.objects.dvs_tree(&commit.tree)?;
         let mut found = Vec::new();
-        self.visit(&tree, TOP, &context, commit, &mut found)?;
+        self.visit(&tree, None, &context, commit, &mut found)?;
         Ok(found)
     }
 
     fn visit(
         &mut self,
         tree: &DvsTree,
-        folder: u32,
+        folder: Option<PathId>,
         context: &Context,
         commit: &Commit,
-        found: &mut Vec<(u32, Site)>,
+        found: &mut Vec<(PairId, Site)>,
     ) -> Result<()> {
         for item in &tree.items {
             match item {
                 DvsItem::Dir { name, tree } => {
                     let path = self.path(folder, *name);
-                    self.visit(tree, path, context, commit, found)?;
+                    self.visit(tree, Some(path), context, commit, found)?;
                 }
                 DvsItem::File { name, blob } => {
                     let path = self.path(folder, *name);
-                    let Some((pair, shape)) = self.site(path, *blob, context.folder, commit)?
-                    else {
+                    let Some(named) = self.site(path, *blob, context.folder, commit)? else {
                         continue;
                     };
-                    let store = match shape {
+                    let store = match named.shape {
                         SidecarShape::Dvs2 => context.dvs2_store.or(context.dvs1_store),
                         _ => context.dvs1_store.or(context.dvs2_store),
                     };
@@ -392,70 +413,88 @@ impl Fold<'_> {
                         blob: *blob,
                         store,
                     };
-                    found.push((pair, site));
+                    found.push((named.pair, site));
                 }
             }
         }
         Ok(())
     }
 
-    fn path(&mut self, folder: u32, name: u32) -> u32 {
-        if let Some(id) = self.path_ids.get(&(folder, name)) {
+    fn path(&mut self, folder: Option<PathId>, name: u32) -> PathId {
+        let key = PathKey { folder, name };
+        if let Some(id) = self.path_ids.get(&key) {
             return *id;
         }
-        let name_str = self.objects.name(name);
+        let name = self.objects.name(name);
         let path = match folder {
-            TOP => name_str.to_string(),
-            _ => format!("{}/{name_str}", self.paths[folder as usize]),
+            None => name.to_string(),
+            Some(folder) => format!("{}/{name}", self.paths[folder.0 as usize]),
         };
-        let id = self.paths.len() as u32;
+        let id = PathId(self.paths.len() as u32);
         self.paths.push(path);
-        self.path_ids.insert((folder, name), id);
+        self.path_ids.insert(key, id);
+        id
+    }
+
+    fn pair(&mut self, pair: EntryRef) -> PairId {
+        if let Some(id) = self.pair_ids.get(&pair) {
+            return *id;
+        }
+        let id = PairId(self.pairs.len() as u32);
+        self.pairs.push(pair.clone());
+        self.pair_ids.insert(pair, id);
         id
     }
 
     /// The pair a sidecar names, read once per path, content and metadata folder
     fn site(
         &mut self,
-        path: u32,
-        blob: u32,
-        folder: usize,
+        path: PathId,
+        blob: BlobId,
+        metadata_folder: usize,
         commit: &Commit,
-    ) -> Result<Option<(u32, SidecarShape)>> {
-        if let Some(site) = self.sites.get(&(path, blob, folder)) {
-            return Ok(*site);
+    ) -> Result<Option<SidecarPair>> {
+        let key = SiteKey {
+            path,
+            blob,
+            metadata_folder,
+        };
+        if let Some(named) = self.sites.get(&key) {
+            return Ok(*named);
         }
-        let sidecar_path = self.paths[path as usize].clone();
-        let mut site = None;
+        let sidecar_path = self.paths[path.0 as usize].clone();
+        let mut named = None;
         if let Some(parsed) = self.sidecar(&sidecar_path, blob, commit)? {
-            let in_folder = self.folders[folder]
+            let in_folder = self.folders[metadata_folder]
                 .as_deref()
                 .and_then(|f| sidecar_path.strip_prefix(f)?.strip_prefix('/'));
-            let within = in_folder.unwrap_or(&sidecar_path);
-            match dvs::legacy::sidecar_data_path(within) {
-                _ if parsed.shape == SidecarShape::Dvs2 && in_folder.is_none() => self
-                    .unrecognized(
-                        &sidecar_path,
-                        blob,
-                        commit,
-                        "a dvs2 sidecar outside a dvs2 metadata folder",
-                    ),
-                Some(data) => {
-                    let next = self.pairs.len() as u32;
-                    let pair = *self
-                        .pairs
-                        .entry((data.as_str().to_string(), parsed.hash.clone()))
-                        .or_insert(next);
-                    site = Some((pair, parsed.shape));
-                }
-                None => self.unrecognized(&sidecar_path, blob, commit, "names no data file"),
+            if parsed.shape == SidecarShape::Dvs2 && in_folder.is_none() {
+                self.unrecognized(
+                    &sidecar_path,
+                    blob,
+                    commit,
+                    "a dvs2 sidecar outside a dvs2 metadata folder",
+                );
+            } else if let Some(data) =
+                dvs::legacy::sidecar_data_path(in_folder.unwrap_or(&sidecar_path))
+            {
+                let pair = self.pair(EntryRef {
+                    path: data,
+                    hash: parsed.hash.clone(),
+                });
+                named = Some(SidecarPair {
+                    pair,
+                    shape: parsed.shape,
+                });
+            } else {
+                self.unrecognized(&sidecar_path, blob, commit, "names no data file");
             }
         }
-        self.sites.insert((path, blob, folder), site);
-        Ok(site)
+        self.sites.insert(key, named);
+        Ok(named)
     }
 
-    fn sidecar(&mut self, path: &str, blob: u32, commit: &Commit) -> Result<Option<Rc<Parsed>>> {
+    fn sidecar(&mut self, path: &str, blob: BlobId, commit: &Commit) -> Result<Option<Rc<Parsed>>> {
         if let Some(parsed) = self.blobs.get(&blob).cloned() {
             if let Err(message) = &parsed {
                 self.unrecognized(path, blob, commit, message);
@@ -483,7 +522,6 @@ impl Fold<'_> {
             Err(e) => Err(e.message),
         };
         let parsed = match parsed {
-            Ok(p) if !is_blake3(&p.hash) => Err(format!("invalid blake3 hash {:?}", p.hash)),
             Ok(p) if i64::try_from(p.size).is_err() => {
                 Err(format!("size {} is too large for the server", p.size))
             }
@@ -498,7 +536,7 @@ impl Fold<'_> {
     }
 
     /// Once per sidecar path and content
-    fn unrecognized(&mut self, path: &str, blob: u32, commit: &Commit, message: &str) {
+    fn unrecognized(&mut self, path: &str, blob: BlobId, commit: &Commit, message: &str) {
         let blob = self.objects.blob(blob).to_string();
         if self.reported.insert((path.to_string(), blob.clone())) {
             self.problems.push(Problem::Unrecognized {
@@ -523,18 +561,18 @@ impl Fold<'_> {
         }
     }
 
-    fn store(&mut self, path: String, shape: StoreKind) -> usize {
+    fn store(&mut self, path: String, kind: StoreKind) -> usize {
         if let Some(i) = self
             .storage
             .iter()
-            .position(|s| s.path == path && s.shape == shape)
+            .position(|s| s.path == path && s.kind == kind)
         {
             return i;
         }
         self.storage.push(StorageSeen {
             remapped_to: self.storage_map.get(&path).cloned(),
             path,
-            shape,
+            kind,
         });
         self.storage.len() - 1
     }
@@ -582,8 +620,15 @@ fn parse_config(name: &str, bytes: &[u8]) -> std::result::Result<ConfigFacts, St
     })
 }
 
-/// The earliest add of each (path, hash) in one store's audit log: when, and by whom
-type Adds = HashMap<(String, String), (Timestamp, String)>;
+/// An add in a store's audit log: when, and by whom
+#[derive(Clone)]
+struct LoggedAdd {
+    time: Timestamp,
+    user: String,
+}
+
+/// The earliest add of each (path, hash) in one store's audit log
+type Adds = HashMap<(String, String), LoggedAdd>;
 
 /// The dvs2-local audit logs, read once per store
 #[derive(Default)]
@@ -592,7 +637,7 @@ struct AuditLogs {
 }
 
 impl AuditLogs {
-    fn find(&mut self, store: &str, path: &str, hash: &str) -> Option<(Timestamp, String)> {
+    fn find(&mut self, store: &str, path: &str, hash: &str) -> Option<LoggedAdd> {
         let adds = self
             .stores
             .entry(store.to_string())
@@ -623,9 +668,13 @@ fn read_audit_log(store: &Path) -> Adds {
         let path = file.path.to_string_lossy().replace('\\', "/");
         let key = (path, file.hashes.blake3);
         match adds.get(&key) {
-            Some((time, _)) if *time <= e.timestamp => {}
+            Some(add) if add.time <= e.timestamp => {}
             _ => {
-                adds.insert(key, (e.timestamp, e.user));
+                let add = LoggedAdd {
+                    time: e.timestamp,
+                    user: e.user,
+                };
+                adds.insert(key, add);
             }
         }
     }
@@ -636,6 +685,8 @@ fn read_audit_log(store: &Path) -> Adds {
 pub(crate) mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
+
+    use dvs::migration::ProblemKind;
 
     use super::*;
 
@@ -719,6 +770,32 @@ pub(crate) mod tests {
         format!("{n:02x}").repeat(32)
     }
 
+    /// An entry for `path` and `hash`, attributed to its commit
+    pub fn manifest_entry(path: &str, hash: &str) -> ManifestEntry {
+        let time: Timestamp = "2023-01-01T00:00:00Z".parse().unwrap();
+        ManifestEntry {
+            path: ProjectPath::from_canonical(path).unwrap(),
+            hash: hash.into(),
+            size: 5,
+            shape: SidecarShape::Dvs1,
+            sidecar_path: format!("{path}.dvs"),
+            storage_path: None,
+            sidecar_user: None,
+            recorded_user: "jdoe".into(),
+            recorded_user_source: AttributionSource::Commit,
+            recorded_at: time,
+            recorded_at_source: AttributionSource::Commit,
+            message: None,
+            commit: EntryCommit {
+                id: "c".into(),
+                author_name: "jdoe".into(),
+                author_email: String::new(),
+                author_date: time,
+            },
+            user_mismatch: false,
+        }
+    }
+
     pub fn dvs1(hash: &str, user: &str, time: &str) -> String {
         format!(
             r#"{{"blake3_checksum": "{hash}", "size": 5, "add_time": "{time}", "message": "", "saved_by": "{user}"}}"#
@@ -732,10 +809,10 @@ pub(crate) mod tests {
         )
     }
 
-    fn find<'a>(walk: &'a Walk, path: &str, hash: &str) -> &'a Entry {
+    fn find<'a>(walk: &'a Walk, path: &str, hash: &str) -> &'a ManifestEntry {
         walk.entries
             .iter()
-            .find(|e| e.path == path && e.hash == hash)
+            .find(|e| e.path.as_str() == path && e.hash == hash)
             .unwrap_or_else(|| panic!("no entry ({path}, {hash})"))
     }
 
@@ -797,28 +874,30 @@ pub(crate) mod tests {
         let walk = repo.walk(&BTreeMap::new());
         let logged = find(&walk, "d/logged.csv", &hash(3));
         assert_eq!(logged.recorded_user, "logged");
-        assert_eq!(logged.recorded_user_source, Source::AuditLog);
-        assert_eq!(logged.recorded_at, "2020-09-13T12:26:40Z");
+        assert_eq!(logged.recorded_user_source, AttributionSource::AuditLog);
+        assert_eq!(logged.recorded_at.to_string(), "2020-09-13T12:26:40Z");
         assert_eq!(logged.sidecar_path, "meta/d/logged.csv.dvs");
         assert_eq!(logged.storage_path.as_deref(), Some(store_path.as_str()));
 
         let plain = find(&walk, "d/plain.csv", &hash(4));
         assert_eq!(
             (plain.recorded_user.as_str(), plain.recorded_user_source),
-            ("JDOE", Source::Sidecar)
+            ("JDOE", AttributionSource::Sidecar)
         );
-        assert_eq!(plain.recorded_at, "2024-01-02T03:04:05Z");
-        assert_eq!(plain.store_kind, Some(StoreKind::Dvs2));
+        assert_eq!(plain.recorded_at.to_string(), "2024-01-02T03:04:05Z");
 
         let old = find(&walk, "old.csv", &hash(5));
         assert_eq!(old.sidecar_user, None);
         assert_eq!(
             (old.recorded_user.as_str(), old.recorded_user_source),
-            ("Jane Doe", Source::Commit)
+            ("Jane Doe", AttributionSource::Commit)
         );
         assert_eq!(
-            (old.recorded_at.as_str(), old.recorded_at_source),
-            ("2023-01-01T00:00:00Z", Source::Commit)
+            (old.recorded_at.to_string(), old.recorded_at_source),
+            (
+                "2023-01-01T00:00:00Z".to_string(),
+                AttributionSource::Commit
+            )
         );
     }
 
@@ -841,9 +920,12 @@ pub(crate) mod tests {
             author_time: Timestamp::UNIX_EPOCH,
         };
         let user = |logged: Option<&str>, c: &Commit| {
-            let logged = logged.map(|u| (Timestamp::UNIX_EPOCH, u.to_string()));
+            let logged = logged.map(|u| LoggedAdd {
+                time: Timestamp::UNIX_EPOCH,
+                user: u.to_string(),
+            });
             let e = entry(
-                "a".into(),
+                ProjectPath::from_canonical("a").unwrap(),
                 hash(1),
                 &parsed,
                 "a.dvs".into(),
@@ -856,11 +938,15 @@ pub(crate) mod tests {
         let message = Some("first pull".to_string());
         assert_eq!(
             user(Some(""), &commit("", "jdoe@example.com")),
-            ("jdoe@example.com".into(), Source::Commit, message.clone())
+            (
+                "jdoe@example.com".into(),
+                AttributionSource::Commit,
+                message.clone()
+            )
         );
         assert_eq!(
             user(None, &commit("", "")),
-            ("unknown".into(), Source::Commit, message)
+            ("unknown".into(), AttributionSource::Commit, message)
         );
     }
 
@@ -917,12 +1003,15 @@ pub(crate) mod tests {
             walk.storage,
             vec![StorageSeen {
                 path: "/old/store".into(),
-                shape: StoreKind::Dvs1,
+                kind: StoreKind::Dvs1,
                 remapped_to: Some("/new/store".into()),
             }]
         );
-        let kinds: Vec<&str> = walk.problems.iter().map(Problem::kind).collect();
-        assert_eq!(kinds, vec!["unreadable_config", "unrecognized"]);
+        let kinds: Vec<ProblemKind> = walk.problems.iter().map(Problem::kind).collect();
+        assert_eq!(
+            kinds,
+            vec![ProblemKind::UnreadableConfig, ProblemKind::Unrecognized]
+        );
     }
 
     #[test]

@@ -4,16 +4,20 @@ use std::io::Read;
 
 use anyhow::Result;
 use dvs::backends::server::{coded, invalid_response, join_url, status_error, unreachable};
+use dvs::migration::{
+    LookupRequest, LookupResponse, ManifestEntry, ManifestRequest, ManifestResponse,
+    StartRunRequest, StartRunResponse, Totals, WalkKind,
+};
 use dvs::{ErrorCode, http_agent};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ureq::Body;
 use ureq::http::Response;
 use url::Url;
 use uuid::Uuid;
 
-use crate::walk::Entry;
+use crate::commands::After;
 
 /// The server's limit on list lengths per call
 pub const MAX_ENTRIES: usize = 10_000;
@@ -24,53 +28,6 @@ pub struct Client {
     url: Url,
     project: String,
     key: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct EntryRef {
-    pub path: String,
-    pub hash: String,
-}
-
-#[derive(Serialize, Default)]
-pub struct LookupRequest {
-    pub hashes: Vec<String>,
-    pub entries: Vec<EntryRef>,
-    pub users: Vec<String>,
-}
-
-#[derive(Deserialize)]
-pub struct LookupResponse {
-    #[serde(default)]
-    pub have: Vec<String>,
-    #[serde(default)]
-    pub migrated: Vec<EntryRef>,
-    #[serde(default)]
-    pub unmatched_users: Vec<String>,
-}
-
-#[derive(Deserialize)]
-pub struct StartedRun {
-    pub run_id: Uuid,
-}
-
-#[derive(Deserialize)]
-pub struct ManifestResponse {
-    pub missing: Vec<String>,
-    pub recorded: usize,
-}
-
-/// How the server took a blob
-pub enum Upload {
-    Stored {
-        created: bool,
-    },
-    /// 400: the bytes do not hash to the claimed hash
-    Corrupt(String),
-    /// Any other refusal of the bytes themselves, as 413 over the size limit
-    Refused(u16, String),
-    /// The local copy could not be read
-    Unreadable(String),
 }
 
 /// Keeps the reader's first error: once ureq has failed, that is the only way to tell a
@@ -126,7 +83,8 @@ impl Client {
         }
     }
 
-    fn post<R: DeserializeOwned>(&self, call: &str, mut body: Value, ok: u16) -> Result<R> {
+    fn post<R: DeserializeOwned>(&self, call: &str, body: &impl Serialize, ok: u16) -> Result<R> {
+        let mut body = serde_json::to_value(body)?;
         strip_nul(&mut body);
         let mut resp = http_agent()
             .post(self.endpoint(call)?.as_str())
@@ -144,24 +102,28 @@ impl Client {
     }
 
     pub fn lookup(&self, req: &LookupRequest) -> Result<LookupResponse> {
-        self.post("lookup", serde_json::to_value(req)?, 200)
+        self.post("lookup", req, 200)
     }
 
-    pub fn start_run(&self, walk: &str, totals: &Value) -> Result<StartedRun> {
-        let body = serde_json::json!({
-            "client_version": format!("dvs-migrate {}", env!("CARGO_PKG_VERSION")),
-            "walk": walk,
-            "totals": totals,
-        });
-        self.post("runs", body, 201)
+    pub fn start_run(&self, walk: WalkKind, totals: Totals) -> Result<StartRunResponse> {
+        let req = StartRunRequest {
+            client_version: format!("dvs-migrate {}", env!("CARGO_PKG_VERSION")),
+            walk,
+            totals,
+        };
+        self.post("runs", &req, 201)
     }
 
-    pub fn manifest(&self, run: Uuid, entries: &[&Entry]) -> Result<ManifestResponse> {
-        let body = serde_json::json!({"run_id": run, "entries": entries});
-        self.post("manifest", body, 200)
+    pub fn manifest(&self, run_id: Uuid, entries: &[ManifestEntry]) -> Result<ManifestResponse> {
+        let req = ManifestRequest {
+            run_id,
+            entries: entries.to_vec(),
+        };
+        self.post("manifest", &req, 200)
     }
 
-    pub fn upload(&self, run: Uuid, hash: &str, bytes: impl Read) -> Result<Upload> {
+    /// How the server took a blob, or that the local copy could not be read
+    pub fn upload(&self, run: Uuid, hash: &str, bytes: impl Read) -> Result<After> {
         let mut url = self.endpoint(&format!("blobs/{hash}"))?;
         url.query_pairs_mut()
             .append_pair("run_id", &run.to_string());
@@ -175,19 +137,19 @@ impl Client {
             .header("content-type", "application/octet-stream")
             .send(ureq::SendBody::from_reader(&mut bytes));
         let mut resp = match (sent, bytes.error) {
-            (Err(_), Some(local)) => return Ok(Upload::Unreadable(local)),
+            (Err(_), Some(local)) => return Ok(After::Unreadable(local)),
             (sent, _) => sent.map_err(|e| unreachable(&self.url, e))?,
         };
         let status = resp.status().as_u16();
         let mut body = || resp.body_mut().read_to_string().unwrap_or_default();
         match status {
-            200 | 201 => Ok(Upload::Stored {
+            200 | 201 => Ok(After::Uploaded {
                 created: status == 201,
             }),
             400 => {
                 let body = body();
                 if body.starts_with("content hash mismatch") {
-                    Ok(Upload::Corrupt(body))
+                    Ok(After::Corrupt(body))
                 } else {
                     Err(coded(
                         ErrorCode::OperationFailed,
@@ -195,13 +157,13 @@ impl Client {
                     ))
                 }
             }
-            413 => Ok(Upload::Refused(413, body())),
+            413 => Ok(After::Refused(413, body())),
             _ => Err(self.refused(&mut resp, "upload")),
         }
     }
 
     pub fn report(&self, report: Value) -> Result<Value> {
-        self.post("report", report, 200)
+        self.post("report", &report, 200)
     }
 }
 

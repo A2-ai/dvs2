@@ -4,9 +4,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use saphyr::{LoadableYamlNode, Yaml};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::backends::local::stored_compression;
 use crate::error::{Error, ErrorCode};
 use crate::{Compression, FileMetadata, Hashes, ProjectPath};
 
@@ -20,6 +22,17 @@ pub enum SidecarShape {
     Dvs1,
     #[serde(rename = "dvs2")]
     Dvs2,
+}
+
+impl SidecarShape {
+    /// The name it serializes as
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SidecarShape::Dvs1V001 => "dvs1-v0.0.1",
+            SidecarShape::Dvs1 => "dvs1",
+            SidecarShape::Dvs2 => "dvs2",
+        }
+    }
 }
 
 /// A dvs1 sidecar of either shape, v0.0.1 keys mapped onto the later names.
@@ -72,7 +85,8 @@ struct V002 {
 }
 
 /// Classifies a `.dvs` file by which shape's required keys it has. Exactly one
-/// shape must match: a file that fits none or several is not guessed at.
+/// shape must match: a file that fits none or several is not guessed at. Its
+/// hash must be a blake3 one.
 pub fn classify_sidecar(bytes: &[u8]) -> Result<Sidecar, Unrecognized> {
     let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| Unrecognized {
         message: format!("not JSON: {e}"),
@@ -84,7 +98,7 @@ pub fn classify_sidecar(bytes: &[u8]) -> Result<Sidecar, Unrecognized> {
         errors: &mut Vec<String>,
     ) -> Option<T> {
         T::deserialize(value)
-            .inspect_err(|e| errors.push(format!("{}: {e}", shape_name(shape))))
+            .inspect_err(|e| errors.push(format!("{}: {e}", shape.as_str())))
             .ok()
     }
 
@@ -115,7 +129,17 @@ pub fn classify_sidecar(bytes: &[u8]) -> Result<Sidecar, Unrecognized> {
     }
 
     if found.len() == 1 {
-        return Ok(found.pop().expect("one shape"));
+        let sidecar = found.pop().expect("one shape");
+        let hash = match &sidecar {
+            Sidecar::Dvs1(m) => &m.blake3,
+            Sidecar::Dvs2(m) => &m.hashes.blake3,
+        };
+        if !is_blake3(hash) {
+            return Err(Unrecognized {
+                message: format!("invalid blake3 hash {hash:?}"),
+            });
+        }
+        return Ok(sidecar);
     }
     let message = if found.is_empty() {
         format!("matches no sidecar shape ({})", errors.join("; "))
@@ -123,21 +147,13 @@ pub fn classify_sidecar(bytes: &[u8]) -> Result<Sidecar, Unrecognized> {
         let shapes: Vec<_> = found
             .iter()
             .map(|s| match s {
-                Sidecar::Dvs1(m) => shape_name(m.shape),
-                Sidecar::Dvs2(_) => shape_name(SidecarShape::Dvs2),
+                Sidecar::Dvs1(m) => m.shape.as_str(),
+                Sidecar::Dvs2(_) => SidecarShape::Dvs2.as_str(),
             })
             .collect();
         format!("matches more than one sidecar shape: {}", shapes.join(", "))
     };
     Err(Unrecognized { message })
-}
-
-fn shape_name(shape: SidecarShape) -> &'static str {
-    match shape {
-        SidecarShape::Dvs1V001 => "dvs1-v0.0.1",
-        SidecarShape::Dvs1 => "dvs1",
-        SidecarShape::Dvs2 => "dvs2",
-    }
 }
 
 impl Dvs1Sidecar {
@@ -175,12 +191,45 @@ pub struct Dvs1Config {
 
 impl Dvs1Config {
     pub fn from_yaml(yaml: &str) -> Result<Self> {
-        serde_yaml::from_str(yaml).map_err(|e| {
+        let invalid = |why: String| -> anyhow::Error {
             Error::new(
                 ErrorCode::InvalidConfiguration,
-                format!("cannot read {DVS1_CONFIG_FILE}: {e}"),
+                format!("cannot read {DVS1_CONFIG_FILE}: {why}"),
             )
             .into()
+        };
+        let docs = Yaml::load_from_str(yaml).map_err(|e| invalid(e.to_string()))?;
+        let Some(doc) = docs.first().filter(|d| d.is_mapping()) else {
+            return Err(invalid("not a mapping".to_string()));
+        };
+        // A key set to `null` is the same as a missing one
+        let key = |name: &str| doc.as_mapping_get(name).filter(|v| !v.is_null());
+
+        let storage_dir = match key("storage_dir") {
+            None => return Err(invalid("missing field `storage_dir`".to_string())),
+            Some(v) => match v.as_str() {
+                Some(dir) => PathBuf::from(dir),
+                None => return Err(invalid("storage_dir is not a string".to_string())),
+            },
+        };
+        let permissions = match key("permissions") {
+            None => None,
+            Some(v) => match v.as_integer().and_then(|p| i32::try_from(p).ok()) {
+                Some(permissions) => Some(permissions),
+                None => return Err(invalid("permissions is not an integer".to_string())),
+            },
+        };
+        let group = match key("group") {
+            None => None,
+            Some(v) => match v.as_str() {
+                Some(group) => Some(group.to_string()),
+                None => return Err(invalid("group is not a string".to_string())),
+            },
+        };
+        Ok(Dvs1Config {
+            storage_dir,
+            permissions,
+            group,
         })
     }
 }
@@ -206,6 +255,24 @@ pub fn blob_path(storage_dir: &Path, hash: &str) -> PathBuf {
     } else {
         storage_dir.join("invalid-hash")
     }
+}
+
+/// The first of `stores` that holds the blob for `hash`: its path, and how it
+/// is stored as read from the blob, which can fail. A store may hold a blob
+/// compressed or not whatever its sidecar says.
+pub fn find_blob(
+    stores: &[impl AsRef<Path>],
+    hash: &str,
+    size: u64,
+) -> Option<(PathBuf, Result<Compression>)> {
+    for store in stores {
+        let path = blob_path(store.as_ref(), hash);
+        if path.is_file() {
+            let compression = stored_compression(&path, size, hash);
+            return Some((path, compression));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -306,14 +373,30 @@ mod tests {
     }
 
     #[test]
-    fn shape_serializes_as_report_names() {
-        let names = serde_json::to_string(&[
+    fn unrecognized_when_hash_is_not_blake3() {
+        for shape in [
             SidecarShape::Dvs1V001,
             SidecarShape::Dvs1,
             SidecarShape::Dvs2,
-        ])
-        .unwrap();
+        ] {
+            let json = sidecar_json(shape).replace(&hash(), "abc");
+            let err = classify_sidecar(json.as_bytes()).unwrap_err();
+            assert_eq!(err.message, r#"invalid blake3 hash "abc""#);
+        }
+    }
+
+    #[test]
+    fn shape_serializes_as_report_names() {
+        let shapes = [
+            SidecarShape::Dvs1V001,
+            SidecarShape::Dvs1,
+            SidecarShape::Dvs2,
+        ];
+        let names = serde_json::to_string(&shapes).unwrap();
         assert_eq!(names, r#"["dvs1-v0.0.1","dvs1","dvs2"]"#);
+        for shape in shapes {
+            assert_eq!(serde_json::to_value(shape).unwrap(), shape.as_str());
+        }
     }
 
     #[test]
@@ -363,6 +446,34 @@ mod tests {
         );
         assert_eq!(sidecar_data_path("data/a.csv"), None);
         assert_eq!(sidecar_data_path("data/.dvs"), None);
+    }
+
+    #[test]
+    fn find_blob_takes_the_first_store_holding_it_and_reads_its_compression() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (empty, full) = (tmp.path().join("empty"), tmp.path().join("full"));
+        // Content that is itself a zstd frame, stored raw, and other content
+        // stored compressed: neither magic bytes nor the sidecar tell them apart
+        let raw = zstd::encode_all(&b"raw"[..], 0).unwrap();
+        let plain = b"compressed".to_vec();
+        for (content, stored, expected) in [
+            (raw.clone(), raw, Compression::None),
+            (
+                plain.clone(),
+                zstd::encode_all(&plain[..], 0).unwrap(),
+                Compression::Zstd,
+            ),
+        ] {
+            let hash = blake3::hash(&content).to_hex().to_string();
+            let blob = blob_path(&full, &hash);
+            fs_err::create_dir_all(blob.parent().unwrap()).unwrap();
+            fs_err::write(&blob, stored).unwrap();
+
+            let (path, compression) =
+                find_blob(&[&empty, &full], &hash, content.len() as u64).unwrap();
+            assert_eq!((path, compression.unwrap()), (blob, expected));
+            assert!(find_blob(&[&empty], &hash, content.len() as u64).is_none());
+        }
     }
 
     #[test]

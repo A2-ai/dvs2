@@ -7,8 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use dvs::Compression;
-
-use crate::walk::StoreKind;
+use dvs::legacy::{blob_path, find_blob};
 
 /// A blob in a local store and how it is stored
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,37 +17,28 @@ pub struct Blob {
     pub stored_size: u64,
 }
 
-/// The first of `candidates` (store root, kind) holding `hash`, and the path looked at:
-/// the hit, else the first tried. A dvs2 store may hold a blob compressed or not whatever
-/// the sidecar says, so its compression is read from the blob; dvs1 blobs are raw.
-pub fn find(
-    hash: &str,
-    size: u64,
-    candidates: &[(&str, StoreKind)],
-) -> (Option<Blob>, Option<String>) {
-    let mut first = None;
-    for (store, kind) in candidates {
-        let path = dvs::legacy::blob_path(Path::new(store), hash);
-        let meta = std::fs::metadata(&path).ok().filter(|m| m.is_file());
-        if let Some(meta) = meta {
-            let looked_at = path.to_string_lossy().into_owned();
-            // Unreadable here is unreadable at upload too, where it is reported
-            let compression = match kind {
-                StoreKind::Dvs1 => Compression::None,
-                StoreKind::Dvs2 => {
-                    dvs::stored_compression(&path, size, hash).unwrap_or(Compression::None)
-                }
-            };
-            let blob = Blob {
-                path,
-                compression,
-                stored_size: meta.len(),
-            };
-            return (Some(blob), Some(looked_at));
-        }
-        first.get_or_insert_with(|| path.to_string_lossy().into_owned());
-    }
-    (None, first)
+/// The first of `stores` holding `hash`, and the path looked at: the hit, else the first
+/// store's. Its compression is read from the blob, whatever the sidecar or store says.
+pub fn find(hash: &str, size: u64, stores: &[&str]) -> (Option<Blob>, Option<String>) {
+    let first = stores.first().map(|store| {
+        blob_path(Path::new(store), hash)
+            .to_string_lossy()
+            .into_owned()
+    });
+    let Some((path, compression)) = find_blob(stores, hash, size) else {
+        return (None, first);
+    };
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return (None, first);
+    };
+    let looked_at = path.to_string_lossy().into_owned();
+    let blob = Blob {
+        path,
+        // Unreadable here is unreadable at upload too, where it is reported
+        compression: compression.unwrap_or(Compression::None),
+        stored_size: meta.len(),
+    };
+    (Some(blob), Some(looked_at))
 }
 
 /// The uncompressed bytes, as the server takes them
@@ -99,16 +89,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let hash = hello_hash(dir.path());
         let (empty, full) = (dir.path().join("empty"), dir.path().join("full"));
-        let blob = dvs::legacy::blob_path(&full, &hash);
+        let blob = blob_path(&full, &hash);
         std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
         std::fs::write(&blob, b"hello").unwrap();
         let (empty, full) = (empty.to_str().unwrap(), full.to_str().unwrap());
 
-        let (found, looked_at) = find(
-            &hash,
-            5,
-            &[(empty, StoreKind::Dvs1), (full, StoreKind::Dvs2)],
-        );
+        let (found, looked_at) = find(&hash, 5, &[empty, full]);
         let found = found.unwrap();
         assert_eq!(
             (found.compression, found.stored_size),
@@ -116,23 +102,21 @@ mod tests {
         );
         assert_eq!(looked_at.as_deref(), blob.to_str());
 
-        let (found, looked_at) = find(&hash, 5, &[(empty, StoreKind::Dvs1)]);
+        let (found, looked_at) = find(&hash, 5, &[empty]);
         assert!(found.is_none());
         assert!(looked_at.unwrap().starts_with(empty));
     }
 
     #[test]
-    fn find_reads_a_dvs2_blobs_compression_from_the_blob() {
+    fn find_reads_any_stores_compression_from_the_blob() {
         let dir = tempfile::tempdir().unwrap();
         let hash = hello_hash(dir.path());
-        let blob = dvs::legacy::blob_path(dir.path(), &hash);
+        let blob = blob_path(dir.path(), &hash);
         std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
         std::fs::write(&blob, zstd::encode_all(&b"hello"[..], 0).unwrap()).unwrap();
-        let store = dir.path().to_str().unwrap();
 
-        let kind = |kind| find(&hash, 5, &[(store, kind)]).0.unwrap().compression;
-        assert_eq!(kind(StoreKind::Dvs2), Compression::Zstd);
-        assert_eq!(kind(StoreKind::Dvs1), Compression::None);
+        let (found, _) = find(&hash, 5, &[dir.path().to_str().unwrap()]);
+        assert_eq!(found.unwrap().compression, Compression::Zstd);
     }
 
     #[test]

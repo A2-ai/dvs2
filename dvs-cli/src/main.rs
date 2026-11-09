@@ -26,7 +26,9 @@ use dvs::config::{Config, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::{create_metadata_folder, init};
 use dvs::legacy::DVS1_CONFIG_FILE;
-use dvs::migrate::{Destination, MigrateReport, MissingHash, migrate, prepare};
+use dvs::migrate::{
+    Destination, MigrateOptions, MigrateReport, MissingHash, MissingState, migrate, prepare,
+};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
@@ -1107,7 +1109,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             }
         }
         Command::Migrate(to) => {
-            let (destination, clean, upload_missing) = match to {
+            let (destination, options) = match to {
                 Migrate::Server {
                     name,
                     url,
@@ -1116,21 +1118,28 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                     no_clean,
                 } => {
                     let storage = storage.map(std::path::absolute).transpose()?;
-                    let destination = Destination::Server { name, url, storage };
-                    (destination, !no_clean, upload_missing)
+                    let options = MigrateOptions {
+                        clean: !no_clean,
+                        upload_missing,
+                    };
+                    (Destination::Server { name, url, storage }, options)
                 }
                 Migrate::Local { path, no_clean } => {
                     let path = path.map(std::path::absolute).transpose()?;
-                    (Destination::Local { path }, !no_clean, false)
+                    let options = MigrateOptions {
+                        clean: !no_clean,
+                        upload_missing: false,
+                    };
+                    (Destination::Local { path }, options)
                 }
             };
-            let prepared = prepare(&current_dir, &destination, upload_missing)?;
+            let prepared = prepare(&current_dir, &destination, options)?;
             if let Destination::Server { url, .. } = &destination
                 && get_token(url)?.is_none()
             {
                 run_device_login(url, cli.json)?;
             }
-            let report = migrate(prepared, clean)?;
+            let report = migrate(prepared)?;
             let outcome = if report.is_partial() {
                 RunOutcome::Partial
             } else {
@@ -1145,7 +1154,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 }
                 output::emit(result);
             } else {
-                print_migrate(&report, &destination, clean);
+                print_migrate(&report, &destination, options.clean);
             }
             summary_exit(outcome)?;
         }
@@ -1233,7 +1242,10 @@ fn print_migrate(report: &MigrateReport, destination: &Destination, clean: bool)
     for warning in &report.warnings {
         eprintln!("Warning: {warning}");
     }
-    let (uploaded, lacking): (Vec<_>, Vec<_>) = report.missing.iter().partition(|m| m.uploaded);
+    let (uploaded, lacking): (Vec<_>, Vec<_>) = report
+        .missing
+        .iter()
+        .partition(|m| m.state == MissingState::Uploaded);
     if !report.changed && uploaded.is_empty() {
         println!("Already migrated: nothing changed");
     }
@@ -1292,11 +1304,11 @@ fn print_migrate(report: &MigrateReport, destination: &Destination, clean: bool)
     if !lacking.is_empty() {
         eprintln!("The server lacks the content of:");
         for missing in &lacking {
-            let state = match (&missing.message, missing.in_local_storage) {
-                (Some(error), true) => format!("upload failed: {error}"),
-                (Some(error), false) => error.clone(),
-                (None, true) => "in local storage".to_string(),
-                (None, false) => "not in local storage".to_string(),
+            let state = match &missing.state {
+                MissingState::InLocalStorage => "in local storage",
+                MissingState::NotLocal => "not in local storage",
+                MissingState::Failed { message, .. } => message,
+                MissingState::Uploaded => "uploaded",
             };
             eprintln!("  {} {} ({state})", missing.hash, paths(missing));
         }
@@ -1304,7 +1316,7 @@ fn print_migrate(report: &MigrateReport, destination: &Destination, clean: bool)
             (destination, &report.storage)
             && lacking
                 .iter()
-                .any(|m| m.in_local_storage && m.message.is_none())
+                .any(|m| m.state == MissingState::InLocalStorage)
         {
             eprintln!(
                 "To upload what local storage has, run: {}",

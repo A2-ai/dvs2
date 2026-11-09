@@ -11,20 +11,18 @@ mod walk;
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
-use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use dvs::ErrorCode;
 use dvs::backends::server::coded;
 use dvs::operation::{duration_ms, rfc3339_ms};
-use serde::Deserialize;
 use url::Url;
 
 use crate::client::Client;
-use crate::commands::error_json;
-use crate::report::{Command, Destination, Report};
+use crate::commands::{Phase, error_json};
+use crate::report::{Command, Report, ServerTarget};
 
 #[derive(Parser)]
 #[command(name = "dvs-migrate", version, about)]
@@ -61,9 +59,6 @@ struct Args {
     /// A storage path as written in the project's config, and where it is now (repeatable)
     #[arg(long = "storage-map", value_name = "OLD=NEW", value_parser = parse_mapping)]
     storage_map: Vec<(String, String)>,
-    /// TOML file with `server`, `project` and a `[storage_map]` table; flags win over it
-    #[arg(long, value_name = "PATH")]
-    config: Option<PathBuf>,
     /// Print the full report as JSON instead of the summary
     #[arg(long)]
     json: bool,
@@ -78,18 +73,9 @@ fn parse_mapping(s: &str) -> Result<(String, String), String> {
     }
 }
 
-#[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct FileSettings {
-    server: Option<Url>,
-    project: Option<String>,
-    #[serde(default)]
-    storage_map: BTreeMap<String, String>,
-}
-
 struct Settings {
     client: Client,
-    dest: Destination,
+    target: ServerTarget,
     storage_map: BTreeMap<String, String>,
 }
 
@@ -98,68 +84,64 @@ fn usage(message: &str) -> anyhow::Error {
 }
 
 fn settings(args: &Args) -> Result<Settings> {
-    let file: FileSettings = match &args.config {
-        Some(path) => {
-            let text = std::fs::read_to_string(path)
-                .with_context(|| format!("cannot read {}", path.display()))?;
-            toml::from_str(&text).map_err(|e| {
-                coded(
-                    ErrorCode::InvalidConfiguration,
-                    format!("cannot read {}: {e}", path.display()),
-                )
-            })?
-        }
-        None => FileSettings::default(),
-    };
     let server = args
         .server
         .clone()
-        .or(file.server)
-        .ok_or_else(|| usage("no server: pass --server or set `server` in --config"))?;
+        .ok_or_else(|| usage("no server: pass --server"))?;
     let project = args
         .project
         .clone()
-        .or(file.project)
-        .ok_or_else(|| usage("no project: pass --project or set `project` in --config"))?;
+        .ok_or_else(|| usage("no project: pass --project"))?;
     if !args.key.starts_with("dvsm_") {
         return Err(usage(
             "not a migrate key: issue one on the project's Migration page (it starts with dvsm_)",
         ));
     }
-    let mut storage_map = file.storage_map;
-    storage_map.extend(args.storage_map.iter().cloned());
     Ok(Settings {
         client: Client::new(server.clone(), project.clone(), args.key.clone()),
-        dest: Destination { server, project },
-        storage_map,
+        target: ServerTarget { server, project },
+        storage_map: args.storage_map.iter().cloned().collect(),
     })
 }
 
-fn execute(command: Command, args: &Args, settings: &Settings, report: &mut Report) -> Result<()> {
+fn execute(
+    command: Command,
+    args: &Args,
+    settings: &Settings,
+    started: Started,
+    report: &mut Report,
+) -> Result<()> {
     let quiet = args.json;
     let mut plan = commands::plan(&args.repo, &settings.storage_map, &settings.client, quiet)?;
     match command {
-        Command::Plan => plan.fill(report, None),
+        Command::Plan => plan.fill(report, Phase::Plan),
         Command::Run => {
             commands::run(&mut plan, &settings.client, report, quiet)?;
-            stamp(report);
+            stamp(report, started);
             settings.client.report(report.for_server())?;
         }
     }
     Ok(())
 }
 
-static STARTED: std::sync::OnceLock<(Instant, SystemTime)> = std::sync::OnceLock::new();
+/// When the command started, for the report's times
+#[derive(Clone, Copy)]
+struct Started {
+    clock: Instant,
+    time: SystemTime,
+}
 
-fn stamp(report: &mut Report) {
-    let (started, started_at) = *STARTED.get_or_init(|| (Instant::now(), SystemTime::now()));
-    report.started_at = rfc3339_ms(started_at);
+fn stamp(report: &mut Report, started: Started) {
+    report.started_at = rfc3339_ms(started.time);
     report.finished_at = rfc3339_ms(SystemTime::now());
-    report.duration_ms = duration_ms(started);
+    report.duration_ms = duration_ms(started.clock);
 }
 
 fn main() {
-    STARTED.get_or_init(|| (Instant::now(), SystemTime::now()));
+    let started = Started {
+        clock: Instant::now(),
+        time: SystemTime::now(),
+    };
     git::clean_up_on_signal();
     let cli = Cli::parse();
     let (command, args) = match &cli.command {
@@ -168,20 +150,23 @@ fn main() {
     };
 
     let mut report = Report::new(command);
-    let (result, dest) = match settings(args) {
-        Ok(s) => (execute(command, args, &s, &mut report), Some(s.dest)),
+    let (result, target) = match settings(args) {
+        Ok(s) => (
+            execute(command, args, &s, started, &mut report),
+            Some(s.target),
+        ),
         Err(e) => (Err(e), None),
     };
     if let Err(error) = &result {
         report.outcome = dvs::RunOutcome::Failed;
         report.error = Some(error_json(error));
     }
-    stamp(&mut report);
+    stamp(&mut report, started);
 
     let source = git::redact(&args.repo);
     let stdout = &mut std::io::stdout().lock();
     let printed = report
-        .print(args.json, &source, dest.as_ref(), stdout)
+        .print(args.json, &source, target.as_ref(), stdout)
         .and_then(|()| stdout.flush());
     if let Err(e) = &printed {
         eprintln!("error: {e}");

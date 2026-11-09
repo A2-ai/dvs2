@@ -1,124 +1,17 @@
 //! The report document every command prints with `--json` (and `run` sends): dvs2's
 //! `--json` envelope plus scope, totals, entries and problems.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io;
 
-use dvs::legacy::SidecarShape;
+use dvs::migration::{ManifestEntry, PartialReason, Problem, Scope, Totals, WalkKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 use uuid::Uuid;
 
-use crate::git::{PartialReason, redact};
-use crate::walk::{Entry, StorageSeen};
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Problem {
-    Missing {
-        hash: String,
-        size: u64,
-        paths: Vec<String>,
-        looked_at: Option<String>,
-        /// The storage folder the config named, and whether it exists on this machine
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        storage: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        storage_exists: Option<bool>,
-    },
-    Corrupt {
-        hash: String,
-        paths: Vec<String>,
-        looked_at: Option<String>,
-        message: String,
-    },
-    UploadRefused {
-        hash: String,
-        paths: Vec<String>,
-        looked_at: Option<String>,
-        status: u16,
-        message: String,
-    },
-    SizeMismatch {
-        hash: String,
-        recorded_sizes: Vec<u64>,
-        actual_size: Option<u64>,
-        looked_at: Option<String>,
-    },
-    Unrecognized {
-        sidecar_path: String,
-        commit: String,
-        blob: String,
-        message: String,
-    },
-    UnreadableConfig {
-        config_path: String,
-        commit: String,
-        message: String,
-    },
-    UnmatchedUser {
-        user: String,
-        entries: usize,
-    },
-    UnusedStorageMap {
-        storage_path: String,
-        remapped_to: String,
-    },
-}
-
-#[cfg(test)]
-impl Problem {
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Problem::Missing { .. } => "missing",
-            Problem::Corrupt { .. } => "corrupt",
-            Problem::UploadRefused { .. } => "upload_refused",
-            Problem::SizeMismatch { .. } => "size_mismatch",
-            Problem::Unrecognized { .. } => "unrecognized",
-            Problem::UnreadableConfig { .. } => "unreadable_config",
-            Problem::UnmatchedUser { .. } => "unmatched_user",
-            Problem::UnusedStorageMap { .. } => "unused_storage_map",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum WalkKind {
-    Full,
-    Partial,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Scope {
-    pub source: String,
-    pub walk: WalkKind,
-    pub partial_reasons: Vec<PartialReason>,
-    pub refs: Vec<String>,
-    pub commits: usize,
-    pub storage: Vec<StorageSeen>,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct Totals {
-    pub sidecars: BTreeMap<SidecarShape, usize>,
-    pub entries: usize,
-    pub unique_hashes: usize,
-    pub bytes: u64,
-    pub on_server: usize,
-    pub to_upload: usize,
-    pub missing: usize,
-    pub already_migrated: usize,
-    pub user_mismatches: usize,
-    pub uploaded: Option<usize>,
-    pub migrated: Option<usize>,
-    /// Distinct contents this run sent, stored now or already (200); only the summary uses
-    /// it, so its line adds up to the distinct contents.
-    #[serde(skip)]
-    pub sent: Option<usize>,
-}
+use crate::git::redact;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -134,7 +27,7 @@ pub enum Content {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReportEntry {
     #[serde(flatten)]
-    pub entry: Entry,
+    pub entry: ManifestEntry,
     pub content: Content,
     pub already_migrated: bool,
 }
@@ -198,14 +91,14 @@ impl Report {
         &self,
         json: bool,
         source: &str,
-        dest: Option<&Destination>,
+        target: Option<&ServerTarget>,
         out: &mut dyn io::Write,
     ) -> io::Result<()> {
         if json {
             serde_json::to_writer(&mut *out, self)?;
             writeln!(out)
         } else {
-            out.write_all(self.summary(source, dest).as_bytes())
+            out.write_all(self.summary(source, target).as_bytes())
         }
     }
 
@@ -224,23 +117,36 @@ impl Report {
 
     /// A few lines to read at a glance; every entry and problem is in `--json` and on the
     /// Migration page.
-    pub fn summary(&self, source: &str, dest: Option<&Destination>) -> String {
+    pub fn summary(&self, source: &str, target: Option<&ServerTarget>) -> String {
         let mut out = String::new();
+        self.write_header(&mut out, source, target);
+        self.write_facts(&mut out);
+        self.write_missing(&mut out);
+        self.write_stores_not_found(&mut out);
+        self.write_also(&mut out);
+        self.write_footer(&mut out, target);
+        out
+    }
+
+    fn write_header(&self, out: &mut String, source: &str, target: Option<&ServerTarget>) {
         let command = match self.command {
             Command::Plan => "plan",
             Command::Run => "run",
         };
         // A blank line keeps the summary apart from the progress lines above it on a terminal
-        let _ = match dest {
-            Some(d) => writeln!(
+        let _ = match target {
+            Some(t) => writeln!(
                 out,
                 "\ndvs-migrate {command}  {source} -> {} (project {})\n",
-                redact(d.server.as_str()),
-                d.project
+                redact(t.server.as_str()),
+                t.project
             ),
             None => writeln!(out, "\ndvs-migrate {command}  {source}\n"),
         };
+    }
 
+    /// Failure, walk and counts, as aligned `key  value` lines
+    fn write_facts(&self, out: &mut String) {
         let mut facts: Vec<(&str, String)> = Vec::new();
         if let Some(error) = &self.error {
             facts.push((
@@ -249,40 +155,17 @@ impl Report {
             ));
         }
         if let Some(scope) = &self.scope {
-            let walk = match scope.walk {
-                WalkKind::Full => "full".to_string(),
-                WalkKind::Partial => {
-                    let reasons: Vec<String> = scope
-                        .partial_reasons
-                        .iter()
-                        .map(|r| match r {
-                            PartialReason::Shallow => "the clone is shallow".to_string(),
-                            PartialReason::UnreachableRemote { remote, url, .. } => {
-                                format!("remote {remote} ({url}) unreachable")
-                            }
-                        })
-                        .collect();
-                    format!("PARTIAL: {}", reasons.join("; "))
-                }
-            };
             facts.push((
                 "Walk",
                 format!(
-                    "{} on {} ({walk})",
+                    "{} on {} ({})",
                     plural(scope.commits, "commit"),
-                    plural(scope.refs.len(), "ref")
+                    plural(scope.refs.len(), "ref"),
+                    walk_description(scope)
                 ),
             ));
         }
         if let Some(t) = &self.totals {
-            // A hash the server never asked for was there by then, though `lookup` missed it.
-            let (on_server, done) = match t.sent {
-                Some(n) => (
-                    t.unique_hashes.saturating_sub(n + t.missing),
-                    ("Uploaded", n),
-                ),
-                None => (t.on_server, ("To upload", t.to_upload)),
-            };
             facts.push((
                 "Versions",
                 format!(
@@ -292,73 +175,62 @@ impl Report {
                     dvs::format_size(t.bytes)
                 ),
             ));
-            facts.push(("On server", on_server.to_string()));
-            facts.push((done.0, done.1.to_string()));
+            match self.command {
+                Command::Plan => {
+                    facts.push(("On server", t.on_server.to_string()));
+                    facts.push(("To upload", t.to_upload.to_string()));
+                }
+                Command::Run => {
+                    // Counted from the entries: `totals.uploaded` leaves out content the
+                    // server already had when it was sent
+                    let uploaded = self.distinct_uploaded();
+                    // Content the server did not ask for was on the server by then, even
+                    // where the lookup before the run missed it
+                    let on_server = t.unique_hashes.saturating_sub(uploaded + t.missing);
+                    facts.push(("On server", on_server.to_string()));
+                    facts.push(("Uploaded", uploaded.to_string()));
+                }
+            }
             facts.push(("Missing", t.missing.to_string()));
         }
         let width = facts.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
         for (key, value) in &facts {
             let _ = writeln!(out, "  {key:<width$}  {value}");
         }
+    }
 
-        let missing: Vec<(String, &str, String)> = self
-            .problems
+    /// Distinct contents this run sent, stored now or already
+    fn distinct_uploaded(&self) -> usize {
+        self.entries
             .iter()
-            .filter_map(|p| {
-                let (hash, paths, reason) = match p {
-                    Problem::Missing {
-                        hash,
-                        paths,
-                        storage,
-                        storage_exists,
-                        ..
-                    } => (
-                        hash,
-                        paths,
-                        match (storage, storage_exists) {
-                            (Some(_), Some(false)) => "storage folder not found",
-                            (Some(_), _) => "not in storage folder",
-                            (None, _) => "no storage path in config",
-                        }
-                        .to_string(),
-                    ),
-                    Problem::Corrupt { hash, paths, .. } => {
-                        (hash, paths, "local copy doesn't match its hash".to_string())
-                    }
-                    Problem::UploadRefused {
-                        hash,
-                        paths,
-                        status,
-                        ..
-                    } => (
-                        hash,
-                        paths,
-                        match status {
-                            413 => "refused by the server (too large)".to_string(),
-                            s => format!("refused by the server ({s})"),
-                        },
-                    ),
-                    _ => return None,
-                };
-                let mut path = paths.first().map_or("?", String::as_str).to_string();
-                if paths.len() > 1 {
-                    path = format!("{path} (+{})", plural(paths.len() - 1, "other path"));
-                }
-                Some((path, hash.get(..12).unwrap_or(hash), reason))
-            })
-            .collect();
-        if !missing.is_empty() {
-            let _ = writeln!(out, "\n  Missing files");
-            let shown = &missing[..missing.len().min(MISSING_SHOWN)];
-            let width = shown.iter().map(|(path, ..)| path.len()).max().unwrap_or(0);
-            for (path, hash, reason) in shown {
-                let _ = writeln!(out, "    {path:<width$}  {hash}  {reason}");
-            }
-            if missing.len() > MISSING_SHOWN {
-                let _ = writeln!(out, "    and {} more", missing.len() - MISSING_SHOWN);
-            }
-        }
+            .filter(|e| e.content == Content::Uploaded)
+            .map(|e| e.entry.hash.as_str())
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
 
+    /// The first few contents a run cannot bring over, by path
+    fn write_missing(&self, out: &mut String) {
+        let missing: Vec<MissingRow> = self.problems.iter().filter_map(missing_row).collect();
+        if missing.is_empty() {
+            return;
+        }
+        let _ = writeln!(out, "\n  Missing files");
+        let shown = &missing[..missing.len().min(MISSING_SHOWN)];
+        let width = shown.iter().map(|row| row.path.len()).max().unwrap_or(0);
+        for row in shown {
+            let _ = writeln!(
+                out,
+                "    {:<width$}  {}  {}",
+                row.path, row.hash, row.reason
+            );
+        }
+        if missing.len() > MISSING_SHOWN {
+            let _ = writeln!(out, "    and {} more", missing.len() - MISSING_SHOWN);
+        }
+    }
+
+    fn write_stores_not_found(&self, out: &mut String) {
         let mut not_found: BTreeMap<&str, usize> = BTreeMap::new();
         for p in &self.problems {
             if let Problem::Missing {
@@ -370,16 +242,20 @@ impl Report {
                 *not_found.entry(store).or_default() += 1;
             }
         }
-        if !not_found.is_empty() {
-            let _ = writeln!(
-                out,
-                "\n  Storage folders not found here (point them elsewhere with --storage-map OLD=NEW)"
-            );
-            for (store, n) in &not_found {
-                let _ = writeln!(out, "    {store}  ({})", plural(*n, "missing content"));
-            }
+        if not_found.is_empty() {
+            return;
         }
+        let _ = writeln!(
+            out,
+            "\n  Storage folders not found here (point them elsewhere with --storage-map OLD=NEW)"
+        );
+        for (store, n) in &not_found {
+            let _ = writeln!(out, "    {store}  ({})", plural(*n, "missing content"));
+        }
+    }
 
+    /// One line counting the other problems
+    fn write_also(&self, out: &mut String) {
         let mut others: BTreeMap<(&str, &str), usize> = BTreeMap::new();
         for p in &self.problems {
             let words = match p {
@@ -399,23 +275,97 @@ impl Report {
             };
             *others.entry(words).or_default() += 1;
         }
-        if !others.is_empty() {
-            let others: Vec<String> = others
-                .iter()
-                .map(|((one, many), n)| format!("{n} {}", if *n == 1 { one } else { many }))
-                .collect();
-            let _ = writeln!(out, "\n  Also: {}", others.join(", "));
+        if others.is_empty() {
+            return;
         }
+        let others: Vec<String> = others
+            .iter()
+            .map(|((one, many), n)| format!("{n} {}", if *n == 1 { one } else { many }))
+            .collect();
+        let _ = writeln!(out, "\n  Also: {}", others.join(", "));
+    }
 
+    fn write_footer(&self, out: &mut String, target: Option<&ServerTarget>) {
         let _ = writeln!(out);
         if self.command == Command::Plan {
             let _ = writeln!(out, "  Nothing was sent (plan).");
         }
-        if let Some(d) = dest {
-            let _ = writeln!(out, "  Migration page: {}", redact(&d.migration_page()));
+        if let Some(t) = target {
+            let _ = writeln!(out, "  Migration page: {}", redact(&t.migration_page()));
         }
-        out
     }
+}
+
+fn walk_description(scope: &Scope) -> String {
+    match scope.walk {
+        WalkKind::Full => "full".to_string(),
+        WalkKind::Partial => {
+            let reasons: Vec<String> = scope
+                .partial_reasons
+                .iter()
+                .map(|r| match r {
+                    PartialReason::Shallow => "the clone is shallow".to_string(),
+                    PartialReason::UnreachableRemote { remote, url, .. } => {
+                        format!("remote {remote} ({url}) unreachable")
+                    }
+                })
+                .collect();
+            format!("PARTIAL: {}", reasons.join("; "))
+        }
+    }
+}
+
+/// A line of the summary's missing list
+struct MissingRow {
+    /// The first path, and how many others share the content
+    path: String,
+    /// Shortened
+    hash: String,
+    reason: String,
+}
+
+fn missing_row(problem: &Problem) -> Option<MissingRow> {
+    let (hash, paths, reason) = match problem {
+        Problem::Missing {
+            hash,
+            paths,
+            storage,
+            storage_exists,
+            ..
+        } => {
+            let reason = match (storage, storage_exists) {
+                (Some(_), Some(false)) => "storage folder not found",
+                (Some(_), _) => "not in storage folder",
+                (None, _) => "no storage path in config",
+            };
+            (hash, paths, reason.to_string())
+        }
+        Problem::Corrupt { hash, paths, .. } => {
+            (hash, paths, "local copy doesn't match its hash".to_string())
+        }
+        Problem::UploadRefused {
+            hash,
+            paths,
+            status,
+            ..
+        } => {
+            let reason = match status {
+                413 => "refused by the server (too large)".to_string(),
+                s => format!("refused by the server ({s})"),
+            };
+            (hash, paths, reason)
+        }
+        _ => return None,
+    };
+    let mut path = paths.first().map_or("?", String::as_str).to_string();
+    if paths.len() > 1 {
+        path = format!("{path} (+{})", plural(paths.len() - 1, "other path"));
+    }
+    Some(MissingRow {
+        path,
+        hash: hash.get(..12).unwrap_or(hash).to_string(),
+        reason,
+    })
 }
 
 const MISSING_SHOWN: usize = 20;
@@ -428,13 +378,13 @@ pub fn plural(n: usize, word: &str) -> String {
     }
 }
 
-/// Where a command sends to
-pub struct Destination {
+/// The server and project a command sends to
+pub struct ServerTarget {
     pub server: Url,
     pub project: String,
 }
 
-impl Destination {
+impl ServerTarget {
     pub fn migration_page(&self) -> String {
         dvs::backends::server::join_url(
             &self.server,
@@ -447,7 +397,7 @@ impl Destination {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::walk::tests::hash;
+    use crate::walk::tests::{hash, manifest_entry};
 
     fn report() -> Report {
         let mut report = Report::new(Command::Run);
@@ -467,10 +417,16 @@ mod tests {
             to_upload: 20,
             missing: 24,
             uploaded: Some(20),
-            sent: Some(20),
             migrated: Some(37),
             ..Totals::default()
         });
+        report.entries = (100..120)
+            .map(|n| ReportEntry {
+                entry: manifest_entry(&format!("up/{n}.csv"), &hash(n)),
+                content: Content::Uploaded,
+                already_migrated: false,
+            })
+            .collect();
         // data/1.csv's storage folder is gone; the rest are simply not in theirs
         let missing = |n: u8| Problem::Missing {
             hash: hash(n),
@@ -515,13 +471,13 @@ mod tests {
     }
 
     fn printed(report: &Report, json: bool) -> String {
-        let dest = Destination {
+        let target = ServerTarget {
             server: "https://admin:pw@dvs.example.com".parse().unwrap(),
             project: "proj".into(),
         };
         let mut out = Vec::new();
         report
-            .print(json, "git@host:org/proj.git", Some(&dest), &mut out)
+            .print(json, "git@host:org/proj.git", Some(&target), &mut out)
             .unwrap();
         String::from_utf8(out).unwrap()
     }
@@ -575,7 +531,7 @@ mod tests {
         let mut plan = report();
         plan.command = Command::Plan;
         let totals = plan.totals.as_mut().unwrap();
-        (totals.uploaded, totals.sent, plan.problems) = (None, None, Vec::new());
+        (totals.uploaded, plan.problems) = (None, Vec::new());
         let summary = printed(&plan, false);
         assert!(
             summary.contains("\n  To upload  20\n  Missing    24\n"),

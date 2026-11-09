@@ -12,6 +12,7 @@ mod hashes;
 pub mod init;
 pub mod legacy;
 pub mod migrate;
+pub mod migration;
 pub mod operation;
 pub mod paths;
 pub mod progress;

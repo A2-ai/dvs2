@@ -12,12 +12,11 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::backends::Backend;
-use crate::backends::local::stored_compression;
 use crate::backends::server::{ServerBackend, UploadManifest, UploadManifestEntry, coded};
 use crate::config::{Config, dvs1_root};
 use crate::error::{Error, ErrorCode, backend_error_code};
 use crate::init::create_metadata_folder;
-use crate::legacy::{self, DVS1_CONFIG_FILE, Dvs1Config, Dvs1Sidecar, Sidecar, is_blake3};
+use crate::legacy::{self, DVS1_CONFIG_FILE, Dvs1Config, Sidecar, is_blake3};
 use crate::paths::CONFIG_FILE_NAME;
 use crate::{Compression, DvsPaths, FileMetadata, Hashes, ProjectPath, StoreRequest};
 
@@ -28,11 +27,19 @@ pub enum Destination {
     Server {
         name: String,
         url: Url,
-        /// Where `--upload-missing` looks for content. `None`: the storage this run replaces
+        /// Where `--upload-missing` looks for content first
         storage: Option<PathBuf>,
     },
     /// `None`: dvs.yaml's `storage_dir`
     Local { path: Option<PathBuf> },
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MigrateOptions {
+    /// Remove dvs.yaml and the converted dvs1 sidecars
+    pub clean: bool,
+    /// Upload the content the server lacks that local storage has
+    pub upload_missing: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -69,10 +76,23 @@ pub struct LeftSidecar {
 pub struct MissingHash {
     pub hash: String,
     pub paths: Vec<ProjectPath>,
-    pub in_local_storage: bool,
-    pub uploaded: bool,
-    pub code: Option<ErrorCode>,
-    pub message: Option<String>,
+    #[serde(flatten)]
+    pub state: MissingState,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum MissingState {
+    /// Found in local storage and uploaded with `--upload-missing`
+    Uploaded,
+    /// Found in local storage, not uploaded
+    InLocalStorage,
+    NotLocal,
+    /// Reading local storage or the upload failed
+    Failed {
+        code: ErrorCode,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,7 +110,7 @@ pub struct MigrateReport {
     pub compression_rewritten: usize,
     /// Repo-relative files deleted by the clean-up
     pub removed: Vec<PathBuf>,
-    /// The local storage searched for the content the server lacks
+    /// The local storage searched first for the content the server lacks
     pub storage: Option<PathBuf>,
     pub missing: Vec<MissingHash>,
     /// The server check failed after the conversion, which stands
@@ -103,7 +123,10 @@ impl MigrateReport {
     pub fn is_partial(&self) -> bool {
         !self.left.is_empty()
             || self.check_error.is_some()
-            || self.missing.iter().any(|m| m.message.is_some())
+            || self
+                .missing
+                .iter()
+                .any(|m| matches!(m.state, MissingState::Failed { .. }))
     }
 }
 
@@ -225,7 +248,7 @@ fn scan_dvs1(root: &Path, metadata_folder: &Path) -> Result<(Vec<Dvs1Found>, Vec
             message,
         };
         let parsed = match legacy::classify_sidecar(&fs::read(entry.path())?) {
-            Ok(Sidecar::Dvs1(m)) => to_metadata(&m),
+            Ok(Sidecar::Dvs1(m)) => m.to_metadata().map_err(|e| e.to_string()),
             Ok(Sidecar::Dvs2(_)) => Err(format!(
                 "a dvs2 sidecar outside {}",
                 metadata_folder.display()
@@ -244,13 +267,6 @@ fn scan_dvs1(root: &Path, metadata_folder: &Path) -> Result<(Vec<Dvs1Found>, Vec
     Ok((found, left))
 }
 
-fn to_metadata(m: &Dvs1Sidecar) -> Result<FileMetadata, String> {
-    if !is_blake3(&m.blake3) {
-        return Err(format!("invalid blake3 hash {:?}", m.blake3));
-    }
-    m.to_metadata().map_err(|e| e.to_string())
-}
-
 fn read_metadata(path: &Path) -> Result<FileMetadata> {
     serde_json::from_slice(&fs::read(path)?).map_err(|e| {
         coded(
@@ -260,66 +276,25 @@ fn read_metadata(path: &Path) -> Result<FileMetadata> {
     })
 }
 
-/// Where a file's content may still be in local storage, and how it is stored
-/// there. `None`: unknown, told from the blob's size.
-#[derive(Clone)]
-struct Origin {
-    store: PathBuf,
-    compression: Option<Compression>,
-}
-
-/// Sets every dvs2 sidecar's compression to the server's. Returns the count
-/// rewritten and each file's compression before.
-fn rewrite_compression(
-    paths: &DvsPaths,
-    compression: Compression,
-    left: &mut Vec<LeftSidecar>,
-) -> Result<(usize, BTreeMap<PathBuf, Compression>)> {
-    let mut rewritten = 0;
-    let mut before = BTreeMap::new();
-    for data in paths.tracked_paths() {
-        let path = paths.metadata_path(&data);
-        let mut metadata = match read_metadata(&path) {
-            Ok(m) => m,
-            Err(e) => {
-                left.push(LeftSidecar {
-                    sidecar: path.strip_prefix(paths.repo_root())?.to_path_buf(),
-                    kind: LeftKind::Unreadable,
-                    message: e.to_string(),
-                });
-                continue;
-            }
-        };
-        before.insert(data.clone(), metadata.compression);
-        if metadata.compression != compression {
-            metadata.compression = compression;
-            metadata.write(paths, &data)?;
-            rewritten += 1;
-        }
-    }
-    Ok((rewritten, before))
-}
-
 /// A migration that passed every refusal, before anything is changed or sent.
 pub struct Prepared {
     root: PathBuf,
-    dvs1: Option<Dvs1Config>,
     source: Source,
     config: Config,
     config_written: bool,
     replaced_store: Option<PathBuf>,
+    /// Where `--upload-missing` looks for content, in order
+    stores: Vec<PathBuf>,
     paths: DvsPaths,
     found: Vec<Dvs1Found>,
     left: Vec<LeftSidecar>,
     warnings: Vec<String>,
-    /// Given with `--storage`
-    storage: Option<PathBuf>,
-    upload_missing: bool,
+    options: MigrateOptions,
 }
 
 /// Reads the working tree at or above `cwd` and refuses what `destination`
 /// cannot take, without touching the tree or the network.
-pub fn prepare(cwd: &Path, destination: &Destination, upload_missing: bool) -> Result<Prepared> {
+pub fn prepare(cwd: &Path, destination: &Destination, options: MigrateOptions) -> Result<Prepared> {
     let dvs1_root = dvs1_root(cwd);
     let root = cwd
         .ancestors()
@@ -389,7 +364,14 @@ pub fn prepare(cwd: &Path, destination: &Destination, upload_missing: bool) -> R
             format!("the storage {} is not a directory", storage.display()),
         ));
     }
-    if upload_missing && storage.is_none() && dvs1.is_none() && replaced_store.is_none() {
+    // The storage given with `--storage` first, then dvs.yaml's `storage_dir`,
+    // then the dvs2 local storage this run replaces
+    let dvs1_store = dvs1.as_ref().map(|d| root.join(&d.storage_dir));
+    let stores: Vec<PathBuf> = [storage, dvs1_store, replaced_store.clone()]
+        .into_iter()
+        .flatten()
+        .collect();
+    if options.upload_missing && stores.is_empty() {
         return Err(coded(
             ErrorCode::InvalidArguments,
             format!(
@@ -399,84 +381,165 @@ pub fn prepare(cwd: &Path, destination: &Destination, upload_missing: bool) -> R
     }
     Ok(Prepared {
         root,
-        dvs1,
         source,
         config,
         config_written,
         replaced_store,
+        stores,
         paths,
         found,
         left,
         warnings,
-        storage,
-        upload_missing,
+        options,
     })
 }
 
 /// Converts the prepared tree, then, for a server, lists the content it lacks
 /// (uploading what local storage has with `upload_missing`). A failure of that
 /// check leaves the conversion standing.
-pub fn migrate(prepared: Prepared, clean: bool) -> Result<MigrateReport> {
+pub fn migrate(prepared: Prepared) -> Result<MigrateReport> {
     let Prepared {
         root,
-        dvs1,
         source,
         config,
         config_written,
         replaced_store,
+        stores,
         paths,
         found,
         mut left,
         warnings,
-        storage,
-        upload_missing,
+        options,
     } = prepared;
-    let dvs1_config_path = root.join(DVS1_CONFIG_FILE);
-
     let server = match config.backend() {
         Backend::Server(s) => Some(s),
         Backend::Local(_) => None,
     };
-    let mut server_compression = None;
-    if let Some(server) = server
-        && (config_written || !found.is_empty())
-    {
-        let access = server.access()?.ok_or_else(|| {
-            coded(
-                ErrorCode::AccessDenied,
-                format!("you are not a member of the project {}", server.name),
-            )
-        })?;
-        server_compression = Some(match access.compression {
-            Some(compression) => compression,
-            // Older servers name the compression only in a manifest answer
-            None => {
-                server
-                    .manifest(&UploadManifest {
-                        operation_id: Uuid::new_v4(),
-                        message: None,
-                        entries: Vec::new(),
-                        git_branch: None,
-                        git_commit: None,
-                    })?
-                    .compression
-            }
-        });
-    }
 
-    // Where each file's content may still be, for --upload-missing
-    let mut origins = BTreeMap::new();
+    // Only needed when there are sidecars to write
+    let compression = match server {
+        Some(server) if config_written || !found.is_empty() => Some(server_compression(server)?),
+        _ => None,
+    };
+
     let mut compression_rewritten = 0;
-    if let (Some(compression), Some(store)) = (server_compression, &replaced_store) {
-        let before;
-        (compression_rewritten, before) = rewrite_compression(&paths, compression, &mut left)?;
-        origins = store_origins(before.into_keys(), store);
+    if let (Some(compression), Some(_)) = (compression, &replaced_store) {
+        compression_rewritten = rewrite_compression(&paths, compression, &mut left)?;
     }
 
-    let dvs1_store = dvs1.as_ref().map(|d| root.join(&d.storage_dir));
-    let mut converted = Vec::new();
-    let mut duplicates = Vec::new();
-    let mut to_remove = Vec::new();
+    let conversion = convert_dvs1(&paths, found, compression, &mut left)?;
+
+    if config_written {
+        write_config(&root, &config)?;
+    }
+
+    let removed = if options.clean {
+        clean_up(&root, conversion.to_remove)?
+    } else {
+        Vec::new()
+    };
+
+    let mut report = MigrateReport {
+        source,
+        changed: config_written
+            || !conversion.converted.is_empty()
+            || compression_rewritten > 0
+            || !removed.is_empty(),
+        project_root: root,
+        config_written,
+        converted: conversion.converted,
+        duplicates: conversion.duplicates,
+        left,
+        compression_rewritten,
+        removed,
+        storage: None,
+        missing: Vec::new(),
+        check_error: None,
+        warnings,
+    };
+    if let Some(server) = server {
+        report.storage = stores.first().cloned();
+        if let Err(e) = check_server(server, &paths, &stores, options.upload_missing, &mut report) {
+            report.check_error = Some(Error::new(
+                backend_error_code(&e).unwrap_or(ErrorCode::OperationFailed),
+                format!("{e:#}"),
+            ));
+        }
+    }
+    Ok(report)
+}
+
+/// The compression the server stores the project's content with.
+fn server_compression(server: &ServerBackend) -> Result<Compression> {
+    let access = server.access()?.ok_or_else(|| {
+        coded(
+            ErrorCode::AccessDenied,
+            format!("you are not a member of the project {}", server.name),
+        )
+    })?;
+    if let Some(compression) = access.compression {
+        return Ok(compression);
+    }
+    // Older servers name the compression only in a manifest answer
+    let answer = server.manifest(&UploadManifest {
+        operation_id: Uuid::new_v4(),
+        message: None,
+        entries: Vec::new(),
+        git_branch: None,
+        git_commit: None,
+    })?;
+    Ok(answer.compression)
+}
+
+/// Sets every dvs2 sidecar's compression to the server's. Returns the count rewritten.
+fn rewrite_compression(
+    paths: &DvsPaths,
+    compression: Compression,
+    left: &mut Vec<LeftSidecar>,
+) -> Result<usize> {
+    let mut rewritten = 0;
+    for data in paths.tracked_paths() {
+        let path = paths.metadata_path(&data);
+        let mut metadata = match read_metadata(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                left.push(LeftSidecar {
+                    sidecar: path.strip_prefix(paths.repo_root())?.to_path_buf(),
+                    kind: LeftKind::Unreadable,
+                    message: e.to_string(),
+                });
+                continue;
+            }
+        };
+        if metadata.compression != compression {
+            metadata.compression = compression;
+            metadata.write(paths, &data)?;
+            rewritten += 1;
+        }
+    }
+    Ok(rewritten)
+}
+
+struct Conversion {
+    converted: Vec<ProjectPath>,
+    duplicates: Vec<ProjectPath>,
+    /// The dvs1 sidecars the clean-up removes
+    to_remove: Vec<PathBuf>,
+}
+
+/// Writes a dvs2 sidecar for each dvs1 one, with the server's compression if
+/// given. A file that already has a dvs2 sidecar keeps it.
+fn convert_dvs1(
+    paths: &DvsPaths,
+    found: Vec<Dvs1Found>,
+    compression: Option<Compression>,
+    left: &mut Vec<LeftSidecar>,
+) -> Result<Conversion> {
+    let mut conversion = Conversion {
+        converted: Vec::new(),
+        duplicates: Vec::new(),
+        to_remove: Vec::new(),
+    };
     for Dvs1Found {
         sidecar,
         data,
@@ -487,14 +550,8 @@ pub fn migrate(prepared: Prepared, clean: bool) -> Result<MigrateReport> {
         if target.is_file() {
             match read_metadata(&target) {
                 Ok(dvs2) if dvs2.hashes.blake3 == metadata.hashes.blake3 => {
-                    if let Some(store) = &dvs1_store {
-                        origins.entry(data.to_native()).or_insert(Origin {
-                            store: store.clone(),
-                            compression: Some(Compression::None),
-                        });
-                    }
-                    duplicates.push(data);
-                    to_remove.push(sidecar);
+                    conversion.duplicates.push(data);
+                    conversion.to_remove.push(sidecar);
                 }
                 Ok(dvs2) => left.push(LeftSidecar {
                     sidecar,
@@ -502,7 +559,7 @@ pub fn migrate(prepared: Prepared, clean: bool) -> Result<MigrateReport> {
                     message: format!(
                         "its hash {} differs from {}'s {}",
                         metadata.hashes.blake3,
-                        target.strip_prefix(&root)?.display(),
+                        target.strip_prefix(paths.repo_root())?.display(),
                         dvs2.hashes.blake3
                     ),
                 }),
@@ -514,86 +571,40 @@ pub fn migrate(prepared: Prepared, clean: bool) -> Result<MigrateReport> {
             }
             continue;
         }
-        if let Some(compression) = server_compression {
+        if let Some(compression) = compression {
             metadata.compression = compression;
         }
-        metadata.write(&paths, data.to_native())?;
-        // A leftover dvs1 sidecar's content may have been re-added, possibly
-        // compressed, to the dvs2 store this run replaces
-        let origin = match (&dvs1_store, &replaced_store) {
-            (Some(store), _) => Some((store, Some(Compression::None))),
-            (None, Some(store)) => Some((store, None)),
-            (None, None) => None,
-        };
-        if let Some((store, compression)) = origin {
-            origins.insert(
-                data.to_native(),
-                Origin {
-                    store: store.clone(),
-                    compression,
-                },
-            );
-        }
-        converted.push(data);
-        to_remove.push(sidecar);
+        metadata.write(paths, data.to_native())?;
+        conversion.converted.push(data);
+        conversion.to_remove.push(sidecar);
     }
+    Ok(conversion)
+}
 
-    if let Some(store) = &storage {
-        origins.extend(storage_origins(&paths, store));
-    }
+fn write_config(root: &Path, config: &Config) -> Result<()> {
+    create_metadata_folder(root, config)?;
+    config.save(root)
+}
 
-    if config_written {
-        create_metadata_folder(&root, &config)?;
-        config.save(&root)?;
+/// Deletes dvs.yaml and `sidecars`. Returns what it deleted, repo-relative.
+fn clean_up(root: &Path, sidecars: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
+    let mut to_remove = sidecars;
+    if root.join(DVS1_CONFIG_FILE).is_file() {
+        to_remove.push(PathBuf::from(DVS1_CONFIG_FILE));
     }
-
-    let mut removed = Vec::new();
-    if clean {
-        if dvs1_config_path.is_file() {
-            to_remove.push(PathBuf::from(DVS1_CONFIG_FILE));
-        }
-        for rel in to_remove {
-            fs::remove_file(root.join(&rel))?;
-            removed.push(rel);
-        }
+    for rel in &to_remove {
+        fs::remove_file(root.join(rel))?;
     }
-
-    let mut report = MigrateReport {
-        source,
-        changed: config_written
-            || !converted.is_empty()
-            || compression_rewritten > 0
-            || !removed.is_empty(),
-        project_root: root,
-        config_written,
-        converted,
-        duplicates,
-        left,
-        compression_rewritten,
-        removed,
-        storage: server.and(storage.or(dvs1_store).or(replaced_store)),
-        missing: Vec::new(),
-        check_error: None,
-        warnings,
-    };
-    if let Some(server) = server
-        && let Err(e) = check_server(server, &paths, &origins, upload_missing, &mut report)
-    {
-        report.check_error = Some(Error::new(
-            backend_error_code(&e).unwrap_or(ErrorCode::OperationFailed),
-            format!("{e:#}"),
-        ));
-    }
-    Ok(report)
+    Ok(to_remove)
 }
 
 /// Lists in `report` every sidecar's hash the server lacks, uploading those
-/// local storage has when asked: one ordinary add per file, as the user, with
-/// a note. Only reaching the server fails it, keeping the rows listed so far.
+/// `stores` have when asked: one ordinary add per file, as the user, with a
+/// note. Only reaching the server fails it, keeping the rows listed so far.
 fn check_server(
     server: &ServerBackend,
     paths: &DvsPaths,
-    origins: &BTreeMap<PathBuf, Origin>,
+    stores: &[PathBuf],
     upload_missing: bool,
     report: &mut MigrateReport,
 ) -> Result<()> {
@@ -623,86 +634,32 @@ fn check_server(
         if server.exists(&hashes)? {
             continue;
         }
-        let mut local = None;
-        let mut read_error = None;
-        for (data, metadata) in &files {
-            let Some(origin) = origins.get(data) else {
-                continue;
-            };
-            match local_blob(origin, &hash, metadata.size) {
-                Ok(Some(found)) => {
-                    local = Some(found);
-                    break;
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    read_error.get_or_insert(e);
+        let failed = |message: String, e: &anyhow::Error| MissingState::Failed {
+            code: backend_error_code(e).unwrap_or(ErrorCode::FileFailed),
+            message,
+        };
+        let size = files[0].1.size;
+        let state = match legacy::find_blob(stores, &hash, size) {
+            None => MissingState::NotLocal,
+            Some((_, Err(e))) => failed(format!("could not read local storage: {e:#}"), &e),
+            Some((blob, Ok(compression))) if upload_missing => {
+                match upload(server, paths, &hashes, &blob, compression, &files) {
+                    Ok(()) => MissingState::Uploaded,
+                    Err(e) => failed(format!("upload failed: {e:#}"), &e),
                 }
             }
-        }
-        let mut row = MissingHash {
-            hash: hash.clone(),
+            Some(_) => MissingState::InLocalStorage,
+        };
+        report.missing.push(MissingHash {
+            hash,
             paths: files
                 .iter()
                 .filter_map(|(data, _)| ProjectPath::from_path(data).ok())
                 .collect(),
-            in_local_storage: local.is_some(),
-            uploaded: false,
-            code: None,
-            message: None,
-        };
-        if let (None, Some(e)) = (&local, read_error) {
-            row.code = Some(backend_error_code(&e).unwrap_or(ErrorCode::FileFailed));
-            row.message = Some(format!("could not read local storage: {e:#}"));
-        }
-        if let (true, Some((blob, compression))) = (upload_missing, local) {
-            match upload(server, paths, &hashes, &blob, compression, &files) {
-                Ok(()) => row.uploaded = true,
-                Err(e) => {
-                    row.code = Some(backend_error_code(&e).unwrap_or(ErrorCode::FileFailed));
-                    row.message = Some(format!("{e:#}"));
-                }
-            }
-        }
-        report.missing.push(row);
+            state,
+        });
     }
     Ok(())
-}
-
-/// An explicit storage may hold any tracked file, in whatever form it was stored.
-fn storage_origins(paths: &DvsPaths, store: &Path) -> BTreeMap<PathBuf, Origin> {
-    store_origins(paths.tracked_paths(), store)
-}
-
-/// A dvs2 store's blobs are told apart from their bytes: a sidecar's compression
-/// may not be how the blob was stored.
-fn store_origins(
-    files: impl IntoIterator<Item = PathBuf>,
-    store: &Path,
-) -> BTreeMap<PathBuf, Origin> {
-    files
-        .into_iter()
-        .map(|data| {
-            let origin = Origin {
-                store: store.to_path_buf(),
-                compression: None,
-            };
-            (data, origin)
-        })
-        .collect()
-}
-
-/// The blob in `origin`'s store and how it is stored.
-fn local_blob(origin: &Origin, hash: &str, size: u64) -> Result<Option<(PathBuf, Compression)>> {
-    let blob = legacy::blob_path(&origin.store, hash);
-    if !blob.is_file() {
-        return Ok(None);
-    }
-    let compression = match origin.compression {
-        Some(compression) => compression,
-        None => stored_compression(&blob, size, hash)?,
-    };
-    Ok(Some((blob, compression)))
 }
 
 fn upload(
@@ -799,13 +756,20 @@ mod tests {
         Destination::Local { path: None }
     }
 
+    fn options(clean: bool, upload_missing: bool) -> MigrateOptions {
+        MigrateOptions {
+            clean,
+            upload_missing,
+        }
+    }
+
     fn migrate(
         cwd: &Path,
         destination: &Destination,
         clean: bool,
         upload_missing: bool,
     ) -> Result<MigrateReport> {
-        super::migrate(prepare(cwd, destination, upload_missing)?, clean)
+        super::migrate(prepare(cwd, destination, options(clean, upload_missing))?)
     }
 
     #[test]
@@ -914,8 +878,16 @@ mod tests {
         assert_eq!(report.converted.len(), 1);
     }
 
+    fn server(storage: Option<PathBuf>) -> Destination {
+        Destination::Server {
+            name: "p".into(),
+            url: Url::parse("https://h").unwrap(),
+            storage,
+        }
+    }
+
     #[test]
-    fn upload_missing_finds_content_in_the_given_storage() {
+    fn upload_missing_needs_a_storage() {
         let (_tmp, root, store) = dvs1_repo();
         migrate(&root, &local(), true, false).unwrap();
         let mut config = Config::find(&root).unwrap().unwrap();
@@ -925,62 +897,23 @@ mod tests {
             Url::parse("https://h").unwrap(),
         ));
         config.save(&root).unwrap();
-        let server = |storage: Option<PathBuf>| Destination::Server {
-            name: "p".into(),
-            url: Url::parse("https://h").unwrap(),
-            storage,
-        };
 
         // No dvs.yaml is left to name the storage
-        let err = prepare(&root, &server(None), true).err().unwrap();
+        let err = prepare(&root, &server(None), options(true, true))
+            .err()
+            .unwrap();
         assert_eq!(backend_error_code(&err), Some(ErrorCode::InvalidArguments));
         assert!(err.to_string().contains("--storage"), "{err}");
-        prepare(&root, &server(Some(store.clone())), true).unwrap();
+        prepare(&root, &server(Some(store)), options(true, true)).unwrap();
+    }
 
-        let paths = DvsPaths::new(root.clone(), root.clone(), ".dvs").unwrap();
-        let origins = storage_origins(&paths, &store);
-        // A raw file that is itself a zstd frame, and a compressed blob of the
-        // file's exact size, so neither magic bytes nor size alone tell them apart
-        let raw = zstd::encode_all(&b"inner"[..], 0).unwrap();
-        let noise: Vec<u8> = (0..256u32)
-            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
-            .collect();
-        let (plain, compressed) = (0..64)
-            .map(|zeros| [noise.clone(), vec![0; zeros]].concat())
-            .map(|plain| (zstd::encode_all(&plain[..], 0).unwrap(), plain))
-            .find(|(compressed, plain)| compressed.len() == plain.len())
-            .map(|(compressed, plain)| (plain, compressed))
-            .unwrap();
-        for (content, blob_content, expected) in [
-            (raw.clone(), raw, Compression::None),
-            (plain, compressed, Compression::Zstd),
-        ] {
-            let blake3 = blake3::hash(&content).to_hex().to_string();
-            let blob = create_file(
-                &store,
-                &format!("{}/{}", &blake3[..2], &blake3[2..]),
-                &blob_content,
-            );
-            let found = local_blob(&origins[Path::new("a.csv")], &blake3, content.len() as u64);
-            assert_eq!(found.unwrap(), Some((blob, expected)));
-        }
-        assert_eq!(
-            local_blob(&origins[Path::new("data/b.csv")], &hash('b'), 3).unwrap(),
-            None
-        );
-
-        // A sidecar that says zstd for a blob stored raw
-        let raw = zstd::encode_all(&b"other"[..], 0).unwrap();
-        let blake3 = blake3::hash(&raw).to_hex().to_string();
-        let blob = create_file(&store, &format!("{}/{}", &blake3[..2], &blake3[2..]), &raw);
-        let mut m = read_metadata(&paths.metadata_path(Path::new("a.csv"))).unwrap();
-        m.compression = Compression::Zstd;
-        m.write(&paths, "a.csv").unwrap();
-        let (_, before) = rewrite_compression(&paths, Compression::None, &mut Vec::new()).unwrap();
-        assert_eq!(before[Path::new("a.csv")], Compression::Zstd);
-        let origins = store_origins(before.into_keys(), &store);
-        let found = local_blob(&origins[Path::new("a.csv")], &blake3, raw.len() as u64);
-        assert_eq!(found.unwrap(), Some((blob, Compression::None)));
+    #[test]
+    fn stores_are_searched_given_storage_first() {
+        let (tmp, root, store) = dvs1_repo();
+        let given = tmp.path().join("given");
+        fs::create_dir(&given).unwrap();
+        let prepared = prepare(&root, &server(Some(given.clone())), options(true, true)).unwrap();
+        assert_eq!(prepared.stores, [given, store]);
     }
 
     /// A server that has no content: every request gets a 404.
@@ -1029,12 +962,13 @@ mod tests {
         };
         let report = migrate(&root, &destination, true, false).unwrap();
         assert!(report.check_error.is_none(), "{:?}", report.check_error);
-        let rows: Vec<_> = report
-            .missing
-            .iter()
-            .map(|m| (m.hash.clone(), m.in_local_storage, m.message.is_some()))
-            .collect();
-        assert_eq!(rows, [(hash('a'), false, true), (hash('b'), true, false)]);
+        let rows: Vec<_> = report.missing.iter().map(|m| &m.state).collect();
+        assert_eq!(report.missing[0].hash, hash('a'));
+        assert!(
+            matches!(rows[0], MissingState::Failed { message, .. } if message.starts_with("could not read local storage")),
+            "{rows:?}"
+        );
+        assert_eq!(rows[1], &MissingState::InLocalStorage);
         assert!(report.is_partial());
     }
 
@@ -1048,9 +982,8 @@ mod tests {
         m.to_metadata().unwrap().write(&paths, "a.csv").unwrap();
 
         let mut left = Vec::new();
-        let (n, before) = rewrite_compression(&paths, Compression::Zstd, &mut left).unwrap();
+        let n = rewrite_compression(&paths, Compression::Zstd, &mut left).unwrap();
         assert_eq!(n, 1);
-        assert_eq!(before[Path::new("a.csv")], Compression::None);
         let m = read_metadata(&root.join(".dvs/a.csv.dvs")).unwrap();
         assert_eq!(m.compression, Compression::Zstd);
     }

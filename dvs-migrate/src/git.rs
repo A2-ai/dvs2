@@ -9,20 +9,8 @@ use std::rc::Rc;
 use std::sync::Mutex;
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use dvs::migration::PartialReason;
 use tempfile::TempDir;
-
-/// Why a walk did not see everything
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum PartialReason {
-    UnreachableRemote {
-        remote: String,
-        url: String,
-        message: String,
-    },
-    Shallow,
-}
 
 pub struct Mirror {
     _dir: TempDir,
@@ -36,8 +24,15 @@ fn git(dir: &Path) -> Command {
     cmd
 }
 
-/// stdout, or stderr as the error
-fn output(cmd: &mut Command) -> Result<std::result::Result<String, String>> {
+/// How a git command that ran went
+enum GitOutput {
+    /// Its stdout
+    Succeeded(String),
+    /// Its stderr, redacted
+    Failed(String),
+}
+
+fn output(cmd: &mut Command) -> Result<GitOutput> {
     let child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -53,16 +48,20 @@ fn output(cmd: &mut Command) -> Result<std::result::Result<String, String>> {
         .retain(|p| *p != pid);
     let out = out?;
     if out.status.success() {
-        Ok(Ok(String::from_utf8_lossy(&out.stdout).into_owned()))
+        Ok(GitOutput::Succeeded(
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        ))
     } else {
-        Ok(Err(redact(String::from_utf8_lossy(&out.stderr).trim())))
+        Ok(GitOutput::Failed(redact(
+            String::from_utf8_lossy(&out.stderr).trim(),
+        )))
     }
 }
 
 fn run(cmd: &mut Command) -> Result<String> {
     match output(cmd)? {
-        Ok(out) => Ok(out),
-        Err(stderr) => bail!("{}", redact(&format!("{cmd:?} failed: {stderr}"))),
+        GitOutput::Succeeded(out) => Ok(out),
+        GitOutput::Failed(stderr) => bail!("{}", redact(&format!("{cmd:?} failed: {stderr}"))),
     }
 }
 
@@ -202,7 +201,7 @@ pub fn mirror(source: &str) -> Result<Mirror> {
                 &format!("+refs/heads/*:refs/remotes/{remote}/*"),
                 "+refs/tags/*:refs/tags/*",
             ]))?;
-            if let Err(message) = fetched {
+            if let GitOutput::Failed(message) = fetched {
                 partial.push(PartialReason::UnreachableRemote {
                     remote: remote.to_string(),
                     url: redact(&url),
@@ -337,6 +336,10 @@ impl Interner {
     }
 }
 
+/// A `.dvs` file's blob, interned by `Objects` and read back with `Objects::blob`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BlobId(u32);
+
 /// A tree cut down to its `*.dvs` files and the folders holding some, in tree order, with
 /// names and blob ids interned (`Objects::name`, `Objects::blob`)
 #[derive(Debug, Default)]
@@ -346,14 +349,14 @@ pub struct DvsTree {
 
 #[derive(Debug)]
 pub enum DvsItem {
-    File { name: u32, blob: u32 },
+    File { name: u32, blob: BlobId },
     Dir { name: u32, tree: Rc<DvsTree> },
 }
 
 impl Objects {
     pub fn open(repo: &Path) -> Result<Self> {
         let oid_len = match output(git(repo).args(["rev-parse", "--show-object-format"]))? {
-            Ok(format) if format.trim() == "sha256" => 32,
+            GitOutput::Succeeded(format) if format.trim() == "sha256" => 32,
             // Git before 2.25 has no --show-object-format, and only sha1
             _ => 20,
         };
@@ -426,8 +429,8 @@ impl Objects {
         &self.names.strings[id as usize]
     }
 
-    pub fn blob(&self, id: u32) -> &str {
-        &self.blobs.strings[id as usize]
+    pub fn blob(&self, id: BlobId) -> &str {
+        &self.blobs.strings[id.0 as usize]
     }
 
     /// Every regular file named `*.dvs` under a tree
@@ -448,7 +451,7 @@ impl Objects {
             } else if mode.starts_with("100") && name.ends_with(".dvs") {
                 items.push(DvsItem::File {
                     name: self.names.id(&name),
-                    blob: self.blobs.id(&oid),
+                    blob: BlobId(self.blobs.id(&oid)),
                 });
             }
         }
