@@ -960,3 +960,107 @@ Everywhere a version brought over by a migration run is named, it is "migrated":
 UI tag: "migrated". Hover: "Who and when as recorded in the project's history, brought over by a migration run". This supersedes earlier text that says "imported". 0002 is edited in place because it is unreleased.
 
 *Decided — Wes, 2026-11-06.*
+
+## Resolutions from review (R16–R24)
+
+The key and the separate binary are the friction: only an admin with a key from that project's Migration page can run a migration, and no user has `dvs-migrate`. These resolutions add semantics around re-runs and long or failed runs, report on orphaned content, and cover devious, the Go predecessor of dvs1.
+
+### R16 — Say what is already there
+
+`plan` and `run` open with the project's migration history: the number of migrated versions, the number of runs, and the last run's admin and time, for example "42 versions migrated in 2 runs (last: alice, 2026-11-07); this walk adds 3". It is information only. A project with no migrated versions says nothing.
+
+`lookup` (K5) returns this as `previous: {runs, migrated, last_run_by, last_run_at}`, or `null` when there have been no runs.
+
+*Decided — Wes, 2026-11-09.*
+
+### R17 — A different source is refused
+
+When the project already has migrated versions and none of the walk's commits are among the commits that earlier runs recorded for their entries, the walk looks like a different repo. `plan` warns. `run` refuses with exit status 2, naming the earlier runs' source, unless `--other-source` is passed. A run started with `--other-source` records it in its start-run request (`other_source: true`), and the run's event shows it.
+
+`lookup` takes the walk's commit ids (`commits`, chunked like `hashes`, K10) and answers `known_commits`, how many of them earlier runs recorded. The check is "zero known out of a non-zero walk".
+
+*Decided — Wes, 2026-11-09 (flag name: my call, reversible).*
+
+### R18 — Timeouts and retries
+
+- Every request has a connect timeout (30 s) and a read timeout (5 min, since a large blob upload streams).
+- A transport error, a timeout or a 5xx on `lookup`, `runs`, `manifest`, `blobs` or `report` is retried up to 5 times with exponential backoff (1, 2, 4, 8, 16 s). Each of these calls is safe to repeat (D10, I6). A 4xx is not retried.
+- When the retries run out, the run ends with exit status 1 and "interrupted after N of M versions (X GB); run again to resume" on stderr. The run stays open on the server (R19).
+
+*Decided — Wes, 2026-11-09 (values: my call, reversible).*
+
+### R19 — An active run holds the project
+
+A run is **active** while it is open and its last request arrived less than 15 minutes ago. Every migration call with the run's id updates its `last_activity_at`, at arrival and at completion.
+
+- **The key stays alive.** While its run is active, a migrate key does not expire. The 8-hour limit (D2) still applies, counted from the later of first use and the active run's last activity.
+- **The key is held.** While a run is active, the Migration page does not reissue or revoke the key; it shows "Run in progress by alice since 14:02 (last activity 14:31)". An "End this run" control, behind a confirmation, closes the run as interrupted and revokes the key. A request to reissue or revoke while a run is active is 409 `a migration run is in progress`.
+- A run with no request for 15 minutes is **abandoned**. It stays open until the next start run closes it (R20). An abandoned run does not hold the key.
+
+There is one key per project (D2), so two admins running at once share it; R20 stops them colliding.
+
+A single blob upload longer than 15 minutes without another request lets the run count as abandoned. This is accepted. The window is a default.
+
+*Decided — Wes, 2026-11-09 (15 minutes: my call, reversible).*
+
+### R20 — One run never interrupts another
+
+Supersedes K6's "starting a run closes every open run".
+
+- Starting a run while another run is active is 409 `a migration run is in progress: started by <admin> at <time>, last activity <time>`. `dvs-migrate run` prints it and exits with status 2.
+- `--take-over` sends `take_over: true`. The server then closes the active run as interrupted, records "taken over by <admin>" on it, and opens the new run.
+- Abandoned runs (R19) are closed as interrupted by the next start run without the flag.
+
+*Decided — Wes, 2026-11-09 (flag name: my call, reversible).*
+
+### R21 — Show what an interrupted run did
+
+- The start-run response (K6) gains `closed`: for each run it closed, `{run_id, started_by, started_at, last_activity_at, migrated, uploaded_bytes, taken_over}`. `run` prints one line per closed run before its own summary, for example "previous run (alice, 14:02) was interrupted after 1,204 versions (38 GB); resuming".
+- On the Migration page, an interrupted run's row shows the same counts and, when it was taken over, by whom.
+
+The counts come from what the server recorded under that run: its migrated versions and the bytes of the blobs it uploaded.
+
+*Decided — Wes, 2026-11-09.*
+
+### R22 — How much of local storage the migration covers
+
+The summary (R14) gains one line, for example: "local storage: 1.2 TB in 3 stores; history references 0.9 TB; 0.9 TB on the server after this run". `plan` says "would be on the server".
+
+The report's `totals` (K12) gain `storage_bytes` (every blob file in the stores the walk saw), `referenced_bytes` (the stored size of each hash in history found in local storage, once per hash) and, for `run`, `on_server_bytes`. They are computed from file sizes, without reading content.
+
+*Decided — Wes, 2026-11-09.*
+
+### R23 — `dvs-migrate orphans` lists what history does not reference
+
+`dvs-migrate orphans <repo>... [--storage-map OLD=NEW]... [--json]` walks each repo as `plan` does, then lists every blob in the stores those walks saw that no commit in any of them references. It is read-only: it never deletes, and it needs no key and no server.
+
+- For each store: the path, and for each orphan its hash, size and modification time. Then a total.
+- Files in a store that are not laid out as blobs (any layout in R24 or the dvs2 layout) are listed as "other files", never as orphans.
+- A store can be shared by several projects. An orphan is unreferenced only by the repos given. The output says so ("orphaned with respect to these 2 repos") and, when a store's blobs are mostly orphans, warns that the store may be shared.
+- `--json` prints `{repos, stores: [{path, orphans: [{hash, size, modified}], other_files, orphan_bytes}], orphan_bytes}`.
+
+*Decided — Wes, 2026-11-09.*
+
+### R24 — devious projects
+
+devious is the Go dvs that came before the dvs1 R package. Its formats are in history wherever a project used it. Its last format (the "normalize fields" commit, tagged v0.3.0) is the dvs1 shape and is already covered; the earlier ones are not.
+
+| devious releases | Dates | Sidecar | Sidecar keys (JSON) | Config | Store layout | Hash |
+|---|---|---|---|---|---|---|
+| v0.1–v0.4 | 2023-08-03 – 08-08 | `<file>.dvsmeta` | `FileHash` (Go field names) | `.dvs.yaml`, `storage-dir` | `<storage>/<hash>.dvsfile` | blake3 of the file's **path** |
+| v0.4.1–v0.7.2 | 2023-08-08 – 08-14 | `<file>.dvsmeta` | `FileHash`, `FileSize`, `Timestamp`, `Message`, `User` | `.dvs.yaml`, `storage-dir` | `<storage>/<hash>.dvsfile` | blake3 of content |
+| v1.0–v1.2.1 | 2023-08-15 – 08-24 | `<file>.dvsmeta` | `blake3_checksum`, `file_size_bytes`, `timestamp`, `message`, `user` | `.dvs.yaml`, `storage-dir` | `<storage>/<hash>.dvsfile` | blake3 of content |
+| v2.0.0–v2.0.3 | 2023-10-11 – 2024-08-01 | `<file>.dvs` | `blake3_checksum`, `file_size_bytes`, `timestamp`, `message`, `saved_by` | `dvs.yaml`, `storage-dir` | `<storage>/<hh>/<rest>` | blake3 of content |
+| normalize fields (v0.3.0) | 2024-08-15 | `<file>.dvs` | dvs1 shape (`size`, `add_time`, `saved_by`) | `dvs.yaml`, `storage_dir` | `<storage>/<hh>/<rest>` | blake3 of content |
+
+devious v2's own `dvs migrate` renames `.dvsmeta` to `.dvs`, rewrites the sidecar, renames `.dvs.yaml`, and moves `<hash>.dvsfile` blobs into `<hh>/<rest>`. A store can therefore hold either layout, and a commit from v1 can name a blob that now sits in the nested layout.
+
+- **Shapes.** `SidecarShape` gains `devious-v0` (Go field names), `devious-v1` (`timestamp`, `user`) and `devious-v2` (`timestamp`, `saved_by`). `classify_sidecar` (D4, D21) recognizes them by their required keys like the others. `devious-v0` requires only `FileHash`; its other keys are optional. The server's `shape` CHECK gains the three names (0002 is edited in place: unreleased).
+- **Finding sidecars.** A sidecar is a `.dvs` or `.dvsmeta` file; its data path drops that suffix.
+- **Finding the config.** Each commit's config is `dvs.yaml` or `.dvs.yaml` at the repo root, with `storage_dir` or `storage-dir`. `Dvs1Config` reads all four combinations.
+- **Finding content.** `find_blob` tries `<storage>/<hh>/<rest>`, then `<storage>/<hash>.dvsfile`, then `<storage>/<hash>` (a devious migrate interrupted between its two steps). devious stored content uncompressed; compression is detected from the blob as for any store (R6).
+- **Provenance.** `user`/`saved_by` and `timestamp` map onto the sidecar's user and time (D5); devious wrote the OS username of whoever added the file. `devious-v0` without `User` or `Timestamp` falls through to the commit.
+- **Path hashes.** v0.1–v0.4 recorded a hash of the path, which no content matches, and the file shape cannot tell them from v0.4.1–v0.7.2. Such content fails the hash check and is reported as `corrupt` (I3), with the hint "devious v0.4 or earlier hashed the path, not the content". Nothing is uploaded for it.
+- **`dvs migrate` (users).** A checkout whose working tree has devious sidecars or a devious config is treated like a dvs1 checkout (D16, W2, W6). Its sidecars are converted to dvs2, and its `.dvsmeta` sidecars and `.dvs.yaml` are removed, as dvs1's are.
+
+*Decided — Wes, 2026-11-09 (shape names, the `dvs migrate` coverage: my call, reversible).*
