@@ -20,13 +20,13 @@ pub use config::Compression;
 pub use error::{Error, ErrorCode, backend_error_code};
 pub use files::add::{AddDetail, AddReport, AddResult, add_files};
 pub use files::get::{
-    Action, Before, GetCode, GetCounts, GetOptions, GetOutcome, GetReport, GetRow, GetVerdict,
-    StoredCopy, get_files, shell_path,
+    Action, Before, GetCode, GetCounts, GetOptions, GetOutcome, GetReport, GetRequest, GetRow,
+    GetVerdict, StoredCopy, get_files, shell_path,
 };
 pub use files::metadata::FileMetadata;
 pub use files::status::{Baseline, StatusFacts, StatusReport, WorkingCopy, inspect_status};
 pub use files::types::{Outcome, Status};
-pub use files::version::{VersionGet, get_version};
+pub use files::version::VersionRequest;
 pub use hashes::{HashAlg, Hashes};
 pub use operation::{
     ByteTotals, CancelToken, Counts, FileRow, OperationContext, OperationObserver, OperationPlan,

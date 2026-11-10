@@ -16,6 +16,8 @@ use crate::cache::{FileStat, HashCache, baseline_for, record_baseline, try_open_
 use crate::config::{OnConflict, SettingSource};
 use crate::error::{Error, ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
+use crate::files::version::{VersionRequest, resolve};
+use crate::gitignore::add_to_gitignore;
 use crate::globbing::GetSelection;
 use crate::operation::{
     ByteTotals, FileRow, Hashing, OperationContext, OperationPlan, RunOutcome, millis,
@@ -191,6 +193,8 @@ pub struct GetRow {
     /// Time spent on this file (hash + transfer + install); `None` for rows
     /// never hashed or transferred (cancelled before the plan included).
     pub duration_ms: Option<u64>,
+    /// An earlier version written to `local_path`, which dvs does not track
+    pub untracked: bool,
 }
 
 impl GetRow {
@@ -441,9 +445,20 @@ impl Default for GetOptions {
     }
 }
 
+/// What a `get` writes.
+#[derive(Debug)]
+pub enum GetRequest {
+    /// Tracked files, each at the version its `.dvs` record names
+    Tracked(GetSelection),
+    /// One tracked file at an earlier version, written to a side file
+    Version(VersionRequest),
+}
+
 /// A row being worked on, with what the plan learned about the working file.
 struct Planned {
     row: GetRow,
+    /// Where it is written: the working file, or a version's side file
+    target: PathBuf,
     metadata: Option<FileMetadata>,
     /// The working file's stat when it was classified, to detect it changing
     /// while its replacement downloads. None when it was absent.
@@ -457,9 +472,10 @@ struct Planned {
 }
 
 impl Planned {
-    fn new(row: GetRow) -> Self {
+    fn new(row: GetRow, target: PathBuf) -> Self {
         Planned {
             row,
+            target,
             metadata: None,
             stat: None,
             hash_time: Duration::ZERO,
@@ -615,7 +631,14 @@ fn blank_row(paths: &DvsPaths, relative_path: &Path) -> GetRow {
         message: None,
         hint: None,
         duration_ms: None,
+        untracked: false,
     }
+}
+
+fn fail(mut planned: Planned, before: Before, code: GetCode, message: String) -> Planned {
+    planned.row.before = before;
+    planned.set(Action::Failed, Some(code), Some(message));
+    planned
 }
 
 /// Classify one tracked file. Reads only local state. `hashing` begins
@@ -626,13 +649,8 @@ fn plan_file(
     cache: Option<&Mutex<HashCache>>,
     hashing: &Hashing<'_>,
 ) -> Planned {
-    let mut planned = Planned::new(blank_row(paths, relative_path));
-    let fail = |mut planned: Planned, before: Before, code: GetCode, message: String| {
-        planned.row.before = before;
-        planned.set(Action::Failed, Some(code), Some(message));
-        planned
-    };
-
+    let target = paths.file_path(relative_path);
+    let planned = Planned::new(blank_row(paths, relative_path), target);
     let metadata_path = paths.metadata_path(relative_path);
     let metadata: FileMetadata = match fs::File::open(&metadata_path)
         .map_err(anyhow::Error::from)
@@ -648,11 +666,79 @@ fn plan_file(
             );
         }
     };
-    planned.row.size = Some(metadata.size);
+    classify(planned, metadata, paths, cache, hashing)
+}
+
+/// Classify the side file a version is written to. The version's hash comes
+/// from the file's history; the destination is classified like a working
+/// file that dvs has no record of writing.
+fn plan_version(
+    paths: &DvsPaths,
+    backend: &Backend,
+    request: &VersionRequest,
+    hashing: &Hashing<'_>,
+) -> Planned {
+    let mut row = blank_row(paths, &request.path);
+    row.local_path = relative_to(paths.cwd(), &request.to);
+    row.untracked = true;
+    let planned = Planned::new(row, request.to.clone());
+    let (hashes, compression) = match resolve(backend, &request.path, &request.version) {
+        Ok(found) => found,
+        Err(e) => {
+            let code = match e.downcast_ref::<Error>() {
+                Some(coded) => GetCode::Shared(coded.code),
+                None => code_for(&e),
+            };
+            return fail(planned, Before::Absent, code, format!("{e:#}"));
+        }
+    };
+    let refused = if request.to.starts_with(paths.metadata_folder()) {
+        Some("is inside the dvs metadata folder")
+    } else {
+        match request.to.strip_prefix(paths.repo_root()) {
+            Ok(rel) if paths.metadata_path(rel).is_file() => {
+                Some("is a tracked file; get it without --version")
+            }
+            _ => None,
+        }
+    };
+    if let Some(why) = refused {
+        return fail(
+            planned,
+            Before::NotAFile,
+            GetCode::Shared(ErrorCode::InvalidArguments),
+            why.to_string(),
+        );
+    }
+    // The history has no size: it is the side file's once it is written
+    let metadata = FileMetadata {
+        hashes,
+        size: 0,
+        created_by: String::new(),
+        add_time: jiff::Timestamp::now(),
+        compression,
+        message: None,
+    };
+    classify(planned, metadata, paths, None, hashing)
+}
+
+/// Classify `planned.target` against `metadata`, the version it should hold.
+fn classify(
+    mut planned: Planned,
+    metadata: FileMetadata,
+    paths: &DvsPaths,
+    cache: Option<&Mutex<HashCache>>,
+    hashing: &Hashing<'_>,
+) -> Planned {
+    let untracked = planned.row.untracked;
+    if !untracked {
+        planned.row.size = Some(metadata.size);
+    }
     planned.row.target_hash = Some(metadata.hashes.blake3.clone());
 
-    let target = paths.file_path(relative_path);
-    if !destination_is_contained(paths.repo_root(), &target) {
+    let target = planned.target.clone();
+    let inside = target.starts_with(paths.repo_root());
+    if inside && !destination_is_contained(paths.repo_root(), &target) {
         return fail(
             planned,
             Before::UnsafePath,
@@ -695,7 +781,9 @@ fn plan_file(
         Ok(_) => {}
     }
 
-    let rel_str = relative_path.to_string_lossy();
+    // A side file is not the tracked path: no cache entry or baseline is its
+    let rel_str = planned.row.path.to_string_lossy().into_owned();
+    let cache = if untracked { None } else { cache };
     let stat = FileStat::from_path(&target).ok();
     hashing.begin();
     planned.hashed = true;
@@ -717,7 +805,11 @@ fn plan_file(
     planned.row.local_hash = Some(hashes.blake3.clone());
     planned.stat = stat;
 
-    planned.row.before = if hashes == metadata.hashes && size == metadata.size {
+    let current = hashes == metadata.hashes && (untracked || size == metadata.size);
+    planned.row.before = if current {
+        if untracked {
+            planned.row.size = Some(size);
+        }
         Before::Current
     } else {
         match baseline_for(cache, &rel_str) {
@@ -732,6 +824,10 @@ fn plan_file(
         Before::Modified => Some((
             GetCode::LocalChanges,
             "local changes since dvs last wrote this file",
+        )),
+        Before::Unknown if untracked => Some((
+            GetCode::UnknownLocal,
+            "already exists and is not this version",
         )),
         Before::Unknown => Some((
             GetCode::UnknownLocal,
@@ -783,14 +879,13 @@ type FileError = (GetCode, String);
 /// replaced after the new bytes are verified and the destination is unchanged.
 fn install(
     backend: &Backend,
-    paths: &DvsPaths,
+    target: &Path,
     relative_path: &Path,
     metadata: &FileMetadata,
     planned_stat: &Option<FileStat>,
     operation_id: Uuid,
     on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
 ) -> Result<(), FileError> {
-    let target = paths.file_path(relative_path);
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| (io_code(&e), format!("cannot create its directory: {e}")))?;
@@ -824,13 +919,13 @@ fn install(
                 "the stored content does not match the tracked hash".to_string(),
             ));
         }
-        if !destination_unchanged(&target, planned_stat) {
+        if !destination_unchanged(target, planned_stat) {
             return Err((
                 GetCode::DestinationChanged,
                 "the file changed while dvs was downloading it; your version was kept".to_string(),
             ));
         }
-        fs::rename(&tmp_path, &target)
+        fs::rename(&tmp_path, target)
             .map_err(|e| (io_code(&e), format!("cannot replace the file: {e}")))?;
         Ok(())
     })();
@@ -852,7 +947,7 @@ fn install(
 /// completes). A cancel stops files from *starting*: a file already
 /// downloading finishes (verified temp file + rename), the rest are `cancelled`.
 pub fn get_files(
-    selection: GetSelection,
+    request: GetRequest,
     paths: &DvsPaths,
     backend: &Backend,
     options: GetOptions,
@@ -871,7 +966,11 @@ pub fn get_files(
         }
         report
     };
-    if selection.tracked.is_empty() && selection.unmatched.is_empty() {
+    let (selection, version) = match request {
+        GetRequest::Tracked(selection) => (selection, None),
+        GetRequest::Version(version) => (GetSelection::default(), Some(version)),
+    };
+    if version.is_none() && selection.tracked.is_empty() && selection.unmatched.is_empty() {
         return problem(
             ErrorCode::NoFilesSelected,
             "no tracked files matched".into(),
@@ -910,7 +1009,7 @@ pub fn get_files(
                 // Hashing is starting work too: a cancel stops it. The
                 // row is `unknown` only because nothing looked at the file.
                 if ctx.is_cancelled() {
-                    let mut planned = Planned::new(blank_row(paths, &p));
+                    let mut planned = Planned::new(blank_row(paths, &p), paths.file_path(&p));
                     planned.row.before = Before::Unknown;
                     cancel_row(&mut planned.row);
                     return planned;
@@ -922,6 +1021,9 @@ pub fn get_files(
             })
             .collect()
     });
+    if let Some(v) = &version {
+        planned.push(plan_version(paths, backend, v, &hashing));
+    }
     hashing.finish();
     let cwd_rel = paths
         .cwd_relative_to_root()
@@ -935,7 +1037,9 @@ pub fn get_files(
         } else {
             Some(normalize(&cwd_rel.join(&user_path)))
         };
-        let mut p = Planned::new(blank_row(paths, inside.as_deref().unwrap_or(&user_path)));
+        let row = blank_row(paths, inside.as_deref().unwrap_or(&user_path));
+        let target = paths.file_path(&row.path);
+        let mut p = Planned::new(row, target);
         let is_dir = paths.file_path(&p.row.path).is_dir();
         if inside.is_none() {
             p.row.local_path = user_path;
@@ -961,7 +1065,7 @@ pub fn get_files(
         p.set(Action::Unchanged, None, None);
         // Hashing it was the work: nothing to transfer.
         p.row.duration_ms = Some(millis(p.hash_time));
-        if !dry_run {
+        if !dry_run && !p.row.untracked {
             if let Some(m) = &p.metadata {
                 record_baseline(
                     cache,
@@ -1084,7 +1188,7 @@ pub fn get_files(
                     return (i, row);
                 }
                 let started = Instant::now();
-                let result = transfer(p, backend, paths, dry_run, operation_id, ctx);
+                let result = transfer(p, backend, dry_run, operation_id, ctx);
                 settle(&mut row, p, result, dry_run, paths, cache);
                 row.duration_ms = Some(millis(p.hash_time + started.elapsed()));
                 row.hint = hint(&row);
@@ -1106,7 +1210,6 @@ pub fn get_files(
 fn transfer(
     p: &Planned,
     backend: &Backend,
-    paths: &DvsPaths,
     dry_run: bool,
     operation_id: Uuid,
     ctx: &OperationContext,
@@ -1129,7 +1232,7 @@ fn transfer(
     let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
     let result = install(
         backend,
-        paths,
+        &p.target,
         &p.row.path,
         metadata,
         &p.stat,
@@ -1172,7 +1275,14 @@ fn settle(
                 .to_string()
             });
             set_row(row, action, None, message);
-            if !dry_run {
+            if !dry_run && p.row.untracked {
+                row.size = fs::metadata(&p.target).ok().map(|m| m.len());
+                if let Ok(rel) = p.target.strip_prefix(paths.repo_root()) {
+                    if let Err(e) = add_to_gitignore(paths.repo_root(), &[rel.to_path_buf()]) {
+                        log::warn!("Could not git-ignore {}: {e}", p.target.display());
+                    }
+                }
+            } else if !dry_run {
                 let metadata = p
                     .metadata
                     .as_ref()
@@ -1224,6 +1334,9 @@ pub fn shell_path(path: &Path) -> String {
 /// The next command to run for a row.
 fn hint(row: &GetRow) -> Option<String> {
     let p = shell_path(&row.local_path);
+    if row.untracked && row.code == Some(GetCode::UnknownLocal) {
+        return Some("to replace it, rerun with --force; or choose another --to".into());
+    }
     let choices = format!(
         "keep your version: dvs add {p} (makes it the tracked version); \
          take the tracked version: dvs get --force {p} (replaces yours)"
@@ -1443,7 +1556,7 @@ mod tests {
                 unmatched: unmatched.iter().map(PathBuf::from).collect(),
             };
             get_files(
-                selection,
+                GetRequest::Tracked(selection),
                 &self.paths,
                 self.backend(),
                 GetOptions {
@@ -1451,6 +1564,35 @@ mod tests {
                     on_conflict,
                     source: SettingSource::Argument,
                 },
+                &OperationContext::new(),
+            )
+        }
+
+        fn hash(&self, name: &str) -> String {
+            let meta: FileMetadata = serde_json::from_slice(&self.metadata_bytes(name)).unwrap();
+            meta.hashes.blake3
+        }
+
+        fn get_version(
+            &self,
+            version: &str,
+            to: &str,
+            on_conflict: OnConflict,
+            dry_run: bool,
+        ) -> GetReport {
+            let request =
+                VersionRequest::new(&self.paths, vec!["a.csv".into()], version, Path::new(to))
+                    .unwrap();
+            let options = GetOptions {
+                dry_run,
+                on_conflict,
+                source: SettingSource::Argument,
+            };
+            get_files(
+                GetRequest::Version(request),
+                &self.paths,
+                self.backend(),
+                options,
                 &OperationContext::new(),
             )
         }
@@ -1870,7 +2012,7 @@ mod tests {
             source: SettingSource::Argument,
         };
         let report = get_files(
-            selection,
+            GetRequest::Tracked(selection),
             &in_data,
             repo.backend(),
             options,
@@ -1965,7 +2107,13 @@ mod tests {
                 source: SettingSource::Argument,
             };
             let ctx = OperationContext::new().with_observer(recorder.clone());
-            let report = get_files(selection, &self.paths, self.backend(), options, &ctx);
+            let report = get_files(
+                GetRequest::Tracked(selection),
+                &self.paths,
+                self.backend(),
+                options,
+                &ctx,
+            );
             let rows = recorder.rows.lock().unwrap().clone();
             (report, recorder.seen(), rows)
         }
@@ -2058,7 +2206,13 @@ mod tests {
         let ctx = OperationContext::new()
             .with_cancel(token)
             .with_observer(recorder.clone());
-        let report = get_files(selection, &repo.paths, repo.backend(), options, &ctx);
+        let report = get_files(
+            GetRequest::Tracked(selection),
+            &repo.paths,
+            repo.backend(),
+            options,
+            &ctx,
+        );
 
         assert_eq!(report.outcome, GetOutcome::Cancelled);
         let seen = recorder.seen();
@@ -2165,5 +2319,67 @@ mod tests {
             },
         );
         assert_eq!(report.summary(), "Nothing to do, 3 already current");
+    }
+
+    #[test]
+    fn a_version_lands_beside_the_tracked_file() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"v1");
+        let v1 = repo.hash("a.csv");
+        repo.add("a.csv", b"v2");
+        let record = repo.metadata_bytes("a.csv");
+
+        let report = repo.get_version(&v1[..8], "old/a.csv", OnConflict::Abort, false);
+
+        assert!(report.files[0].satisfied && report.files[0].untracked);
+        assert_eq!(repo.read("old/a.csv"), b"v1");
+        assert_eq!(repo.read("a.csv"), b"v2");
+        assert_eq!(repo.metadata_bytes("a.csv"), record);
+        let ignore = fs::read_to_string(repo.root.join("old/.gitignore")).unwrap();
+        assert!(ignore.lines().any(|l| l == "/a.csv"));
+    }
+
+    #[test]
+    fn an_existing_side_file_follows_on_conflict() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"v1");
+        let v1 = repo.hash("a.csv");
+        create_file(&repo.root, "mine.csv", b"mine");
+
+        let kept = repo.get_version(&v1, "mine.csv", OnConflict::Abort, false);
+        assert_eq!(kept.files[0].code, Some(GetCode::UnknownLocal));
+        assert_eq!(repo.read("mine.csv"), b"mine");
+        repo.get_version(&v1, "mine.csv", OnConflict::Overwrite, false);
+        assert_eq!(repo.read("mine.csv"), b"v1");
+        let again = repo.get_version(&v1, "mine.csv", OnConflict::Abort, false);
+        assert_eq!(again.files[0].action, Action::Unchanged);
+    }
+
+    #[test]
+    fn a_version_never_replaces_a_tracked_file() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"v1");
+        let v1 = repo.hash("a.csv");
+        repo.add("b.csv", b"b");
+
+        let report = repo.get_version(&v1, "b.csv", OnConflict::Overwrite, false);
+
+        assert!(!report.files[0].satisfied);
+        assert_eq!(repo.read("b.csv"), b"b");
+    }
+
+    #[test]
+    fn a_hash_the_file_never_had_is_refused() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"v1");
+        repo.add("b.csv", b"b");
+
+        let report = repo.get_version(&repo.hash("b.csv"), "out.csv", OnConflict::Abort, false);
+
+        assert_eq!(
+            report.files[0].code,
+            Some(GetCode::Shared(ErrorCode::FileFailed))
+        );
+        assert!(!repo.root.join("out.csv").exists());
     }
 }

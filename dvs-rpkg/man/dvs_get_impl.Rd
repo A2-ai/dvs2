@@ -12,6 +12,8 @@ dvs_get_impl(
   on_conflict = NULL,
   on_error = c("return", "warn", "error"),
   progress_callback = NULL,
+  version = NULL,
+  to = NULL,
   .call = NULL
 )
 }
@@ -43,6 +45,11 @@ local changes).}
 back to R, which acts on it.}
 
 \item{progress_callback}{Optional handle to enable progress bar display.}
+
+\item{version}{With \code{to}: write this earlier version of the one file in
+\code{paths} to \code{to}, a hash or a prefix of at least 8 hex characters.}
+
+\item{to}{Where \code{version} is written, relative to the working directory.}
 
 \item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }

@@ -148,21 +148,20 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   earlier version of one tracked file, as [dvs_audit_log()] lists them.
 #'   With `version`, `dvs_get()` writes that version to `to` instead of
 #'   restoring `paths`, and takes exactly one file in `paths`. It cannot be
-#'   combined with `glob`, `recursive`, `dry_run` or `on_conflict`.
-#' @param to Where `version` is written. It must not exist. It is not tracked
-#'   by dvs and, inside the git repo, is added to `.gitignore`.
-#' @return With `version`, a one-row tibble: `path`, `to`, `hash`, `size`
-#'   and `ignored`.
-#'
-#'   Otherwise a tibble of class `dvs_get_result` with one row per requested file
+#'   combined with `glob` or `recursive`.
+#' @param to Where `version` is written. An existing `to` is a conflict,
+#'   handled by `on_conflict`; a tracked file is never replaced. It is not
+#'   tracked by dvs and, inside the git repo, is added to `.gitignore`.
+#' @return A tibble of class `dvs_get_result` with one row per requested file
 #'   and always the same columns: `path`, `local_path`, `before` (`"absent"`,
 #'   `"current"`, `"clean"`, `"modified"`, `"unknown"`, `"not_tracked"`,
 #'   `"not_a_file"`, `"unsafe_path"`), `action` (`"restored"`, `"replaced"`,
 #'   `"unchanged"`, `"skipped"`, `"not_run"`, `"failed"`, `"would_restore"`,
 #'   `"would_replace"`), `satisfied`, `size`, `target_hash`, `local_hash`,
-#'   `stored_copy`, `code`, `message`, `hint` and `duration_ms` (the
+#'   `stored_copy`, `code`, `message`, `hint`, `duration_ms` (the
 #'   milliseconds spent on the file, `NA` when it was never hashed or
-#'   copied). [dvs_result_info()] returns
+#'   copied) and `untracked` (`TRUE` for a `version` written to `to`, whose
+#'   `local_path` is `to`). [dvs_result_info()] returns
 #'   the outcome and the policy that applied. Outside a dvs project it raises an
 #'   error. A configuration error, for example `on_conflict = "overwrite"`
 #'   in dvs.toml, raises a `dvs_config_error`.
@@ -206,17 +205,9 @@ dvs_get <- function(
     if (is.null(version) || is.null(to)) {
       .miniextendr_arg_error(if (is.null(to)) "to" else "version", "is required: `version` and `to` go together", sys.call())
     }
-    if (length(paths) != 1L) {
-      .miniextendr_arg_error("paths", "must be exactly one file with `version`", sys.call())
+    if (!is.null(glob) || isTRUE(recursive)) {
+      .miniextendr_arg_error("version", "cannot be combined with `glob` or `recursive`", sys.call())
     }
-    if (!is.null(glob) || isTRUE(recursive) || isTRUE(dry_run) || !is.null(on_conflict)) {
-      .miniextendr_arg_error(
-        "version",
-        "cannot be combined with `glob`, `recursive`, `dry_run` or `on_conflict`",
-        sys.call()
-      )
-    }
-    return(tibble::as_tibble(dvs_get_version_impl(path = paths, version = version, to = to)))
   }
   apply_dvs_threads_option()
   progress_callback <- NULL
@@ -237,7 +228,9 @@ dvs_get <- function(
       dry_run = dry_run,
       on_conflict = on_conflict,
       on_error = on_error %||% getOption("dvs.on_error", "return"),
-      progress_callback = progress_callback
+      progress_callback = progress_callback,
+      version = version,
+      to = to
     ),
     "on_error",
     on_error_option

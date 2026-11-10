@@ -175,3 +175,41 @@ Branch off `main` (D10). No dvs-server change (D3, I1).
   `dvs-cli/src/get_cmd.rs`.
 - **P4 — R package (depends on P1, P2).** `version` / `to` on `dvs_get()` (D8). Files:
   `dvs-rpkg/R/dvs-commands.R`, `dvs-rpkg/src/` bindings.
+
+## Resolutions from implementation review (D11–D14)
+
+These supersede the earlier sections where they disagree.
+
+### D11 — One get path: `GetRequest::{Tracked, Version}`
+
+`get_files` takes a `GetRequest`. `Tracked(GetSelection)` is the normal get. `Version(VersionRequest)`
+(`path`, `version`, `to`) is one tracked file at an earlier version. Both share planning (classify the destination), transfer,
+install (download to a temp file, verify the hash, check the destination is unchanged, rename) and the
+report. Only the plan's source of the hash (history instead of the `.dvs` record), the destination (`to`
+instead of the tracked path) and the settle step (`.gitignore` instead of baseline and cache) differ.
+
+*Decided — Wes, 2026-11-10.*
+
+### D12 — `--to` follows `on_conflict` (supersedes D6's "never overwrites")
+
+An existing `to` is a conflict, as a working file dvs has no record of writing: `abort` (the default)
+keeps it, `skip` leaves it, `overwrite`/`--force` replaces it. A `to` that already holds the version is
+`unchanged`. The project's `on_conflict` default applies, as for any get. A tracked file and a path inside
+`.dvs` are refused under every policy.
+
+*Decided — Wes, 2026-11-10.*
+
+### D13 — `--dry-run` works with `--version`
+
+A dry run checks that the version resolves, classifies `to` and asks storage for the content, writing
+nothing. `--version` is still refused with `--glob` and `--recursive` (D7).
+
+*Decided — Wes, 2026-11-10.*
+
+### D14 — Output and results are a normal get's
+
+The JSON envelope and R's `dvs_get_result` are the ones a get always returns, with one row: `path` is the
+tracked file, `local_path` is `to`, `target_hash` is the version, and `untracked` is true. The human output
+is the row's line, `wrote <to>  <size>  from <file> @ <hash>, untracked`, with no summary line.
+
+*Decided — Wes, 2026-11-10.*

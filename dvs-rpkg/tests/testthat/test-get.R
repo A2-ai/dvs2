@@ -22,7 +22,7 @@ switch_branches <- function() {
 get_columns <- c(
   "path", "local_path", "before", "action", "satisfied", "size",
   "target_hash", "local_hash", "stored_copy", "code", "message", "hint",
-  "duration_ms"
+  "duration_ms", "untracked"
 )
 
 test_that("dvs_get restores deleted files with identical content", {
@@ -320,10 +320,11 @@ test_that("dvs_get with version writes an earlier version beside the tracked fil
   v1 <- dvs_audit_log("t.csv")$action_file_hashes_blake3[2]
 
   result <- dvs_get("t.csv", version = substr(v1, 1, 8), to = "old/t.csv")
-  expect_equal(names(result), c("path", "to", "hash", "size", "ignored"))
-  expect_equal(result$hash, v1)
-  expect_true(result$ignored)
+  expect_s3_class(result, "dvs_get_result")
+  expect_equal(result$local_path, "old/t.csv")
+  expect_equal(result$target_hash, v1)
+  expect_true(result$untracked)
   expect_equal(readLines("old/t.csv"), "v1")
   expect_equal(readLines("t.csv"), "v2")
-  expect_error(dvs_get("t.csv", version = v1, to = "old/t.csv"), "already exists")
+  expect_equal(dvs_get("t.csv", version = v1, to = "old/t.csv")$action, "unchanged")
 })

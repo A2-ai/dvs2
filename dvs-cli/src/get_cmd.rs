@@ -17,8 +17,13 @@ fn is_shared(code: Option<GetCode>) -> bool {
     )
 }
 
-fn label(action: Action) -> &'static str {
-    match action {
+fn label(row: &GetRow) -> &'static str {
+    match (row.action, row.untracked) {
+        (Action::Restored | Action::Replaced, true) => return "wrote",
+        (Action::WouldRestore | Action::WouldReplace, true) => return "would write",
+        _ => {}
+    }
+    match row.action {
         Action::Restored => "restored",
         Action::Replaced => "replaced",
         Action::Unchanged => "unchanged",
@@ -34,7 +39,7 @@ fn label(action: Action) -> &'static str {
 /// Rows listed one per line: every file that changed or needs attention.
 /// Cancelled files are only counted, as add and status do.
 fn is_listed(row: &GetRow) -> bool {
-    !matches!(row.action, Action::Unchanged | Action::Cancelled)
+    row.untracked || !matches!(row.action, Action::Unchanged | Action::Cancelled)
 }
 
 /// Print the report for people: one line per file that changed or needs
@@ -56,16 +61,24 @@ pub fn print_human(report: &GetReport) {
         let detail = match (r.satisfied, &r.message) {
             _ if is_shared(r.code) => String::new(),
             (true, None) => r.size.map(format_size).unwrap_or_default(),
+            (true, Some(_)) if r.untracked => r.size.map(format_size).unwrap_or_default(),
             (_, Some(m)) => m.clone(),
             (false, None) => String::new(),
         };
         let extra = match (r.is_conflict(), r.stored_copy) {
-            (true, Some(StoredCopy::Present)) => " (a copy of your version appears to be stored)",
-            _ => "",
+            _ if r.untracked && r.satisfied => format!(
+                "  from {} @ {}, untracked",
+                shell_path(&r.path),
+                r.target_hash.as_deref().map_or("", |h| &h[..8])
+            ),
+            (true, Some(StoredCopy::Present)) => {
+                " (a copy of your version appears to be stored)".to_string()
+            }
+            _ => String::new(),
         };
         let line = format!(
             "{:<13} {:<width$}  {detail}{extra}",
-            label(r.action),
+            label(r),
             r.local_path.display()
         );
         if r.satisfied {
@@ -74,11 +87,13 @@ pub fn print_human(report: &GetReport) {
             eprintln!("{}", line.trim_end());
         }
     }
+    // One file: its line says it all
+    let version = report.files.iter().all(|r| r.untracked);
     // Set apart from the file lines, like add's
     let summary = format!("{}{}", if listed { "\n" } else { "" }, report.summary());
-    if report.outcome == GetOutcome::Complete {
+    if !version && report.outcome == GetOutcome::Complete {
         println!("{summary}");
-    } else {
+    } else if !version {
         eprintln!("{summary}");
     }
 
@@ -98,7 +113,11 @@ pub fn print_human(report: &GetReport) {
     }
 
     // Next steps for conflicts, in one place rather than per row.
-    let conflicts: Vec<&GetRow> = report.files.iter().filter(|r| r.is_conflict()).collect();
+    let conflicts: Vec<&GetRow> = report
+        .files
+        .iter()
+        .filter(|r| r.is_conflict() && !r.untracked)
+        .collect();
     if !conflicts.is_empty() {
         let paths = conflicts
             .iter()
@@ -124,7 +143,7 @@ pub fn print_human(report: &GetReport) {
     }
     for r in report.files.iter().filter(|r| {
         !r.satisfied
-            && !r.is_conflict()
+            && (!r.is_conflict() || r.untracked)
             && r.code != Some(GetCode::BatchAborted)
             && !is_shared(r.code)
     }) {
@@ -150,61 +169,4 @@ pub fn to_json(report: &GetReport) -> serde_json::Value {
             .map(|p| crate::output::error_json(p.code, p.message.as_str())),
         "files": report.files,
     })
-}
-
-/// `get --version`: exactly one tracked file.
-pub fn get_version(
-    paths: &dvs::DvsPaths,
-    backend: &dvs::Backend,
-    user_paths: Vec<std::path::PathBuf>,
-    version: &str,
-    to: &std::path::Path,
-) -> anyhow::Result<dvs::VersionGet> {
-    let [path] = <[_; 1]>::try_from(user_paths).map_err(|_| {
-        crate::output::coded(
-            ErrorCode::InvalidArguments,
-            "--version takes exactly one file",
-        )
-    })?;
-    dvs::get_version(paths, backend, &path, version, to)
-}
-
-pub fn version_json(got: &dvs::VersionGet) -> serde_json::Value {
-    let mut result = crate::output::envelope("get", false);
-    result["path"] = json!(got.path);
-    result["to"] = json!(got.to);
-    result["hash"] = json!(got.hash);
-    result["size"] = json!(got.size);
-    result["ignored"] = json!(got.ignored);
-    result
-}
-
-/// A normal get line for the file written, with where its content came from.
-/// One file, so no summary line.
-pub fn print_version(got: &dvs::VersionGet, paths: &dvs::DvsPaths) {
-    let to = pathdiff(paths.cwd(), &got.to);
-    let from = pathdiff(paths.cwd(), &paths.repo_root().join(&got.path));
-    println!(
-        "{:<13} {}  {}  from {} @ {}, untracked",
-        "wrote",
-        shell_path(&to),
-        format_size(got.size),
-        shell_path(&from),
-        &got.hash[..8]
-    );
-}
-
-/// `target` relative to `base`, with `..` where it is not below it.
-fn pathdiff(base: &std::path::Path, target: &std::path::Path) -> std::path::PathBuf {
-    let base: Vec<_> = base.components().collect();
-    let target: Vec<_> = target.components().collect();
-    let common = base.iter().zip(&target).take_while(|(a, b)| a == b).count();
-    let mut out = std::path::PathBuf::new();
-    for _ in common..base.len() {
-        out.push("..");
-    }
-    for c in &target[common..] {
-        out.push(c.as_os_str());
-    }
-    out
 }

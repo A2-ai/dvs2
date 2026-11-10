@@ -26,8 +26,9 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
-    OperationContext, PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
+    Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRequest, GetRow, GetVerdict,
+    OperationContext, PathFilter, Status, TransferObserver, VersionRequest, add_files, get_files,
+    set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -537,8 +538,12 @@ impl From<OnConflictChoice> for OnConflict {
 ///   `"return"`, `"warn"` or `"error"`. The result carries the matched choice
 ///   back to R, which acts on it.
 /// @param progress_callback Optional handle to enable progress bar display.
+/// @param version With `to`: write this earlier version of the one file in
+///   `paths` to `to`, a hash or a prefix of at least 8 hex characters.
+/// @param to Where `version` is written, relative to the working directory.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_get_impl", internal, call = caller)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dvs_get(
     #[miniextendr(default = "character(0)", no_na)] paths: Option<Vec<PathBuf>>,
     #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
@@ -547,6 +552,8 @@ pub(crate) fn dvs_get(
     #[miniextendr(match_arg)] on_conflict: Option<OnConflictChoice>,
     #[miniextendr(match_arg)] on_error: OnErrorChoice,
     #[miniextendr(default = "NULL")] progress_callback: Option<ExternalPtr<ProgressBarCallback>>,
+    #[miniextendr(default = "NULL", no_na)] version: Option<String>,
+    #[miniextendr(default = "NULL", no_na)] to: Option<PathBuf>,
 ) -> Result<GetResult> {
     let dry_run = dry_run.unwrap_or(false);
     let explicit = on_conflict.map(OnConflict::from);
@@ -559,12 +566,20 @@ pub(crate) fn dvs_get(
         Err(ConfigError(message)) => config_error(&message),
     };
     let dvs_paths = DvsPaths::from_cwd(&config)?;
-    let selection = select_paths_for_get(
-        paths.unwrap_or_default(),
-        glob.as_deref(),
-        &dvs_paths,
-        recursive.unwrap_or(false),
-    )?;
+    let request = match (version, to) {
+        (Some(version), Some(to)) => GetRequest::Version(VersionRequest::new(
+            &dvs_paths,
+            paths.unwrap_or_default(),
+            &version,
+            &to,
+        )?),
+        _ => GetRequest::Tracked(select_paths_for_get(
+            paths.unwrap_or_default(),
+            glob.as_deref(),
+            &dvs_paths,
+            recursive.unwrap_or(false),
+        )?),
+    };
     let options = GetOptions {
         dry_run,
         on_conflict: policy,
@@ -576,7 +591,7 @@ pub(crate) fn dvs_get(
             let ctx = OperationContext::new()
                 .with_observer(Arc::new(TransferObserver(progress_on_file_start(tx))));
             Ok(get_files(
-                selection,
+                request,
                 &dvs_paths,
                 config.backend(),
                 options,
@@ -585,7 +600,7 @@ pub(crate) fn dvs_get(
         })?
     } else {
         get_files(
-            selection,
+            request,
             &dvs_paths,
             config.backend(),
             options,
@@ -602,46 +617,6 @@ pub(crate) fn dvs_get(
         info: GetInfo::from(&report),
         on_error: on_error.to_choice(),
     })
-}
-
-/// One row: what `dvs_get(version = , to = )` wrote.
-#[derive(DataFrameRow)]
-struct VersionRow {
-    path: String,
-    to: String,
-    hash: String,
-    size: f64,
-    ignored: bool,
-}
-
-/// @title Write an earlier version of a tracked file to a side file
-/// @description
-/// Writes the stored version `version` of the tracked file `path` to `to`.
-/// The tracked file, its `.dvs` file and dvs's local state are not changed.
-/// `to` is never overwritten and never tracked; inside the git repo it is
-/// added to `.gitignore`.
-/// @param path One tracked file, relative to the working directory.
-/// @param version A hash, or a prefix of at least 8 hex characters, from
-///   `dvs_audit_log()`. A hash the file never had is an error.
-/// @param to Where to write it, relative to the working directory.
-/// @keywords internal
-#[miniextendr(r_name = "dvs_get_version_impl", internal, call = caller)]
-pub(crate) fn dvs_get_version(
-    #[miniextendr(no_na)] path: PathBuf,
-    #[miniextendr(no_na)] version: String,
-    #[miniextendr(no_na)] to: PathBuf,
-) -> Result<BuiltDataFrame> {
-    let config = find_config()?;
-    let dvs_paths = DvsPaths::from_cwd(&config)?;
-    let got = dvs::get_version(&dvs_paths, config.backend(), &path, &version, &to)?;
-    let row = VersionRow {
-        path: got.path.to_string_lossy().into_owned(),
-        to: got.to.to_string_lossy().into_owned(),
-        hash: got.hash,
-        size: got.size as f64,
-        ignored: got.ignored,
-    };
-    Ok(vec![row].into_dataframe()?)
 }
 
 /// The config of the dvs project that holds the working directory. Outside a
@@ -676,6 +651,7 @@ struct GetFileRow {
     message: Option<String>,
     hint: Option<String>,
     duration_ms: Option<f64>,
+    untracked: bool,
 }
 
 impl From<&GetRow> for GetFileRow {
@@ -696,6 +672,7 @@ impl From<&GetRow> for GetFileRow {
             message,
             hint,
             duration_ms,
+            untracked,
         } = row;
         GetFileRow {
             path: path.to_string_lossy().into_owned(),
@@ -711,6 +688,7 @@ impl From<&GetRow> for GetFileRow {
             message: message.clone(),
             hint: hint.clone(),
             duration_ms: duration_ms.map(|d| d as f64),
+            untracked: *untracked,
         }
     }
 }

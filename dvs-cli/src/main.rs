@@ -28,9 +28,9 @@ use dvs::init::{create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
-    FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow,
-    Outcome, PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files,
-    set_num_threads,
+    FileMetadata, FileProgress, FileRow, GetOptions, GetRequest, GetVerdict, OperationContext,
+    OperationRow, Outcome, PathFilter, RowState, RunOutcome, Status, VersionRequest, add_files,
+    format_size, get_files, set_num_threads,
 };
 
 use crate::observer::CliObserver;
@@ -174,10 +174,10 @@ pub enum Command {
         force: bool,
         /// Write this earlier version of one tracked file to --to instead:
         /// a hash, or a prefix of at least 8 characters, from `dvs history`
-        #[clap(long, value_name = "HASH", requires = "to", conflicts_with_all = ["glob", "recursive", "dry_run", "on_conflict", "force"])]
+        #[clap(long, value_name = "HASH", requires = "to", conflicts_with_all = ["glob", "recursive"])]
         version: Option<String>,
-        /// Where --version writes the file. Never overwritten, never tracked;
-        /// inside the repo it is added to .gitignore
+        /// Where --version writes the file. It is not tracked, and inside the
+        /// repo it is added to .gitignore
         #[clap(long, value_name = "PATH", requires = "version")]
         to: Option<PathBuf>,
     },
@@ -803,16 +803,6 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             to,
         } => {
             let config = find_config(&current_dir)?;
-            if let (Some(version), Some(to)) = (version, to) {
-                let dvs_paths = DvsPaths::from_cwd(&config)?;
-                let got = get_cmd::get_version(&dvs_paths, config.backend(), paths, &version, &to)?;
-                if cli.json {
-                    output::emit(get_cmd::version_json(&got));
-                } else {
-                    get_cmd::print_version(&got, &dvs_paths);
-                }
-                return Ok(());
-            }
             let explicit = if force {
                 Some(OnConflict::Overwrite)
             } else {
@@ -822,7 +812,17 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             };
             let (on_conflict, source) = config.get_on_conflict(explicit)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let selection = select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
+            let request = match (version, to) {
+                (Some(version), Some(to)) => {
+                    GetRequest::Version(VersionRequest::new(&dvs_paths, paths, &version, &to)?)
+                }
+                _ => GetRequest::Tracked(select_paths_for_get(
+                    paths,
+                    glob.as_deref(),
+                    &dvs_paths,
+                    recursive,
+                )?),
+            };
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
@@ -837,7 +837,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 .with_cancel(cancel.clone())
                 .with_observer(Arc::new(observer));
             let report = get_files(
-                selection,
+                request,
                 &dvs_paths,
                 config.backend(),
                 GetOptions {

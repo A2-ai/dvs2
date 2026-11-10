@@ -49,24 +49,23 @@ The condition has class \code{dvs_get_incomplete} and carries the result as
 earlier version of one tracked file, as \code{\link[=dvs_audit_log]{dvs_audit_log()}} lists them.
 With \code{version}, \code{dvs_get()} writes that version to \code{to} instead of
 restoring \code{paths}, and takes exactly one file in \code{paths}. It cannot be
-combined with \code{glob}, \code{recursive}, \code{dry_run} or \code{on_conflict}.}
+combined with \code{glob} or \code{recursive}.}
 
-\item{to}{Where \code{version} is written. It must not exist. It is not tracked
-by dvs and, inside the git repo, is added to \code{.gitignore}.}
+\item{to}{Where \code{version} is written. An existing \code{to} is a conflict,
+handled by \code{on_conflict}; a tracked file is never replaced. It is not
+tracked by dvs and, inside the git repo, is added to \code{.gitignore}.}
 }
 \value{
-With \code{version}, a one-row tibble: \code{path}, \code{to}, \code{hash}, \code{size}
-and \code{ignored}.
-
-Otherwise a tibble of class \code{dvs_get_result} with one row per requested file
+A tibble of class \code{dvs_get_result} with one row per requested file
 and always the same columns: \code{path}, \code{local_path}, \code{before} (\code{"absent"},
 \code{"current"}, \code{"clean"}, \code{"modified"}, \code{"unknown"}, \code{"not_tracked"},
 \code{"not_a_file"}, \code{"unsafe_path"}), \code{action} (\code{"restored"}, \code{"replaced"},
 \code{"unchanged"}, \code{"skipped"}, \code{"not_run"}, \code{"failed"}, \code{"would_restore"},
 \code{"would_replace"}), \code{satisfied}, \code{size}, \code{target_hash}, \code{local_hash},
-\code{stored_copy}, \code{code}, \code{message}, \code{hint} and \code{duration_ms} (the
+\code{stored_copy}, \code{code}, \code{message}, \code{hint}, \code{duration_ms} (the
 milliseconds spent on the file, \code{NA} when it was never hashed or
-copied). \code{\link[=dvs_result_info]{dvs_result_info()}} returns
+copied) and \code{untracked} (\code{TRUE} for a \code{version} written to \code{to}, whose
+\code{local_path} is \code{to}). \code{\link[=dvs_result_info]{dvs_result_info()}} returns
 the outcome and the policy that applied. Outside a dvs project it raises an
 error. A configuration error, for example \code{on_conflict = "overwrite"}
 in dvs.toml, raises a \code{dvs_config_error}.
