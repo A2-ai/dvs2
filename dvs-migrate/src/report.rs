@@ -5,13 +5,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io;
 
-use dvs::migration::{ManifestEntry, PartialReason, Problem, Scope, Totals, WalkKind};
+use dvs::migration::{
+    ManifestEntry, PartialReason, PreviousRuns, Problem, Scope, Totals, WalkKind,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 use uuid::Uuid;
 
 use crate::git::redact;
+
+/// Why content a devious v0 sidecar names fails the server's hash check (R24)
+pub const PATH_HASH_HINT: &str = "devious v0.4 or earlier hashed the path, not the content";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,6 +59,20 @@ pub struct Report {
     pub totals: Option<Totals>,
     pub entries: Vec<ReportEntry>,
     pub problems: Vec<Problem>,
+    /// For the summary only: the document's keys are K12's
+    #[serde(skip)]
+    pub previous: Option<PreviousRuns>,
+    #[serde(skip)]
+    pub local: Option<LocalStorage>,
+}
+
+/// The summary's local storage line beyond `totals` (R22)
+#[derive(Debug, Clone, Copy)]
+pub struct LocalStorage {
+    /// Stores the walk saw that are here
+    pub stores: usize,
+    /// History's bytes on the server after a run, or that would be after a plan
+    pub on_server_bytes: u64,
 }
 
 impl Report {
@@ -72,6 +91,8 @@ impl Report {
             totals: None,
             entries: Vec::new(),
             problems: Vec::new(),
+            previous: None,
+            local: None,
         }
     }
 
@@ -120,6 +141,7 @@ impl Report {
     pub fn summary(&self, source: &str, target: Option<&ServerTarget>) -> String {
         let mut out = String::new();
         self.write_header(&mut out, source, target);
+        self.write_history(&mut out);
         self.write_facts(&mut out);
         self.write_missing(&mut out);
         self.write_stores_not_found(&mut out);
@@ -143,6 +165,29 @@ impl Report {
             ),
             None => writeln!(out, "\ndvs-migrate {command}  {source}\n"),
         };
+    }
+
+    /// What earlier runs migrated, when there is any (R16)
+    fn write_history(&self, out: &mut String) {
+        let Some(previous) = self.previous.as_ref().filter(|p| p.migrated > 0) else {
+            return;
+        };
+        let _ = write!(
+            out,
+            "  {} migrated in {} (last: {}, {})",
+            plural(previous.migrated as usize, "version"),
+            plural(previous.runs as usize, "run"),
+            previous.last_run_by,
+            previous.last_run_at.strftime("%Y-%m-%d")
+        );
+        if let Some(t) = &self.totals {
+            let _ = write!(
+                out,
+                "; this walk has {} not yet migrated",
+                t.entries.saturating_sub(t.already_migrated)
+            );
+        }
+        let _ = writeln!(out, "\n");
     }
 
     /// Failure, walk and counts, as aligned `key  value` lines
@@ -192,6 +237,22 @@ impl Report {
                 }
             }
             facts.push(("Missing", t.missing.to_string()));
+            if let Some(local) = &self.local {
+                let after = match self.command {
+                    Command::Plan => "would be on the server",
+                    Command::Run => "on the server after this run",
+                };
+                facts.push((
+                    "Storage",
+                    format!(
+                        "{} in {}; history references {}; {} {after}",
+                        dvs::format_size(t.storage_bytes),
+                        plural(local.stores, "store"),
+                        dvs::format_size(t.referenced_bytes),
+                        dvs::format_size(local.on_server_bytes),
+                    ),
+                ));
+            }
         }
         let width = facts.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
         for (key, value) in &facts {
@@ -340,8 +401,18 @@ fn missing_row(problem: &Problem) -> Option<MissingRow> {
             };
             (hash, paths, reason.to_string())
         }
-        Problem::Corrupt { hash, paths, .. } => {
-            (hash, paths, "local copy doesn't match its hash".to_string())
+        Problem::Corrupt {
+            hash,
+            paths,
+            message,
+            ..
+        } => {
+            let reason = if message.ends_with(PATH_HASH_HINT) {
+                PATH_HASH_HINT
+            } else {
+                "local copy doesn't match its hash"
+            };
+            (hash, paths, reason.to_string())
         }
         Problem::UploadRefused {
             hash,
@@ -539,6 +610,69 @@ mod tests {
         );
         assert!(
             summary.contains("\n  Nothing was sent (plan).\n"),
+            "{summary}"
+        );
+    }
+
+    #[test]
+    fn the_summary_opens_with_history_and_measures_local_storage() {
+        let mut report = report();
+        report.problems.clear();
+        report.previous = Some(PreviousRuns {
+            runs: 2,
+            migrated: 42,
+            last_run_by: "alice".into(),
+            last_run_at: "2026-11-07T10:00:00Z".parse().unwrap(),
+            last_source: None,
+        });
+        report.local = Some(LocalStorage {
+            stores: 3,
+            on_server_bytes: 900,
+        });
+        let totals = report.totals.as_mut().unwrap();
+        (
+            totals.already_migrated,
+            totals.storage_bytes,
+            totals.referenced_bytes,
+        ) = (57, 1200, 950);
+        let lines: Vec<String> = printed(&report, false).lines().map(String::from).collect();
+        assert_eq!(
+            lines[3],
+            "  42 versions migrated in 2 runs (last: alice, 2026-11-07); this walk has 3 not yet migrated"
+        );
+        assert_eq!(lines[4], "");
+        assert_eq!(
+            lines[10],
+            "  Storage    1.2 KB in 3 stores; history references 950 B; 900 B on the server \
+             after this run"
+        );
+
+        report.command = Command::Plan;
+        let summary = printed(&report, false);
+        assert!(
+            summary.contains("; 900 B would be on the server\n"),
+            "{summary}"
+        );
+        // Not in the document: `--json` is K12's keys only
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(json.get("previous").is_none() && json.get("local").is_none());
+
+        report.previous.as_mut().unwrap().migrated = 0;
+        assert!(!printed(&report, false).contains("migrated in"));
+    }
+
+    #[test]
+    fn a_path_hash_is_named_in_the_missing_list() {
+        let mut report = report();
+        report.problems = vec![Problem::Corrupt {
+            hash: hash(1),
+            paths: vec!["a.csv".into()],
+            looked_at: None,
+            message: format!("content hash mismatch; {PATH_HASH_HINT}"),
+        }];
+        let summary = printed(&report, false);
+        assert!(
+            summary.contains(&format!("{}  {PATH_HASH_HINT}\n", &hash(1)[..12])),
             "{summary}"
         );
     }

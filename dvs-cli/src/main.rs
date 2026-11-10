@@ -22,10 +22,9 @@ use dvs::auth::{
     delete_token, get_client_approve_url, get_token, initiate_device_approval, poll_for_token,
     revoke_token, store_token,
 };
-use dvs::config::{Config, OnConflict};
+use dvs::config::{Config, OnConflict, dvs1_config_path};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::{create_metadata_folder, init};
-use dvs::legacy::DVS1_CONFIG_FILE;
 use dvs::migrate::{
     Destination, MigrateOptions, MigrateReport, MissingHash, MissingState, migrate, prepare,
 };
@@ -95,15 +94,15 @@ pub enum Migrate {
         /// or the dvs2 local storage being replaced
         #[clap(long)]
         storage: Option<PathBuf>,
-        /// Keep dvs.yaml and the converted dvs1 sidecars
+        /// Keep dvs.yaml (or devious's .dvs.yaml) and the converted dvs1 sidecars
         #[clap(long)]
         no_clean: bool,
     },
     /// Move a dvs1 project onto dvs2 local storage. No data moves
     Local {
-        /// The storage directory. Defaults to `storage_dir` in dvs.yaml
+        /// The storage directory. Defaults to `storage_dir` in dvs.yaml (or .dvs.yaml)
         path: Option<PathBuf>,
-        /// Keep dvs.yaml and the converted dvs1 sidecars
+        /// Keep dvs.yaml (or devious's .dvs.yaml) and the converted dvs1 sidecars
         #[clap(long)]
         no_clean: bool,
     },
@@ -1238,6 +1237,15 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
     Ok(())
 }
 
+/// What `--no-clean` kept, when there is any of it.
+fn kept_line(report: &MigrateReport, clean: bool) -> Option<&'static str> {
+    let kept = !clean
+        && (dvs1_config_path(&report.project_root).is_some()
+            || !report.converted.is_empty()
+            || !report.duplicates.is_empty());
+    kept.then_some("Kept the dvs1 config and sidecars (--no-clean)")
+}
+
 fn print_migrate(report: &MigrateReport, destination: &Destination, clean: bool) {
     for warning in &report.warnings {
         eprintln!("Warning: {warning}");
@@ -1275,12 +1283,8 @@ fn print_migrate(report: &MigrateReport, destination: &Destination, clean: bool)
     }
     if !report.removed.is_empty() {
         println!("Removed {} dvs1 files", report.removed.len());
-    } else if !clean
-        && (report.project_root.join(DVS1_CONFIG_FILE).is_file()
-            || !report.converted.is_empty()
-            || !report.duplicates.is_empty())
-    {
-        println!("Kept dvs.yaml and the dvs1 sidecars (--no-clean)");
+    } else if let Some(kept) = kept_line(report, clean) {
+        println!("{kept}");
     }
     if !report.left.is_empty() {
         eprintln!("Left {} sidecars as they were:", report.left.len());
@@ -1545,6 +1549,31 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn no_clean_keeps_devious_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        let store = tmp.path().join("store");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(
+            root.join(".dvs.yaml"),
+            format!("storage-dir: {}\n", store.display()),
+        )
+        .unwrap();
+        let options = MigrateOptions {
+            clean: false,
+            upload_missing: false,
+        };
+        let destination = Destination::Local { path: None };
+        let report = migrate(prepare(&root, &destination, options).unwrap()).unwrap();
+        assert!(root.join(".dvs.yaml").is_file());
+        assert_eq!(
+            kept_line(&report, false),
+            Some("Kept the dvs1 config and sidecars (--no-clean)")
+        );
     }
 
     #[test]

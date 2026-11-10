@@ -5,6 +5,7 @@
 mod client;
 mod commands;
 mod git;
+mod orphans;
 mod report;
 mod storage;
 mod walk;
@@ -20,7 +21,7 @@ use dvs::backends::server::coded;
 use dvs::operation::{duration_ms, rfc3339_ms};
 use url::Url;
 
-use crate::client::Client;
+use crate::client::{Client, GaveUp, Refused};
 use crate::commands::{Phase, error_json};
 use crate::report::{Command, Report, ServerTarget};
 
@@ -40,7 +41,19 @@ enum Cmd {
     ///
     /// The server keeps each run's report on the project's Migration page. Run again until
     /// nothing new is sent, then make local storage read-only.
-    Run(Args),
+    Run(RunArgs),
+    /// List the blobs in the stores the repos' histories name that no commit references;
+    /// reads only, needs no key or server
+    Orphans(orphans::Args),
+}
+
+#[derive(clap::Args)]
+struct RunArgs {
+    #[command(flatten)]
+    args: Args,
+    /// Run although none of the walked commits is in the project's earlier runs
+    #[arg(long)]
+    other_source: bool,
 }
 
 #[derive(clap::Args)]
@@ -64,7 +77,7 @@ struct Args {
     json: bool,
 }
 
-fn parse_mapping(s: &str) -> Result<(String, String), String> {
+pub(crate) fn parse_mapping(s: &str) -> Result<(String, String), String> {
     match s.split_once('=') {
         Some((old, new)) if !old.is_empty() && !new.is_empty() => {
             Ok((old.to_string(), new.to_string()))
@@ -107,21 +120,57 @@ fn settings(args: &Args) -> Result<Settings> {
 fn execute(
     command: Command,
     args: &Args,
+    other_source: bool,
     settings: &Settings,
     started: Started,
     report: &mut Report,
 ) -> Result<()> {
     let quiet = args.json;
-    let mut plan = commands::plan(&args.repo, &settings.storage_map, &settings.client, quiet)?;
+    let plan = commands::plan(&args.repo, &settings.storage_map, &settings.client, quiet);
+    if command == Command::Run && plan.as_ref().is_err_and(gave_up) {
+        eprintln!("{}", commands::nothing_started());
+    }
+    let mut plan = plan?;
     match command {
-        Command::Plan => plan.fill(report, Phase::Plan),
+        Command::Plan => {
+            if let Some(why) = plan.different_source() {
+                eprintln!(
+                    "warning: {why}; `dvs-migrate run` refuses it unless --other-source is passed"
+                );
+            }
+            plan.fill(report, Phase::Plan);
+        }
         Command::Run => {
-            commands::run(&mut plan, &settings.client, report, quiet)?;
-            stamp(report, started);
-            settings.client.report(report.for_server())?;
+            let ran = commands::run(&mut plan, &settings.client, report, quiet, other_source)
+                .and_then(|()| {
+                    stamp(report, started);
+                    settings.client.report(report.for_server())
+                });
+            if ran.as_ref().is_err_and(gave_up) {
+                eprintln!("{}", plan.interrupted());
+            }
+            ran?;
         }
     }
     Ok(())
+}
+
+/// A call's retries ran out (R18)
+fn gave_up(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<GaveUp>().is_some()
+}
+
+/// The exit status: 2 for a usage error or a refusal a flag answers, 1 for any other
+/// failure, retries running out included
+fn exit_code(result: &Result<()>, printed: bool) -> i32 {
+    match result {
+        Err(e) if gave_up(e) => 1,
+        Err(e) if dvs::backend_error_code(e) == Some(ErrorCode::InvalidArguments) => 2,
+        Err(e) if e.downcast_ref::<Refused>().is_some() => 2,
+        Err(_) => 1,
+        Ok(()) if !printed => 1,
+        Ok(()) => 0,
+    }
 }
 
 /// When the command started, for the report's times
@@ -144,15 +193,16 @@ fn main() {
     };
     git::clean_up_on_signal();
     let cli = Cli::parse();
-    let (command, args) = match &cli.command {
-        Cmd::Plan(args) => (Command::Plan, args),
-        Cmd::Run(args) => (Command::Run, args),
+    let (command, args, other_source) = match &cli.command {
+        Cmd::Plan(args) => (Command::Plan, args, false),
+        Cmd::Run(run) => (Command::Run, &run.args, run.other_source),
+        Cmd::Orphans(args) => std::process::exit(orphans::main(args)),
     };
 
     let mut report = Report::new(command);
     let (result, target) = match settings(args) {
         Ok(s) => (
-            execute(command, args, &s, started, &mut report),
+            execute(command, args, other_source, &s, started, &mut report),
             Some(s.target),
         ),
         Err(e) => (Err(e), None),
@@ -181,11 +231,21 @@ fn main() {
         }
     }
 
-    let code = match &result {
-        Err(e) if dvs::backend_error_code(e) == Some(ErrorCode::InvalidArguments) => 2,
-        Err(_) => 1,
-        Ok(()) if printed.is_err() => 1,
-        Ok(()) => 0,
-    };
-    std::process::exit(code);
+    std::process::exit(exit_code(&result, printed.is_ok()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refusal_exits_2_and_retries_running_out_exit_1() {
+        let refused = Err(Refused("run again with --other-source".into()).into());
+        assert_eq!(exit_code(&refused, true), 2);
+        let gave_up = Err(client::tests::gave_up());
+        assert_eq!(exit_code(&gave_up, true), 1);
+        assert_eq!(exit_code(&Err(usage("no server")), true), 2);
+        assert_eq!(exit_code(&Ok(()), false), 1);
+        assert_eq!(exit_code(&Ok(()), true), 0);
+    }
 }

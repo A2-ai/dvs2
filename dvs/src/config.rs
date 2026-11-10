@@ -1,11 +1,11 @@
 use std::io;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::backends::Backend;
 use crate::backends::local::LocalBackend;
 use crate::backends::server::ServerBackend;
-use crate::legacy::DVS1_CONFIG_FILE;
+use crate::legacy::DVS1_CONFIG_FILES;
 use crate::paths::{CONFIG_FILE_NAME, DEFAULT_FOLDER_NAME, find_repo_root};
 use crate::progress::ProgressReader;
 use crate::utils::parse_size;
@@ -261,15 +261,36 @@ pub struct Config {
     get: Option<GetConfig>,
 }
 
-/// The dvs1 project at or above `dir`, looking no higher than its git root.
+/// The dvs1 or devious config in `dir`: `dvs.yaml`, else devious's `.dvs.yaml`.
+pub fn dvs1_config_path(dir: &Path) -> Option<PathBuf> {
+    DVS1_CONFIG_FILES
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.is_file())
+}
+
+/// The dvs1 project at or above `dir`, looking no higher than its git root: the
+/// folder with a dvs1 or devious config, else a git checkout that tracks
+/// devious `.dvsmeta` sidecars (R24).
 pub(crate) fn dvs1_root(dir: &Path) -> Option<&Path> {
-    let git_root = dir
+    let git_root = dir.ancestors().find(|d| d.join(".git").exists());
+    let config_root = dir
         .ancestors()
-        .find(|d| d.join(".git").exists())
-        .unwrap_or(dir);
-    dir.ancestors()
-        .take_while(|d| d.starts_with(git_root))
-        .find(|d| d.join(DVS1_CONFIG_FILE).is_file())
+        .take_while(|d| d.starts_with(git_root.unwrap_or(dir)))
+        .find(|d| dvs1_config_path(d).is_some());
+    config_root.or_else(|| git_root.filter(|root| tracks_devious_sidecars(root)))
+}
+
+/// Whether git tracks a `.dvsmeta` file in the checkout at `git_root`. Asks
+/// git's index rather than walking the working tree, whose ignored data files
+/// may be many and on a network filesystem. No git, no answer.
+fn tracks_devious_sidecars(git_root: &Path) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(git_root)
+        .args(["ls-files", "-z", "--", "*.dvsmeta"])
+        .output()
+        .is_ok_and(|out| out.status.success() && !out.stdout.is_empty())
 }
 
 impl Config {
@@ -329,15 +350,22 @@ impl Config {
         if find_repo_root(dir).join(CONFIG_FILE_NAME).exists() {
             return Ok(());
         }
-        match dvs1_root(dir) {
-            Some(dvs1_root) => Err(ConfigError(format!(
-                "{} is a dvs1 project ({DVS1_CONFIG_FILE}, no {CONFIG_FILE_NAME}): convert it with \
-                 `dvs migrate server <NAME> <URL>` or `dvs migrate local`",
-                dvs1_root.display()
-            ))
-            .into()),
-            None => Ok(()),
-        }
+        let Some(dvs1_root) = dvs1_root(dir) else {
+            return Ok(());
+        };
+        let found = match dvs1_config_path(dvs1_root) {
+            Some(config) => config
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            None => "devious .dvsmeta sidecars".to_string(),
+        };
+        Err(ConfigError(format!(
+            "{} is a dvs1 project ({found}, no {CONFIG_FILE_NAME}): convert it with \
+             `dvs migrate server <NAME> <URL>` or `dvs migrate local`",
+            dvs1_root.display()
+        ))
+        .into())
     }
 
     pub fn set_metadata_folder_name(&mut self, name: String) {
@@ -395,7 +423,15 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::create_temp_git_repo;
+    use crate::legacy::DVS1_CONFIG_FILE;
+    use crate::testutil::{create_temp_git_repo, git};
+
+    #[test]
+    fn no_devious_sidecars_outside_git() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.csv.dvsmeta"), "{}").unwrap();
+        assert!(!tracks_devious_sidecars(tmp.path()));
+    }
 
     #[test]
     fn config_save_and_find_roundtrip() {
@@ -439,6 +475,36 @@ mod tests {
         )
         .unwrap();
         assert!(Config::find(&root).is_none());
+    }
+
+    #[test]
+    fn devious_config_is_a_dvs1_project() {
+        let (_tmp, root) = create_temp_git_repo();
+        // devious before v2.0.0 wrote this, with `storage-dir`
+        fs::write(root.join(".dvs.yaml"), "storage-dir: /store\n").unwrap();
+        let err = Config::refuse_dvs1(&root).unwrap_err();
+        assert!(
+            err.to_string().contains("(.dvs.yaml, no dvs.toml)"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn tracked_devious_sidecars_are_a_dvs1_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(tmp.path()).unwrap();
+        git(&root, &["init", "-q"]);
+        fs::create_dir(root.join("data")).unwrap();
+        // An untracked one is not looked for
+        fs::write(root.join("data/a.csv.dvsmeta"), "{}").unwrap();
+        Config::refuse_dvs1(root.join("data")).unwrap();
+
+        git(&root, &["add", "data/a.csv.dvsmeta"]);
+        let err = Config::refuse_dvs1(root.join("data")).unwrap_err();
+        assert!(
+            err.to_string().contains("devious .dvsmeta sidecars"),
+            "{err}"
+        );
     }
 
     #[cfg(unix)]

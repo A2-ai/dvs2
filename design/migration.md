@@ -1048,7 +1048,7 @@ devious is the Go dvs that came before the dvs1 R package. Its formats are in hi
 | devious releases | Dates | Sidecar | Sidecar keys (JSON) | Config | Store layout | Hash |
 |---|---|---|---|---|---|---|
 | v0.1–v0.4 | 2023-08-03 – 08-08 | `<file>.dvsmeta` | `FileHash` (Go field names) | `.dvs.yaml`, `storage-dir` | `<storage>/<hash>.dvsfile` | blake3 of the file's **path** |
-| v0.4.1–v0.7.2 | 2023-08-08 – 08-14 | `<file>.dvsmeta` | `FileHash`, `FileSize`, `Timestamp`, `Message`, `User` | `.dvs.yaml`, `storage-dir` | `<storage>/<hash>.dvsfile` | blake3 of content |
+| v0.4.1–v0.7.2 | 2023-08-08 – 08-14 | `<file>.dvsmeta` | `FileHash` (Go field names); `FileSize` from v0.5, `Timestamp`, `Message`, `User` from v0.7 | `.dvs.yaml`, `storage-dir` | `<storage>/<hash>.dvsfile` | blake3 of content |
 | v1.0–v1.2.1 | 2023-08-15 – 08-24 | `<file>.dvsmeta` | `blake3_checksum`, `file_size_bytes`, `timestamp`, `message`, `user` | `.dvs.yaml`, `storage-dir` | `<storage>/<hash>.dvsfile` | blake3 of content |
 | v2.0.0–v2.0.3 | 2023-10-11 – 2024-08-01 | `<file>.dvs` | `blake3_checksum`, `file_size_bytes`, `timestamp`, `message`, `saved_by` | `dvs.yaml`, `storage-dir` | `<storage>/<hh>/<rest>` | blake3 of content |
 | normalize fields (v0.3.0) | 2024-08-15 | `<file>.dvs` | dvs1 shape (`size`, `add_time`, `saved_by`) | `dvs.yaml`, `storage_dir` | `<storage>/<hh>/<rest>` | blake3 of content |
@@ -1064,3 +1064,113 @@ devious v2's own `dvs migrate` renames `.dvsmeta` to `.dvs`, rewrites the sideca
 - **`dvs migrate` (users).** A checkout whose working tree has devious sidecars or a devious config is treated like a dvs1 checkout (D16, W2, W6). Its sidecars are converted to dvs2, and its `.dvsmeta` sidecars and `.dvs.yaml` are removed, as dvs1's are.
 
 *Decided — Wes, 2026-11-09 (shape names, the `dvs migrate` coverage: my call, reversible).*
+
+## Resolutions from implementation review (R25–R32)
+
+### R25 — The earlier source is named
+
+R17's refusal names the earlier runs' source. `previous` (R16) gains `last_source`: the `scope.source` of the latest run that recorded a migrated version, from its stored report, or `null` when that run has no report.
+
+*Decided — follows R17.*
+
+### R26 — Repeated calls return what the first one did
+
+R18 retries calls on the basis that a repeat is safe. When the server did the work and the reply was lost, the repeat must not be refused.
+
+- Start run takes `request_id`, a UUID the client generates once per start and sends on every retry of it. A start whose `request_id` matches a run the server already opened returns that run (201, with the same `run_id`, `started_at`, `compression` and an empty `closed`) and changes nothing.
+- A report for a run that is already reported returns 200 with the stored counts, and stores nothing.
+- A retried manifest or blob call answers from what is already recorded. The client's counts for that call can come out low; they are not corrected.
+
+*Decided — Wes, 2026-11-10.*
+
+### R27 — Content that arrives after its run closed
+
+A blob upload can still be streaming when its run is taken over or ended (R19, R20). After the content is stored, the server checks the run again under its lock. If the run has closed, the content stays and its completion is still recorded, but the run's frozen counts and its `closed` entry stay as they were at close. If the closed run had changed nothing at close and content arrived afterwards, its "migration run by" event is written then.
+
+*Decided — Wes, 2026-11-10.*
+
+### R28 — `dvs migrate local` refuses a devious store it cannot read
+
+dvs2 local storage reads only `<hh>/<rest>` (D13: it never reads older layouts). `dvs migrate local` refuses when any version it would convert has its content only in another layout (`<hash>.dvsfile` or `<hash>`). The refusal gives the count and says to use `dvs migrate server --upload-missing`, or to move the store into the `<hh>/<rest>` layout first. Nothing is converted or removed.
+
+*Decided — Wes, 2026-11-10.*
+
+### R29 — `orphans` lists files, and warns about unreadable sidecars
+
+- Every orphan file is its own entry, including another copy, in a second layout, of a hash history references (the copy `find_blob` would not use). Each orphan gains `path`, relative to its store: `{hash, path, size, modified}`.
+- When any walk has sidecars it could not read, `orphans` warns that content they name may be listed as orphans.
+- An unreadable folder in a store is skipped with a warning; the rest of the store is listed. This holds for R22's totals too.
+
+*Decided — orchestrator, small call, 2026-11-10.*
+
+### R30 — Clarifications from the R25–R29 review
+
+- A repeated start (R26) whose `request_id` matches a run that has since closed is 409 `migration run <id> was closed (<interrupted|taken over by <admin>|reported>); start a new run`. Only a still-open run is returned.
+- R18's "interrupted after N of M versions" counts as N the versions this run brought to completion on the server (content present), the same measure as R21's `migrated`.
+- R29: an error reading a store's root, including while listing it, drops the store with its warning, in `orphans` and in R22's totals.
+
+*Decided — orchestrator, small calls, 2026-11-10.*
+
+### R31 — A run that fails closes itself
+
+When `dvs-migrate run` fails after its run is opened, it sends its report before exiting, so the run closes and does not hold the project (R19, R20):
+
+- A refusal or error from the server or locally (for example a locked project's 423 on `manifest`) sends the report with `outcome: "failed"` and `error` set.
+- Ctrl-C sends it with `outcome: "cancelled"`, best effort, then cleans up as R10 says.
+- When retries run out (R18) the server cannot be reached, so no report is sent; that run stays open to be resumed, and becomes abandoned after the window.
+
+The report carries what the run did up to that point. If sending it fails, the run exits with its original error and the run is left as it is.
+
+*Decided — Wes, 2026-11-10.*
+
+### R32 — "Best effort" for a cancelled report
+
+R31's cancelled report is best effort: the binary notices Ctrl-C between calls and waits at most 10 s for the report. A signal during a long upload, a retry wait, the start of the run or the final report exits at once with no cancelled report, and the run is left open to become abandoned (R19). Once a signal has arrived, a failure that follows it is reported as `cancelled`, not `failed`.
+
+*Decided — orchestrator, small call, 2026-11-10.*
+
+## Resume instead of lock (R33)
+
+### R33 — A project has one open run, and the next run resumes it
+
+Supersedes R19, R20, R21, R26's start-run part, R27, R30's first bullet, R31 and R32. The goal is the same (runs never collide, nothing is lost when a run fails part way) with far less machinery: every migration call is already safe to repeat (D10, I6), so a later run can simply finish an earlier one.
+
+- **Start run.** If the project has an open run, start run returns it (200) with `resumed: {started_by, started_at, migrated}` (what the open run has completed so far) and opens nothing. Otherwise it opens a run (201) with `resumed: null`. Two starts are serialized by the project lock, so a project never has two open runs. `take_over`, `request_id` and `closed` are removed from the wire.
+- **The client** prints, for a resumed run, `resuming run started by alice at 2026-11-05 14:02 UTC; 1,204 versions already migrated`. `--take-over` is removed.
+- **Only a report closes a run.** There is no "interrupted" state, no take-over and no "End this run". A run that fails, is cancelled or loses the server stays open, and the next `run` resumes it. R10's Ctrl-C cleanup is unchanged; no report is sent on failure or Ctrl-C.
+- **`other_source`** on a resumed run becomes true if either start asked for it.
+- **Keys.** A migrate key expires 8 hours after its *last* use (D2's "8h after first use" becomes "8h after last use"). Reissuing or revoking a key is allowed at any time; with a run open, the Migration page asks for confirmation ("A run is open (started by alice at 14:02). Revoking the key pauses it; the next run with a new key resumes it."). Nothing about runs is tracked for this: no activity column, no active window.
+- **Repeated report.** A report for a run that is already reported returns 200 with the stored counts and stores nothing (kept from R26).
+- **Two admins at once** both feed the one open run. That is safe because every call is idempotent; the first report closes the run and the second gets the repeated-report 200.
+- **Kept unchanged:** R16, R17 and R25 (history and different source), R18 (timeouts and retries; the "interrupted after N of M" line now ends "run again to resume" and is still exit 1), R22, R23, R24, R28, R29 and R30's other bullets.
+- **Schema (0002, edited in place: unreleased):** `migration_runs` drops `last_activity_at`, `taken_over_by`, `request_id` and `uploaded_bytes`, and its `state` no longer has `interrupted`. `migration_keys` gets `last_used_at` if it does not have it.
+
+*Decided — Wes, 2026-11-10.*
+
+### R34 — Clarifications from the R33 review
+
+- **Superseded text.** K4's start-run row (201 only), K4's error table ("reported or interrupted"), K6's run states ("interrupted") and D2's "8h after first use" are superseded by R33: start run answers 200 or 201, a run is open or reported, and a key expires 8h after its last use.
+- **A resumed run's report** describes the attempt that sent it: its scope, totals and problems are that walk's. Versions the run completed in an earlier attempt count as already migrated in it. The run's counts on the Migration page are the server's, across every attempt. A run fed by two different walks (`--other-source`) holds both walks' entries.
+- **`uploaded` counts each version once**, when its content arrives and completes it, however many clients sent it.
+- **Content arriving after the run's report** (two admins on one run) is stored and completes its versions; the closed run's counts are not changed and no event is added.
+- **A refused call** (expired, revoked, other project, locked project) is not a use of the key.
+- **The Migration page** warns before issuing or revoking a key whenever a run is open, whether or not the current key is live.
+- **R16's line** says how many versions the walk has that are not migrated yet: "this walk has 2 not yet migrated".
+
+*Decided — orchestrator, small calls, 2026-11-10.*
+
+## In progress is shown, never enforced (R35)
+
+### R35 — A run is one invocation; runs never block each other
+
+Supersedes R33's resume (start run returning the open run, `resumed`, the "resuming" line) and R34's resumed-report bullet. The rest of R33 and R34 stands: only a run's own report closes it, there is no take-over, no "End this run", no failure or cancel report, keys expire 8h after last use, a repeated report answers 200, and `uploaded` credits each version once.
+
+- **A run is one `dvs-migrate run`.** Start run always opens a new run (201). It never refuses, resumes or closes another run. Every call is safe to repeat (D10, I6), so runs going at once cannot duplicate or corrupt anything; each version is credited to the run that completed it.
+- **Start run answers `in_progress`**: the project's other open runs with activity in the last 15 minutes, each `{started_by, started_at, last_activity_at}`. The client prints one note per run on stderr and carries on: `note: a run by bob is in progress (started 2026-11-10 14:02 UTC, last activity 14:31 UTC); both can run, the server keeps one copy of each version`.
+- **Activity is for display.** Every migration call carrying a run id sets that run's `last_activity_at`. On the Migration page an open run reads "in progress" when its last activity is within 15 minutes, and "interrupted after N versions (no activity since <time>)" otherwise. Nothing changes a run because of it.
+- **A run that dies stays open and shows as interrupted.** The next `run` is a new run that does the remaining work.
+- **Keys.** Reissue and revoke always work. While a run is in progress the Migration page asks for confirmation ("A run by alice is in progress (last activity 14:31). Revoking the key stops it; run again with a new key to carry on.").
+- **Schema (0002, edited in place: unreleased):** `migration_runs.last_activity_at` comes back (display only). `state` stays `open` or `reported`.
+
+*Decided — Wes, 2026-11-10.*
+- R18's interrupted line ends "run again to carry on" (a new run does the remaining work); "resume" no longer names a mechanism.

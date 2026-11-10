@@ -37,7 +37,7 @@ pub use operation::{
 };
 pub use paths::{AddPathStatus, DvsPaths, PathFilter, ProjectPath, find_repo_root};
 pub use progress::FileProgress;
-pub use utils::{format_size, http_agent, set_num_threads};
+pub use utils::{format_size, http_agent, http_agent_config, set_num_threads};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -76,6 +76,18 @@ pub mod testutil {
         }
         fs::write(&path, content).unwrap();
         path
+    }
+
+    /// Runs `git -C root <args>`, which must succeed.
+    pub fn git(root: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap()
+            .status;
+        assert!(status.success(), "git {args:?}");
     }
 
     /// Initializes a DVS repository in the given directory.

@@ -153,23 +153,30 @@ fn insecure_tls_requested(value: Option<&str>) -> bool {
     value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
+/// What every dvs HTTP agent shares: dvs's user agent, the OS certificate store,
+/// `DVS_INSECURE`, and an error status returned as a response. Each agent adds its own
+/// timeouts.
+pub fn http_agent_config() -> ureq::config::ConfigBuilder<ureq::typestate::AgentScope> {
+    let insecure = insecure_tls_requested(std::env::var("DVS_INSECURE").ok().as_deref());
+    if insecure {
+        log::warn!("TLS certificate verification is disabled via DVS_INSECURE");
+    }
+    ureq::Agent::config_builder()
+        .user_agent(format!("dvs/{}", crate::VERSION))
+        // Trust the OS certificate store so internal CAs work
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .disable_verification(insecure)
+                .build(),
+        )
+        .http_status_as_error(false)
+}
+
 pub fn http_agent() -> &'static ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
-        let insecure = insecure_tls_requested(std::env::var("DVS_INSECURE").ok().as_deref());
-        if insecure {
-            log::warn!("TLS certificate verification is disabled via DVS_INSECURE");
-        }
-        ureq::Agent::config_builder()
-            .user_agent(format!("dvs/{}", crate::VERSION))
-            // Trust the OS certificate store so internal CAs work
-            .tls_config(
-                ureq::tls::TlsConfig::builder()
-                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-                    .disable_verification(insecure)
-                    .build(),
-            )
-            .http_status_as_error(false)
+        http_agent_config()
             .timeout_connect(Some(Duration::from_secs(5)))
             .max_idle_connections(ENV_MAX_THREADS)
             .max_idle_connections_per_host(ENV_MAX_THREADS)

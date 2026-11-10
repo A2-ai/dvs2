@@ -83,6 +83,9 @@ pub struct LookupRequest {
     pub entries: Vec<EntryRef>,
     #[serde(default)]
     pub users: Vec<String>,
+    /// The walk's commit ids, to tell whether earlier runs walked the same repo (R17)
+    #[serde(default)]
+    pub commits: Vec<String>,
 }
 
 /// What the project already has of a walk: content, migrated versions and directory users
@@ -95,6 +98,24 @@ pub struct LookupResponse {
     #[serde(default)]
     pub unmatched_users: Vec<String>,
     pub compression: Compression,
+    /// The project's earlier runs; `None` when there have been none (R16)
+    #[serde(default)]
+    pub previous: Option<PreviousRuns>,
+    /// How many of the request's `commits` earlier runs recorded for their entries (R17)
+    #[serde(default)]
+    pub known_commits: u64,
+}
+
+/// What earlier runs migrated into the project, and who ran the last one
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviousRuns {
+    pub runs: u64,
+    pub migrated: u64,
+    pub last_run_by: String,
+    pub last_run_at: Timestamp,
+    /// The repo the latest such run walked, as its report gave it (R17, R25)
+    #[serde(default)]
+    pub last_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +130,9 @@ pub struct StartRunRequest {
     pub client_version: String,
     pub walk: WalkKind,
     pub totals: Totals,
+    /// Run although no walked commit is one earlier runs recorded (R17)
+    #[serde(default)]
+    pub other_source: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +141,18 @@ pub struct StartRunResponse {
     /// RFC 3339, as the server writes it
     pub started_at: String,
     pub compression: Compression,
+    /// The project's other runs in progress when this one started (R35)
+    #[serde(default)]
+    pub in_progress: Vec<InProgressRun>,
+}
+
+/// Another run of the project with recent activity (R35)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InProgressRun {
+    pub started_by: String,
+    /// RFC 3339, as the server writes it, like `StartRunResponse::started_at`
+    pub started_at: String,
+    pub last_activity_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +186,12 @@ pub struct Totals {
     /// What a run stored and newly recorded; `None` for a plan
     pub uploaded: Option<usize>,
     pub migrated: Option<usize>,
+    /// Every blob file in the stores the walk saw (R22)
+    pub storage_bytes: u64,
+    /// The stored size of each hash in history found in local storage, once per hash
+    pub referenced_bytes: u64,
+    /// What the project holds of history after a run; `None` for a plan
+    pub on_server_bytes: Option<u64>,
 }
 
 /// What a walk covered. Keys left out other than `walk` are empty.
@@ -336,7 +378,69 @@ mod tests {
         };
         pin(
             &totals,
-            r#"{"sidecars":{"dvs1":1},"entries":1,"unique_hashes":0,"bytes":0,"on_server":0,"to_upload":0,"missing":0,"already_migrated":0,"user_mismatches":0,"uploaded":1,"migrated":null}"#,
+            r#"{"sidecars":{"dvs1":1},"entries":1,"unique_hashes":0,"bytes":0,"on_server":0,"to_upload":0,"missing":0,"already_migrated":0,"user_mismatches":0,"uploaded":1,"migrated":null,"storage_bytes":0,"referenced_bytes":0,"on_server_bytes":null}"#,
+        );
+        let totals = Totals {
+            storage_bytes: 30,
+            referenced_bytes: 20,
+            on_server_bytes: Some(10),
+            ..Totals::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&totals).unwrap()["on_server_bytes"],
+            10
+        );
+
+        let lookup = LookupRequest {
+            hashes: vec![hash.clone()],
+            commits: vec!["c1".into()],
+            ..LookupRequest::default()
+        };
+        pin(
+            &lookup,
+            &format!(r#"{{"hashes":["{hash}"],"entries":[],"users":[],"commits":["c1"]}}"#),
+        );
+
+        let found = LookupResponse {
+            have: Vec::new(),
+            migrated: Vec::new(),
+            unmatched_users: Vec::new(),
+            compression: Compression::Zstd,
+            previous: Some(PreviousRuns {
+                runs: 2,
+                migrated: 42,
+                last_run_by: "alice".into(),
+                last_run_at: "2026-11-07T10:00:00Z".parse().unwrap(),
+                last_source: Some("/old/clone/project".into()),
+            }),
+            known_commits: 3,
+        };
+        pin(
+            &found,
+            r#"{"have":[],"migrated":[],"unmatched_users":[],"compression":"zstd","previous":{"runs":2,"migrated":42,"last_run_by":"alice","last_run_at":"2026-11-07T10:00:00Z","last_source":"/old/clone/project"},"known_commits":3}"#,
+        );
+
+        let start = StartRunRequest {
+            client_version: "dvs-migrate 0.1.0".into(),
+            walk: WalkKind::Full,
+            totals: Totals::default(),
+            other_source: true,
+        };
+        assert_eq!(serde_json::to_value(&start).unwrap()["other_source"], true);
+
+        let started = StartRunResponse {
+            run_id: Uuid::nil(),
+            started_at: "2026-11-05T14:02:11.123Z".into(),
+            compression: Compression::None,
+            in_progress: vec![InProgressRun {
+                started_by: "alice".into(),
+                started_at: "2026-11-05T13:00:00Z".into(),
+                last_activity_at: "2026-11-05T14:01:00Z".into(),
+            }],
+        };
+        pin(
+            &started,
+            r#"{"run_id":"00000000-0000-0000-0000-000000000000","started_at":"2026-11-05T14:02:11.123Z","compression":"none","in_progress":[{"started_by":"alice","started_at":"2026-11-05T13:00:00Z","last_activity_at":"2026-11-05T14:01:00Z"}]}"#,
         );
 
         let problem = Problem::Missing {
@@ -357,5 +461,42 @@ mod tests {
             serde_json::to_value(problem.kind()).unwrap(),
             serde_json::to_value(&problem).unwrap()["kind"]
         );
+    }
+
+    /// Bodies from before R16-R22 still parse, the new keys taking their defaults.
+    #[test]
+    fn older_bodies_parse_with_defaults() {
+        let lookup: LookupRequest = serde_json::from_str(r#"{"hashes":[]}"#).unwrap();
+        assert!(lookup.commits.is_empty());
+
+        let found: LookupResponse =
+            serde_json::from_str(r#"{"have":[],"compression":"zstd"}"#).unwrap();
+        assert_eq!((found.previous, found.known_commits), (None, 0));
+        let previous: PreviousRuns = serde_json::from_str(
+            r#"{"runs":1,"migrated":1,"last_run_by":"a","last_run_at":"2026-11-07T10:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(previous.last_source, None);
+
+        let start: StartRunRequest =
+            serde_json::from_str(r#"{"client_version":"v","walk":"full","totals":{}}"#).unwrap();
+        assert!(!start.other_source);
+        assert_eq!(start.totals.on_server_bytes, None);
+
+        let started: StartRunResponse = serde_json::from_str(
+            r#"{"run_id":"00000000-0000-0000-0000-000000000000","started_at":"t","compression":"none"}"#,
+        )
+        .unwrap();
+        assert!(started.in_progress.is_empty());
+    }
+
+    /// A total of the wrong type is refused, not defaulted: the server's 400
+    /// `invalid report` relies on it.
+    #[test]
+    fn totals_of_the_wrong_type_are_refused() {
+        for key in ["storage_bytes", "referenced_bytes", "on_server_bytes"] {
+            let json = format!(r#"{{"{key}":"5"}}"#);
+            assert!(serde_json::from_str::<Totals>(&json).is_err(), "{key}");
+        }
     }
 }

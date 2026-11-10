@@ -11,7 +11,7 @@ use dvs::ProjectPath;
 use dvs::audit::{Action, parse_audit_log};
 use dvs::backends::Backend;
 use dvs::config::Config;
-use dvs::legacy::{DVS1_CONFIG_FILE, Dvs1Config, Sidecar, SidecarShape, classify_sidecar};
+use dvs::legacy::{DVS1_CONFIG_FILES, Dvs1Config, Sidecar, SidecarShape, classify_sidecar};
 use dvs::migration::{
     AttributionSource, EntryCommit, EntryRef, ManifestEntry, Problem, StorageSeen, StoreKind,
 };
@@ -88,7 +88,8 @@ struct SidecarPair {
     shape: SidecarShape,
 }
 
-/// What a commit's `dvs.toml` or `dvs.yaml` says about where its sidecars and content are
+/// What a commit's `dvs.toml`, `dvs.yaml` or `.dvs.yaml` says about where its sidecars and
+/// content are
 #[derive(Clone)]
 struct ConfigFacts {
     store: Option<(String, StoreKind)>,
@@ -362,9 +363,13 @@ impl Fold<'_> {
             dvs2_store = config.store.map(|(path, kind)| self.store(path, kind));
         }
         let mut dvs1_store = None;
-        if let Some(blob) = self.objects.root_file(&commit.tree, DVS1_CONFIG_FILE)? {
-            let config = self.config(DVS1_CONFIG_FILE, &blob, commit)?;
-            dvs1_store = config.store.map(|(path, kind)| self.store(path, kind));
+        // dvs1's `dvs.yaml`, else devious's `.dvs.yaml`
+        for name in DVS1_CONFIG_FILES {
+            if let Some(blob) = self.objects.root_file(&commit.tree, name)? {
+                let config = self.config(name, &blob, commit)?;
+                dvs1_store = config.store.map(|(path, kind)| self.store(path, kind));
+                break;
+            }
         }
         let folder = match self.folders.iter().position(|f| *f == folder) {
             Some(i) => i,
@@ -599,7 +604,7 @@ impl Fold<'_> {
 
 fn parse_config(name: &str, bytes: &[u8]) -> std::result::Result<ConfigFacts, String> {
     let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
-    if name == DVS1_CONFIG_FILE {
+    if DVS1_CONFIG_FILES.contains(&name) {
         let config = Dvs1Config::from_yaml(text).map_err(|e| format!("{e:#}"))?;
         return Ok(ConfigFacts {
             store: Some((
@@ -1033,6 +1038,45 @@ pub(crate) mod tests {
                 remapped_to: "/elsewhere".into(),
             }]
         );
+    }
+
+    #[test]
+    fn devious_sidecars_and_config_are_read_from_history() {
+        let repo = Repo::new();
+        repo.write(".dvs.yaml", "storage-dir: /devious/store\n");
+        repo.write(
+            "data/a.csv.dvsmeta",
+            &format!(
+                r#"{{"blake3_checksum": "{}", "file_size_bytes": 5,
+                    "timestamp": "2023-08-15T10:11:12.5-04:00", "message": "", "user": "amy"}}"#,
+                hash(1)
+            ),
+        );
+        repo.write("b.csv.dvsmeta", &format!(r#"{{"FileHash":"{}"}}"#, hash(2)));
+        repo.commit("2023-08-16T00:00:00Z", "Jane Doe", "jdoe@example.com");
+
+        let walk = repo.walk(&BTreeMap::new());
+        assert_eq!(
+            walk.storage,
+            vec![StorageSeen {
+                path: "/devious/store".into(),
+                kind: StoreKind::Dvs1,
+                remapped_to: None,
+            }]
+        );
+        let a = find(&walk, "data/a.csv", &hash(1));
+        assert_eq!(a.shape, SidecarShape::DeviousV1);
+        assert_eq!(a.sidecar_path, "data/a.csv.dvsmeta");
+        assert_eq!(a.storage_path.as_deref(), Some("/devious/store"));
+        assert_eq!(
+            (a.recorded_user.as_str(), a.recorded_at.to_string()),
+            ("amy", "2023-08-15T14:11:12.5Z".to_string())
+        );
+        let b = find(&walk, "b.csv", &hash(2));
+        assert_eq!((b.shape, b.size), (SidecarShape::DeviousV0, 0));
+        assert_eq!(b.recorded_user_source, AttributionSource::Commit);
+        assert_eq!(walk.sidecars[&SidecarShape::DeviousV1], 1);
+        assert!(walk.problems.is_empty(), "{:?}", walk.problems);
     }
 
     #[test]

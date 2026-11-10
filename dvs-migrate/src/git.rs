@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::Mutex;
 
 use anyhow::{Context, Result, bail};
+use dvs::legacy::SIDECAR_SUFFIXES;
 use dvs::migration::PartialReason;
 use tempfile::TempDir;
 
@@ -340,8 +341,9 @@ impl Interner {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BlobId(u32);
 
-/// A tree cut down to its `*.dvs` files and the folders holding some, in tree order, with
-/// names and blob ids interned (`Objects::name`, `Objects::blob`)
+/// A tree cut down to its sidecars (`*.dvs`, and devious's `*.dvsmeta`) and the folders
+/// holding some, in tree order, with names and blob ids interned (`Objects::name`,
+/// `Objects::blob`)
 #[derive(Debug, Default)]
 pub struct DvsTree {
     pub items: Vec<DvsItem>,
@@ -433,7 +435,7 @@ impl Objects {
         &self.blobs.strings[id.0 as usize]
     }
 
-    /// Every regular file named `*.dvs` under a tree
+    /// Every regular file named `*.dvs` or `*.dvsmeta` under a tree
     pub fn dvs_tree(&mut self, tree: &str) -> Result<Rc<DvsTree>> {
         if let Some(found) = self.trees.get(tree) {
             return Ok(found.clone());
@@ -448,7 +450,9 @@ impl Objects {
                         tree: sub,
                     });
                 }
-            } else if mode.starts_with("100") && name.ends_with(".dvs") {
+            } else if mode.starts_with("100")
+                && SIDECAR_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+            {
                 items.push(DvsItem::File {
                     name: self.names.id(&name),
                     blob: BlobId(self.blobs.id(&oid)),
