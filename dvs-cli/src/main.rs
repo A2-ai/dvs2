@@ -25,10 +25,16 @@ use dvs::auth::{
 use dvs::config::{Config, OnConflict, dvs1_config_path};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::{create_metadata_folder, init};
-use dvs::migrate::{
-    Destination, MigrateOptions, MigrateReport, MissingHash, MissingState, migrate, prepare,
+use dvs::migrate::import::{
+    ImportPlan, ImportReport, Interrupted, Refused, import, prepare_import,
 };
+use dvs::migrate::{
+    Destination, MigrateOptions, MigrateReport, MissingHash, MissingState, Prepared, migrate,
+    prepare,
+};
+use dvs::migration::{Content, Problem};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
+use dvs::retry::Retrying;
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
     FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow,
@@ -97,6 +103,12 @@ pub enum Migrate {
         /// Keep dvs.yaml (or devious's .dvs.yaml) and the converted dvs1 sidecars
         #[clap(long)]
         no_clean: bool,
+        /// Import the store's audit log as the project's history (server admins only)
+        #[clap(long, conflicts_with_all = ["upload_missing", "storage"])]
+        import_history: bool,
+        /// The project path this checkout is, when the store's audit log names several
+        #[clap(long, requires = "import_history")]
+        project_path: Option<PathBuf>,
     },
     /// Move a dvs1 project onto dvs2 local storage. No data moves
     Local {
@@ -1107,6 +1119,16 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 println!("{}", tabled::Table::new(rows));
             }
         }
+        Command::Migrate(Migrate::Server {
+            name,
+            url,
+            no_clean,
+            import_history: true,
+            project_path,
+            ..
+        }) => {
+            import_history(cli.json, &current_dir, name, url, project_path, !no_clean)?;
+        }
         Command::Migrate(to) => {
             let (destination, options) = match to {
                 Migrate::Server {
@@ -1115,6 +1137,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                     upload_missing,
                     storage,
                     no_clean,
+                    ..
                 } => {
                     let storage = storage.map(std::path::absolute).transpose()?;
                     let options = MigrateOptions {
@@ -1133,29 +1156,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 }
             };
             let prepared = prepare(&current_dir, &destination, options)?;
-            if let Destination::Server { url, .. } = &destination
-                && get_token(url)?.is_none()
-            {
-                run_device_login(url, cli.json)?;
-            }
-            let report = migrate(prepared)?;
-            let outcome = if report.is_partial() {
-                RunOutcome::Partial
-            } else {
-                RunOutcome::Complete
-            };
-            if cli.json {
-                let mut result = output::envelope("migrate", false);
-                result["outcome"] = json!(outcome);
-                let fields = serde_json::to_value(&report)?;
-                for (key, value) in fields.as_object().expect("the report is an object") {
-                    result[key] = value.clone();
-                }
-                output::emit(result);
-            } else {
-                print_migrate(&report, &destination, options.clean);
-            }
-            summary_exit(outcome)?;
+            run_migrate(cli.json, prepared, &destination, options.clean)?;
         }
         Command::Login { url: Some(url) } => {
             run_device_login(&url, cli.json)?;
@@ -1235,6 +1236,164 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Signs in for a server if needed, then migrates and prints the report.
+fn run_migrate(
+    json: bool,
+    prepared: Prepared,
+    destination: &Destination,
+    clean: bool,
+) -> Result<()> {
+    if let Destination::Server { url, .. } = destination
+        && get_token(url)?.is_none()
+    {
+        run_device_login(url, json)?;
+    }
+    let report = migrate(prepared)?;
+    let outcome = if report.is_partial() {
+        RunOutcome::Partial
+    } else {
+        RunOutcome::Complete
+    };
+    if json {
+        let mut result = output::envelope("migrate", false);
+        result["outcome"] = json!(outcome);
+        let fields = serde_json::to_value(&report)?;
+        for (key, value) in fields.as_object().expect("the report is an object") {
+            result[key] = value.clone();
+        }
+        output::emit(result);
+    } else {
+        print_migrate(&report, destination, clean);
+    }
+    summary_exit(outcome)
+}
+
+/// `dvs migrate server --import-history`: every refusal before signing in, then the
+/// import, then the switch (log import C1-C3).
+fn import_history(
+    json: bool,
+    current_dir: &std::path::Path,
+    name: String,
+    url: Url,
+    project_path: Option<PathBuf>,
+    clean: bool,
+) -> Result<()> {
+    let destination = Destination::Server {
+        name: name.clone(),
+        url: url.clone(),
+        storage: None,
+    };
+    let plan = prepare_import(
+        current_dir,
+        name,
+        url.clone(),
+        project_path.as_deref(),
+        clean,
+    )
+    .map_err(|e| refused(e, json))?;
+    let prepared = match plan {
+        ImportPlan::Import(prepared) => prepared,
+        // Run again after the switch: plain `dvs migrate server` (L11)
+        ImportPlan::AlreadyMigrated(prepared) => {
+            return run_migrate(json, prepared, &destination, clean);
+        }
+    };
+    if get_token(&url)?.is_none() {
+        run_device_login(&url, json)?;
+    }
+    let imported = match import(prepared, &Retrying::default()) {
+        Ok(imported) => imported,
+        Err(e) if !json && e.downcast_ref::<Interrupted>().is_some() => {
+            // The cause, then what the run did: the checkout was not switched (W2)
+            let cause: Vec<String> = e.chain().skip(1).map(|c| c.to_string()).collect();
+            eprintln!("Error: {}", cause.join(": "));
+            eprintln!("{e}");
+            return Err(Exit(output::EXIT_FAILED).into());
+        }
+        Err(e) => return Err(refused(e, json)),
+    };
+    for note in &imported.notes {
+        eprintln!("{note}");
+    }
+    let outcome = if imported.switch.is_partial() {
+        RunOutcome::Partial
+    } else {
+        RunOutcome::Complete
+    };
+    if json {
+        let mut result = serde_json::to_value(&imported.report)?;
+        result["switch"] = serde_json::to_value(&imported.switch)?;
+        output::emit(result);
+    } else {
+        print_import(&imported.report);
+        print_migrate(&imported.switch, &destination, clean);
+        println!("Migration page: {}", imported.migration_page);
+    }
+    summary_exit(outcome)
+}
+
+/// A refusal (I5) is reported here and exits 2; any other error goes on as it is.
+fn refused(error: anyhow::Error, json: bool) -> anyhow::Error {
+    // Once the run is open, a refusal is an interruption like any other failure (W2)
+    let refusal = match error.downcast_ref::<Refused>() {
+        Some(Refused(refusal)) if error.downcast_ref::<Interrupted>().is_none() => refusal,
+        _ => return error,
+    };
+    if json {
+        let error = output::coded(refusal.code, refusal.message.clone());
+        output::emit(output::problem("migrate", false, &error));
+    } else {
+        eprintln!("Error: {}", refusal.message);
+    }
+    Exit(output::EXIT_USAGE).into()
+}
+
+/// The import's counts and what could not come along, as `dvs-migrate run` words them.
+fn print_import(report: &ImportReport) {
+    let totals = &report.totals;
+    let uploaded = report
+        .entries
+        .iter()
+        .filter(|e| e.content == Content::Uploaded)
+        .map(|e| e.entry.hash.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let on_server = totals
+        .unique_hashes
+        .saturating_sub(uploaded + totals.missing);
+    println!(
+        "Versions in the log    {} ({} distinct, {})",
+        totals.entries,
+        totals.unique_hashes,
+        format_size(totals.bytes)
+    );
+    println!("Already on the server  {on_server}");
+    println!("Uploaded               {uploaded}");
+    println!("Missing                {}", totals.missing);
+    for problem in &report.problems {
+        let (hash, paths, reason) = match problem {
+            Problem::Missing { hash, paths, .. } => match report.unreadable.get(hash) {
+                Some(error) => (hash, paths, format!("could not read: {error}")),
+                None => (hash, paths, "not in the store".to_string()),
+            },
+            Problem::Corrupt { hash, paths, .. } => (
+                hash,
+                paths,
+                "the stored copy doesn't match its hash".to_string(),
+            ),
+            Problem::UploadRefused {
+                hash,
+                paths,
+                status,
+                ..
+            } => (hash, paths, format!("refused by the server ({status})")),
+            _ => continue,
+        };
+        let short = hash.get(..12).unwrap_or(hash);
+        println!("  {}  {short}  {reason}", paths.join(", "));
+    }
 }
 
 /// What `--no-clean` kept, when there is any of it.

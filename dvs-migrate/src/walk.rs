@@ -237,7 +237,7 @@ pub fn walk(
     let mut audit = AuditLogs::default();
     let mut entries = Vec::with_capacity(introduced.len());
     for (pair, first) in introduced {
-        let EntryRef { path, hash } = fold.pairs[pair.0 as usize].clone();
+        let EntryRef { path, hash, .. } = fold.pairs[pair.0 as usize].clone();
         let parsed = fold.blobs[&first.site.blob]
             .clone()
             .expect("only parsed sidecars have pairs");
@@ -318,6 +318,7 @@ fn entry(
             .user
             .as_deref()
             .is_some_and(|user| user_mismatch(user, commit)),
+        operation: None,
         path,
         hash,
         size: parsed.size,
@@ -330,12 +331,12 @@ fn entry(
         recorded_at,
         recorded_at_source,
         message: parsed.message.clone(),
-        commit: EntryCommit {
+        commit: Some(EntryCommit {
             id: commit.id.clone(),
             author_name: commit.author_name.clone(),
             author_email: commit.author_email.clone(),
             author_date: commit.author_time,
-        },
+        }),
     }
 }
 
@@ -486,6 +487,7 @@ impl Fold<'_> {
                 let pair = self.pair(EntryRef {
                     path: data,
                     hash: parsed.hash.clone(),
+                    operation: None,
                 });
                 named = Some(SidecarPair {
                     pair,
@@ -791,13 +793,14 @@ pub(crate) mod tests {
             recorded_at: time,
             recorded_at_source: AttributionSource::Commit,
             message: None,
-            commit: EntryCommit {
+            commit: Some(EntryCommit {
                 id: "c".into(),
                 author_name: "jdoe".into(),
                 author_email: String::new(),
                 author_date: time,
-            },
+            }),
             user_mismatch: false,
+            operation: None,
         }
     }
 
@@ -845,10 +848,16 @@ pub(crate) mod tests {
 
         let walk = repo.walk(&BTreeMap::new());
         assert_eq!(walk.entries.len(), 2, "{:?}", walk.entries);
-        assert_eq!(find(&walk, "a.csv", &hash(1)).commit.id, first);
+        assert_eq!(
+            find(&walk, "a.csv", &hash(1)).commit.as_ref().unwrap().id,
+            first
+        );
         let b = find(&walk, "b.csv", &hash(2));
         assert_eq!(
-            (b.commit.id.as_str(), b.recorded_user.as_str()),
+            (
+                b.commit.as_ref().unwrap().id.as_str(),
+                b.recorded_user.as_str()
+            ),
             (older.as_str(), "bob")
         );
         assert_eq!(walk.sidecars[&SidecarShape::Dvs1], 4);

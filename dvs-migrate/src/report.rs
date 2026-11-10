@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use std::io;
 
 use dvs::migration::{
-    ManifestEntry, PartialReason, PreviousRuns, Problem, Scope, Totals, WalkKind,
+    Content, PartialReason, PreviousRuns, Problem, ReportEntry, Scope, Totals, WalkKind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,25 +17,6 @@ use crate::git::redact;
 
 /// Why content a devious v0 sidecar names fails the server's hash check (R24)
 pub const PATH_HASH_HINT: &str = "devious v0.4 or earlier hashed the path, not the content";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Content {
-    OnServer,
-    ToUpload,
-    Uploaded,
-    Missing,
-    Corrupt,
-    Refused,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReportEntry {
-    #[serde(flatten)]
-    pub entry: ManifestEntry,
-    pub content: Content,
-    pub already_migrated: bool,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -359,7 +340,7 @@ impl Report {
 
 fn walk_description(scope: &Scope) -> String {
     match scope.walk {
-        WalkKind::Full => "full".to_string(),
+        WalkKind::Full | WalkKind::AuditLog => "full".to_string(),
         WalkKind::Partial => {
             let reasons: Vec<String> = scope
                 .partial_reasons
@@ -624,6 +605,7 @@ mod tests {
             last_run_by: "alice".into(),
             last_run_at: "2026-11-07T10:00:00Z".parse().unwrap(),
             last_source: None,
+            imported_from_log: false,
         });
         report.local = Some(LocalStorage {
             stores: 3,

@@ -16,6 +16,7 @@ pub mod migration;
 pub mod operation;
 pub mod paths;
 pub mod progress;
+pub mod retry;
 pub(crate) mod utils;
 
 pub use backends::local::stored_compression;

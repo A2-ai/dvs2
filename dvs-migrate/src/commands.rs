@@ -6,16 +6,17 @@ use std::path::Path;
 use anyhow::Result;
 use dvs::RunOutcome;
 use dvs::legacy::SidecarShape;
+use dvs::retry::{After, RETRIES};
 use serde_json::{Value, json};
 
 use dvs::migration::{
-    EntryRef, InProgressRun, LookupRequest, ManifestEntry, PreviousRuns, Problem, Scope, Totals,
-    WalkKind,
+    Content, EntryRef, InProgressRun, LookupRequest, ManifestEntry, PreviousRuns, Problem,
+    ReportEntry, Scope, Totals, WalkKind, chunks,
 };
 
-use crate::client::{Client, RETRIES, Refused, chunks};
+use crate::client::{Client, Refused};
 use crate::git::{self, redact};
-use crate::report::{Content, LocalStorage, PATH_HASH_HINT, Report, ReportEntry, plural};
+use crate::report::{LocalStorage, PATH_HASH_HINT, Report, plural};
 use crate::storage::{self, Blob};
 use crate::walk::{self, Walk};
 
@@ -25,19 +26,6 @@ enum Before {
     Local,
     #[default]
     Absent,
-}
-
-/// How the server took a blob a run sent
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum After {
-    /// 201 if the server stored it now, 200 if it had it already
-    Uploaded { created: bool },
-    /// 400: the bytes do not hash to the claimed hash
-    Corrupt(String),
-    /// Any other refusal of the bytes themselves, as 413 over the size limit
-    Refused(u16, String),
-    /// The local copy could not be read
-    Unreadable(String),
 }
 
 /// A storage folder looked in, and whether it exists here
@@ -216,7 +204,7 @@ pub fn plan(
     let lookup = lookup(
         client,
         hashes.keys().cloned().collect(),
-        walk.entries.iter().map(entry_ref).collect(),
+        walk.entries.iter().map(ManifestEntry::entry_ref).collect(),
         users.into_iter().map(str::to_string).collect(),
         commit_ids,
     )?;
@@ -291,27 +279,12 @@ pub fn plan(
     })
 }
 
-fn entry_ref(e: &ManifestEntry) -> EntryRef {
-    EntryRef {
-        path: e.path.clone(),
-        hash: e.hash.clone(),
-    }
-}
-
 struct Lookup {
     have: HashSet<String>,
     migrated: HashSet<EntryRef>,
     unmatched_users: Vec<String>,
     previous: Option<PreviousRuns>,
     known_commits: u64,
-}
-
-/// The `i`th chunk, or nothing once the list has run out
-fn chunk_at<T: Clone>(chunks: &[&[T]], i: usize) -> Vec<T> {
-    chunks
-        .get(i)
-        .map(|chunk| chunk.to_vec())
-        .unwrap_or_default()
 }
 
 fn lookup(
@@ -321,15 +294,6 @@ fn lookup(
     users: Vec<String>,
     commits: Vec<String>,
 ) -> Result<Lookup> {
-    let hashes = chunks(&hashes);
-    let entries = chunks(&entries);
-    let users = chunks(&users);
-    let commits = chunks(&commits);
-    // Call `i` takes chunk `i` of each list, and there is always at least one call
-    let calls = [hashes.len(), entries.len(), users.len(), commits.len(), 1]
-        .into_iter()
-        .max()
-        .unwrap_or(1);
     let mut found = Lookup {
         have: HashSet::new(),
         migrated: HashSet::new(),
@@ -337,13 +301,7 @@ fn lookup(
         previous: None,
         known_commits: 0,
     };
-    for i in 0..calls {
-        let req = LookupRequest {
-            hashes: chunk_at(&hashes, i),
-            entries: chunk_at(&entries, i),
-            users: chunk_at(&users, i),
-            commits: chunk_at(&commits, i),
-        };
+    for req in LookupRequest::chunked(&hashes, &entries, &users, &commits) {
         let answer = client.lookup(&req)?;
         found.have.extend(answer.have);
         found.migrated.extend(answer.migrated);
@@ -358,14 +316,15 @@ fn lookup(
 
 impl Plan {
     fn already_migrated(&self, e: &ManifestEntry) -> bool {
-        self.migrated.contains(&entry_ref(e))
+        self.migrated.contains(&e.entry_ref())
     }
 
     /// The walk looks like another repo: the project has runs, and none of them recorded
-    /// any commit this walk visited (R17). Why, for a warning or a refusal.
+    /// any commit this walk visited (R17). Why, for a warning or a refusal. A project
+    /// imported from its audit log has no commits to match; the server decides (L5).
     pub fn different_source(&self) -> Option<String> {
         let previous = self.previous.as_ref()?;
-        if self.scope.commits == 0 || self.known_commits > 0 {
+        if self.scope.commits == 0 || self.known_commits > 0 || previous.imported_from_log {
             return None;
         }
         let from = previous
@@ -575,7 +534,7 @@ fn send(plan: &mut Plan, client: &Client, run_id: uuid::Uuid, quiet: bool) -> Re
         let lacking: HashSet<&String> = answer.missing.iter().collect();
         let mut waiting = 0;
         for e in chunk {
-            if lacking.contains(&e.hash) && !plan.migrated.contains(&entry_ref(e)) {
+            if lacking.contains(&e.hash) && !plan.migrated.contains(&e.entry_ref()) {
                 *plan.progress.pending.entry(e.hash.clone()).or_default() += 1;
                 waiting += 1;
             }
@@ -632,21 +591,7 @@ pub fn thousands(n: u64) -> String {
 
 /// One note per other run in progress; they never stop this one (R35)
 fn in_progress_notes(runs: &[InProgressRun]) -> Vec<String> {
-    let utc = |at: &str, format: &str| {
-        at.parse::<jiff::Timestamp>()
-            .map_or_else(|_| at.to_string(), |t| t.strftime(format).to_string())
-    };
-    runs.iter()
-        .map(|r| {
-            format!(
-                "note: a run by {} is in progress (started {} UTC, last activity {} UTC); \
-                 both can run, the server keeps one copy of each version",
-                r.started_by,
-                utc(&r.started_at, "%Y-%m-%d %H:%M"),
-                utc(&r.last_activity_at, "%H:%M")
-            )
-        })
-        .collect()
+    runs.iter().map(InProgressRun::note).collect()
 }
 
 /// The warning `run` ends with while an add could still land in local storage. Making it
@@ -700,7 +645,7 @@ mod tests {
                 commits: 1,
                 storage,
             },
-            migrated: entries.iter().map(entry_ref).collect(),
+            migrated: entries.iter().map(ManifestEntry::entry_ref).collect(),
             hashes: hashes
                 .into_iter()
                 .map(|(h, before, after)| {
@@ -876,7 +821,10 @@ mod tests {
             "could not reach the server after 5 retries; nothing was started"
         );
         // 1,500 versions, of which 2 earlier runs migrated
-        plan.migrated = plan.walk.entries[..2].iter().map(entry_ref).collect();
+        plan.migrated = plan.walk.entries[..2]
+            .iter()
+            .map(ManifestEntry::entry_ref)
+            .collect();
         plan.progress = Progress {
             opened: true,
             recorded: 1300,
@@ -931,7 +879,7 @@ mod tests {
             false,
         )
         .unwrap_err();
-        assert!(error.downcast_ref::<crate::client::GaveUp>().is_some());
+        assert!(error.downcast_ref::<dvs::retry::GaveUp>().is_some());
         assert_eq!(
             plan.interrupted(),
             "interrupted after 2 of 3 versions (5 B); run again to carry on"
@@ -973,9 +921,56 @@ mod tests {
             false,
         )
         .unwrap_err();
-        assert!(error.downcast_ref::<crate::client::GaveUp>().is_some());
+        assert!(error.downcast_ref::<dvs::retry::GaveUp>().is_some());
         assert_eq!(seen.lock().unwrap().len(), RETRIES + 1);
         assert_eq!(plan.interrupted(), nothing_started());
+    }
+
+    #[test]
+    fn a_project_imported_from_its_log_is_refused_unless_other_source() {
+        let imported = "project's history was imported from its audit log by alice on \
+                        2026-11-10; pass --other-source to run anyway";
+        let started = r#"{"run_id":"00000000-0000-0000-0000-000000000000","started_at":"t","compression":"none"}"#;
+        let (url, seen) = serve(vec![(409, imported), (201, started)]);
+        let client = client(url);
+        let mut plan = plan(Vec::new(), Vec::new());
+        let mut report = Report::new(crate::report::Command::Run);
+        let error = run(&mut plan, &client, &mut report, true, false).unwrap_err();
+        assert_eq!(error.downcast_ref::<Refused>().unwrap().0, imported);
+        assert_eq!(error_json(&error)["message"], imported);
+        assert!(!plan.progress.opened);
+
+        run(&mut plan, &client, &mut report, true, true).unwrap();
+        let seen = seen.lock().unwrap();
+        let other_source = |i: usize| {
+            let sent: Value = serde_json::from_str(seen[i].split_once('\n').unwrap().1).unwrap();
+            sent["other_source"].clone()
+        };
+        assert_eq!(
+            (other_source(0), other_source(1)),
+            (json!(false), json!(true))
+        );
+    }
+
+    #[test]
+    fn a_project_imported_from_its_log_is_left_to_the_server_not_r17() {
+        let imported = "project's history was imported from its audit log by alice on \
+                        2026-11-10; pass --other-source to run anyway";
+        let (url, seen) = serve(vec![(409, imported)]);
+        let client = client(url);
+        let mut plan = plan(Vec::new(), Vec::new());
+        plan.previous = Some(
+            serde_json::from_value(json!({"runs":1,"migrated":3,"last_run_by":"alice",
+                "last_run_at":"2026-11-10T10:00:00Z","imported_from_log":true}))
+            .unwrap(),
+        );
+        assert_eq!((plan.scope.commits, plan.known_commits), (1, 0));
+        assert_eq!(plan.different_source(), None);
+        let mut report = Report::new(crate::report::Command::Run);
+        let error = run(&mut plan, &client, &mut report, true, false).unwrap_err();
+        assert_eq!(error.downcast_ref::<Refused>().unwrap().0, imported);
+        // The start-run call was made
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 
     #[test]

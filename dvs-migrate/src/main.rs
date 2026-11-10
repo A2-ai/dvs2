@@ -19,9 +19,10 @@ use clap::{Parser, Subcommand};
 use dvs::ErrorCode;
 use dvs::backends::server::coded;
 use dvs::operation::{duration_ms, rfc3339_ms};
+use dvs::retry::GaveUp;
 use url::Url;
 
-use crate::client::{Client, GaveUp, Refused};
+use crate::client::{Client, Refused};
 use crate::commands::{Phase, error_json};
 use crate::report::{Command, Report, ServerTarget};
 
@@ -51,7 +52,8 @@ enum Cmd {
 struct RunArgs {
     #[command(flatten)]
     args: Args,
-    /// Run although none of the walked commits is in the project's earlier runs
+    /// Run although none of the walked commits is in the project's earlier runs, or the
+    /// project's history was imported from its audit log
     #[arg(long)]
     other_source: bool,
 }
@@ -242,6 +244,18 @@ mod tests {
     fn a_refusal_exits_2_and_retries_running_out_exit_1() {
         let refused = Err(Refused("run again with --other-source".into()).into());
         assert_eq!(exit_code(&refused, true), 2);
+        // A3: the server's 409 on a project imported from its audit log
+        let (url, _) = client::tests::serve(vec![(
+            409,
+            "project's history was imported from its audit log by alice on 2026-11-10; \
+             pass --other-source to run anyway",
+        )]);
+        let imported = client::tests::client(url).start_run(
+            dvs::migration::WalkKind::Full,
+            Default::default(),
+            false,
+        );
+        assert_eq!(exit_code(&imported.map(drop), true), 2);
         let gave_up = Err(client::tests::gave_up());
         assert_eq!(exit_code(&gave_up, true), 1);
         assert_eq!(exit_code(&Err(usage("no server")), true), 2);

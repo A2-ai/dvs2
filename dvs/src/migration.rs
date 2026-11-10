@@ -1,5 +1,5 @@
-//! The JSON `dvs-migrate` and dvs-server exchange to move a project's history
-//! onto the server, declared once for both sides.
+//! The JSON `dvs-migrate`, `dvs migrate server --import-history` and dvs-server exchange
+//! to move a project's history onto the server, declared once for both sides.
 
 use std::collections::BTreeMap;
 
@@ -9,6 +9,29 @@ use uuid::Uuid;
 
 use crate::legacy::SidecarShape;
 use crate::{Compression, ProjectPath};
+
+/// The server's limit on list lengths per call (K10)
+pub const MAX_ENTRIES: usize = 10_000;
+/// Under the server's 64 MiB JSON body limit, with room for the envelope
+pub const MAX_BODY: usize = 48 * 1024 * 1024;
+
+/// Splits `items` so each call stays under the server's list and body limits (K10)
+pub fn chunks<T: Serialize>(items: &[T]) -> Vec<&[T]> {
+    let mut chunks = Vec::new();
+    let (mut start, mut bytes) = (0, 0);
+    for (i, item) in items.iter().enumerate() {
+        let size = serde_json::to_vec(item).map_or(0, |v| v.len()) + 1;
+        if i > start && (i - start == MAX_ENTRIES || bytes + size > MAX_BODY) {
+            chunks.push(&items[start..i]);
+            (start, bytes) = (i, 0);
+        }
+        bytes += size;
+    }
+    if start < items.len() {
+        chunks.push(&items[start..]);
+    }
+    chunks
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -65,14 +88,34 @@ pub struct ManifestEntry {
     pub recorded_at: Timestamp,
     pub recorded_at_source: AttributionSource,
     pub message: Option<String>,
-    pub commit: EntryCommit,
+    /// The commit that introduced the entry; `None` for one read from a store's audit log,
+    /// which names no commit
+    pub commit: Option<EntryCommit>,
     pub user_mismatch: bool,
+    /// The audit-log operation the entry came from: entries with one operation and no
+    /// commit make one server operation (log import D2)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+}
+
+impl ManifestEntry {
+    pub fn entry_ref(&self) -> EntryRef {
+        EntryRef {
+            path: self.path.clone(),
+            hash: self.hash.clone(),
+            operation: self.operation.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EntryRef {
     pub path: ProjectPath,
     pub hash: String,
+    /// The log operation, for an audit-log import: there a version is one add, so the same
+    /// (path, hash) added again in another operation is another version (log import L10)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -86,6 +129,36 @@ pub struct LookupRequest {
     /// The walk's commit ids, to tell whether earlier runs walked the same repo (R17)
     #[serde(default)]
     pub commits: Vec<String>,
+}
+
+impl LookupRequest {
+    /// As many requests as K10's limits need, and always at least one: request `i` takes
+    /// chunk `i` of each list
+    pub fn chunked(
+        hashes: &[String],
+        entries: &[EntryRef],
+        users: &[String],
+        commits: &[String],
+    ) -> Vec<LookupRequest> {
+        let (hashes, entries) = (chunks(hashes), chunks(entries));
+        let (users, commits) = (chunks(users), chunks(commits));
+        let calls = [hashes.len(), entries.len(), users.len(), commits.len(), 1]
+            .into_iter()
+            .max()
+            .unwrap_or(1);
+        /// The `i`th chunk, or nothing once the list has run out
+        fn chunk_at<T: Clone>(chunks: &[&[T]], i: usize) -> Vec<T> {
+            chunks.get(i).map(|c| c.to_vec()).unwrap_or_default()
+        }
+        (0..calls)
+            .map(|i| LookupRequest {
+                hashes: chunk_at(&hashes, i),
+                entries: chunk_at(&entries, i),
+                users: chunk_at(&users, i),
+                commits: chunk_at(&commits, i),
+            })
+            .collect()
+    }
 }
 
 /// What the project already has of a walk: content, migrated versions and directory users
@@ -116,13 +189,19 @@ pub struct PreviousRuns {
     /// The repo the latest such run walked, as its report gave it (R17, R25)
     #[serde(default)]
     pub last_source: Option<String>,
+    /// Whether any of those runs imported the project's audit log rather than walking
+    /// commits; the client then leaves R17 to the server (log import L5)
+    #[serde(default)]
+    pub imported_from_log: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum WalkKind {
     Full,
     Partial,
+    /// History read from a dvs2 store's audit log, not from commits
+    AuditLog,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,6 +232,23 @@ pub struct InProgressRun {
     /// RFC 3339, as the server writes it, like `StartRunResponse::started_at`
     pub started_at: String,
     pub last_activity_at: String,
+}
+
+impl InProgressRun {
+    /// The note a run prints for it and carries on (R35)
+    pub fn note(&self) -> String {
+        let utc = |at: &str, format: &str| {
+            at.parse::<Timestamp>()
+                .map_or_else(|_| at.to_string(), |t| t.strftime(format).to_string())
+        };
+        format!(
+            "note: a run by {} is in progress (started {} UTC, last activity {} UTC); \
+             both can run, the server keeps one copy of each version",
+            self.started_by,
+            utc(&self.started_at, "%Y-%m-%d %H:%M"),
+            utc(&self.last_activity_at, "%H:%M")
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -308,9 +404,38 @@ impl Problem {
     }
 }
 
+/// Where an entry's content stands, in a run's report document (K12)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Content {
+    OnServer,
+    ToUpload,
+    Uploaded,
+    Missing,
+    Corrupt,
+    Refused,
+}
+
+/// A manifest entry as a report document lists it
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportEntry {
+    #[serde(flatten)]
+    pub entry: ManifestEntry,
+    pub content: Content,
+    pub already_migrated: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chunks_stay_under_the_entry_limit() {
+        let items: Vec<u8> = vec![0; MAX_ENTRIES * 2 + 1];
+        let sizes: Vec<usize> = chunks(&items).iter().map(|c| c.len()).collect();
+        assert_eq!(sizes, vec![MAX_ENTRIES, MAX_ENTRIES, 1]);
+        assert!(chunks::<u8>(&[]).is_empty());
+    }
 
     /// Serializes `value`, checks it is `json`, and reads `json` back to the same text.
     fn pin<T: Serialize + serde::de::DeserializeOwned>(value: &T, json: &str) {
@@ -337,13 +462,14 @@ mod tests {
                 recorded_at: "2023-04-05T14:11:12.12Z".parse().unwrap(),
                 recorded_at_source: AttributionSource::Sidecar,
                 message: None,
-                commit: EntryCommit {
+                commit: Some(EntryCommit {
                     id: "c1".into(),
                     author_name: "Ann".into(),
                     author_email: "ann@x".into(),
                     author_date: "2024-01-02T03:04:05Z".parse().unwrap(),
-                },
+                }),
                 user_mismatch: false,
+                operation: None,
             }],
         };
         pin(
@@ -352,6 +478,24 @@ mod tests {
                 r#"{{"run_id":"00000000-0000-0000-0000-000000000000","entries":[{{"path":"data/a.csv","hash":"{hash}","size":3,"shape":"dvs1-v0.0.1","sidecar_path":"data/a.csv.dvs","storage_path":"/data/store","sidecar_user":null,"recorded_user":"ann","recorded_user_source":"audit_log","recorded_at":"2023-04-05T14:11:12.12Z","recorded_at_source":"sidecar","message":null,"commit":{{"id":"c1","author_name":"Ann","author_email":"ann@x","author_date":"2024-01-02T03:04:05Z"}},"user_mismatch":false}}]}}"#
             ),
         );
+
+        // An entry from a store's audit log has no commit (A2)
+        let from_log = ManifestEntry {
+            shape: SidecarShape::Dvs2,
+            storage_path: None,
+            recorded_at_source: AttributionSource::AuditLog,
+            commit: None,
+            ..manifest.entries[0].clone()
+        };
+        pin(
+            &from_log,
+            &format!(
+                r#"{{"path":"data/a.csv","hash":"{hash}","size":3,"shape":"dvs2","sidecar_path":"data/a.csv.dvs","storage_path":null,"sidecar_user":null,"recorded_user":"ann","recorded_user_source":"audit_log","recorded_at":"2023-04-05T14:11:12.12Z","recorded_at_source":"audit_log","message":null,"commit":null,"user_mismatch":false}}"#
+            ),
+        );
+
+        let walks = [WalkKind::Full, WalkKind::Partial, WalkKind::AuditLog];
+        pin(&walks, r#"["full","partial","audit_log"]"#);
 
         let scope = Scope {
             source: "/repo".into(),
@@ -412,12 +556,13 @@ mod tests {
                 last_run_by: "alice".into(),
                 last_run_at: "2026-11-07T10:00:00Z".parse().unwrap(),
                 last_source: Some("/old/clone/project".into()),
+                imported_from_log: false,
             }),
             known_commits: 3,
         };
         pin(
             &found,
-            r#"{"have":[],"migrated":[],"unmatched_users":[],"compression":"zstd","previous":{"runs":2,"migrated":42,"last_run_by":"alice","last_run_at":"2026-11-07T10:00:00Z","last_source":"/old/clone/project"},"known_commits":3}"#,
+            r#"{"have":[],"migrated":[],"unmatched_users":[],"compression":"zstd","previous":{"runs":2,"migrated":42,"last_run_by":"alice","last_run_at":"2026-11-07T10:00:00Z","last_source":"/old/clone/project","imported_from_log":false},"known_commits":3}"#,
         );
 
         let start = StartRunRequest {
@@ -488,6 +633,20 @@ mod tests {
         )
         .unwrap();
         assert!(started.in_progress.is_empty());
+
+        // An entry that leaves out `commit` has none (A2); one that sends it, as every
+        // sender before A2 did, keeps it
+        let hash = "ab".repeat(32);
+        let entry = format!(
+            r#"{{"path":"a","hash":"{hash}","size":1,"shape":"dvs2","sidecar_path":"a.dvs","storage_path":null,"sidecar_user":null,"recorded_user":"ann","recorded_user_source":"audit_log","recorded_at":"2023-04-05T14:11:12Z","recorded_at_source":"audit_log","message":null,"user_mismatch":false"#
+        );
+        let without: ManifestEntry = serde_json::from_str(&format!("{entry}}}")).unwrap();
+        assert_eq!(without.commit, None);
+        let with: ManifestEntry = serde_json::from_str(&format!(
+            r#"{entry},"commit":{{"id":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-02T03:04:05Z"}}}}"#
+        ))
+        .unwrap();
+        assert_eq!(with.commit.unwrap().id, "c1");
     }
 
     /// A total of the wrong type is refused, not defaulted: the server's 400

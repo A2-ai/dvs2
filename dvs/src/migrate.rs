@@ -23,6 +23,8 @@ use crate::legacy::{
 use crate::paths::CONFIG_FILE_NAME;
 use crate::{Compression, DvsPaths, FileMetadata, Hashes, ProjectPath, StoreRequest};
 
+pub mod import;
+
 const UPLOAD_NOTE: &str = "Not found in the admin's migration; found in local storage and \
                            uploaded by the user with `dvs migrate server --upload-missing`.";
 
