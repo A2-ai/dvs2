@@ -17,8 +17,9 @@ use crate::{Compression, Hashes};
 const AUDIT_LOG_FILENAME: &str = "audit.log.jsonl";
 /// Only protects the current dvs process, not concurrent dvs processes
 static AUDIT_LOG_LOCK: Mutex<()> = Mutex::new(());
-/// The first bytes of every zstd frame
-const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+/// The first bytes of every zstd frame: the magic number of the zstd library,
+/// which a frame stores little-endian
+const ZSTD_MAGIC: [u8; 4] = zstd::zstd_safe::MAGICNUMBER.to_le_bytes();
 
 /// The compression a blob in storage was stored with. A blob without the zstd
 /// magic number is stored as is. Content stored as is can start with the magic
