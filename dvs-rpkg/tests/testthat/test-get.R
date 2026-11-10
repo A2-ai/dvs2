@@ -310,3 +310,20 @@ test_that("the summary is the one the CLI prints", {
   out <- capture.output(print(dvs_get("a.csv", dry_run = TRUE)))
   expect_identical(out[1], "# Nothing to do, 1 already current")
 })
+
+test_that("dvs_get with version writes an earlier version beside the tracked file", {
+  new_dvs_test_repo()
+  writeLines("v1", "t.csv")
+  dvs_add("t.csv")
+  writeLines("v2", "t.csv")
+  dvs_add("t.csv")
+  v1 <- dvs_audit_log("t.csv")$action_file_hashes_blake3[2]
+
+  result <- dvs_get("t.csv", version = substr(v1, 1, 8), to = "old/t.csv")
+  expect_equal(names(result), c("path", "to", "hash", "size", "ignored"))
+  expect_equal(result$hash, v1)
+  expect_true(result$ignored)
+  expect_equal(readLines("old/t.csv"), "v1")
+  expect_equal(readLines("t.csv"), "v2")
+  expect_error(dvs_get("t.csv", version = v1, to = "old/t.csv"), "already exists")
+})

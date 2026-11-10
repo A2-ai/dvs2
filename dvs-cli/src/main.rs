@@ -172,6 +172,14 @@ pub enum Command {
         /// Replace files with local changes (same as --on-conflict overwrite)
         #[clap(long, short, conflicts_with = "on_conflict")]
         force: bool,
+        /// Write this earlier version of one tracked file to --to instead:
+        /// a hash, or a prefix of at least 8 characters, from `dvs history`
+        #[clap(long, value_name = "HASH", requires = "to", conflicts_with_all = ["glob", "recursive", "dry_run", "on_conflict", "force"])]
+        version: Option<String>,
+        /// Where --version writes the file. Never overwritten, never tracked;
+        /// inside the repo it is added to .gitignore
+        #[clap(long, value_name = "PATH", requires = "version")]
+        to: Option<PathBuf>,
     },
     /// Show the project configuration, and the server info when the project uses a dvs-server backend
     Info,
@@ -791,8 +799,20 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             dry_run,
             on_conflict,
             force,
+            version,
+            to,
         } => {
             let config = find_config(&current_dir)?;
+            if let (Some(version), Some(to)) = (version, to) {
+                let dvs_paths = DvsPaths::from_cwd(&config)?;
+                let got = get_cmd::get_version(&dvs_paths, config.backend(), paths, &version, &to)?;
+                if cli.json {
+                    output::emit(get_cmd::version_json(&got));
+                } else {
+                    get_cmd::print_version(&got, &dvs_paths);
+                }
+                return Ok(());
+            }
             let explicit = if force {
                 Some(OnConflict::Overwrite)
             } else {

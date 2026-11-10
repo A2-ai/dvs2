@@ -567,7 +567,7 @@ fn relative_to(base: &Path, target: &Path) -> PathBuf {
 }
 
 /// Resolve `.` and `..` without touching the filesystem.
-fn normalize(path: &Path) -> PathBuf {
+pub(crate) fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {
         match c {

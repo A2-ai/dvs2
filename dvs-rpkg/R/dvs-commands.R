@@ -144,7 +144,17 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   default) takes the `dvs.on_error` option, and `"return"` when it is unset.
 #'   The condition has class `dvs_get_incomplete` and carries the result as
 #'   `cnd$result`. Pipelines can set `options(dvs.on_error = "error")`.
-#' @return A tibble of class `dvs_get_result` with one row per requested file
+#' @param version A hash, or a prefix of at least 8 hex characters, of an
+#'   earlier version of one tracked file, as [dvs_audit_log()] lists them.
+#'   With `version`, `dvs_get()` writes that version to `to` instead of
+#'   restoring `paths`, and takes exactly one file in `paths`. It cannot be
+#'   combined with `glob`, `recursive`, `dry_run` or `on_conflict`.
+#' @param to Where `version` is written. It must not exist. It is not tracked
+#'   by dvs and, inside the git repo, is added to `.gitignore`.
+#' @return With `version`, a one-row tibble: `path`, `to`, `hash`, `size`
+#'   and `ignored`.
+#'
+#'   Otherwise a tibble of class `dvs_get_result` with one row per requested file
 #'   and always the same columns: `path`, `local_path`, `before` (`"absent"`,
 #'   `"current"`, `"clean"`, `"modified"`, `"unknown"`, `"not_tracked"`,
 #'   `"not_a_file"`, `"unsafe_path"`), `action` (`"restored"`, `"replaced"`,
@@ -176,6 +186,9 @@ dvs_audit_log <- function(paths = character(0)) {
 #' res <- dvs_get(recursive = TRUE)
 #' res[!res$satisfied, c("path", "code", "hint")]
 #' dvs_get("data/derived.csv", on_conflict = "overwrite")
+#'
+#' # Compare with an earlier version, written beside it
+#' dvs_get("data/derived.csv", version = "1a2b3c4d", to = "compare/derived_v1.csv")
 #' }
 #' @rdname dvs_get
 #' @export
@@ -185,8 +198,26 @@ dvs_get <- function(
   recursive = FALSE,
   dry_run = FALSE,
   on_conflict = NULL,
-  on_error = NULL
+  on_error = NULL,
+  version = NULL,
+  to = NULL
 ) {
+  if (!is.null(version) || !is.null(to)) {
+    if (is.null(version) || is.null(to)) {
+      .miniextendr_arg_error(if (is.null(to)) "to" else "version", "is required: `version` and `to` go together", sys.call())
+    }
+    if (length(paths) != 1L) {
+      .miniextendr_arg_error("paths", "must be exactly one file with `version`", sys.call())
+    }
+    if (!is.null(glob) || isTRUE(recursive) || isTRUE(dry_run) || !is.null(on_conflict)) {
+      .miniextendr_arg_error(
+        "version",
+        "cannot be combined with `glob`, `recursive`, `dry_run` or `on_conflict`",
+        sys.call()
+      )
+    }
+    return(tibble::as_tibble(dvs_get_version_impl(path = paths, version = version, to = to)))
+  }
   apply_dvs_threads_option()
   progress_callback <- NULL
   # Only show a progress bar in interactive sessions; non-interactive callers

@@ -26,6 +26,7 @@ pub use files::get::{
 pub use files::metadata::FileMetadata;
 pub use files::status::{Baseline, StatusFacts, StatusReport, WorkingCopy, inspect_status};
 pub use files::types::{Outcome, Status};
+pub use files::version::{VersionGet, get_version};
 pub use hashes::{HashAlg, Hashes};
 pub use operation::{
     ByteTotals, CancelToken, Counts, FileRow, OperationContext, OperationObserver, OperationPlan,

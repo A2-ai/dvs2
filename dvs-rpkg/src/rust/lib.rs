@@ -604,6 +604,46 @@ pub(crate) fn dvs_get(
     })
 }
 
+/// One row: what `dvs_get(version = , to = )` wrote.
+#[derive(DataFrameRow)]
+struct VersionRow {
+    path: String,
+    to: String,
+    hash: String,
+    size: f64,
+    ignored: bool,
+}
+
+/// @title Write an earlier version of a tracked file to a side file
+/// @description
+/// Writes the stored version `version` of the tracked file `path` to `to`.
+/// The tracked file, its `.dvs` file and dvs's local state are not changed.
+/// `to` is never overwritten and never tracked; inside the git repo it is
+/// added to `.gitignore`.
+/// @param path One tracked file, relative to the working directory.
+/// @param version A hash, or a prefix of at least 8 hex characters, from
+///   `dvs_audit_log()`. A hash the file never had is an error.
+/// @param to Where to write it, relative to the working directory.
+/// @keywords internal
+#[miniextendr(r_name = "dvs_get_version_impl", internal, call = caller)]
+pub(crate) fn dvs_get_version(
+    #[miniextendr(no_na)] path: PathBuf,
+    #[miniextendr(no_na)] version: String,
+    #[miniextendr(no_na)] to: PathBuf,
+) -> Result<BuiltDataFrame> {
+    let config = find_config()?;
+    let dvs_paths = DvsPaths::from_cwd(&config)?;
+    let got = dvs::get_version(&dvs_paths, config.backend(), &path, &version, &to)?;
+    let row = VersionRow {
+        path: got.path.to_string_lossy().into_owned(),
+        to: got.to.to_string_lossy().into_owned(),
+        hash: got.hash,
+        size: got.size as f64,
+        ignored: got.ignored,
+    };
+    Ok(vec![row].into_dataframe()?)
+}
+
 /// The config of the dvs project that holds the working directory. Outside a
 /// project it is an error. A dvs.toml that does not load raises a
 /// `dvs_config_error`.

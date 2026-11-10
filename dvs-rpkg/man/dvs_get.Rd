@@ -10,7 +10,9 @@ dvs_get(
   recursive = FALSE,
   dry_run = FALSE,
   on_conflict = NULL,
-  on_error = NULL
+  on_error = NULL,
+  version = NULL,
+  to = NULL
 )
 }
 \arguments{
@@ -42,9 +44,21 @@ result, \code{"warn"} also warns and \code{"error"} raises an error. \code{NULL}
 default) takes the \code{dvs.on_error} option, and \code{"return"} when it is unset.
 The condition has class \code{dvs_get_incomplete} and carries the result as
 \code{cnd$result}. Pipelines can set \code{options(dvs.on_error = "error")}.}
+
+\item{version}{A hash, or a prefix of at least 8 hex characters, of an
+earlier version of one tracked file, as \code{\link[=dvs_audit_log]{dvs_audit_log()}} lists them.
+With \code{version}, \code{dvs_get()} writes that version to \code{to} instead of
+restoring \code{paths}, and takes exactly one file in \code{paths}. It cannot be
+combined with \code{glob}, \code{recursive}, \code{dry_run} or \code{on_conflict}.}
+
+\item{to}{Where \code{version} is written. It must not exist. It is not tracked
+by dvs and, inside the git repo, is added to \code{.gitignore}.}
 }
 \value{
-A tibble of class \code{dvs_get_result} with one row per requested file
+With \code{version}, a one-row tibble: \code{path}, \code{to}, \code{hash}, \code{size}
+and \code{ignored}.
+
+Otherwise a tibble of class \code{dvs_get_result} with one row per requested file
 and always the same columns: \code{path}, \code{local_path}, \code{before} (\code{"absent"},
 \code{"current"}, \code{"clean"}, \code{"modified"}, \code{"unknown"}, \code{"not_tracked"},
 \code{"not_a_file"}, \code{"unsafe_path"}), \code{action} (\code{"restored"}, \code{"replaced"},
@@ -90,5 +104,8 @@ dvs_get(recursive = TRUE, on_error = "error")
 res <- dvs_get(recursive = TRUE)
 res[!res$satisfied, c("path", "code", "hint")]
 dvs_get("data/derived.csv", on_conflict = "overwrite")
+
+# Compare with an earlier version, written beside it
+dvs_get("data/derived.csv", version = "1a2b3c4d", to = "compare/derived_v1.csv")
 }
 }
