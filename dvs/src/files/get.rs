@@ -16,6 +16,7 @@ use crate::cache::{FileStat, HashCache, baseline_for, record_baseline, try_open_
 use crate::config::{OnConflict, SettingSource};
 use crate::error::{Error, ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
+use crate::gitignore::add_to_gitignore;
 use crate::globbing::GetSelection;
 use crate::operation::{
     ByteTotals, FileRow, Hashing, OperationContext, OperationPlan, RunOutcome, millis,
@@ -1348,7 +1349,7 @@ pub fn get_files(
                 }
                 let started = Instant::now();
                 let result = transfer(p, backend, dry_run, operation_id, ctx);
-                settle(&mut row, p, result, dry_run, cache);
+                settle(&mut row, p, result, dry_run, paths, cache);
                 row.duration_ms = Some(millis(p.hash_time + started.elapsed()));
                 row.hint = hint(&row);
                 // Final the moment its own transfer is done, not when the batch is.
@@ -1402,6 +1403,7 @@ fn settle(
     p: &Planned,
     result: Result<(), FileError>,
     dry_run: bool,
+    paths: &DvsPaths,
     cache: Option<&Mutex<HashCache>>,
 ) {
     let was_absent = p.row.before == Before::Absent;
@@ -1436,6 +1438,14 @@ fn settle(
                     log::warn!("Cache store failed after get for {rel_str}: {e}");
                 }
                 log::info!("Retrieved {} ({})", p.row.path.display(), action.as_str());
+            }
+            // A side file inside the repo is kept out of git; one outside it is left alone
+            if !dry_run
+                && p.row.untracked
+                && let Ok(rel) = p.target.strip_prefix(paths.repo_root())
+                && let Err(e) = add_to_gitignore(paths.repo_root(), &[rel.to_path_buf()])
+            {
+                log::warn!("Could not git-ignore {}: {e}", p.target.display());
             }
         }
         Err((code, message)) => {
@@ -1693,6 +1703,32 @@ mod tests {
                 self.backend(),
                 GetOptions {
                     dry_run,
+                    on_conflict,
+                    source: SettingSource::Argument,
+                },
+                &OperationContext::new(),
+            )
+        }
+
+        fn hash(&self, name: &str) -> String {
+            let meta: FileMetadata = serde_json::from_slice(&self.metadata_bytes(name)).unwrap();
+            meta.hashes.blake3
+        }
+
+        fn get_version(
+            &self,
+            name: &str,
+            version: &str,
+            to: &str,
+            on_conflict: OnConflict,
+        ) -> GetReport {
+            let request = GetVersion::new(name, version, to, &self.paths).unwrap();
+            get_files(
+                GetRequest::Version(request),
+                &self.paths,
+                self.backend(),
+                GetOptions {
+                    dry_run: false,
                     on_conflict,
                     source: SettingSource::Argument,
                 },
@@ -2422,5 +2458,89 @@ mod tests {
             },
         );
         assert_eq!(report.summary(), "Nothing to do, 3 already current");
+    }
+
+    #[test]
+    fn a_version_lands_beside_the_tracked_file() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"v1");
+        let v1 = repo.hash("a.csv");
+        let v1_record = repo.metadata_bytes("a.csv");
+        repo.add("a.csv", b"v2");
+        let v2_record = repo.metadata_bytes("a.csv");
+
+        let first = repo.get_version("a.csv", &v1, "old/a.csv", OnConflict::Abort);
+        let again = repo.get_version("a.csv", &v1, "old/a.csv", OnConflict::Abort);
+
+        assert!(first.files[0].untracked);
+        assert_eq!(first.files[0].action, Action::Restored);
+        assert_eq!(again.files[0].action, Action::Unchanged);
+        assert_eq!(repo.read("old/a.csv"), b"v1");
+        assert_eq!(repo.read("a.csv"), b"v2");
+        assert_eq!(repo.metadata_bytes("a.csv"), v2_record);
+        let ignore = fs::read_to_string(repo.root.join("old/.gitignore")).unwrap();
+        assert!(ignore.lines().any(|l| l == "/a.csv"));
+        // a.csv's baseline is still v2: going back to v1's record replaces it cleanly
+        repo.set_metadata_bytes("a.csv", &v1_record);
+        let back = repo.get(&["a.csv"], OnConflict::Abort);
+        assert_eq!(back.files[0].before, Before::Clean);
+    }
+
+    #[test]
+    fn an_existing_side_file_follows_on_conflict() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"v1");
+        let v1 = repo.hash("a.csv");
+        create_file(&repo.root, "mine.csv", b"mine");
+
+        let kept = repo.get_version("a.csv", &v1, "mine.csv", OnConflict::Abort);
+        assert_eq!(kept.files[0].code, Some(GetCode::UnknownLocal));
+        assert_eq!(repo.read("mine.csv"), b"mine");
+
+        let replaced = repo.get_version("a.csv", &v1, "mine.csv", OnConflict::Overwrite);
+        assert_eq!(replaced.files[0].action, Action::Replaced);
+        assert_eq!(repo.read("mine.csv"), b"v1");
+    }
+
+    #[test]
+    fn a_hash_the_file_never_had_is_a_failed_row() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"v1");
+        repo.add("b.csv", b"b");
+
+        let report = repo.get_version("a.csv", &repo.hash("b.csv"), "out.csv", OnConflict::Abort);
+
+        assert_eq!(report.files[0].action, Action::Failed);
+        assert_eq!(
+            report.files[0].code,
+            Some(GetCode::Shared(ErrorCode::InvalidArguments))
+        );
+        assert!(!repo.root.join("out.csv").exists());
+    }
+
+    #[test]
+    fn a_version_get_refuses_bad_arguments() {
+        let repo = TestRepo::new();
+        repo.add("a.csv", b"v1");
+        repo.add("b.csv", b"b");
+        let v1 = repo.hash("a.csv");
+        fs::create_dir(repo.root.join("dir")).unwrap();
+        let in_metadata = repo.paths.metadata_folder().join("x.csv");
+
+        let refused = [
+            ("a.csv", v1.as_str(), Path::new("b.csv")),
+            ("a.csv", v1.as_str(), in_metadata.as_path()),
+            ("dir", v1.as_str(), Path::new("out.csv")),
+            ("a.csv", "not-a-hash", Path::new("out.csv")),
+        ];
+        for (name, version, to) in refused {
+            let err = GetVersion::new(name, version, to, &repo.paths).unwrap_err();
+            let code = err.downcast_ref::<Error>().map(|e| e.code);
+            assert_eq!(
+                code,
+                Some(ErrorCode::InvalidArguments),
+                "{name} {version} {to:?}"
+            );
+        }
     }
 }
