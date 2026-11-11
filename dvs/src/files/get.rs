@@ -22,7 +22,7 @@ use crate::operation::{
 };
 use crate::paths::ProjectPath;
 use crate::utils::get_threadpool;
-use crate::{Backend, Compression, DvsPaths, RetrieveRequest, cache};
+use crate::{Backend, Compression, DvsPaths, Hashes, PathFilter, RetrieveRequest, cache};
 use fs_err as fs;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -191,6 +191,7 @@ pub struct GetRow {
     /// Time spent on this file (hash + transfer + install); `None` for rows
     /// never hashed or transferred (cancelled before the plan included).
     pub duration_ms: Option<u64>,
+    pub untracked: bool,
 }
 
 impl GetRow {
@@ -441,10 +442,21 @@ impl Default for GetOptions {
     }
 }
 
+/// The version a row gets from storage, and the project path it was stored under.
+struct Source {
+    hashes: Hashes,
+    compression: Compression,
+    /// None when the version's size is not recorded (a version from history)
+    size: Option<u64>,
+    project_path: ProjectPath,
+}
+
 /// A row being worked on, with what the plan learned about the working file.
 struct Planned {
     row: GetRow,
-    metadata: Option<FileMetadata>,
+    /// where it is written
+    target: PathBuf,
+    source: Option<Source>,
     /// The working file's stat when it was classified, to detect it changing
     /// while its replacement downloads. None when it was absent.
     stat: Option<FileStat>,
@@ -457,10 +469,11 @@ struct Planned {
 }
 
 impl Planned {
-    fn new(row: GetRow) -> Self {
+    fn new(row: GetRow, target: PathBuf) -> Self {
         Planned {
             row,
-            metadata: None,
+            target,
+            source: None,
             stat: None,
             hash_time: Duration::ZERO,
             hashed: false,
@@ -615,7 +628,86 @@ fn blank_row(paths: &DvsPaths, relative_path: &Path) -> GetRow {
         message: None,
         hint: None,
         duration_ms: None,
+        untracked: false,
     }
+}
+
+/// A row that failed during planning.
+fn fail(mut planned: Planned, before: Before, code: GetCode, message: String) -> Planned {
+    planned.row.before = before;
+    planned.set(Action::Failed, Some(code), Some(message));
+    planned
+}
+
+fn plan_version(
+    ver_request: &GetVersion,
+    dvs_paths: &DvsPaths,
+    backend: &Backend,
+    hashing: &Hashing<'_>,
+) -> Planned {
+    let mut row = blank_row(dvs_paths, &ver_request.path);
+    row.local_path = relative_to(dvs_paths.cwd(), &ver_request.to);
+    row.untracked = true;
+
+    let mut planned = Planned::new(row, ver_request.to.clone());
+
+    let entries = match backend.get_audit_entries(std::slice::from_ref(&ver_request.path)) {
+        Ok(e) => e,
+        Err(e) => {
+            return fail(
+                planned,
+                Before::Unknown,
+                code_for(&e),
+                format!("cannot read its history: {e:#}"),
+            );
+        }
+    };
+
+    let found = entries
+        .into_iter()
+        .filter_map(|e| {
+            if let crate::audit::Action::Add {
+                file, compression, ..
+            } = e.action
+            {
+                Some((file, compression))
+            } else {
+                None
+            }
+        })
+        .find(|(file, _)| {
+            file.path == ver_request.path && file.hashes.blake3 == ver_request.version
+        });
+
+    let Some((audit_file, compression)) = found else {
+        return fail(
+            planned,
+            Before::Unknown,
+            GetCode::Shared(ErrorCode::InvalidArguments),
+            format!("has no version matching {}", ver_request.version),
+        );
+    };
+
+    planned.row.target_hash = Some(audit_file.hashes.blake3.clone());
+    let project_path = match ProjectPath::from_path(&planned.row.path) {
+        Ok(p) => p,
+        Err(e) => {
+            return fail(
+                planned,
+                Before::Unknown,
+                ErrorCode::IoError.into(),
+                e.to_string(),
+            );
+        }
+    };
+    // History records no size
+    let source = Source {
+        hashes: audit_file.hashes,
+        compression,
+        size: None,
+        project_path,
+    };
+    classify(planned, source, dvs_paths, None, hashing)
 }
 
 /// Classify one tracked file. Reads only local state. `hashing` begins
@@ -626,12 +718,8 @@ fn plan_file(
     cache: Option<&Mutex<HashCache>>,
     hashing: &Hashing<'_>,
 ) -> Planned {
-    let mut planned = Planned::new(blank_row(paths, relative_path));
-    let fail = |mut planned: Planned, before: Before, code: GetCode, message: String| {
-        planned.row.before = before;
-        planned.set(Action::Failed, Some(code), Some(message));
-        planned
-    };
+    let target = paths.file_path(relative_path);
+    let mut planned = Planned::new(blank_row(paths, relative_path), target);
 
     let metadata_path = paths.metadata_path(relative_path);
     let metadata: FileMetadata = match fs::File::open(&metadata_path)
@@ -651,8 +739,39 @@ fn plan_file(
     planned.row.size = Some(metadata.size);
     planned.row.target_hash = Some(metadata.hashes.blake3.clone());
 
-    let target = paths.file_path(relative_path);
-    if !destination_is_contained(paths.repo_root(), &target) {
+    let source = match ProjectPath::from_path(&planned.row.path) {
+        Ok(project_path) => Source {
+            hashes: metadata.hashes,
+            compression: metadata.compression,
+            size: Some(metadata.size),
+            project_path,
+        },
+        Err(e) => {
+            return fail(
+                planned,
+                Before::Unknown,
+                GetCode::Shared(ErrorCode::IoError),
+                e.to_string(),
+            );
+        }
+    };
+    classify(planned, source, paths, cache, hashing)
+}
+
+/// Classify `planned.target` against `source`, the version it should hold.
+/// `cache` must be None for an untracked target: it is keyed by tracked path.
+fn classify(
+    mut planned: Planned,
+    source: Source,
+    paths: &DvsPaths,
+    cache: Option<&Mutex<HashCache>>,
+    hashing: &Hashing<'_>,
+) -> Planned {
+    let target = planned.target.clone();
+    // A target outside the repo (an untracked --to) has no project to escape
+    if target.starts_with(paths.repo_root())
+        && !destination_is_contained(paths.repo_root(), &target)
+    {
         return fail(
             planned,
             Before::UnsafePath,
@@ -665,7 +784,7 @@ fn plan_file(
     match std::fs::symlink_metadata(&target) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             planned.row.before = Before::Absent;
-            planned.metadata = Some(metadata);
+            planned.source = Some(source);
             return planned;
         }
         Err(e) => {
@@ -695,7 +814,7 @@ fn plan_file(
         Ok(_) => {}
     }
 
-    let rel_str = relative_path.to_string_lossy();
+    let rel_str = planned.row.path.to_string_lossy().into_owned();
     let stat = FileStat::from_path(&target).ok();
     hashing.begin();
     planned.hashed = true;
@@ -717,7 +836,8 @@ fn plan_file(
     planned.row.local_hash = Some(hashes.blake3.clone());
     planned.stat = stat;
 
-    planned.row.before = if hashes == metadata.hashes && size == metadata.size {
+    let same_size = source.size.is_none_or(|s| s == size);
+    planned.row.before = if hashes == source.hashes && same_size {
         Before::Current
     } else {
         match baseline_for(cache, &rel_str) {
@@ -733,6 +853,10 @@ fn plan_file(
             GetCode::LocalChanges,
             "local changes since dvs last wrote this file",
         )),
+        Before::Unknown if planned.row.untracked => Some((
+            GetCode::UnknownLocal,
+            "differs from the requested version, and dvs has no record of writing it",
+        )),
         Before::Unknown => Some((
             GetCode::UnknownLocal,
             "differs from the tracked version, and dvs has no record of writing it",
@@ -742,7 +866,7 @@ fn plan_file(
     if let Some((code, message)) = conflict {
         planned.set(Action::NotRun, Some(code), Some(message.to_string()));
     }
-    planned.metadata = Some(metadata);
+    planned.source = Some(source);
     planned
 }
 
@@ -783,29 +907,25 @@ type FileError = (GetCode, String);
 /// replaced after the new bytes are verified and the destination is unchanged.
 fn install(
     backend: &Backend,
-    paths: &DvsPaths,
-    relative_path: &Path,
-    metadata: &FileMetadata,
+    target: &Path,
+    source: &Source,
     planned_stat: &Option<FileStat>,
     operation_id: Uuid,
     on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
 ) -> Result<(), FileError> {
-    let target = paths.file_path(relative_path);
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| (io_code(&e), format!("cannot create its directory: {e}")))?;
     }
     let tmp_path = target.with_extension(format!("dvs-tmp.{}", Uuid::new_v4()));
-    let path = ProjectPath::from_path(relative_path)
-        .map_err(|e| (GetCode::Shared(ErrorCode::IoError), e.to_string()))?;
 
     let result = (|| {
         let retrieved = backend
             .retrieve(RetrieveRequest {
-                hashes: &metadata.hashes,
+                hashes: &source.hashes,
                 target: &tmp_path,
-                compression: metadata.compression,
-                path,
+                compression: source.compression,
+                path: source.project_path.clone(),
                 operation_id,
                 on_bytes,
             })
@@ -818,19 +938,19 @@ fn install(
         }
         let actual = FileMetadata::from_file(&tmp_path, Compression::None, None)
             .map_err(|e| (code_for(&e), e.to_string()))?;
-        if actual.hashes != metadata.hashes {
+        if actual.hashes != source.hashes {
             return Err((
                 GetCode::HashMismatch,
                 "the stored content does not match the tracked hash".to_string(),
             ));
         }
-        if !destination_unchanged(&target, planned_stat) {
+        if !destination_unchanged(target, planned_stat) {
             return Err((
                 GetCode::DestinationChanged,
                 "the file changed while dvs was downloading it; your version was kept".to_string(),
             ));
         }
-        fs::rename(&tmp_path, &target)
+        fs::rename(&tmp_path, target)
             .map_err(|e| (io_code(&e), format!("cannot replace the file: {e}")))?;
         Ok(())
     })();
@@ -838,6 +958,194 @@ fn install(
         let _ = fs::remove_file(&tmp_path);
     }
     result
+}
+
+#[derive(Debug)]
+pub enum GetRequest {
+    Tracked(GetSelection),
+    Version(GetVersion),
+}
+
+impl GetRequest {
+    fn file_count(&self) -> usize {
+        match self {
+            Self::Tracked(s) => s.tracked.len(),
+            Self::Version(_) => 1,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Tracked(s) => s.tracked.is_empty() && s.unmatched.is_empty(),
+            Self::Version(_) => false,
+        }
+    }
+
+    /// Classify every requested file, locally (a version get also reads its
+    /// history), writing nothing. Sorted by path.
+    fn plan(
+        self,
+        paths: &DvsPaths,
+        backend: &Backend,
+        cache: Option<&Mutex<HashCache>>,
+        hashing: &Hashing<'_>,
+        ctx: &OperationContext,
+    ) -> Vec<Planned> {
+        match self {
+            Self::Tracked(selection) => selection.plan(paths, cache, hashing, ctx),
+            Self::Version(version) => version.plan(paths, backend, hashing, ctx),
+        }
+    }
+}
+
+impl GetSelection {
+    fn plan(
+        self,
+        paths: &DvsPaths,
+        cache: Option<&Mutex<HashCache>>,
+        hashing: &Hashing<'_>,
+        ctx: &OperationContext,
+    ) -> Vec<Planned> {
+        let mut planned: Vec<Planned> = self
+            .tracked
+            .into_par_iter()
+            .map(|p| {
+                // Hashing is starting work too: a cancel stops it. The
+                // row is `unknown` only because nothing looked at the file.
+                if ctx.is_cancelled() {
+                    let mut planned = Planned::new(blank_row(paths, &p), paths.file_path(&p));
+                    planned.row.before = Before::Unknown;
+                    cancel_row(&mut planned.row);
+                    return planned;
+                }
+                let started = Instant::now();
+                let mut planned = plan_file(paths, &p, cache, hashing);
+                planned.hash_time = started.elapsed();
+                planned
+            })
+            .collect();
+        let cwd_rel = paths
+            .cwd_relative_to_root()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        for user_path in self.unmatched {
+            // Report it like a tracked file: `path` from the project root, and
+            // `local_path` from the cwd, however the user wrote it.
+            let inside = if user_path.is_absolute() {
+                project_relative(paths.repo_root(), &user_path)
+            } else {
+                Some(normalize(&cwd_rel.join(&user_path)))
+            };
+            let path = inside.as_deref().unwrap_or(&user_path);
+            let mut p = Planned::new(blank_row(paths, path), paths.file_path(path));
+            let is_dir = paths.file_path(&p.row.path).is_dir();
+            if inside.is_none() {
+                p.row.local_path = user_path;
+            }
+            p.row.before = Before::NotTracked;
+            p.set(
+                Action::Failed,
+                Some(GetCode::NotTracked),
+                Some(if is_dir {
+                    "no tracked files selected in this directory".to_string()
+                } else {
+                    "not tracked by dvs".to_string()
+                }),
+            );
+            planned.push(p);
+        }
+        planned.sort_by(|a, b| a.row.path.cmp(&b.row.path));
+        planned
+    }
+}
+
+#[derive(Debug)]
+pub struct GetVersion {
+    path: PathBuf,
+    version: String,
+    to: PathBuf,
+}
+
+impl GetVersion {
+    pub fn new(
+        user_path: impl AsRef<Path>,
+        version: &str,
+        to: impl AsRef<Path>,
+        paths: &DvsPaths,
+    ) -> anyhow::Result<Self> {
+        let user_path = user_path.as_ref();
+
+        let invalid = |m: &str| -> anyhow::Error {
+            Error::new(ErrorCode::InvalidArguments, m.to_string()).into()
+        };
+
+        // the path input is a file, not a folder
+        if paths.cwd().join(user_path).is_dir() {
+            return Err(invalid(&format!(
+                "a version get requires a file, not a folder: {}",
+                user_path.display()
+            )));
+        }
+
+        // the path input is within the project directory
+        let filter = PathFilter::from_user_paths(vec![user_path.to_path_buf()], false, paths);
+        let path = match filter.paths() {
+            [relative] if !relative.as_os_str().is_empty() => relative.clone(),
+            _ => {
+                return Err(invalid(&format!(
+                    "a version get requires a file within the project: {}",
+                    user_path.display()
+                )));
+            }
+        };
+
+        let to = normalize(&paths.cwd().join(to));
+
+        // the output is not in the metadata folder
+        if to.starts_with(paths.metadata_folder()) {
+            return Err(invalid(
+                "specified file output cannot be within the metadata folder",
+            ));
+        }
+
+        // the output is not a tracked file
+        if let Ok(rel) = to.strip_prefix(paths.repo_root())
+            && paths.metadata_path(rel).is_file()
+        {
+            return Err(invalid("specified file output cannot be a tracked file"));
+        }
+
+        let version = version.to_ascii_lowercase();
+        if !version.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Err(invalid(&format!(
+                "the version provide ({version}) must be a hash"
+            )));
+        }
+
+        Ok(GetVersion { path, version, to })
+    }
+
+    /// No cache: it is keyed by tracked path, and the target is a side file.
+    fn plan(
+        self,
+        paths: &DvsPaths,
+        backend: &Backend,
+        hashing: &Hashing<'_>,
+        ctx: &OperationContext,
+    ) -> Vec<Planned> {
+        if ctx.is_cancelled() {
+            let mut row = blank_row(paths, &self.path);
+            row.local_path = relative_to(paths.cwd(), &self.to);
+            row.untracked = true;
+            row.before = Before::Unknown;
+            cancel_row(&mut row);
+            return vec![Planned::new(row, self.to)];
+        }
+        let started = Instant::now();
+        let mut planned = plan_version(&self, paths, backend, hashing);
+        planned.hash_time = started.elapsed();
+        vec![planned]
+    }
 }
 
 /// Gets the selected files from storage, following `options.on_conflict`.
@@ -852,7 +1160,7 @@ fn install(
 /// completes). A cancel stops files from *starting*: a file already
 /// downloading finishes (verified temp file + rename), the rest are `cancelled`.
 pub fn get_files(
-    selection: GetSelection,
+    request: GetRequest,
     paths: &DvsPaths,
     backend: &Backend,
     options: GetOptions,
@@ -871,14 +1179,14 @@ pub fn get_files(
         }
         report
     };
-    if selection.tracked.is_empty() && selection.unmatched.is_empty() {
+    if request.is_empty() {
         return problem(
             ErrorCode::NoFilesSelected,
             "no tracked files matched".into(),
         );
     }
 
-    let pool = match get_threadpool(selection.tracked.len().max(1)) {
+    let pool = match get_threadpool(request.file_count().max(1)) {
         Ok(p) => p,
         Err(e) => return problem(ErrorCode::OperationFailed, e.to_string()),
     };
@@ -902,57 +1210,9 @@ pub fn get_files(
     // reported from the first file actually hashed, so a plan that hashes
     // nothing (every file absent, or a cancel first) reports none.
     let hashing = Hashing::new(observer);
-    let mut planned: Vec<Planned> = pool.install(|| {
-        selection
-            .tracked
-            .into_par_iter()
-            .map(|p| {
-                // Hashing is starting work too: a cancel stops it. The
-                // row is `unknown` only because nothing looked at the file.
-                if ctx.is_cancelled() {
-                    let mut planned = Planned::new(blank_row(paths, &p));
-                    planned.row.before = Before::Unknown;
-                    cancel_row(&mut planned.row);
-                    return planned;
-                }
-                let started = Instant::now();
-                let mut planned = plan_file(paths, &p, cache, &hashing);
-                planned.hash_time = started.elapsed();
-                planned
-            })
-            .collect()
-    });
+    let mut planned: Vec<Planned> =
+        pool.install(|| request.plan(paths, backend, cache, &hashing, ctx));
     hashing.finish();
-    let cwd_rel = paths
-        .cwd_relative_to_root()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    for user_path in selection.unmatched {
-        // Report it like a tracked file: `path` from the project root, and
-        // `local_path` from the cwd, however the user wrote it.
-        let inside = if user_path.is_absolute() {
-            project_relative(paths.repo_root(), &user_path)
-        } else {
-            Some(normalize(&cwd_rel.join(&user_path)))
-        };
-        let mut p = Planned::new(blank_row(paths, inside.as_deref().unwrap_or(&user_path)));
-        let is_dir = paths.file_path(&p.row.path).is_dir();
-        if inside.is_none() {
-            p.row.local_path = user_path;
-        }
-        p.row.before = Before::NotTracked;
-        p.set(
-            Action::Failed,
-            Some(GetCode::NotTracked),
-            Some(if is_dir {
-                "no tracked files selected in this directory".to_string()
-            } else {
-                "not tracked by dvs".to_string()
-            }),
-        );
-        planned.push(p);
-    }
-    planned.sort_by(|a, b| a.row.path.cmp(&b.row.path));
 
     for p in planned
         .iter_mut()
@@ -961,15 +1221,18 @@ pub fn get_files(
         p.set(Action::Unchanged, None, None);
         // Hashing it was the work: nothing to transfer.
         p.row.duration_ms = Some(millis(p.hash_time));
-        if !dry_run {
-            if let Some(m) = &p.metadata {
-                record_baseline(
-                    cache,
-                    &p.row.path.to_string_lossy(),
-                    &m.hashes.blake3,
-                    m.size,
-                );
-            }
+        // A side file is not the tracked file: no baseline for it
+        if !dry_run
+            && !p.row.untracked
+            && let Some(source) = &p.source
+        {
+            let size = source.size.expect("a tracked source has its size");
+            record_baseline(
+                cache,
+                &p.row.path.to_string_lossy(),
+                &source.hashes.blake3,
+                size,
+            );
         }
     }
 
@@ -1084,8 +1347,8 @@ pub fn get_files(
                     return (i, row);
                 }
                 let started = Instant::now();
-                let result = transfer(p, backend, paths, dry_run, operation_id, ctx);
-                settle(&mut row, p, result, dry_run, paths, cache);
+                let result = transfer(p, backend, dry_run, operation_id, ctx);
+                settle(&mut row, p, result, dry_run, cache);
                 row.duration_ms = Some(millis(p.hash_time + started.elapsed()));
                 row.hint = hint(&row);
                 // Final the moment its own transfer is done, not when the batch is.
@@ -1106,17 +1369,13 @@ pub fn get_files(
 fn transfer(
     p: &Planned,
     backend: &Backend,
-    paths: &DvsPaths,
     dry_run: bool,
     operation_id: Uuid,
     ctx: &OperationContext,
 ) -> Result<(), FileError> {
-    let metadata = p
-        .metadata
-        .as_ref()
-        .expect("planned transfers have metadata");
+    let source = p.source.as_ref().expect("planned transfers have a source");
     if dry_run {
-        return match backend.exists(&metadata.hashes) {
+        return match backend.exists(&source.hashes) {
             Ok(true) => Ok(()),
             Ok(false) => Err((
                 GetCode::SourceMissing,
@@ -1125,17 +1384,11 @@ fn transfer(
             Err(e) => Err((code_for(&e), format!("{e:#}"))),
         };
     }
-    let file_progress = ctx.observer().transfer_started(&p.row.path, metadata.size);
+    let file_progress = ctx
+        .observer()
+        .transfer_started(&p.row.path, source.size.unwrap_or(0));
     let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
-    let result = install(
-        backend,
-        paths,
-        &p.row.path,
-        metadata,
-        &p.stat,
-        operation_id,
-        on_bytes,
-    );
+    let result = install(backend, &p.target, source, &p.stat, operation_id, on_bytes);
     if let Some(fp) = &file_progress {
         (fp.on_done)(result.is_ok());
     }
@@ -1149,7 +1402,6 @@ fn settle(
     p: &Planned,
     result: Result<(), FileError>,
     dry_run: bool,
-    paths: &DvsPaths,
     cache: Option<&Mutex<HashCache>>,
 ) {
     let was_absent = p.row.before == Before::Absent;
@@ -1172,23 +1424,16 @@ fn settle(
                 .to_string()
             });
             set_row(row, action, None, message);
-            if !dry_run {
-                let metadata = p
-                    .metadata
-                    .as_ref()
-                    .expect("planned transfers have metadata");
+            if !dry_run && !p.row.untracked {
+                let source = p.source.as_ref().expect("planned transfers have a source");
+                let size = source.size.expect("a tracked source has its size");
                 let rel_str = p.row.path.to_string_lossy().into_owned();
-                record_baseline(cache, &rel_str, &metadata.hashes.blake3, metadata.size);
-                if let Some(mtx) = cache {
-                    if let Ok(stat) = FileStat::from_path(&paths.file_path(&p.row.path)) {
-                        if let Err(e) =
-                            mtx.lock()
-                                .unwrap()
-                                .insert(&rel_str, &stat, &metadata.hashes)
-                        {
-                            log::warn!("Cache store failed after get for {rel_str}: {e}");
-                        }
-                    }
+                record_baseline(cache, &rel_str, &source.hashes.blake3, size);
+                if let Some(mtx) = cache
+                    && let Ok(stat) = FileStat::from_path(&p.target)
+                    && let Err(e) = mtx.lock().unwrap().insert(&rel_str, &stat, &source.hashes)
+                {
+                    log::warn!("Cache store failed after get for {rel_str}: {e}");
                 }
                 log::info!("Retrieved {} ({})", p.row.path.display(), action.as_str());
             }
@@ -1443,7 +1688,7 @@ mod tests {
                 unmatched: unmatched.iter().map(PathBuf::from).collect(),
             };
             get_files(
-                selection,
+                GetRequest::Tracked(selection),
                 &self.paths,
                 self.backend(),
                 GetOptions {
@@ -1870,7 +2115,7 @@ mod tests {
             source: SettingSource::Argument,
         };
         let report = get_files(
-            selection,
+            GetRequest::Tracked(selection),
             &in_data,
             repo.backend(),
             options,
@@ -1965,7 +2210,13 @@ mod tests {
                 source: SettingSource::Argument,
             };
             let ctx = OperationContext::new().with_observer(recorder.clone());
-            let report = get_files(selection, &self.paths, self.backend(), options, &ctx);
+            let report = get_files(
+                GetRequest::Tracked(selection),
+                &self.paths,
+                self.backend(),
+                options,
+                &ctx,
+            );
             let rows = recorder.rows.lock().unwrap().clone();
             (report, recorder.seen(), rows)
         }
@@ -2058,7 +2309,13 @@ mod tests {
         let ctx = OperationContext::new()
             .with_cancel(token)
             .with_observer(recorder.clone());
-        let report = get_files(selection, &repo.paths, repo.backend(), options, &ctx);
+        let report = get_files(
+            GetRequest::Tracked(selection),
+            &repo.paths,
+            repo.backend(),
+            options,
+            &ctx,
+        );
 
         assert_eq!(report.outcome, GetOutcome::Cancelled);
         let seen = recorder.seen();

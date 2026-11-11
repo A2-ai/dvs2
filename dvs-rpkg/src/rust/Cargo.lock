@@ -248,7 +248,7 @@ dependencies = [
 
 [[package]]
 name = "dvs"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "blake3",
