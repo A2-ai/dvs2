@@ -8,6 +8,8 @@ dvs_get(
   paths = character(0),
   glob = NULL,
   recursive = FALSE,
+  version = NULL,
+  to = NULL,
   dry_run = FALSE,
   on_conflict = NULL,
   on_error = NULL
@@ -26,6 +28,14 @@ with \code{recursive}.}
 \item{recursive}{If \code{TRUE}, directory inputs include all descendants.
 Otherwise only direct children of the directory. With no explicit \code{paths}
 the directory is the working directory. Mutually exclusive with \code{glob}.}
+
+\item{version}{The blake3 hash of an earlier version of one file in \code{paths},
+or at least its first 8 characters, as the audit log shows it.}
+
+\item{to}{Where the \code{version} is written, relative to the working directory.
+The file is not tracked by dvs; inside the repository it is added to the
+\code{.gitignore} of its folder. An existing file there is a conflict,
+decided by \code{on_conflict}.}
 
 \item{dry_run}{If \code{TRUE}, report what would happen without writing files.}
 
@@ -50,12 +60,12 @@ and always the same columns: \code{path}, \code{local_path}, \code{before} (\cod
 \code{"not_a_file"}, \code{"unsafe_path"}), \code{action} (\code{"restored"}, \code{"replaced"},
 \code{"unchanged"}, \code{"skipped"}, \code{"not_run"}, \code{"failed"}, \code{"would_restore"},
 \code{"would_replace"}), \code{satisfied}, \code{size}, \code{target_hash}, \code{local_hash},
-\code{stored_copy}, \code{code}, \code{message}, \code{hint} and \code{duration_ms} (the
+\code{stored_copy}, \code{code}, \code{message}, \code{hint}, \code{duration_ms} (the
 milliseconds spent on the file, \code{NA} when it was never hashed or
-copied). \code{\link[=dvs_result_info]{dvs_result_info()}} returns
-the outcome and the policy that applied. Outside a dvs project it raises an
-error. A configuration error, for example \code{on_conflict = "overwrite"}
-in dvs.toml, raises a \code{dvs_config_error}.
+copied), and \code{untracked} (\code{TRUE} for a row written to \code{to}).
+\code{\link[=dvs_result_info]{dvs_result_info()}} returns the outcome and the policy that applied.
+Outside a dvs project it raises an error. A configuration error, for
+example \code{on_conflict = "overwrite"} in dvs.toml, raises a \code{dvs_config_error}.
 
 In a dry run, \code{satisfied} is the prediction: \code{TRUE} when the file would be
 at its tracked version afterwards.

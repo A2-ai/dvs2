@@ -20,8 +20,8 @@ pub use config::Compression;
 pub use error::{Error, ErrorCode, backend_error_code};
 pub use files::add::{AddDetail, AddReport, AddResult, add_files};
 pub use files::get::{
-    Action, Before, GetCode, GetCounts, GetOptions, GetOutcome, GetReport, GetRow, GetVerdict,
-    StoredCopy, get_files, shell_path,
+    Action, Before, GetCode, GetCounts, GetOptions, GetOutcome, GetReport, GetRequest, GetRow,
+    GetVerdict, GetVersion, StoredCopy, get_files, shell_path,
 };
 pub use files::metadata::FileMetadata;
 pub use files::status::{Baseline, StatusFacts, StatusReport, WorkingCopy, inspect_status};

@@ -28,9 +28,9 @@ use dvs::init::{create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
-    FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow,
-    Outcome, PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files,
-    set_num_threads,
+    FileMetadata, FileProgress, FileRow, GetOptions, GetRequest, GetVerdict, GetVersion,
+    OperationContext, OperationRow, Outcome, PathFilter, RowState, RunOutcome, Status, add_files,
+    format_size, get_files, set_num_threads,
 };
 
 use crate::observer::CliObserver;
@@ -160,6 +160,14 @@ pub enum Command {
         /// Without this flag, directories return only their direct children.
         #[clap(long, short, conflicts_with = "glob")]
         recursive: bool,
+        /// Get an earlier version of one tracked file, by its hash or at least an 8 character prefix.
+        /// Written to --to
+        #[clap(long, value_name = "HASH", requires = "to", conflicts_with_all = ["glob", "recursive"])]
+        version: Option<String>,
+        /// Where the --version is written. It is not tracked; inside a git repo it is added to
+        /// the .gitignore
+        #[clap(long, value_name = "PATH", requires = "version")]
+        to: Option<PathBuf>,
         /// Show what would be retrieved without making any actual changes
         #[clap(long)]
         dry_run: bool,
@@ -788,6 +796,8 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             paths,
             glob,
             recursive,
+            version,
+            to,
             dry_run,
             on_conflict,
             force,
@@ -802,7 +812,27 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             };
             let (on_conflict, source) = config.get_on_conflict(explicit)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
-            let selection = select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
+            let get_request = if let (Some(ver), Some(to)) = (version, to) {
+                if paths.len() != 1 {
+                    return Err(output::coded(
+                        ErrorCode::InvalidArguments,
+                        "--version requires exactly one file",
+                    ));
+                }
+                GetRequest::Version(GetVersion::new(
+                    paths.first().unwrap(),
+                    &ver,
+                    &to,
+                    &dvs_paths,
+                )?)
+            } else {
+                GetRequest::Tracked(select_paths_for_get(
+                    paths,
+                    glob.as_deref(),
+                    &dvs_paths,
+                    recursive,
+                )?)
+            };
 
             let show_progress = !cli.json && !dry_run && std::io::stderr().is_terminal();
             let mut observer = CliObserver::new(dry_run).with_rows(|row| match row {
@@ -817,7 +847,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 .with_cancel(cancel.clone())
                 .with_observer(Arc::new(observer));
             let report = get_files(
-                selection,
+                get_request,
                 &dvs_paths,
                 config.backend(),
                 GetOptions {

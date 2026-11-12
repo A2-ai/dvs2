@@ -20,14 +20,15 @@ use miniextendr_api::{
     miniextendr,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use dvs::config::{Config, ConfigError, OnConflict};
 use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
-    OperationContext, PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
+    Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRequest, GetRow, GetVerdict,
+    GetVersion, OperationContext, PathFilter, Status, TransferObserver, add_files, get_files,
+    set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -527,6 +528,12 @@ impl From<OnConflictChoice> for OnConflict {
 ///   If `FALSE` or `NULL`, only direct children of the directory are
 ///   returned. With no explicit `paths` the directory is the working
 ///   directory. Mutually exclusive with `glob`.
+/// @param version The blake3 hash of an earlier version of one file in `paths`,
+///   or at least its first 8 characters, as the audit log shows it.
+/// @param to Where the `version` is written, relative to the working directory.
+///   The file is not tracked by dvs; inside the repository it is added to the
+///   `.gitignore` of its folder. An existing file there is a conflict,
+///   decided by `on_conflict`.
 /// @param dry_run If `TRUE`, report what would be retrieved without writing files.
 /// @param on_conflict `NULL` (use `DVS_GET_ON_CONFLICT`, then `[get] on_conflict`
 ///   in dvs.toml, then `"abort"`), or one of `"abort"` (change no files if any
@@ -539,10 +546,13 @@ impl From<OnConflictChoice> for OnConflict {
 /// @param progress_callback Optional handle to enable progress bar display.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_get_impl", internal, call = caller)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dvs_get(
     #[miniextendr(default = "character(0)", no_na)] paths: Option<Vec<PathBuf>>,
     #[miniextendr(default = "NULL", no_na)] glob: Option<String>,
     #[miniextendr(default = "NULL", no_na)] recursive: Option<bool>,
+    #[miniextendr(default = "NULL", no_na)] version: Option<String>,
+    #[miniextendr(default = "NULL", no_na)] to: Option<PathBuf>,
     #[miniextendr(default = "NULL", no_na)] dry_run: Option<bool>,
     #[miniextendr(match_arg)] on_conflict: Option<OnConflictChoice>,
     #[miniextendr(match_arg)] on_error: OnErrorChoice,
@@ -553,18 +563,44 @@ pub(crate) fn dvs_get(
     if glob.is_some() && recursive.unwrap_or(false) {
         return Err(anyhow!("`glob` and `recursive` are mutually exclusive"));
     }
+
+    if version.is_some() != to.is_some() {
+        bail!("`version` and `to` must be given together");
+    }
+
+    if version.is_some() && (glob.is_some() || recursive.unwrap_or(false)) {
+        bail!("`version` cannot be combined with `glob` or `recursive`");
+    }
+
     let config = find_config()?;
     let (policy, source) = match config.get_on_conflict(explicit) {
         Ok(p) => p,
         Err(ConfigError(message)) => config_error(&message),
     };
     let dvs_paths = DvsPaths::from_cwd(&config)?;
-    let selection = select_paths_for_get(
-        paths.unwrap_or_default(),
-        glob.as_deref(),
-        &dvs_paths,
-        recursive.unwrap_or(false),
-    )?;
+
+    let paths = paths.unwrap_or_default();
+
+    let get_request = if let (Some(ver), Some(to)) = (version, to) {
+        if paths.len() != 1 {
+            bail!("specifying `version` and `to` requires exactly one file in `paths`");
+        }
+
+        GetRequest::Version(GetVersion::new(
+            paths.first().unwrap(),
+            &ver,
+            &to,
+            &dvs_paths,
+        )?)
+    } else {
+        GetRequest::Tracked(select_paths_for_get(
+            paths,
+            glob.as_deref(),
+            &dvs_paths,
+            recursive.unwrap_or(false),
+        )?)
+    };
+
     let options = GetOptions {
         dry_run,
         on_conflict: policy,
@@ -576,7 +612,7 @@ pub(crate) fn dvs_get(
             let ctx = OperationContext::new()
                 .with_observer(Arc::new(TransferObserver(progress_on_file_start(tx))));
             Ok(get_files(
-                selection,
+                get_request,
                 &dvs_paths,
                 config.backend(),
                 options,
@@ -585,7 +621,7 @@ pub(crate) fn dvs_get(
         })?
     } else {
         get_files(
-            selection,
+            get_request,
             &dvs_paths,
             config.backend(),
             options,
@@ -636,6 +672,7 @@ struct GetFileRow {
     message: Option<String>,
     hint: Option<String>,
     duration_ms: Option<f64>,
+    untracked: bool,
 }
 
 impl From<&GetRow> for GetFileRow {
@@ -656,6 +693,7 @@ impl From<&GetRow> for GetFileRow {
             message,
             hint,
             duration_ms,
+            untracked,
         } = row;
         GetFileRow {
             path: path.to_string_lossy().into_owned(),
@@ -671,6 +709,7 @@ impl From<&GetRow> for GetFileRow {
             message: message.clone(),
             hint: hint.clone(),
             duration_ms: duration_ms.map(|d| d as f64),
+            untracked: *untracked,
         }
     }
 }

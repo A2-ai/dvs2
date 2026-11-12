@@ -22,7 +22,7 @@ switch_branches <- function() {
 get_columns <- c(
   "path", "local_path", "before", "action", "satisfied", "size",
   "target_hash", "local_hash", "stored_copy", "code", "message", "hint",
-  "duration_ms"
+  "duration_ms", "untracked"
 )
 
 test_that("dvs_get restores deleted files with identical content", {
@@ -43,6 +43,21 @@ test_that("dvs_get restores deleted files with identical content", {
   expect_equal(result$action, c("restored", "restored"))
   expect_equal(lapply(c("a.csv", "b.csv"), readLines), original)
   expect_equal(dvs_result_info(result)$outcome, "complete")
+})
+
+test_that("dvs_get with version and to writes an earlier version beside the file", {
+  new_dvs_test_repo()
+  writeLines("v1", "t.csv")
+  dvs_add("t.csv")
+  v1 <- dvs_get("t.csv")$target_hash
+  writeLines("v2", "t.csv")
+  dvs_add("t.csv")
+
+  result <- dvs_get("t.csv", version = v1, to = "old/t.csv")
+  expect_equal(result$action, "restored")
+  expect_true(result$untracked)
+  expect_equal(readLines("old/t.csv"), "v1")
+  expect_equal(readLines("t.csv"), "v2")
 })
 
 test_that("dvs_get dry_run does not restore files", {

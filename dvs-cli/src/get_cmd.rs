@@ -59,6 +59,22 @@ pub fn print_human(report: &GetReport) {
             (_, Some(m)) => m.clone(),
             (false, None) => String::new(),
         };
+        // A side file: which version of which file it holds
+        let detail = match &r.target_hash {
+            Some(hash) if r.untracked && r.satisfied => {
+                let from = format!(
+                    "from {} @ {}",
+                    r.path.display(),
+                    hash.get(..8).unwrap_or(hash)
+                );
+                if detail.is_empty() {
+                    from
+                } else {
+                    format!("{detail}  {from}")
+                }
+            }
+            _ => detail,
+        };
         let extra = match (r.is_conflict(), r.stored_copy) {
             (true, Some(StoredCopy::Present)) => " (a copy of your version appears to be stored)",
             _ => "",
@@ -97,8 +113,23 @@ pub fn print_human(report: &GetReport) {
         }
     }
 
+    // A side file in the way: its own next step, not the tracked file's
+    for r in report
+        .files
+        .iter()
+        .filter(|r| r.is_conflict() && r.untracked)
+    {
+        if let Some(h) = &r.hint {
+            eprintln!("  {h}");
+        }
+    }
+
     // Next steps for conflicts, in one place rather than per row.
-    let conflicts: Vec<&GetRow> = report.files.iter().filter(|r| r.is_conflict()).collect();
+    let conflicts: Vec<&GetRow> = report
+        .files
+        .iter()
+        .filter(|r| r.is_conflict() && !r.untracked)
+        .collect();
     if !conflicts.is_empty() {
         let paths = conflicts
             .iter()

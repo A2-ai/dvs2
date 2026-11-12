@@ -8,6 +8,8 @@ dvs_get_impl(
   paths = character(0),
   glob = NULL,
   recursive = NULL,
+  version = NULL,
+  to = NULL,
   dry_run = NULL,
   on_conflict = NULL,
   on_error = c("return", "warn", "error"),
@@ -29,6 +31,14 @@ with \code{recursive}.}
 If \code{FALSE} or \code{NULL}, only direct children of the directory are
 returned. With no explicit \code{paths} the directory is the working
 directory. Mutually exclusive with \code{glob}.}
+
+\item{version}{The blake3 hash of an earlier version of one file in \code{paths},
+or at least its first 8 characters, as the audit log shows it.}
+
+\item{to}{Where the \code{version} is written, relative to the working directory.
+The file is not tracked by dvs; inside the repository it is added to the
+\code{.gitignore} of its folder. An existing file there is a conflict,
+decided by \code{on_conflict}.}
 
 \item{dry_run}{If \code{TRUE}, report what would be retrieved without writing files.}
 
