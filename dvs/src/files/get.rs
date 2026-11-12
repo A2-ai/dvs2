@@ -1119,7 +1119,7 @@ impl GetVersion {
         let version = version.to_ascii_lowercase();
         if !version.bytes().all(|c| c.is_ascii_hexdigit()) {
             return Err(invalid(&format!(
-                "the version provide ({version}) must be a hash"
+                "the version provided ({version}) must be a hash"
             )));
         }
 
@@ -1439,6 +1439,9 @@ fn settle(
                 }
                 log::info!("Retrieved {} ({})", p.row.path.display(), action.as_str());
             }
+            if !dry_run && p.row.untracked {
+                row.size = fs::metadata(&p.target).ok().map(|m| m.len());
+            }
             // A side file inside the repo is kept out of git; one outside it is left alone
             if !dry_run
                 && p.row.untracked
@@ -1484,6 +1487,9 @@ fn hint(row: &GetRow) -> Option<String> {
          take the tracked version: dvs get --force {p} (replaces yours)"
     );
     match row.code? {
+        GetCode::UnknownLocal if row.untracked => {
+            Some("to replace it, rerun with --force; or choose another --to".into())
+        }
         GetCode::LocalChanges => Some(choices),
         GetCode::UnknownLocal => Some(format!(
             "dvs has no record of writing this file (a clone from before dvs recorded this, \

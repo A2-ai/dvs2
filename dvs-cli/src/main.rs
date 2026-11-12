@@ -163,7 +163,8 @@ pub enum Command {
         /// Get an earlier version of one tracked file. Written to --to
         #[clap(long, value_name = "HASH", requires = "to", conflicts_with_all = ["glob", "recursive"])]
         version: Option<String>,
-        /// Where the --version is written. It is not tracked, and is added to the .gitignore
+        /// Where the --version is written. It is not tracked; inside a git repo it is added to
+        /// the .gitignore
         #[clap(long, value_name = "PATH", requires = "version")]
         to: Option<PathBuf>,
         /// Show what would be retrieved without making any actual changes
@@ -812,7 +813,10 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let get_request = if let (Some(ver), Some(to)) = (version, to) {
                 if paths.len() != 1 {
-                    bail!("--version requires exactly one file")
+                    return Err(output::coded(
+                        ErrorCode::InvalidArguments,
+                        "--version requires exactly one file",
+                    ));
                 }
                 GetRequest::Version(GetVersion::new(
                     paths.first().unwrap(),
