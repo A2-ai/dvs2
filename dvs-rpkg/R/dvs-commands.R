@@ -150,12 +150,12 @@ dvs_audit_log <- function(paths = character(0)) {
 #'   `"not_a_file"`, `"unsafe_path"`), `action` (`"restored"`, `"replaced"`,
 #'   `"unchanged"`, `"skipped"`, `"not_run"`, `"failed"`, `"would_restore"`,
 #'   `"would_replace"`), `satisfied`, `size`, `target_hash`, `local_hash`,
-#'   `stored_copy`, `code`, `message`, `hint` and `duration_ms` (the
+#'   `stored_copy`, `code`, `message`, `hint`, `duration_ms` (the
 #'   milliseconds spent on the file, `NA` when it was never hashed or
-#'   copied). [dvs_result_info()] returns
-#'   the outcome and the policy that applied. Outside a dvs project it raises an
-#'   error. A configuration error, for example `on_conflict = "overwrite"`
-#'   in dvs.toml, raises a `dvs_config_error`.
+#'   copied), and `untracked` (`TRUE` for a row written to `to`).
+#'   [dvs_result_info()] returns the outcome and the policy that applied.
+#'   Outside a dvs project it raises an error. A configuration error, for
+#'   example `on_conflict = "overwrite"` in dvs.toml, raises a `dvs_config_error`.
 #'
 #'   In a dry run, `satisfied` is the prediction: `TRUE` when the file would be
 #'   at its tracked version afterwards.
@@ -183,6 +183,8 @@ dvs_get <- function(
   paths = character(0),
   glob = NULL,
   recursive = FALSE,
+  version = NULL,
+  to = NULL,
   dry_run = FALSE,
   on_conflict = NULL,
   on_error = NULL
@@ -203,6 +205,8 @@ dvs_get <- function(
       paths = paths,
       glob = glob,
       recursive = recursive,
+      version = version,
+      to = to,
       dry_run = dry_run,
       on_conflict = on_conflict,
       on_error = on_error %||% getOption("dvs.on_error", "return"),
