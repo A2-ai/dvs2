@@ -528,7 +528,8 @@ impl From<OnConflictChoice> for OnConflict {
 ///   If `FALSE` or `NULL`, only direct children of the directory are
 ///   returned. With no explicit `paths` the directory is the working
 ///   directory. Mutually exclusive with `glob`.
-/// @param version The full blake3 hash of an earlier version of one file in `paths`.
+/// @param version The blake3 hash of an earlier version of one file in `paths`,
+///   or at least its first 8 characters, as the audit log shows it.
 /// @param to Where the `version` is written, relative to the working directory.
 ///   The file is not tracked by dvs; inside the repository it is added to the
 ///   `.gitignore` of its folder. An existing file there is a conflict,

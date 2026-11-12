@@ -160,7 +160,8 @@ pub enum Command {
         /// Without this flag, directories return only their direct children.
         #[clap(long, short, conflicts_with = "glob")]
         recursive: bool,
-        /// Get an earlier version of one tracked file. Written to --to
+        /// Get an earlier version of one tracked file, by its hash or at least an 8 character prefix.
+        /// Written to --to
         #[clap(long, value_name = "HASH", requires = "to", conflicts_with_all = ["glob", "recursive"])]
         version: Option<String>,
         /// Where the --version is written. It is not tracked; inside a git repo it is added to

@@ -664,29 +664,43 @@ fn plan_version(
         }
     };
 
-    let found = entries
-        .into_iter()
-        .filter_map(|e| {
-            if let crate::audit::Action::Add {
-                file, compression, ..
-            } = e.action
-            {
-                Some((file, compression))
-            } else {
-                None
-            }
-        })
-        .find(|(file, _)| {
-            file.path == ver_request.path && file.hashes.blake3 == ver_request.version
-        });
+    // A prefix can match several adds of the same version: count distinct hashes
+    let mut found: Vec<(crate::audit::AuditFile, Compression)> = Vec::new();
+    for entry in entries {
+        if let crate::audit::Action::Add {
+            file, compression, ..
+        } = entry.action
+            && file.path == ver_request.path
+            && file.hashes.blake3.starts_with(&ver_request.version)
+            && !found
+                .iter()
+                .any(|(f, _)| f.hashes.blake3 == file.hashes.blake3)
+        {
+            found.push((file, compression));
+        }
+    }
 
-    let Some((audit_file, compression)) = found else {
-        return fail(
-            planned,
-            Before::Unknown,
-            GetCode::Shared(ErrorCode::InvalidArguments),
-            format!("has no version matching {}", ver_request.version),
-        );
+    let (audit_file, compression) = match found.len() {
+        1 => found.remove(0),
+        0 => {
+            return fail(
+                planned,
+                Before::Unknown,
+                GetCode::Shared(ErrorCode::InvalidArguments),
+                format!("has no version matching {}", ver_request.version),
+            );
+        }
+        n => {
+            return fail(
+                planned,
+                Before::Unknown,
+                GetCode::Shared(ErrorCode::InvalidArguments),
+                format!(
+                    "{} matches {n} versions; give more of the hash",
+                    ver_request.version
+                ),
+            );
+        }
     };
 
     planned.row.target_hash = Some(audit_file.hashes.blake3.clone());
@@ -1117,9 +1131,9 @@ impl GetVersion {
         }
 
         let version = version.to_ascii_lowercase();
-        if !version.bytes().all(|c| c.is_ascii_hexdigit()) {
+        if version.len() < 8 || !version.bytes().all(|c| c.is_ascii_hexdigit()) {
             return Err(invalid(&format!(
-                "the version provided ({version}) must be a hash"
+                "the version provided ({version}) must be a hash, or at least its first 8 characters"
             )));
         }
 
@@ -2475,7 +2489,7 @@ mod tests {
         repo.add("a.csv", b"v2");
         let v2_record = repo.metadata_bytes("a.csv");
 
-        let first = repo.get_version("a.csv", &v1, "old/a.csv", OnConflict::Abort);
+        let first = repo.get_version("a.csv", &v1[..8], "old/a.csv", OnConflict::Abort);
         let again = repo.get_version("a.csv", &v1, "old/a.csv", OnConflict::Abort);
 
         assert!(first.files[0].untracked);
@@ -2538,6 +2552,7 @@ mod tests {
             ("a.csv", v1.as_str(), in_metadata.as_path()),
             ("dir", v1.as_str(), Path::new("out.csv")),
             ("a.csv", "not-a-hash", Path::new("out.csv")),
+            ("a.csv", &v1[..7], Path::new("out.csv")),
         ];
         for (name, version, to) in refused {
             let err = GetVersion::new(name, version, to, &repo.paths).unwrap_err();
