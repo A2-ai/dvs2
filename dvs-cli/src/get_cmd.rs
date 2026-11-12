@@ -60,14 +60,18 @@ pub fn print_human(report: &GetReport) {
             (false, None) => String::new(),
         };
         // A side file: which version of which file it holds
-        let detail = match (&r.target_hash, r.untracked && r.satisfied) {
-            (Some(hash), true) => {
+        let detail = match &r.target_hash {
+            Some(hash) if r.untracked && r.satisfied => {
                 let from = format!(
                     "from {} @ {}",
                     r.path.display(),
                     hash.get(..8).unwrap_or(hash)
                 );
-                format!("{detail}  {from}").trim_start().to_string()
+                if detail.is_empty() {
+                    from
+                } else {
+                    format!("{detail}  {from}")
+                }
             }
             _ => detail,
         };

@@ -455,7 +455,7 @@ struct Source {
 /// A row being worked on, with what the plan learned about the working file.
 struct Planned {
     row: GetRow,
-    /// where it is written
+    /// Where the row's file is written
     target: PathBuf,
     source: Option<Source>,
     /// The working file's stat when it was classified, to detect it changing
@@ -470,6 +470,19 @@ struct Planned {
 }
 
 impl Planned {
+    /// A tracked file's row: written at the file itself.
+    fn for_tracked(paths: &DvsPaths, path: &Path) -> Self {
+        Self::new(blank_row(paths, path), paths.file_path(path))
+    }
+
+    /// A version get's row: the tracked file's version, written at `to`.
+    fn for_version(version: &GetVersion, paths: &DvsPaths) -> Self {
+        let mut row = blank_row(paths, &version.path);
+        row.local_path = relative_to(paths.cwd(), &version.to);
+        row.untracked = true;
+        Self::new(row, version.to.clone())
+    }
+
     fn new(row: GetRow, target: PathBuf) -> Self {
         Planned {
             row,
@@ -646,11 +659,7 @@ fn plan_version(
     backend: &Backend,
     hashing: &Hashing<'_>,
 ) -> Planned {
-    let mut row = blank_row(dvs_paths, &ver_request.path);
-    row.local_path = relative_to(dvs_paths.cwd(), &ver_request.to);
-    row.untracked = true;
-
-    let mut planned = Planned::new(row, ver_request.to.clone());
+    let mut planned = Planned::for_version(ver_request, dvs_paths);
 
     let entries = match backend.get_audit_entries(std::slice::from_ref(&ver_request.path)) {
         Ok(e) => e,
@@ -704,25 +713,16 @@ fn plan_version(
     };
 
     planned.row.target_hash = Some(audit_file.hashes.blake3.clone());
-    let project_path = match ProjectPath::from_path(&planned.row.path) {
-        Ok(p) => p,
-        Err(e) => {
-            return fail(
-                planned,
-                Before::Unknown,
-                ErrorCode::IoError.into(),
-                e.to_string(),
-            );
-        }
-    };
     // History records no size
-    let source = Source {
-        hashes: audit_file.hashes,
+    classify(
+        planned,
+        audit_file.hashes,
         compression,
-        size: None,
-        project_path,
-    };
-    classify(planned, source, dvs_paths, None, hashing)
+        None,
+        dvs_paths,
+        None,
+        hashing,
+    )
 }
 
 /// Classify one tracked file. Reads only local state. `hashing` begins
@@ -733,8 +733,7 @@ fn plan_file(
     cache: Option<&Mutex<HashCache>>,
     hashing: &Hashing<'_>,
 ) -> Planned {
-    let target = paths.file_path(relative_path);
-    let mut planned = Planned::new(blank_row(paths, relative_path), target);
+    let mut planned = Planned::for_tracked(paths, relative_path);
 
     let metadata_path = paths.metadata_path(relative_path);
     let metadata: FileMetadata = match fs::File::open(&metadata_path)
@@ -754,34 +753,45 @@ fn plan_file(
     planned.row.size = Some(metadata.size);
     planned.row.target_hash = Some(metadata.hashes.blake3.clone());
 
+    classify(
+        planned,
+        metadata.hashes,
+        metadata.compression,
+        Some(metadata.size),
+        paths,
+        cache,
+        hashing,
+    )
+}
+
+/// Classify `planned.target` against the version it should hold: `hashes`,
+/// stored with `compression`, and `size` when it is known.
+/// `cache` must be None for an untracked target: it is keyed by tracked path.
+fn classify(
+    mut planned: Planned,
+    hashes: Hashes,
+    compression: Compression,
+    size: Option<u64>,
+    paths: &DvsPaths,
+    cache: Option<&Mutex<HashCache>>,
+    hashing: &Hashing<'_>,
+) -> Planned {
     let source = match ProjectPath::from_path(&planned.row.path) {
         Ok(project_path) => Source {
-            hashes: metadata.hashes,
-            compression: metadata.compression,
-            size: Some(metadata.size),
+            hashes,
+            compression,
+            size,
             project_path,
         },
         Err(e) => {
             return fail(
                 planned,
                 Before::Unknown,
-                GetCode::Shared(ErrorCode::IoError),
+                ErrorCode::IoError.into(),
                 e.to_string(),
             );
         }
     };
-    classify(planned, source, paths, cache, hashing)
-}
-
-/// Classify `planned.target` against `source`, the version it should hold.
-/// `cache` must be None for an untracked target: it is keyed by tracked path.
-fn classify(
-    mut planned: Planned,
-    source: Source,
-    paths: &DvsPaths,
-    cache: Option<&Mutex<HashCache>>,
-    hashing: &Hashing<'_>,
-) -> Planned {
     let target = planned.target.clone();
     // A target outside the repo (an untracked --to) has no project to escape
     if target.starts_with(paths.repo_root())
@@ -1028,7 +1038,7 @@ impl GetSelection {
                 // Hashing is starting work too: a cancel stops it. The
                 // row is `unknown` only because nothing looked at the file.
                 if ctx.is_cancelled() {
-                    let mut planned = Planned::new(blank_row(paths, &p), paths.file_path(&p));
+                    let mut planned = Planned::for_tracked(paths, &p);
                     planned.row.before = Before::Unknown;
                     cancel_row(&mut planned.row);
                     return planned;
@@ -1052,7 +1062,7 @@ impl GetSelection {
                 Some(normalize(&cwd_rel.join(&user_path)))
             };
             let path = inside.as_deref().unwrap_or(&user_path);
-            let mut p = Planned::new(blank_row(paths, path), paths.file_path(path));
+            let mut p = Planned::for_tracked(paths, path);
             let is_dir = paths.file_path(&p.row.path).is_dir();
             if inside.is_none() {
                 p.row.local_path = user_path;
@@ -1119,7 +1129,7 @@ impl GetVersion {
         // the output is not in the metadata folder
         if to.starts_with(paths.metadata_folder()) {
             return Err(invalid(
-                "specified file output cannot be within the metadata folder",
+                "a version get cannot write into the metadata folder",
             ));
         }
 
@@ -1127,7 +1137,7 @@ impl GetVersion {
         if let Ok(rel) = to.strip_prefix(paths.repo_root())
             && paths.metadata_path(rel).is_file()
         {
-            return Err(invalid("specified file output cannot be a tracked file"));
+            return Err(invalid("a version get cannot write over a tracked file"));
         }
 
         let version = version.to_ascii_lowercase();
@@ -1149,12 +1159,10 @@ impl GetVersion {
         ctx: &OperationContext,
     ) -> Vec<Planned> {
         if ctx.is_cancelled() {
-            let mut row = blank_row(paths, &self.path);
-            row.local_path = relative_to(paths.cwd(), &self.to);
-            row.untracked = true;
-            row.before = Before::Unknown;
-            cancel_row(&mut row);
-            return vec![Planned::new(row, self.to)];
+            let mut planned = Planned::for_version(&self, paths);
+            planned.row.before = Before::Unknown;
+            cancel_row(&mut planned.row);
+            return vec![planned];
         }
         let started = Instant::now();
         let mut planned = plan_version(&self, paths, backend, hashing);
@@ -1440,7 +1448,18 @@ fn settle(
                 .to_string()
             });
             set_row(row, action, None, message);
-            if !dry_run && !p.row.untracked {
+            if dry_run {
+                return;
+            }
+            if p.row.untracked {
+                row.size = fs::metadata(&p.target).ok().map(|m| m.len());
+                // Kept out of git inside the repo; outside it, left alone
+                if let Ok(rel) = p.target.strip_prefix(paths.repo_root())
+                    && let Err(e) = add_to_gitignore(paths.repo_root(), &[rel.to_path_buf()])
+                {
+                    log::warn!("Could not git-ignore {}: {e}", p.target.display());
+                }
+            } else {
                 let source = p.source.as_ref().expect("planned transfers have a source");
                 let size = source.size.expect("a tracked source has its size");
                 let rel_str = p.row.path.to_string_lossy().into_owned();
@@ -1451,19 +1470,8 @@ fn settle(
                 {
                     log::warn!("Cache store failed after get for {rel_str}: {e}");
                 }
-                log::info!("Retrieved {} ({})", p.row.path.display(), action.as_str());
             }
-            if !dry_run && p.row.untracked {
-                row.size = fs::metadata(&p.target).ok().map(|m| m.len());
-            }
-            // A side file inside the repo is kept out of git; one outside it is left alone
-            if !dry_run
-                && p.row.untracked
-                && let Ok(rel) = p.target.strip_prefix(paths.repo_root())
-                && let Err(e) = add_to_gitignore(paths.repo_root(), &[rel.to_path_buf()])
-            {
-                log::warn!("Could not git-ignore {}: {e}", p.target.display());
-            }
+            log::info!("Retrieved {} ({})", p.row.path.display(), action.as_str());
         }
         Err((code, message)) => {
             log::warn!("Failed to get {}: {message}", p.row.path.display());
