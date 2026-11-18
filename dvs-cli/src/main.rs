@@ -1,5 +1,6 @@
 mod cancel;
 mod events;
+mod fetch_cmd;
 mod get_cmd;
 mod observer;
 mod output;
@@ -28,9 +29,9 @@ use dvs::init::{create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
-    FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow,
-    Outcome, PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files,
-    set_num_threads,
+    FetchOptions, FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext,
+    OperationRow, Outcome, PathFilter, RowState, RunOutcome, Status, add_files, fetch_files,
+    format_size, get_files, set_num_threads,
 };
 
 use crate::observer::CliObserver;
@@ -170,6 +171,23 @@ pub enum Command {
         #[clap(long, value_name = "POLICY", value_parser = clap::builder::PossibleValuesParser::new(OnConflict::CHOICES))]
         on_conflict: Option<String>,
         /// Replace files with local changes (same as --on-conflict overwrite)
+        #[clap(long, short, conflicts_with = "on_conflict")]
+        force: bool,
+    },
+    /// Write an earlier version of a tracked file to .dvs-scratchpad/<first 8 of
+    /// its hash>/<path>, leaving the tracked file and its record unchanged
+    Fetch {
+        /// The tracked file
+        path: PathBuf,
+        /// The version's hash, at least its first 8 characters (see `dvs history`)
+        #[clap(long, value_name = "HASH")]
+        version: String,
+        /// What to do with a copy already in the scratchpad that was changed:
+        /// abort changes nothing, skip leaves it, overwrite replaces it.
+        /// Defaults to DVS_GET_ON_CONFLICT, then `[get] on_conflict` in dvs.toml, then abort
+        #[clap(long, value_name = "POLICY", value_parser = clap::builder::PossibleValuesParser::new(OnConflict::CHOICES))]
+        on_conflict: Option<String>,
+        /// Replace a changed copy (same as --on-conflict overwrite)
         #[clap(long, short, conflicts_with = "on_conflict")]
         force: bool,
     },
@@ -400,6 +418,15 @@ fn summary_line<const N: usize>(parts: [(usize, String); N], counts: &Counts) ->
     let first = line.get(..1)?.to_uppercase();
     line.replace_range(..1, &first);
     Some(line)
+}
+
+fn explicit_on_conflict(on_conflict: Option<String>, force: bool) -> Result<Option<OnConflict>> {
+    if force {
+        return Ok(Some(OnConflict::Overwrite));
+    }
+    on_conflict
+        .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
+        .transpose()
 }
 
 /// Ends a run that reported rows with the exit status of how it ended.
@@ -793,14 +820,8 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             force,
         } => {
             let config = find_config(&current_dir)?;
-            let explicit = if force {
-                Some(OnConflict::Overwrite)
-            } else {
-                on_conflict
-                    .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
-                    .transpose()?
-            };
-            let (on_conflict, source) = config.get_on_conflict(explicit)?;
+            let (on_conflict, source) =
+                config.get_on_conflict(explicit_on_conflict(on_conflict, force)?)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let selection = select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
 
@@ -831,6 +852,47 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
                 output::emit_streamed(get_cmd::to_json(&report));
             } else {
                 get_cmd::print_human(&report);
+            }
+            summary_exit(report.verdict())?;
+        }
+        Command::Fetch {
+            path,
+            version,
+            on_conflict,
+            force,
+        } => {
+            let config = find_config(&current_dir)?;
+            let (on_conflict, source) =
+                config.get_on_conflict(explicit_on_conflict(on_conflict, force)?)?;
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
+
+            let show_progress = !cli.json && std::io::stderr().is_terminal();
+            let mut observer = CliObserver::new(false).with_rows(|row| match row {
+                FileRow::Get(r) => Some(serde_json::to_value(r).expect("rows serialize")),
+                _ => None,
+            });
+            if show_progress {
+                observer =
+                    observer.with_bars(make_progress_callback(config.progress_bytes_threshold()));
+            }
+            let ctx = OperationContext::new()
+                .with_cancel(cancel.clone())
+                .with_observer(Arc::new(observer));
+            let report = fetch_files(
+                &path,
+                &version,
+                &dvs_paths,
+                config.backend(),
+                FetchOptions {
+                    on_conflict,
+                    source,
+                },
+                &ctx,
+            );
+            if cli.json {
+                output::emit_streamed(fetch_cmd::to_json(&report));
+            } else {
+                fetch_cmd::print_human(&report);
             }
             summary_exit(report.verdict())?;
         }
@@ -1190,6 +1252,7 @@ impl Command {
             Self::Add { .. } => "add",
             Self::Status { .. } => "status",
             Self::Get { .. } => "get",
+            Self::Fetch { .. } => "fetch",
             Self::Info => "info",
             Self::Availability { .. } => "availability",
             Self::History { .. } => "history",
@@ -1202,7 +1265,7 @@ impl Command {
     fn cancellable(&self) -> bool {
         matches!(
             self,
-            Self::Add { .. } | Self::Get { .. } | Self::Status { .. }
+            Self::Add { .. } | Self::Get { .. } | Self::Fetch { .. } | Self::Status { .. }
         )
     }
 

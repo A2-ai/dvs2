@@ -26,8 +26,9 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
-    OperationContext, PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
+    Compression, FetchOptions, FetchRow, FileProgress, GetCounts,
+    GetOptions, GetReport, GetRow, GetVerdict, OperationContext, PathFilter, Status,
+    TransferObserver, add_files, fetch_files, get_files, set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -717,6 +718,110 @@ impl From<&GetReport> for GetInfo {
                 Some(p) => p.message.clone(),
                 None => report.summary(),
             },
+        }
+    }
+}
+
+/// @title Fetch an earlier version of a tracked file into the scratchpad
+/// @description
+/// Writes an earlier version of a tracked file to
+/// `.dvs-scratchpad/<first 8 of hash>/<tracked path>`, leaving the tracked file
+/// and its record unchanged.
+///
+/// @param path A tracked file, relative to the working directory.
+/// @param version The version's hash, or at least its first 8 characters.
+/// @param on_conflict As in [dvs_get()], for a scratchpad copy that was changed.
+/// @keywords internal
+#[miniextendr(r_name = "dvs_fetch_impl", internal, call = caller)]
+pub(crate) fn dvs_fetch(
+    #[miniextendr(no_na)] path: PathBuf,
+    #[miniextendr(no_na)] version: String,
+    #[miniextendr(match_arg)] on_conflict: Option<OnConflictChoice>,
+) -> Result<BuiltDataFrame> {
+    let config = find_config()?;
+    let (policy, source) = match config.get_on_conflict(on_conflict.map(OnConflict::from)) {
+        Ok(p) => p,
+        Err(ConfigError(message)) => config_error(&message),
+    };
+    let dvs_paths = DvsPaths::from_cwd(&config)?;
+    let report = fetch_files(
+        &path,
+        &version,
+        &dvs_paths,
+        config.backend(),
+        FetchOptions {
+            on_conflict: policy,
+            source,
+        },
+        &OperationContext::new(),
+    );
+    Ok(report
+        .files
+        .iter()
+        .map(FetchFileRow::from)
+        .collect::<Vec<_>>()
+        .into_dataframe()?)
+}
+
+#[derive(DataFrameRow)]
+struct FetchFileRow {
+    path: String,
+    local_path: String,
+    before: String,
+    action: String,
+    satisfied: bool,
+    size: Option<f64>,
+    target_hash: Option<String>,
+    local_hash: Option<String>,
+    stored_copy: Option<String>,
+    code: Option<String>,
+    message: Option<String>,
+    hint: Option<String>,
+    duration_ms: Option<f64>,
+    written_to: Option<String>,
+    hash: Option<String>,
+}
+
+impl From<&FetchRow> for FetchFileRow {
+    fn from(row: &FetchRow) -> Self {
+        let FetchRow {
+            row,
+            written_to,
+            hash,
+        } = row;
+        let GetFileRow {
+            path,
+            local_path,
+            before,
+            action,
+            satisfied,
+            size,
+            target_hash,
+            local_hash,
+            stored_copy,
+            code,
+            message,
+            hint,
+            duration_ms,
+        } = GetFileRow::from(row);
+        FetchFileRow {
+            path,
+            local_path,
+            before,
+            action,
+            satisfied,
+            size,
+            target_hash,
+            local_hash,
+            stored_copy,
+            code,
+            message,
+            hint,
+            duration_ms,
+            written_to: written_to
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            hash: hash.clone(),
         }
     }
 }
