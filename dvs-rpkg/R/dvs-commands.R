@@ -225,7 +225,7 @@ dvs_get <- function(
 
 #' @inherit dvs_fetch_impl title description params
 #' @return A tibble with [dvs_get()]'s columns, then `written_to` (relative to
-#'   the project root) and `hash`.
+#'   the working directory) and `hash`.
 #' @examples
 #' \dontrun{
 #' res <- dvs_fetch("data/derived.csv", "a1b2c3d4")
@@ -233,11 +233,11 @@ dvs_get <- function(
 #' }
 #' @rdname dvs_fetch
 #' @export
-dvs_fetch <- function(path, version, on_conflict = NULL) {
+dvs_fetch <- function(path, version, force = FALSE) {
   result <- tibble::as_tibble(dvs_fetch_impl(
     path = path,
     version = version,
-    on_conflict = on_conflict
+    force = force
   ))
   result$size <- new_dvs_bytes(result$size)
   result

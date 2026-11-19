@@ -550,7 +550,7 @@ fn project_relative(root: &Path, absolute: &Path) -> Option<PathBuf> {
 }
 
 /// `target` lexically relative to `base`; both absolute.
-fn relative_to(base: &Path, target: &Path) -> PathBuf {
+pub(crate) fn relative_to(base: &Path, target: &Path) -> PathBuf {
     let base: Vec<_> = base.components().collect();
     let target: Vec<_> = target.components().collect();
     let common = base

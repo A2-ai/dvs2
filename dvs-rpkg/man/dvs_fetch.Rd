@@ -4,18 +4,18 @@
 \alias{dvs_fetch}
 \title{Fetch an earlier version of a tracked file into the scratchpad}
 \usage{
-dvs_fetch(path, version, on_conflict = NULL)
+dvs_fetch(path, version, force = FALSE)
 }
 \arguments{
 \item{path}{A tracked file, relative to the working directory.}
 
 \item{version}{The version's hash, or at least its first 8 characters.}
 
-\item{on_conflict}{As in \code{\link[=dvs_get]{dvs_get()}}, for a scratchpad copy that was changed.}
+\item{force}{If \code{TRUE}, replace a copy already in the scratchpad that was changed.}
 }
 \value{
 A tibble with \code{\link[=dvs_get]{dvs_get()}}'s columns, then \code{written_to} (relative to
-the project root) and \code{hash}.
+the working directory) and \code{hash}.
 }
 \description{
 Writes an earlier version of a tracked file to

@@ -29,9 +29,9 @@ use dvs::init::{create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
-    FetchOptions, FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext,
-    OperationRow, Outcome, PathFilter, RowState, RunOutcome, Status, add_files, fetch_files,
-    format_size, get_files, set_num_threads,
+    FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow,
+    Outcome, PathFilter, RowState, RunOutcome, Status, add_files, fetch_files, format_size,
+    get_files, set_num_threads,
 };
 
 use crate::observer::CliObserver;
@@ -182,13 +182,8 @@ pub enum Command {
         /// The version's hash, at least its first 8 characters (see `dvs history`)
         #[clap(long, value_name = "HASH")]
         version: String,
-        /// What to do with a copy already in the scratchpad that was changed:
-        /// abort changes nothing, skip leaves it, overwrite replaces it.
-        /// Defaults to DVS_GET_ON_CONFLICT, then `[get] on_conflict` in dvs.toml, then abort
-        #[clap(long, value_name = "POLICY", value_parser = clap::builder::PossibleValuesParser::new(OnConflict::CHOICES))]
-        on_conflict: Option<String>,
-        /// Replace a changed copy (same as --on-conflict overwrite)
-        #[clap(long, short, conflicts_with = "on_conflict")]
+        /// Replace a copy already in the scratchpad that was changed
+        #[clap(long, short)]
         force: bool,
     },
     /// Show the project configuration, and the server info when the project uses a dvs-server backend
@@ -418,15 +413,6 @@ fn summary_line<const N: usize>(parts: [(usize, String); N], counts: &Counts) ->
     let first = line.get(..1)?.to_uppercase();
     line.replace_range(..1, &first);
     Some(line)
-}
-
-fn explicit_on_conflict(on_conflict: Option<String>, force: bool) -> Result<Option<OnConflict>> {
-    if force {
-        return Ok(Some(OnConflict::Overwrite));
-    }
-    on_conflict
-        .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
-        .transpose()
 }
 
 /// Ends a run that reported rows with the exit status of how it ended.
@@ -820,8 +806,14 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             force,
         } => {
             let config = find_config(&current_dir)?;
-            let (on_conflict, source) =
-                config.get_on_conflict(explicit_on_conflict(on_conflict, force)?)?;
+            let explicit = if force {
+                Some(OnConflict::Overwrite)
+            } else {
+                on_conflict
+                    .map(|v| v.parse().map_err(|e: String| anyhow!(e)))
+                    .transpose()?
+            };
+            let (on_conflict, source) = config.get_on_conflict(explicit)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
             let selection = select_paths_for_get(paths, glob.as_deref(), &dvs_paths, recursive)?;
 
@@ -858,12 +850,9 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
         Command::Fetch {
             path,
             version,
-            on_conflict,
             force,
         } => {
             let config = find_config(&current_dir)?;
-            let (on_conflict, source) =
-                config.get_on_conflict(explicit_on_conflict(on_conflict, force)?)?;
             let dvs_paths = DvsPaths::from_cwd(&config)?;
 
             let show_progress = !cli.json && std::io::stderr().is_terminal();
@@ -878,17 +867,7 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             let ctx = OperationContext::new()
                 .with_cancel(cancel.clone())
                 .with_observer(Arc::new(observer));
-            let report = fetch_files(
-                &path,
-                &version,
-                &dvs_paths,
-                config.backend(),
-                FetchOptions {
-                    on_conflict,
-                    source,
-                },
-                &ctx,
-            );
+            let report = fetch_files(&path, &version, &dvs_paths, config.backend(), force, &ctx);
             if cli.json {
                 output::emit_streamed(fetch_cmd::to_json(&report));
             } else {

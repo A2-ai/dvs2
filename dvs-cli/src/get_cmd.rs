@@ -17,6 +17,20 @@ fn is_shared(code: Option<GetCode>) -> bool {
     )
 }
 
+pub(crate) fn label(action: Action) -> &'static str {
+    match action {
+        Action::Restored => "restored",
+        Action::Replaced => "replaced",
+        Action::Unchanged => "unchanged",
+        Action::Skipped => "skipped",
+        Action::NotRun => "not run",
+        Action::Cancelled => "cancelled",
+        Action::Failed => "failed",
+        Action::WouldRestore => "would restore",
+        Action::WouldReplace => "would replace",
+    }
+}
+
 /// Rows listed one per line: every file that changed or needs attention.
 /// Cancelled files are only counted, as add and status do.
 fn is_listed(row: &GetRow) -> bool {
@@ -51,7 +65,7 @@ pub fn print_human(report: &GetReport) {
         };
         let line = format!(
             "{:<13} {:<width$}  {detail}{extra}",
-            crate::output::action_label(r.action),
+            label(r.action),
             r.local_path.display()
         );
         if r.satisfied {

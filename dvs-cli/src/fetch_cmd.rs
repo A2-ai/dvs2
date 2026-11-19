@@ -1,11 +1,10 @@
-use dvs::{Action, Before, FetchReport, FetchRow, GetOutcome};
+use dvs::{Action, FetchReport, FetchRow};
 use serde_json::json;
 
 fn label(action: Action) -> &'static str {
     match action {
         Action::Restored => "fetched",
-        Action::WouldRestore => "would fetch",
-        other => crate::output::action_label(other),
+        other => crate::get_cmd::label(other),
     }
 }
 
@@ -26,79 +25,13 @@ fn line(r: &FetchRow) -> String {
         .to_string()
 }
 
-fn summary(report: &FetchReport) -> String {
-    let c = &report.counts;
-    let parts = [
-        (c.restored, "fetched {}"),
-        (c.replaced, "replaced {}"),
-        (c.unchanged, "{} already there"),
-        (c.skipped, "skipped {}"),
-        (c.not_run, "{} held back"),
-        (c.cancelled, "cancelled {}"),
-        (c.failed, "{} failed"),
-    ];
-    let phrase = parts
-        .iter()
-        .filter(|(n, _)| *n > 0)
-        .map(|(n, f)| f.replace("{}", &n.to_string()))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let changed = |r: &&FetchRow| r.row.is_conflict() && r.row.before == Before::Modified;
-    let mut out = match report.outcome {
-        GetOutcome::Complete if c.restored + c.replaced == 0 => {
-            format!("nothing to do, {} already there", c.unchanged)
-        }
-        GetOutcome::Complete => phrase,
-        GetOutcome::Aborted => {
-            let mut reasons = Vec::new();
-            let n = report.files.iter().filter(changed).count();
-            match n {
-                0 => {}
-                1 => reasons.push("a scratchpad copy was changed".to_string()),
-                n => reasons.push(format!("{n} scratchpad copies were changed")),
-            }
-            match c.failed {
-                0 => {}
-                1 => reasons.push("1 file cannot be retrieved".to_string()),
-                n => reasons.push(format!("{n} files cannot be retrieved")),
-            }
-            format!("aborted, nothing changed: {}", reasons.join("; "))
-        }
-        _ => format!("{}: {phrase}", report.outcome.as_str()),
-    };
-    if let Some(first) = out.get(..1) {
-        out.replace_range(..1, &first.to_uppercase());
-    }
-    if report
-        .files
-        .iter()
-        .any(|r| r.row.before == Before::Modified)
-    {
-        out.push_str(&format!(
-            "\non_conflict = {} ({})",
-            report.on_conflict, report.source
-        ));
-    }
-    out
-}
-
 pub fn print_human(report: &FetchReport) {
-    if let Some(problem) = &report.problem {
-        eprintln!("dvs fetch: {problem}");
-        return;
-    }
     for r in &report.files {
         if r.row.satisfied {
             println!("{}", line(r));
         } else {
             eprintln!("{}", line(r));
         }
-    }
-    let summary = format!("\n{}", summary(report));
-    if report.outcome == GetOutcome::Complete {
-        println!("{summary}");
-    } else {
-        eprintln!("{summary}");
     }
     for r in report.files.iter().filter(|r| !r.row.satisfied) {
         if let Some(h) = &r.row.hint {
@@ -113,13 +46,8 @@ pub fn to_json(report: &FetchReport) -> serde_json::Value {
         "command": "fetch",
         "outcome": report.outcome,
         "dry_run": false,
-        "on_conflict": report.on_conflict,
-        "source": report.source,
         "counts": report.counts,
-        "error": report
-            .problem
-            .as_ref()
-            .map(|p| crate::output::error_json(p.code, p.message.as_str())),
+        "error": null,
         "files": report.files,
     })
 }
@@ -127,7 +55,7 @@ pub fn to_json(report: &FetchReport) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dvs::{GetCode, GetRow};
+    use dvs::{Before, GetCode, GetRow};
     use std::path::PathBuf;
 
     fn row(action: Action, written_to: Option<&str>, message: Option<&str>) -> FetchRow {

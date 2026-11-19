@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::cache::FileStat;
-use crate::config::{OnConflict, SettingSource};
-use crate::error::{Error, ErrorCode, backend_error_code};
+use crate::error::{ErrorCode, backend_error_code};
 use crate::gitignore::add_to_gitignore;
 use crate::operation::{FileRow, OperationContext, OperationPlan, millis};
 use crate::{Backend, Compression, DvsPaths, Hashes, PathFilter, ProjectPath, audit};
@@ -14,18 +13,12 @@ use uuid::Uuid;
 
 use super::get::{
     Action, Before, FileError, GetCode, GetCounts, GetOutcome, GetRow, GetVerdict, cancel_row,
-    retrieve_into, set_row, shell_path,
+    relative_to, retrieve_into, set_row, shell_path,
 };
 
 pub const SCRATCHPAD: &str = ".dvs-scratchpad";
 
 const MIN_PREFIX: usize = 8;
-
-#[derive(Debug, Clone, Copy)]
-pub struct FetchOptions {
-    pub on_conflict: OnConflict,
-    pub source: SettingSource,
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FetchRow {
@@ -38,10 +31,7 @@ pub struct FetchRow {
 #[derive(Debug, Clone, Serialize)]
 pub struct FetchReport {
     pub outcome: GetOutcome,
-    pub on_conflict: OnConflict,
-    pub source: SettingSource,
     pub counts: GetCounts,
-    pub problem: Option<Error>,
     pub files: Vec<FetchRow>,
 }
 
@@ -49,7 +39,7 @@ impl FetchReport {
     pub fn verdict(&self) -> GetVerdict {
         if self.outcome == GetOutcome::Cancelled {
             GetVerdict::Cancelled
-        } else if self.problem.is_some() || self.counts.failed > 0 {
+        } else if self.counts.failed > 0 {
             GetVerdict::Failed
         } else if self.outcome == GetOutcome::Aborted {
             GetVerdict::HeldBack
@@ -62,6 +52,7 @@ impl FetchReport {
 #[derive(Debug, Clone)]
 struct Resolved {
     path: PathBuf,
+    project_path: ProjectPath,
     local_path: PathBuf,
     hashes: Hashes,
     compression: Compression,
@@ -166,6 +157,7 @@ fn resolve(
         let (hashes, compression) = matches.remove(0);
         return Ok(Resolved {
             path: relative,
+            project_path,
             local_path: user_path.to_path_buf(),
             hashes,
             compression,
@@ -183,9 +175,9 @@ fn resolve(
 }
 
 fn scratch_target(file: &Resolved) -> PathBuf {
-    let blake3 = &file.hashes.blake3;
-    let label = blake3.get(..MIN_PREFIX).unwrap_or(blake3);
-    Path::new(SCRATCHPAD).join(label).join(&file.path)
+    Path::new(SCRATCHPAD)
+        .join(&file.hashes.blake3[..MIN_PREFIX])
+        .join(&file.path)
 }
 
 // A scratchpad or label folder symlinked to the root resolves to the root,
@@ -223,9 +215,8 @@ fn prepare_scratchpad(paths: &DvsPaths) -> Result<(), FileError> {
 
 fn plan_copy(paths: &DvsPaths, resolved: Resolved) -> Planned {
     let mut row = new_row(resolved.path.clone(), resolved.local_path.clone());
-    let relative = scratch_target(&resolved);
-    let target = paths.file_path(&relative);
-    row.written_to = Some(relative);
+    let target = paths.file_path(&scratch_target(&resolved));
+    row.written_to = Some(relative_to(paths.cwd(), &target));
     row.hash = Some(resolved.hashes.blake3.clone());
     row.row.target_hash = row.hash.clone();
     let mut item = Planned {
@@ -308,13 +299,9 @@ pub fn fetch_files(
     version: &str,
     paths: &DvsPaths,
     backend: &Backend,
-    options: FetchOptions,
+    force: bool,
     ctx: &OperationContext,
 ) -> FetchReport {
-    let FetchOptions {
-        on_conflict,
-        source,
-    } = options;
     let observer = ctx.observer();
 
     let mut items: Vec<Planned> = [resolve(path, version, paths, backend)]
@@ -329,20 +316,12 @@ pub fn fetch_files(
         })
         .collect();
 
-    let blocked = on_conflict != OnConflict::Skip
-        && items
-            .iter()
-            .any(|i| is_known_problem(&i.row.row, on_conflict));
-    for item in items.iter_mut() {
-        if item.row.row.is_conflict() && on_conflict == OnConflict::Skip {
-            item.row.row.action = Action::Skipped;
-        }
-    }
+    let blocked = items.iter().any(|i| is_known_problem(&i.row.row, force));
     let transfers: Vec<usize> = if blocked {
         Vec::new()
     } else {
         (0..items.len())
-            .filter(|&i| needs_transfer(&items[i].row.row, on_conflict))
+            .filter(|&i| needs_transfer(&items[i].row.row, force))
             .collect()
     };
     observer.planned(&OperationPlan {
@@ -389,17 +368,15 @@ pub fn fetch_files(
     for item in &items {
         observer.file_finished(FileRow::Get(&item.row.row));
     }
-    finish(items, on_conflict, source, blocked, ctx)
+    finish(items, blocked, ctx)
 }
 
-fn is_known_problem(row: &GetRow, on_conflict: OnConflict) -> bool {
-    row.action == Action::Failed || (row.is_conflict() && on_conflict != OnConflict::Overwrite)
+fn is_known_problem(row: &GetRow, force: bool) -> bool {
+    row.action == Action::Failed || (row.is_conflict() && !force)
 }
 
-fn needs_transfer(row: &GetRow, on_conflict: OnConflict) -> bool {
-    row.action == Action::NotRun
-        && (row.before == Before::Absent
-            || (row.is_conflict() && on_conflict == OnConflict::Overwrite))
+fn needs_transfer(row: &GetRow, force: bool) -> bool {
+    row.action == Action::NotRun && (row.before == Before::Absent || (row.is_conflict() && force))
 }
 
 fn install_copy(
@@ -410,14 +387,7 @@ fn install_copy(
     ctx: &OperationContext,
 ) -> Result<u64, FileError> {
     let resolved = item.resolved.as_ref().expect("transfers are resolved");
-    let relative = item
-        .row
-        .written_to
-        .as_ref()
-        .expect("transfers have a destination");
-    let target = paths.file_path(relative);
-    let project_path = ProjectPath::from_path(&resolved.path)
-        .map_err(|e| (GetCode::Shared(ErrorCode::InvalidArguments), e.to_string()))?;
+    let target = paths.file_path(&scratch_target(resolved));
     let progress = ctx.observer().transfer_started(&resolved.path, 0);
     let on_bytes = progress.as_ref().map(|fp| &*fp.on_bytes);
     let result = retrieve_into(
@@ -425,7 +395,7 @@ fn install_copy(
         &target,
         &resolved.hashes,
         resolved.compression,
-        project_path,
+        resolved.project_path.clone(),
         &item.stat,
         operation_id,
         on_bytes,
@@ -439,13 +409,7 @@ fn install_copy(
         .map_err(|e| (GetCode::Shared(ErrorCode::IoError), e.to_string()))
 }
 
-fn finish(
-    items: Vec<Planned>,
-    on_conflict: OnConflict,
-    source: SettingSource,
-    aborted: bool,
-    ctx: &OperationContext,
-) -> FetchReport {
+fn finish(items: Vec<Planned>, aborted: bool, ctx: &OperationContext) -> FetchReport {
     let files: Vec<FetchRow> = items.into_iter().map(|i| i.row).collect();
     let mut counts = GetCounts {
         total: files.len(),
@@ -479,10 +443,7 @@ fn finish(
     };
     FetchReport {
         outcome,
-        on_conflict,
-        source,
         counts,
-        problem: None,
         files,
     }
 }
@@ -541,16 +502,13 @@ mod tests {
                 .blake3
         }
 
-        fn fetch(&self, path: &str, version: &str, on_conflict: OnConflict) -> FetchReport {
+        fn fetch(&self, path: &str, version: &str, force: bool) -> FetchReport {
             fetch_files(
                 Path::new(path),
                 version,
                 &self.paths,
                 self.config.backend(),
-                FetchOptions {
-                    on_conflict,
-                    source: SettingSource::Argument,
-                },
+                force,
                 &OperationContext::new(),
             )
         }
@@ -571,7 +529,7 @@ mod tests {
     fn old_version_lands_in_the_scratchpad_and_a_second_run_is_unchanged() {
         let (repo, old) = two_versions();
 
-        let report = repo.fetch("data/a.csv", &old[..8].to_uppercase(), OnConflict::Abort);
+        let report = repo.fetch("data/a.csv", &old[..8].to_uppercase(), false);
         assert_eq!(report.outcome, GetOutcome::Complete, "{report:#?}");
         let r = &report.files[0];
         assert_eq!(
@@ -583,7 +541,7 @@ mod tests {
         assert_eq!(r.written_to.as_deref(), Some(written.as_path()));
         assert_eq!(fs::read(repo.scratch(&old, "data/a.csv")).unwrap(), b"old");
 
-        let again = repo.fetch("data/a.csv", &old[..8], OnConflict::Abort);
+        let again = repo.fetch("data/a.csv", &old[..8], false);
         let r = &again.files[0];
         assert_eq!(
             (r.row.before, r.row.action),
@@ -601,7 +559,7 @@ mod tests {
         let baseline_before = baseline_for(cache.as_ref(), "data/a.csv");
         drop(cache);
 
-        let report = repo.fetch("data/a.csv", &old, OnConflict::Abort);
+        let report = repo.fetch("data/a.csv", &old, false);
         assert_eq!(report.outcome, GetOutcome::Complete, "{report:#?}");
 
         assert_eq!(fs::read(repo.root.join("data/a.csv")).unwrap(), b"new");
@@ -616,7 +574,7 @@ mod tests {
     #[test]
     fn first_write_gitignores_the_scratchpad() {
         let (repo, old) = two_versions();
-        repo.fetch("data/a.csv", &old, OnConflict::Abort);
+        repo.fetch("data/a.csv", &old, false);
         let gitignore = fs::read_to_string(repo.root.join(".gitignore")).unwrap();
         assert!(
             gitignore.lines().any(|l| l == "/.dvs-scratchpad"),
@@ -625,13 +583,13 @@ mod tests {
     }
 
     #[test]
-    fn an_edited_scratch_copy_follows_on_conflict() {
+    fn an_edited_scratch_copy_is_kept_unless_forced() {
         let (repo, old) = two_versions();
-        repo.fetch("data/a.csv", &old, OnConflict::Abort);
+        repo.fetch("data/a.csv", &old, false);
         let copy = repo.scratch(&old, "data/a.csv");
         fs::write(&copy, b"edited").unwrap();
 
-        let report = repo.fetch("data/a.csv", &old, OnConflict::Abort);
+        let report = repo.fetch("data/a.csv", &old, false);
         assert_eq!(report.outcome, GetOutcome::Aborted);
         let r = &report.files[0];
         assert_eq!(
@@ -641,12 +599,7 @@ mod tests {
         assert_eq!(r.row.code, Some(GetCode::LocalChanges));
         assert_eq!(fs::read(&copy).unwrap(), b"edited");
 
-        let report = repo.fetch("data/a.csv", &old, OnConflict::Skip);
-        assert_eq!(report.outcome, GetOutcome::Partial);
-        assert_eq!(report.files[0].row.action, Action::Skipped);
-        assert_eq!(fs::read(&copy).unwrap(), b"edited");
-
-        let report = repo.fetch("data/a.csv", &old, OnConflict::Overwrite);
+        let report = repo.fetch("data/a.csv", &old, true);
         assert_eq!(report.outcome, GetOutcome::Complete);
         assert_eq!(report.files[0].row.action, Action::Replaced);
         assert_eq!(fs::read(&copy).unwrap(), b"old");
@@ -660,7 +613,7 @@ mod tests {
             (&old[..7], "at least 8"),
             ("zzzzzzzz", "hex characters"),
         ] {
-            let report = repo.fetch("data/a.csv", version, OnConflict::Abort);
+            let report = repo.fetch("data/a.csv", version, false);
             let r = &report.files[0];
             assert!(r.row.message.as_deref().unwrap().contains(why), "{r:#?}");
             assert_eq!(r.row.action, Action::Failed, "{version}");
@@ -669,6 +622,7 @@ mod tests {
                 Some(GetCode::Shared(ErrorCode::InvalidArguments)),
                 "{version}"
             );
+            assert_eq!(report.outcome, GetOutcome::Aborted, "{version}");
             assert_eq!(report.verdict(), GetVerdict::Failed);
         }
         assert!(!repo.root.join(SCRATCHPAD).exists());
@@ -692,7 +646,7 @@ mod tests {
         let entry = audit::AuditEntry::new_add(Uuid::new_v4(), file, Compression::Zstd, None);
         local.log_audit_entry(&entry).unwrap();
 
-        let report = repo.fetch("data/a.csv", &old[..8], OnConflict::Abort);
+        let report = repo.fetch("data/a.csv", &old[..8], false);
         let r = &report.files[0];
         assert_eq!(
             r.row.code,
@@ -705,7 +659,47 @@ mod tests {
                 .unwrap()
                 .contains("give more of the hash")
         );
-        let report = repo.fetch("data/a.csv", &old, OnConflict::Abort);
+        let report = repo.fetch("data/a.csv", &old, false);
+        assert_eq!(report.outcome, GetOutcome::Complete, "{report:#?}");
+    }
+
+    #[test]
+    fn written_to_is_relative_to_the_working_directory() {
+        let (repo, old) = two_versions();
+        let in_data = DvsPaths::new(
+            repo.root.join("data"),
+            repo.root.clone(),
+            repo.config.metadata_folder_name(),
+        )
+        .unwrap();
+        let report = fetch_files(
+            Path::new("a.csv"),
+            &old,
+            &in_data,
+            repo.config.backend(),
+            false,
+            &OperationContext::new(),
+        );
+        let written = Path::new("..")
+            .join(SCRATCHPAD)
+            .join(&old[..8])
+            .join("data/a.csv");
+        assert_eq!(
+            report.files[0].written_to.as_deref(),
+            Some(written.as_path())
+        );
+        assert_eq!(
+            fs::read(repo.root.join("data").join(&written)).unwrap(),
+            b"old"
+        );
+    }
+
+    #[test]
+    fn a_version_added_twice_is_one_version() {
+        let (repo, old) = two_versions();
+        repo.add("data/a.csv", b"old");
+
+        let report = repo.fetch("data/a.csv", &old[..8], false);
         assert_eq!(report.outcome, GetOutcome::Complete, "{report:#?}");
     }
 
@@ -718,7 +712,7 @@ mod tests {
             ("data", "not a tracked file"),
             ("missing.csv", "not a tracked file"),
         ] {
-            let report = repo.fetch(path, &old, OnConflict::Abort);
+            let report = repo.fetch(path, &old, false);
             let r = &report.files[0];
             assert!(r.row.message.as_deref().unwrap().contains(why), "{r:#?}");
             assert_eq!(
@@ -735,22 +729,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_scratchpad_symlinked_to_the_root_is_refused() {
-        let (repo, old) = two_versions();
-        std::os::unix::fs::symlink(".", repo.root.join(SCRATCHPAD)).unwrap();
-
-        let report = repo.fetch("data/a.csv", &old, OnConflict::Abort);
-        let r = &report.files[0];
-        assert_eq!(
-            (r.row.action, r.row.code),
-            (Action::Failed, Some(GetCode::UnsafePath)),
-            "{r:#?}"
-        );
-        assert!(!repo.root.join(&old[..8]).exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn a_label_folder_symlinked_to_the_root_is_refused() {
         let repo = TestRepo::new();
         let old = repo.add("a.csv", b"old");
@@ -758,7 +736,7 @@ mod tests {
         fs::create_dir(repo.root.join(SCRATCHPAD)).unwrap();
         std::os::unix::fs::symlink("..", repo.root.join(SCRATCHPAD).join(&old[..8])).unwrap();
 
-        let report = repo.fetch("a.csv", &old, OnConflict::Overwrite);
+        let report = repo.fetch("a.csv", &old, true);
         let r = &report.files[0];
         assert_eq!(
             (r.row.action, r.row.code),
@@ -777,7 +755,7 @@ mod tests {
         };
         repo.config.backend().remove(&hashes).unwrap();
 
-        let report = repo.fetch("data/a.csv", &old, OnConflict::Abort);
+        let report = repo.fetch("data/a.csv", &old, false);
         let r = &report.files[0];
         assert_eq!(
             (r.row.action, r.row.code),

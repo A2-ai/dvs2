@@ -4,14 +4,14 @@
 \alias{dvs_fetch_impl}
 \title{Fetch an earlier version of a tracked file into the scratchpad}
 \usage{
-dvs_fetch_impl(path, version, on_conflict = NULL, .call = NULL)
+dvs_fetch_impl(path, version, force = NULL, .call = NULL)
 }
 \arguments{
 \item{path}{A tracked file, relative to the working directory.}
 
 \item{version}{The version's hash, or at least its first 8 characters.}
 
-\item{on_conflict}{As in \code{\link[=dvs_get]{dvs_get()}}, for a scratchpad copy that was changed.}
+\item{force}{If \code{TRUE}, replace a copy already in the scratchpad that was changed.}
 
 \item{.call}{The call conditions from this function report: NULL (the default) for the calling function's call, a frame such as parent.frame() for the call of the function owning that frame, or a call object. Pass it by name.}
 }

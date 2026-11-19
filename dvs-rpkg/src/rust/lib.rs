@@ -26,9 +26,9 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FetchOptions, FetchRow, FileProgress, GetCounts,
-    GetOptions, GetReport, GetRow, GetVerdict, OperationContext, PathFilter, Status,
-    TransferObserver, add_files, fetch_files, get_files, set_num_threads,
+    Compression, FetchRow, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
+    OperationContext, PathFilter, Status, TransferObserver, add_files, fetch_files, get_files,
+    set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -730,29 +730,22 @@ impl From<&GetReport> for GetInfo {
 ///
 /// @param path A tracked file, relative to the working directory.
 /// @param version The version's hash, or at least its first 8 characters.
-/// @param on_conflict As in [dvs_get()], for a scratchpad copy that was changed.
+/// @param force If `TRUE`, replace a copy already in the scratchpad that was changed.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_fetch_impl", internal, call = caller)]
 pub(crate) fn dvs_fetch(
     #[miniextendr(no_na)] path: PathBuf,
     #[miniextendr(no_na)] version: String,
-    #[miniextendr(match_arg)] on_conflict: Option<OnConflictChoice>,
+    #[miniextendr(default = "NULL", no_na)] force: Option<bool>,
 ) -> Result<BuiltDataFrame> {
     let config = find_config()?;
-    let (policy, source) = match config.get_on_conflict(on_conflict.map(OnConflict::from)) {
-        Ok(p) => p,
-        Err(ConfigError(message)) => config_error(&message),
-    };
     let dvs_paths = DvsPaths::from_cwd(&config)?;
     let report = fetch_files(
         &path,
         &version,
         &dvs_paths,
         config.backend(),
-        FetchOptions {
-            on_conflict: policy,
-            source,
-        },
+        force.unwrap_or(false),
         &OperationContext::new(),
     );
     Ok(report

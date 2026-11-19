@@ -4,7 +4,7 @@ use std::time::{Instant, SystemTime};
 
 use anyhow::Error;
 use dvs::operation::{duration_ms, rfc3339_ms};
-use dvs::{Action, ByteTotals, Counts, ErrorCode, GetVerdict, RunOutcome};
+use dvs::{ByteTotals, Counts, ErrorCode, GetVerdict, RunOutcome};
 use serde_json::{Value, json};
 
 /// Exit codes, shared by every command; only `get` and `fetch` use 3.
@@ -103,20 +103,6 @@ pub fn exit_code(error: &Error) -> i32 {
     match error_code(error) {
         ErrorCode::InvalidArguments | ErrorCode::InvalidConfiguration => EXIT_USAGE,
         _ => EXIT_FAILED,
-    }
-}
-
-pub fn action_label(action: Action) -> &'static str {
-    match action {
-        Action::Restored => "restored",
-        Action::Replaced => "replaced",
-        Action::Unchanged => "unchanged",
-        Action::Skipped => "skipped",
-        Action::NotRun => "not run",
-        Action::Cancelled => "cancelled",
-        Action::Failed => "failed",
-        Action::WouldRestore => "would restore",
-        Action::WouldReplace => "would replace",
     }
 }
 
