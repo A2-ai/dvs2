@@ -7,7 +7,7 @@ use dvs::operation::{duration_ms, rfc3339_ms};
 use dvs::{ByteTotals, Counts, ErrorCode, GetVerdict, RunOutcome};
 use serde_json::{Value, json};
 
-/// Exit codes, shared by every command; only `get` uses 3.
+/// Exit codes, shared by every command; only `get` and `fetch` use 3.
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAILED: i32 = 1;
 pub const EXIT_USAGE: i32 = 2;
@@ -137,7 +137,7 @@ pub fn rows_envelope(
 
 pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
     let mut value = match command {
-        "add" | "get" | "status" | "availability" | "history" => rows_envelope(
+        "add" | "get" | "fetch" | "status" | "availability" | "history" => rows_envelope(
             command,
             dry_run,
             vec![],

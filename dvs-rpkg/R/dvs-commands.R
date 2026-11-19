@@ -223,6 +223,26 @@ dvs_get <- function(
   result
 }
 
+#' @inherit dvs_fetch_impl title description params
+#' @return A tibble with [dvs_get()]'s columns, then `written_to` (relative to
+#'   the working directory) and `hash`.
+#' @examples
+#' \dontrun{
+#' res <- dvs_fetch("data/derived.csv", "a1b2c3d4")
+#' old <- read.csv(res$written_to)
+#' }
+#' @rdname dvs_fetch
+#' @export
+dvs_fetch <- function(path, version, force = FALSE) {
+  result <- tibble::as_tibble(dvs_fetch_impl(
+    path = path,
+    version = version,
+    force = force
+  ))
+  result$size <- new_dvs_bytes(result$size)
+  result
+}
+
 # The lines of `text` as comments above a printed result.
 comment_lines <- function(text) {
   paste0("# ", strsplit(text, "\n", fixed = TRUE)[[1L]])

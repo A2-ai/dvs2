@@ -22,7 +22,7 @@ use crate::operation::{
 };
 use crate::paths::ProjectPath;
 use crate::utils::get_threadpool;
-use crate::{Backend, Compression, DvsPaths, RetrieveRequest, cache};
+use crate::{Backend, Compression, DvsPaths, Hashes, RetrieveRequest, cache};
 use fs_err as fs;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -506,7 +506,12 @@ impl Planned {
     }
 }
 
-fn set_row(row: &mut GetRow, action: Action, code: Option<GetCode>, message: Option<String>) {
+pub(crate) fn set_row(
+    row: &mut GetRow,
+    action: Action,
+    code: Option<GetCode>,
+    message: Option<String>,
+) {
     row.action = action;
     row.satisfied = matches!(
         action,
@@ -521,7 +526,7 @@ fn set_row(row: &mut GetRow, action: Action, code: Option<GetCode>, message: Opt
 }
 
 /// A file a cancel stopped before it started.
-fn cancel_row(row: &mut GetRow) {
+pub(crate) fn cancel_row(row: &mut GetRow) {
     let message = "cancelled before it started".to_string();
     set_row(
         row,
@@ -545,7 +550,7 @@ fn project_relative(root: &Path, absolute: &Path) -> Option<PathBuf> {
 }
 
 /// `target` lexically relative to `base`; both absolute.
-fn relative_to(base: &Path, target: &Path) -> PathBuf {
+pub(crate) fn relative_to(base: &Path, target: &Path) -> PathBuf {
     let base: Vec<_> = base.components().collect();
     let target: Vec<_> = target.components().collect();
     let common = base
@@ -777,34 +782,31 @@ fn destination_unchanged(target: &Path, planned: &Option<FileStat>) -> bool {
 }
 
 /// A per-file failure: its code and message.
-type FileError = (GetCode, String);
+pub(crate) type FileError = (GetCode, String);
 
-/// Download, verify and install one file. The existing working file is only
-/// replaced after the new bytes are verified and the destination is unchanged.
-fn install(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn retrieve_into(
     backend: &Backend,
-    paths: &DvsPaths,
-    relative_path: &Path,
-    metadata: &FileMetadata,
+    target: &Path,
+    hashes: &Hashes,
+    compression: Compression,
+    path: ProjectPath,
     planned_stat: &Option<FileStat>,
     operation_id: Uuid,
     on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
 ) -> Result<(), FileError> {
-    let target = paths.file_path(relative_path);
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| (io_code(&e), format!("cannot create its directory: {e}")))?;
     }
     let tmp_path = target.with_extension(format!("dvs-tmp.{}", Uuid::new_v4()));
-    let path = ProjectPath::from_path(relative_path)
-        .map_err(|e| (GetCode::Shared(ErrorCode::IoError), e.to_string()))?;
 
     let result = (|| {
         let retrieved = backend
             .retrieve(RetrieveRequest {
-                hashes: &metadata.hashes,
+                hashes,
                 target: &tmp_path,
-                compression: metadata.compression,
+                compression,
                 path,
                 operation_id,
                 on_bytes,
@@ -818,19 +820,19 @@ fn install(
         }
         let actual = FileMetadata::from_file(&tmp_path, Compression::None, None)
             .map_err(|e| (code_for(&e), e.to_string()))?;
-        if actual.hashes != metadata.hashes {
+        if actual.hashes != *hashes {
             return Err((
                 GetCode::HashMismatch,
                 "the stored content does not match the tracked hash".to_string(),
             ));
         }
-        if !destination_unchanged(&target, planned_stat) {
+        if !destination_unchanged(target, planned_stat) {
             return Err((
                 GetCode::DestinationChanged,
                 "the file changed while dvs was downloading it; your version was kept".to_string(),
             ));
         }
-        fs::rename(&tmp_path, &target)
+        fs::rename(&tmp_path, target)
             .map_err(|e| (io_code(&e), format!("cannot replace the file: {e}")))?;
         Ok(())
     })();
@@ -838,6 +840,32 @@ fn install(
         let _ = fs::remove_file(&tmp_path);
     }
     result
+}
+
+/// Download, verify and install one file. The existing working file is only
+/// replaced after the new bytes are verified and the destination is unchanged.
+fn install(
+    backend: &Backend,
+    paths: &DvsPaths,
+    relative_path: &Path,
+    metadata: &FileMetadata,
+    planned_stat: &Option<FileStat>,
+    operation_id: Uuid,
+    on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
+) -> Result<(), FileError> {
+    let target = paths.file_path(relative_path);
+    let path = ProjectPath::from_path(relative_path)
+        .map_err(|e| (GetCode::Shared(ErrorCode::IoError), e.to_string()))?;
+    retrieve_into(
+        backend,
+        &target,
+        &metadata.hashes,
+        metadata.compression,
+        path,
+        planned_stat,
+        operation_id,
+        on_bytes,
+    )
 }
 
 /// Gets the selected files from storage, following `options.on_conflict`.

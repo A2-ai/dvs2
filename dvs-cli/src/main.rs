@@ -1,5 +1,6 @@
 mod cancel;
 mod events;
+mod fetch_cmd;
 mod get_cmd;
 mod observer;
 mod output;
@@ -29,8 +30,8 @@ use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
     FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow,
-    Outcome, PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files,
-    set_num_threads,
+    Outcome, PathFilter, RowState, RunOutcome, Status, add_files, fetch_files, format_size,
+    get_files, set_num_threads,
 };
 
 use crate::observer::CliObserver;
@@ -171,6 +172,18 @@ pub enum Command {
         on_conflict: Option<String>,
         /// Replace files with local changes (same as --on-conflict overwrite)
         #[clap(long, short, conflicts_with = "on_conflict")]
+        force: bool,
+    },
+    /// Write an earlier version of a tracked file to .dvs-scratchpad/<first 8 of
+    /// its hash>/<path>, leaving the tracked file and its record unchanged
+    Fetch {
+        /// The tracked file
+        path: PathBuf,
+        /// The version's hash, at least its first 8 characters (see `dvs history`)
+        #[clap(long, value_name = "HASH")]
+        version: String,
+        /// Replace a copy already in the scratchpad that was changed
+        #[clap(long, short)]
         force: bool,
     },
     /// Show the project configuration, and the server info when the project uses a dvs-server backend
@@ -834,6 +847,34 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             }
             summary_exit(report.verdict())?;
         }
+        Command::Fetch {
+            path,
+            version,
+            force,
+        } => {
+            let config = find_config(&current_dir)?;
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
+
+            let show_progress = !cli.json && std::io::stderr().is_terminal();
+            let mut observer = CliObserver::new(false).with_rows(|row| match row {
+                FileRow::Get(r) => Some(serde_json::to_value(r).expect("rows serialize")),
+                _ => None,
+            });
+            if show_progress {
+                observer =
+                    observer.with_bars(make_progress_callback(config.progress_bytes_threshold()));
+            }
+            let ctx = OperationContext::new()
+                .with_cancel(cancel.clone())
+                .with_observer(Arc::new(observer));
+            let report = fetch_files(&path, &version, &dvs_paths, config.backend(), force, &ctx);
+            if cli.json {
+                output::emit_streamed(fetch_cmd::to_json(&report));
+            } else {
+                fetch_cmd::print_human(&report);
+            }
+            summary_exit(report.verdict())?;
+        }
         Command::Info => {
             let config = find_config(&current_dir)?;
             let compression = info_compression(&config);
@@ -1190,6 +1231,7 @@ impl Command {
             Self::Add { .. } => "add",
             Self::Status { .. } => "status",
             Self::Get { .. } => "get",
+            Self::Fetch { .. } => "fetch",
             Self::Info => "info",
             Self::Availability { .. } => "availability",
             Self::History { .. } => "history",
@@ -1202,7 +1244,7 @@ impl Command {
     fn cancellable(&self) -> bool {
         matches!(
             self,
-            Self::Add { .. } | Self::Get { .. } | Self::Status { .. }
+            Self::Add { .. } | Self::Get { .. } | Self::Fetch { .. } | Self::Status { .. }
         )
     }
 

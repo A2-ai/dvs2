@@ -17,7 +17,7 @@ fn is_shared(code: Option<GetCode>) -> bool {
     )
 }
 
-fn label(action: Action) -> &'static str {
+pub(crate) fn label(action: Action) -> &'static str {
     match action {
         Action::Restored => "restored",
         Action::Replaced => "replaced",
