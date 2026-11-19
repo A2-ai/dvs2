@@ -49,7 +49,10 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
     }
 
     if root_dir.join(paths::CONFIG_FILE_NAME).exists() {
-        bail!("dvs is already initialized (dvs.toml exists)");
+        bail!(
+            "dvs is already initialized here (dvs.toml exists). To move its storage, copy \
+             the storage directory, then edit `path` under `[backend]` in dvs.toml."
+        );
     }
 
     // Check the metadata folder before touching the backend
@@ -63,10 +66,15 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
 
     log::debug!("Initializing backend");
     if config.backend().init(config.compression())? {
-        if let Backend::Server(s) = config.backend() {
-            bail!("the project {} already exists on {}", s.name, s.url);
+        match config.backend() {
+            Backend::Server(s) => bail!("the project {} already exists on {}", s.name, s.url),
+            Backend::Local(b) => bail!(
+                "the storage directory {} already holds a dvs store, and dvs init starts a new \
+                 one. Choose a new storage directory. If it is the store of this project, \
+                 restore dvs.toml from git instead of running dvs init again.",
+                b.path.display()
+            ),
         }
-        bail!("dvs is already initialized (backend storage exists)");
     }
 
     // The server decides the compression, so there is nothing to keep past init
@@ -144,9 +152,11 @@ mod tests {
         let config = Config::new_local(&storage, None).unwrap();
         init(&root, config.clone()).unwrap();
 
-        // Second init should fail because dvs.toml exists
-        let result = init(&root, config.clone());
-        assert!(result.is_err(), "second init should fail");
+        // Second init should fail because dvs.toml exists, and say how to
+        // change the storage instead
+        let err = init(&root, config.clone()).unwrap_err().to_string();
+        assert!(err.contains("dvs.toml exists"), "{err}");
+        assert!(err.contains("`[backend]`"), "{err}");
     }
 
     #[test]
@@ -161,11 +171,11 @@ mod tests {
         fs::remove_file(root.join("dvs.toml")).unwrap();
         fs::remove_dir_all(root.join(".dvs")).unwrap();
 
-        let result = init(&root, config);
-        assert!(
-            result.is_err(),
-            "should detect backend is already initialized"
-        );
+        let err = init(&root, config).unwrap_err().to_string();
+        let storage = fs::canonicalize(&storage).unwrap();
+        assert!(err.contains(&storage.display().to_string()), "{err}");
+        assert!(err.contains("already holds a dvs store"), "{err}");
+        assert!(!root.join("dvs.toml").exists());
     }
 
     #[test]
