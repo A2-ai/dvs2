@@ -50,13 +50,27 @@ fn coded_message(error: &anyhow::Error) -> (ErrorCode, String) {
     (output::error_code(error), format!("{error:#}"))
 }
 
+/// Why `hash` is not a full BLAKE3 hash, if it is not one.
+fn invalid_hash(hash: &str) -> Option<String> {
+    if hash.is_empty() || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
+        Some(format!("invalid BLAKE3 hash: {hash} is not hexadecimal"))
+    } else if hash.len() != 64 {
+        // Most likely the start that the history table shows
+        Some(format!(
+            "invalid BLAKE3 hash: {hash} has {} characters, a BLAKE3 hash has 64. The history \
+             table shows only the start of a hash. dvs history --json shows all of it.",
+            hash.len()
+        ))
+    } else {
+        None
+    }
+}
+
 /// Validate hashes before I/O and preserve input order and duplicates.
 /// `state` describes blob storage.
 pub fn availability(backend: &Backend, hashes: &[String]) -> Result<(Vec<Value>, usize)> {
-    for hash in hashes {
-        if hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
-            return Err(invalid(format!("invalid BLAKE3 hash: {hash}")));
-        }
+    if let Some(message) = hashes.iter().find_map(|hash| invalid_hash(hash)) {
+        return Err(invalid(message));
     }
     let preflight = check_backend(backend).map_err(|error| coded_message(&error));
 
@@ -128,5 +142,43 @@ mod tests {
         assert_eq!(output::error_code(&error), ErrorCode::InvalidArguments);
         assert_eq!(output::exit_code(&error), output::EXIT_USAGE);
         assert_eq!(error.to_string(), "takes files, not folders: data");
+    }
+
+    #[test]
+    fn a_short_hash_says_where_the_full_one_is() {
+        let full = "d1cd1ec45291d06cdde016568971990c7e4da895f2e5a8a705d4feeb79578a69";
+        assert_eq!(invalid_hash(full), None);
+        assert_eq!(invalid_hash(&full.to_uppercase()), None);
+        let short = invalid_hash(&full[..12]).unwrap();
+        assert!(
+            short.starts_with("invalid BLAKE3 hash: d1cd1ec45291 has 12 characters"),
+            "{short}"
+        );
+        assert!(
+            short.contains("dvs history --json shows all of it"),
+            "{short}"
+        );
+        assert!(
+            invalid_hash(&format!("{full}0"))
+                .unwrap()
+                .contains("has 65 characters")
+        );
+        for text in ["xyz", "", &format!("{}g", &full[..63])] {
+            assert_eq!(
+                invalid_hash(text),
+                Some(format!("invalid BLAKE3 hash: {text} is not hexadecimal"))
+            );
+        }
+        // Refused before storage is looked at: a missing store would give rows
+        let root = tempfile::tempdir().unwrap();
+        let store =
+            dvs::backends::local::LocalBackend::new(root.path().join("missing"), None).unwrap();
+        let error = availability(
+            &Backend::Local(store),
+            &[full.to_string(), full[..12].to_string()],
+        )
+        .unwrap_err();
+        assert_eq!(output::error_code(&error), ErrorCode::InvalidArguments);
+        assert_eq!(output::exit_code(&error), output::EXIT_USAGE);
     }
 }

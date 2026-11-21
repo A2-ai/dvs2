@@ -129,7 +129,9 @@ last wrote or added at the path; `null` without one); `availability` `hash`, `st
 relative to the current directory.
 
 `dvs availability <HASHES>...` takes one or more BLAKE3 hashes (an invalid one is `invalid_arguments`) and
-reports, per hash and in input order, whether storage has that content, without downloading it.
+reports, per hash and in input order, whether storage has that content, without downloading it. A hash is the
+full 64 hexadecimal characters. A shorter one, such as the start that the history table shows, is refused with its
+length and a pointer to `dvs history --json`, which shows the full hash.
 `dvs history <PATHS>...` takes one or more file paths and reports their stored upload history; the files need
 not exist in this checkout. The table and the JSON `files` give the entries newest first, in the order storage
 recorded them. A local store reads its audit log backwards. The server sorts by upload time. It takes files, not
