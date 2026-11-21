@@ -24,6 +24,18 @@ option raises the same condition, and its message names the option.
 \code{\link[=new_dvs_bytes]{new_dvs_bytes()}} takes \code{NA} for an unknown size and refuses \code{NULL}.
 }
 
+\section{Errors}{
+
+A command that fails raises a \code{dvs_error} condition. Its \code{code} is the code
+the CLI's JSON gives the same failure, for example \code{"not_in_project"},
+\code{"no_files_selected"}, \code{"auth_required"}, \code{"access_denied"} or
+\code{"server_unavailable"}, and its message is the CLI's. A \code{dvs.toml} that does
+not load raises a \code{dvs_config_error}, also a \code{dvs_error}, with \code{code}
+\code{"invalid_configuration"}. An argument error is a \code{dvs_error_argument} with
+the argument in \code{param}. A file that fails in \code{\link[=dvs_add]{dvs_add()}}, \code{\link[=dvs_status]{dvs_status()}} or
+\code{\link[=dvs_get]{dvs_get()}} raises nothing: its row has the code.
+}
+
 \author{
 \strong{Maintainer}: Jenna Johnson \email{jenna@a2-ai.com}
 

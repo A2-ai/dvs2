@@ -11,6 +11,15 @@
 #' that names the call. A bad value in the `dvs.num_threads` or `dvs.on_error`
 #' option raises the same condition, and its message names the option.
 #' [new_dvs_bytes()] takes `NA` for an unknown size and refuses `NULL`.
+#' @section Errors:
+#' A command that fails raises a `dvs_error` condition. Its `code` is the code
+#' the CLI's JSON gives the same failure, for example `"not_in_project"`,
+#' `"no_files_selected"`, `"auth_required"`, `"access_denied"` or
+#' `"server_unavailable"`, and its message is the CLI's. A `dvs.toml` that does
+#' not load raises a `dvs_config_error`, also a `dvs_error`, with `code`
+#' `"invalid_configuration"`. An argument error is a `dvs_error_argument` with
+#' the argument in `param`. A file that fails in [dvs_add()], [dvs_status()] or
+#' [dvs_get()] raises nothing: its row has the code.
 #' @keywords internal
 "_PACKAGE"
 
