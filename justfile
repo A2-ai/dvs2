@@ -2,6 +2,11 @@
 
 rpkg_dir := "dvs-rpkg"
 rpkg_manifest := rpkg_dir / "src/rust/Cargo.toml"
+# The rpkg crate builds in the package's rust-target, where configure puts
+# the R build, as in ncakit. Not src/rust/target, and not a target-dir from
+# ~/.cargo/config.toml: one shared by several worktrees can compile another
+# worktree's code. CARGO_TARGET_DIR still wins, as in configure.
+rpkg_target := env("CARGO_TARGET_DIR", justfile_directory() / rpkg_dir / "rust-target")
 
 default:
     @just --list
@@ -136,25 +141,25 @@ rpkg-configure:
     bash ./configure
 
 rpkg-build *args:
-    cargo build --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cargo build --manifest-path={{quote(rpkg_manifest)}} --target-dir={{quote(rpkg_target)}} {{args}}
 
 rpkg-build-release *args:
-    cargo build --manifest-path={{quote(rpkg_manifest)}} --release {{args}}
+    cargo build --manifest-path={{quote(rpkg_manifest)}} --target-dir={{quote(rpkg_target)}} --release {{args}}
 
 # cargo test, the testthat suite against the checkout (devtools sets
 # NOT_CRAN, so the gctorture cases run), then the rv install from a local
 # path.
 [doc('Run the rpkg cargo tests, the testthat suite and the rv install test.')]
 rpkg-test *args:
-    cargo test --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cargo test --manifest-path={{quote(rpkg_manifest)}} --target-dir={{quote(rpkg_target)}} {{args}}
     Rscript -e 'devtools::test("{{rpkg_dir}}", stop_on_failure = TRUE)'
     bash {{quote(rpkg_dir / "tests/rv")}}
 
 rpkg-clippy *args:
-    cargo clippy --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cargo clippy --manifest-path={{quote(rpkg_manifest)}} --target-dir={{quote(rpkg_target)}} {{args}}
 
 rpkg-check *args:
-    cargo check --manifest-path={{quote(rpkg_manifest)}} {{args}}
+    cargo check --manifest-path={{quote(rpkg_manifest)}} --target-dir={{quote(rpkg_target)}} {{args}}
 
 rpkg-fmt *args:
     cargo fmt --manifest-path={{quote(rpkg_manifest)}} {{args}}
