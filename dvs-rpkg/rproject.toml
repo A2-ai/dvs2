@@ -11,5 +11,6 @@ dependencies = [
     "cli",
     "tibble",
     "pillar",
+    "vctrs",
     "testthat",
 ]

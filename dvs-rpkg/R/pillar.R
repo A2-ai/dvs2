@@ -34,6 +34,32 @@ type_sum.dvs_bytes <- function(x) {
   "bytes"
 }
 
+# How dvs_bytes combines with plain numbers, so vctrs::vec_c(),
+# dplyr::bind_rows() and dplyr joins accept a dvs_bytes column next to a
+# numeric one. Two dvs_bytes stay dvs_bytes. With a double or an integer the
+# result is a plain double, as for the percent class of vctrs' S3 vignette.
+
+#' @importFrom vctrs vec_ptype2 vec_cast
+#' @export
+vec_ptype2.dvs_bytes.dvs_bytes <- function(x, y, ...) new_dvs_bytes(double())
+#' @export
+vec_ptype2.dvs_bytes.double <- function(x, y, ...) double()
+#' @export
+vec_ptype2.double.dvs_bytes <- function(x, y, ...) double()
+#' @export
+vec_ptype2.dvs_bytes.integer <- function(x, y, ...) double()
+#' @export
+vec_ptype2.integer.dvs_bytes <- function(x, y, ...) double()
+
+#' @export
+vec_cast.dvs_bytes.dvs_bytes <- function(x, to, ...) x
+#' @export
+vec_cast.dvs_bytes.double <- function(x, to, ...) new_dvs_bytes(x)
+#' @export
+vec_cast.dvs_bytes.integer <- function(x, to, ...) new_dvs_bytes(x)
+#' @export
+vec_cast.double.dvs_bytes <- function(x, to, ...) unclass(x)
+
 # Preserve dvs_bytes class for +/- only. For *, /, ^, %%, %/% the result is
 # dimensionally not bytes (e.g. bytes * bytes would be bytes^2), so fall
 # through without reclassing. Comparisons and logical ops already return

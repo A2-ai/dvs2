@@ -19,7 +19,8 @@ SystemRequirements: Cargo (Rust package manager), rustc >= 1.85.0
 Imports:
     cli,
     pillar,
-    tibble
+    tibble,
+    vctrs
 LinkingTo:
     cli
 Suggests:

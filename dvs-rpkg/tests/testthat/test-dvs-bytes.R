@@ -138,3 +138,22 @@ test_that("format_byte_size refuses TRUE and FALSE, as set_dvs_threads does", {
   expect_identical(conditionMessage(cnd), "`size_bytes` must be a number, not TRUE, FALSE or NA")
   expect_identical(format_byte_size(1L), "1 B")
 })
+
+test_that("dvs_bytes combines with plain numbers in vctrs, so bind_rows() and joins work", {
+  x <- new_dvs_bytes(c(1024, 2048))
+  expect_identical(vctrs::vec_c(x, x), new_dvs_bytes(c(1024, 2048, 1024, 2048)))
+  expect_identical(vctrs::vec_c(x, NA), new_dvs_bytes(c(1024, 2048, NA)))
+  expect_identical(vctrs::vec_c(x, 5), c(1024, 2048, 5))
+  expect_identical(vctrs::vec_c(5L, x), c(5, 1024, 2048))
+  expect_identical(vctrs::vec_ptype2(x, 1), double())
+  expect_identical(vctrs::vec_ptype2(1L, x), double())
+
+  stacked <- vctrs::vec_rbind(tibble::tibble(size = x), tibble::tibble(size = 1))
+  expect_identical(stacked$size, c(1024, 2048, 1))
+  same <- vctrs::vec_rbind(tibble::tibble(size = x), tibble::tibble(size = vctrs::vec_slice(x, 1)))
+  expect_s3_class(same$size, "dvs_bytes")
+
+  expect_identical(vctrs::vec_cast(3, new_dvs_bytes(double())), new_dvs_bytes(3))
+  expect_identical(vctrs::vec_cast(3L, new_dvs_bytes(double())), new_dvs_bytes(3))
+  expect_identical(vctrs::vec_cast(x, double()), c(1024, 2048))
+})
