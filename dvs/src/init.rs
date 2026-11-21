@@ -22,6 +22,24 @@ pub fn create_metadata_folder(root_dir: impl AsRef<Path>, config: &Config) -> Re
     Ok(())
 }
 
+/// Refuses a folder that dvs already initialized: one with a `dvs.toml`, or
+/// with a metadata folder that has files in it. `init` checks it before it
+/// touches the backend. `dvs init server` checks it before it logs in too.
+pub fn check_uninitialized(root_dir: impl AsRef<Path>, config: &Config) -> Result<()> {
+    let root_dir = root_dir.as_ref();
+    if root_dir.join(paths::CONFIG_FILE_NAME).exists() {
+        bail!("dvs is already initialized (dvs.toml exists)");
+    }
+    let metadata_dir = root_dir.join(config.metadata_folder_name());
+    if metadata_dir.exists() && fs::read_dir(&metadata_dir)?.next().is_some() {
+        bail!(
+            "dvs is already initialized ({} exists and is not empty)",
+            config.metadata_folder_name()
+        );
+    }
+    Ok(())
+}
+
 /// Starts a new dvs project.
 /// We need a ready to use Config object + the current directory the user is in
 pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
@@ -48,18 +66,8 @@ pub fn init(root_dir: impl AsRef<Path>, mut config: Config) -> Result<PathBuf> {
         Backend::Server(_) => { /* nothing to do here */ }
     }
 
-    if root_dir.join(paths::CONFIG_FILE_NAME).exists() {
-        bail!("dvs is already initialized (dvs.toml exists)");
-    }
-
-    // Check the metadata folder before touching the backend
-    let metadata_dir = root_dir.join(config.metadata_folder_name());
-    if metadata_dir.exists() && fs::read_dir(&metadata_dir)?.next().is_some() {
-        bail!(
-            "dvs is already initialized ({} exists and is not empty)",
-            config.metadata_folder_name()
-        );
-    }
+    // Before touching the backend
+    check_uninitialized(root_dir, &config)?;
 
     log::debug!("Initializing backend");
     if config.backend().init(config.compression())? {
