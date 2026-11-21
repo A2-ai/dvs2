@@ -27,7 +27,7 @@ pub fn current_dir() -> Result<PathBuf> {
 pub enum AddPathStatus {
     /// File exists and is inside the project
     Valid,
-    /// File does not exist on disk
+    /// Path does not exist on disk
     NotFound,
     /// Path is a directory, not a file
     IsDirectory,
@@ -39,7 +39,7 @@ impl AddPathStatus {
     pub fn reason(&self) -> Option<&str> {
         match self {
             AddPathStatus::Valid => None,
-            AddPathStatus::NotFound => Some("file not found"),
+            AddPathStatus::NotFound => Some("path not found"),
             AddPathStatus::OutsideProject => Some("path is outside project"),
             AddPathStatus::IsDirectory => Some("path is a directory"),
         }

@@ -4,6 +4,7 @@
 
 ### Breaking
 
+- `dvs add` with a path that does not exist is `invalid_arguments` and exits 2, as a directory without `--glob` and a path outside the project are. It was `no_files_selected` with exit 1. The refusal names every invalid path, sorted, with its reason. It stopped at the first missing path. `dvs_add()` raises the same message.
 - R package: requires R 4.4 or later.
 - R package: `dvs_audit_log()` spreads each entry's action into columns: `action_variant` ("init" or "add") and one `action_<field>` column per field that the actions carry, `NA` where an action has none. The action was a list-column. `timestamp` is a date-time (UTC), not unix seconds.
 - R package: `NA` is never a value. An `NA` in any argument raises an error that says it must not be `NA`, also among several values, as in `on_error = c("return", NA)`. An `NA` `message`, `group`, `root_dir` or `metadata_folder_name` meant the argument was not given. Use `NULL` or leave the argument out.

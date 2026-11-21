@@ -297,7 +297,7 @@ fn add_all(
     }
 
     // If any input is invalid we just bail instead of doing partial execution
-    let invalid = matched_paths
+    let mut invalid = matched_paths
         .iter()
         .filter_map(|(path, status)| {
             status
@@ -306,6 +306,8 @@ fn add_all(
         })
         .collect::<Vec<_>>();
     if !invalid.is_empty() {
+        // The inputs come from a set: sort so the list reads the same every run
+        invalid.sort();
         return Err(crate::Error::new(
             ErrorCode::InvalidArguments,
             format!(
@@ -625,6 +627,33 @@ mod tests {
             !paths.metadata_path(Path::new("a.txt")).exists(),
             "no files should be added when any path is invalid"
         );
+    }
+
+    // A missing path is refused with the other invalid paths, and the list is
+    // sorted whatever order the paths come in.
+    #[test]
+    fn add_files_lists_every_invalid_path_sorted() {
+        let (_tmp, root, config, paths) = project();
+        create_file(&root, "a.txt", b"a");
+        fs::create_dir(root.join("subdir")).unwrap();
+
+        let err = add_files(
+            vec!["subdir".into(), "missing.csv".into(), "a.txt".into()],
+            &paths,
+            config.backend(),
+            None,
+            Compression::Zstd,
+            false,
+            &OperationContext::new(),
+        )
+        .unwrap_err();
+        assert_eq!(backend_error_code(&err), Some(ErrorCode::InvalidArguments));
+        assert_eq!(
+            err.to_string(),
+            "Refusing to add, the following paths are invalid:\n  \
+             missing.csv: path not found\n  subdir: path is a directory"
+        );
+        assert!(!paths.metadata_path(Path::new("a.txt")).exists());
     }
 
     #[test]

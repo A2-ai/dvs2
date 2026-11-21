@@ -117,6 +117,21 @@ test_that("dvs_add refuses the whole batch when any path is invalid", {
   expect_false(file.exists(file.path(getwd(), ".dvs", "ok.csv.dvs")))
 })
 
+test_that("dvs_add names a missing path together with the other invalid paths", {
+  new_dvs_test_repo(); write_theoph("ok.csv"); dir.create("dir")
+  expect_error(
+    dvs_add(paths = c("ok.csv", "missing.csv", "dir")),
+    paste(
+      "Refusing to add, the following paths are invalid:",
+      "  dir: path is a directory",
+      "  missing.csv: path not found",
+      sep = "\n"
+    ),
+    fixed = TRUE
+  )
+  expect_false(file.exists(file.path(getwd(), ".dvs", "ok.csv.dvs")))
+})
+
 test_that("dvs_add reports per-file failures in the result, not as a warning", {
   # This test forces a per-file failure by revoking all permissions on
   # noperm.csv, so opening it for hashing fails with EACCES. root bypasses
