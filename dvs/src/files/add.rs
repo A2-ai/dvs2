@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::backends::Backend;
 use crate::backends::server::{UploadManifest, UploadManifestEntry};
-use crate::cache::try_open_cache;
+use crate::cache::{try_open_cache, try_open_cache_read_only};
 use crate::config::Compression;
 use crate::error::{ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
@@ -326,7 +326,12 @@ fn add_all(
 
     let files_total = valid_paths.len() as u64;
     let pool = get_threadpool(valid_paths.len())?;
-    let cache = try_open_cache(paths);
+    // A dry run writes nothing, not even the hash cache
+    let cache = if dry_run {
+        try_open_cache_read_only(paths)
+    } else {
+        try_open_cache(paths)
+    };
     let operation_id = Uuid::new_v4();
 
     // Rows final before the plan, reported only once it is, so that `planned`
@@ -841,5 +846,50 @@ mod tests {
         );
         let c = report.counts;
         assert_eq!((c.total, c.succeeded, c.failed), (2, 1, 1));
+    }
+
+    // A dry run writes nothing: in a fresh project no cache and no
+    // .gitignore, and in a project with a cache no new entry in it
+    #[cfg(feature = "cache")]
+    #[test]
+    fn a_dry_run_writes_nothing() {
+        use crate::cache::{FileStat, HashCache};
+        let (_tmp, root, config, paths) = project();
+        create_file(&root, "a.csv", b"a");
+        let add = |names: &[&str], dry_run: bool| {
+            add_files(
+                names.iter().map(PathBuf::from).collect(),
+                &paths,
+                config.backend(),
+                None,
+                Compression::Zstd,
+                dry_run,
+                &OperationContext::new(),
+            )
+            .unwrap()
+        };
+
+        let report = add(&["a.csv"], true);
+        assert!(matches!(
+            report.files[0].detail,
+            AddDetail::Success {
+                outcome: Outcome::Copied,
+                ..
+            }
+        ));
+        assert!(!paths.cache_folder().exists());
+        assert!(!root.join(".dvs/.gitignore").exists());
+        assert!(!root.join(".gitignore").exists());
+        assert!(!paths.metadata_path(Path::new("a.csv")).exists());
+
+        add(&["a.csv"], false);
+        create_file(&root, "b.csv", b"b");
+        let report = add(&["a.csv", "b.csv"], true);
+        assert_eq!(report.counts.succeeded, 2);
+        let cache = HashCache::open(&paths.cache_folder().join("dvs.db")).unwrap();
+        let stat = |name: &str| FileStat::from_path(&root.join(name)).unwrap();
+        assert!(cache.lookup("a.csv", &stat("a.csv")).unwrap().is_some());
+        assert_eq!(cache.lookup("b.csv", &stat("b.csv")).unwrap(), None);
+        assert_eq!(cache.baseline("b.csv").unwrap(), None);
     }
 }

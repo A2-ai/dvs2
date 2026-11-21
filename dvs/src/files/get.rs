@@ -12,7 +12,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::cache::{FileStat, HashCache, baseline_for, record_baseline, try_open_cache};
+use crate::cache::{
+    FileStat, HashCache, baseline_for, record_baseline, try_open_cache, try_open_cache_read_only,
+};
 use crate::config::{OnConflict, SettingSource};
 use crate::error::{Error, ErrorCode, backend_error_code};
 use crate::files::metadata::FileMetadata;
@@ -882,7 +884,12 @@ pub fn get_files(
         Ok(p) => p,
         Err(e) => return problem(ErrorCode::OperationFailed, e.to_string()),
     };
-    let cache = try_open_cache(paths);
+    // A dry run writes nothing, not even the hash cache
+    let cache = if dry_run {
+        try_open_cache_read_only(paths)
+    } else {
+        try_open_cache(paths)
+    };
     let cache = cache.as_ref();
     let observer = ctx.observer();
     let ending = |planned, aborted| {
@@ -1806,6 +1813,19 @@ mod tests {
         assert_eq!(row(&report, "b.csv").action, Action::WouldRestore);
         assert_eq!(repo.read("a.csv"), b"a2");
         assert!(!repo.root.join("b.csv").exists());
+    }
+
+    // A fresh clone has no hash cache: a dry run does not create one
+    #[test]
+    fn a_dry_run_creates_no_cache() {
+        let repo = TestRepo::new();
+        repo.add("b.csv", b"b");
+        fs::remove_file(repo.root.join("b.csv")).unwrap();
+        fs::remove_dir_all(repo.paths.cache_folder()).unwrap();
+
+        let report = repo.get_with(&["b.csv"], &[], OnConflict::Abort, true);
+        assert_eq!(row(&report, "b.csv").action, Action::WouldRestore);
+        assert!(!repo.paths.cache_folder().exists());
     }
 
     // Spec 4s and 21
