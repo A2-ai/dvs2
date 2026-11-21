@@ -776,11 +776,17 @@ each path. Unlike the hash cache, `status` never writes it. Deleting it is safe;
 
 ### Parallelism
 
-`add`, `get` and `status` run file operations in parallel. You can set the `DVS_NUM_THREADS` environment
-variable to control the thread count, if the CLI and R package have not set the number
-of threads directly. If it is unset, the default is `min(available_parallelism * 4, 16)`.
-If it is set to a positive integer, the override is capped at 32. In both cases the final thread count is
-clamped to the number of files being processed.
+`add`, `get` and `status` run file operations in parallel. The thread count comes from the first rule that applies:
+
+1. `--threads` in the CLI, or `set_dvs_threads()` and the `dvs.num_threads` option in the R package: that many
+   threads. A count above 32 uses 32, without a warning. Both refuse a negative or fractional count as an invalid
+   argument: exit 2 in the CLI, a `dvs_error_argument` in R. Leaving out `--threads`, or `NULL` in R, sets no count,
+   so the next rule applies. `0` does the same.
+2. The `DVS_NUM_THREADS` environment variable, when it is a positive integer. A value above 32 uses 32. Any other
+   value is ignored.
+3. Otherwise `min(available_parallelism * 4, 16)`.
+
+The final thread count is clamped to the number of files being processed.
 
 #### R package
 

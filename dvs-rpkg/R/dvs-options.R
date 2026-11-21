@@ -6,29 +6,53 @@
 #'
 #' Can also be set via `.Rprofile` or temporarily with [withr::with_options()].
 #'
-#' @param threads A whole number of threads, or `NULL` or `0` to set no
-#'   thread count. `NA`, a negative or fractional number, `TRUE`, `FALSE`, a
-#'   string or more than one value raises a `dvs_error_argument` condition.
+#' @param threads A whole number of threads, or `NULL` for the dvs default,
+#'   as leaving out `--threads` in the CLI does. `0` also gives the dvs
+#'   default, as `--threads 0` does. A count above 32 is accepted, and
+#'   operations use 32 threads, without a warning. `NA`, a negative or
+#'   fractional number, `TRUE`, `FALSE`, a string or more than one value
+#'   raises a `dvs_error_argument` condition.
 #'
 #' @details
 #' Each add, get and status operation takes its thread count from the first
 #' rule that applies:
 #'
 #' 1. A thread count set here or in the `dvs.num_threads` option: that many
-#'    threads, at most 32.
+#'    threads, at most 32. A larger count stays in the option as given, and
+#'    the operation uses 32 threads, without a warning.
 #' 2. The `DVS_NUM_THREADS` environment variable, when it is a whole number
-#'    above 0: that many threads, at most 32. Any other value is ignored.
+#'    above 0: that many threads, at most 32. A larger value uses 32. Any
+#'    other value is ignored.
 #' 3. Otherwise 4 threads per CPU, at most 16.
 #'
-#' An operation never uses more threads than it has files. `NULL` and `0` set
-#' no thread count, so the operation falls through to `DVS_NUM_THREADS` or to
-#' 4 threads per CPU. `--threads 0` in the CLI does the same.
+#' Rules 2 and 3 are the dvs default. `NULL` clears a count set before, so
+#' operations use the dvs default again. An operation never uses more threads
+#' than it has files.
+#'
+#' @section The same as the CLI:
+#' `set_dvs_threads()` takes and refuses what `--threads` takes and refuses
+#' in the CLI:
+#'
+#' | R | CLI | Threads used |
+#' |---|---|---|
+#' | `set_dvs_threads(NULL)` | `dvs add` | the dvs default |
+#' | `set_dvs_threads(0)` | `dvs add --threads 0` | the dvs default |
+#' | `set_dvs_threads(4)` | `dvs add --threads 4` | 4 |
+#' | `set_dvs_threads(100)` | `dvs add --threads 100` | 32, without a warning |
+#' | `set_dvs_threads(-1)` | `dvs add --threads -1` | refused |
+#' | `set_dvs_threads(2.5)` | `dvs add --threads 2.5` | refused |
 #'
 #' @return The previous value of `dvs.num_threads` (invisibly).
 #'
 #' @examples
 #' \dontrun{
 #' set_dvs_threads(4)
+#'
+#' # Accepted. Operations use 32 threads, the most dvs uses
+#' set_dvs_threads(64)
+#'
+#' # Back to the dvs default
+#' set_dvs_threads(NULL)
 #'
 #' # Temporarily use 2 threads
 #' withr::with_options(list(dvs.num_threads = 2), {

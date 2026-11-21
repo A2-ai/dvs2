@@ -285,3 +285,13 @@ test_that("set_dvs_threads raises a bad value as a dvs_error_argument", {
   expect_identical(set_dvs_threads(NULL), 0L)
   expect_null(getOption("dvs.num_threads"))
 })
+
+test_that("set_dvs_threads takes a count above 32, as --threads in the CLI does", {
+  withr::local_options(dvs.num_threads = NULL)
+  # Kept as given, without a warning. Operations use 32 threads.
+  expect_no_warning(set_dvs_threads(1000))
+  expect_identical(getOption("dvs.num_threads"), 1000L)
+
+  new_dvs_test_repo()
+  expect_no_warning(dvs_status())
+})

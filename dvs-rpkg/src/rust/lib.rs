@@ -750,10 +750,11 @@ pub fn dvs_result_info(x: DataFrame) -> SEXP {
 /// @title Set the number of threads used by DVS parallel operations
 /// @description
 /// Controls the thread pool size for add, get, and status operations.
-/// `NULL` or `0` sets no thread count. [set_dvs_threads()] gives the rule
-/// that then applies.
+/// `NULL` gives the dvs default, and so does `0`. [set_dvs_threads()] gives
+/// the rules.
 ///
-/// @param threads A whole number of threads, or `0` or `NULL` for none.
+/// @param threads A whole number of threads, or `NULL` for the dvs default.
+///   `0` also gives the default. A count above 32 uses 32.
 /// @keywords internal
 #[miniextendr(r_name = "dvs_set_threads_impl", internal, call = caller)]
 pub(crate) fn dvs_set_threads(
@@ -769,6 +770,8 @@ pub(crate) fn dvs_set_threads(
     )]
     threads: Option<usize>,
 ) {
+    // NULL clears a count set before, so dvs uses its default, as without
+    // `--threads`. dvs reads a count of 0 as no count.
     set_num_threads(threads.unwrap_or(0));
 }
 
