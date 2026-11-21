@@ -325,6 +325,12 @@ impl Config {
         self.compression.unwrap_or_default()
     }
 
+    /// The compression dvs.toml names, `None` without the line. A server
+    /// project's compression is the server's, so there the line is ignored.
+    pub fn configured_compression(&self) -> Option<Compression> {
+        self.compression
+    }
+
     pub fn set_compression(&mut self, compression: Option<Compression>) {
         self.compression = compression;
     }
