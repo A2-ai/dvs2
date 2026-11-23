@@ -81,3 +81,4 @@ dvs-rpkg/configure~
 dvs-rpkg/autom4te.cache/
 .vscode/
 .idea/
+/.dvs-scratchpad

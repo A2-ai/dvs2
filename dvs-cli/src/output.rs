@@ -137,7 +137,7 @@ pub fn rows_envelope(
 
 pub fn problem(command: &str, dry_run: bool, error: &Error) -> Value {
     let mut value = match command {
-        "add" | "get" | "status" | "availability" | "history" => rows_envelope(
+        "add" | "get" | "fetch" | "status" | "availability" | "history" => rows_envelope(
             command,
             dry_run,
             vec![],

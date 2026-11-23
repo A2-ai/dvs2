@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::paths::{DvsPaths, PathFilter};
+use crate::paths::{DvsPaths, PathFilter, SCRATCHPAD_FOLDER_NAME};
 use anyhow::{Result, bail};
 use globset::{GlobBuilder, GlobMatcher};
 use walkdir::WalkDir;
@@ -50,6 +50,7 @@ pub fn resolve_paths_for_add(
         .metadata_folder()
         .canonicalize()
         .unwrap_or_else(|_| dvs_paths.metadata_folder());
+    let scratchpad_root = repo_root.join(SCRATCHPAD_FOLDER_NAME);
 
     // If no paths given, default to cwd
     let paths = if paths.is_empty() {
@@ -80,8 +81,11 @@ pub fn resolve_paths_for_add(
             } else if let Some(matcher) = &glob_matcher {
                 for entry in WalkDir::new(&full_path).into_iter().filter_map(|e| e.ok()) {
                     let entry_path = entry.path().canonicalize()?;
-                    // Skip directories and metadata root folder
-                    if !entry_path.is_file() || entry_path.starts_with(&metadata_root) {
+                    // Skip directories, the metadata folder and fetched copies
+                    if !entry_path.is_file()
+                        || entry_path.starts_with(&metadata_root)
+                        || entry_path.starts_with(&scratchpad_root)
+                    {
                         continue;
                     }
                     // dvs writes .gitignore files next to tracked data: only an
@@ -280,23 +284,35 @@ mod tests {
     }
 
     #[test]
-    fn add_glob_skips_gitignore_unless_explicit() {
+    fn add_glob_skips_what_dvs_writes_unless_explicit() {
         let (_temp, dvs_paths) = setup_test_repo();
-        File::create(dvs_paths.repo_root().join("data/.gitignore")).unwrap();
-        File::create(dvs_paths.repo_root().join("data/subdir/.gitignore")).unwrap();
+        let root = dvs_paths.repo_root();
+        let gitignore = PathBuf::from("data/.gitignore");
+        let fetched = PathBuf::from(SCRATCHPAD_FOLDER_NAME).join("a1b2c3d4/data/a.csv");
+        fs::create_dir_all(root.join(&fetched).parent().unwrap()).unwrap();
+        for written in [
+            &gitignore,
+            &PathBuf::from("data/subdir/.gitignore"),
+            &fetched,
+        ] {
+            File::create(root.join(written)).unwrap();
+        }
 
-        let walked =
-            resolve_paths_for_add(vec![PathBuf::from("data")], Some("**/*"), &dvs_paths).unwrap();
-        assert!(walked.contains(&PathBuf::from("data/a.csv")));
-        assert!(!walked.iter().any(|p| p.ends_with(".gitignore")));
-
-        let walked = resolve_paths_for_add(vec![], Some("data/*"), &dvs_paths).unwrap();
-        assert!(!walked.iter().any(|p| p.ends_with(".gitignore")));
+        // Skipped: .dvs records, .gitignore files and the fetched copy
+        let walked = resolve_paths_for_add(vec![], Some("**/*"), &dvs_paths).unwrap();
+        let expected = [
+            "foo.txt",
+            "bar.csv",
+            "data/a.csv",
+            "data/b.txt",
+            "data/subdir/c.csv",
+        ];
+        assert_eq!(walked, HashSet::from(expected.map(PathBuf::from)));
 
         let explicit =
-            resolve_paths_for_add(vec![PathBuf::from("data/.gitignore")], None, &dvs_paths)
+            resolve_paths_for_add(vec![gitignore.clone(), fetched.clone()], None, &dvs_paths)
                 .unwrap();
-        assert!(explicit.contains(&PathBuf::from("data/.gitignore")));
+        assert_eq!(explicit, HashSet::from([gitignore, fetched]));
     }
 
     #[test]

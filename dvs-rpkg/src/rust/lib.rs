@@ -26,8 +26,9 @@ use dvs::globbing::{resolve_paths_for_add, select_paths_for_get};
 use dvs::init::init;
 use dvs::paths::DvsPaths;
 use dvs::{
-    Compression, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
-    OperationContext, PathFilter, Status, TransferObserver, add_files, get_files, set_num_threads,
+    Compression, FetchCriteria, FileProgress, GetCounts, GetOptions, GetReport, GetRow, GetVerdict,
+    OperationContext, PathFilter, Status, TransferObserver, add_files, fetch_file, get_files,
+    set_num_threads,
 };
 
 use cli_progress::CliProgressBar;
@@ -718,6 +719,33 @@ impl From<&GetReport> for GetInfo {
                 None => report.summary(),
             },
         }
+    }
+}
+
+/// @title Fetch an earlier version of a file
+/// @description
+/// Writes an earlier version of a file to
+/// `.dvs-scratchpad/<first 12 characters of the hash>/<path>` and returns
+/// where it is. The working file and what dvs tracks are not changed.
+///
+/// @param path The file, relative to the working directory.
+/// @param hash The hash of the version, or at least its first 12 characters.
+/// @return The path of the version, relative to the working directory.
+/// @examples
+/// \dontrun{
+/// old <- read.csv(dvs_fetch("data/derived.csv", "87b86a9f9e06"))
+/// }
+#[miniextendr]
+pub fn dvs_fetch(
+    #[miniextendr(no_na)] path: PathBuf,
+    #[miniextendr(no_na)] hash: String,
+) -> Result<String> {
+    let config = find_config()?;
+    let dvs_paths = DvsPaths::from_cwd(&config)?;
+    let criteria = FetchCriteria::Hash(hash);
+    match fetch_file(&path, &criteria, &dvs_paths, config.backend()) {
+        Ok(fetched) => Ok(fetched.written_to.to_string_lossy().into_owned()),
+        Err(e) => miniextendr_api::error!(class = ["dvs_error"], "{e:#}"),
     }
 }
 
