@@ -1,5 +1,4 @@
-//! `fetch`: write an earlier version of a file to the scratchpad. The working
-//! file and its record are left alone.
+//! `fetch`: write an earlier version of a file to the scratchpad.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -18,18 +17,17 @@ use crate::gitignore::add_to_gitignore;
 use crate::paths::SCRATCHPAD_FOLDER_NAME;
 use crate::{Backend, Compression, DvsPaths, Hashes, PathFilter, ProjectPath, audit};
 
-/// How much of a hash `dvs history` and the server show: the shortest prefix
-/// that names a version.
+/// The shortest hash prefix accepted, as `dvs history` shows it.
 pub const SHORT_HASH_LEN: usize = 12;
 
-/// How the version of a file to fetch is chosen.
+/// How to pick the version to fetch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchCriteria {
-    /// Its hash, or at least the first [`SHORT_HASH_LEN`] characters of it
+    /// The full hash, or at least its first [`SHORT_HASH_LEN`] characters
     Hash(String),
 }
 
-/// `user_path` as a path from the project root. The file need not exist.
+/// `user_path` relative to the project root. The file need not exist.
 fn project_path(user_path: &Path, paths: &DvsPaths) -> Result<ProjectPath> {
     let filter = PathFilter::from_user_paths(vec![user_path.to_path_buf()], false, paths);
     let [relative] = filter.paths() else {
@@ -40,8 +38,7 @@ fn project_path(user_path: &Path, paths: &DvsPaths) -> Result<ProjectPath> {
         .map_err(|e| Error::invalid_arguments(format!("{}: {e}", user_path.display())).into())
 }
 
-/// The version of `path` that `criteria` chooses. `user_path` is how the user
-/// named the file, for the messages.
+/// The version of `path` picked by `criteria`. `user_path` is for the messages.
 fn find_version(
     path: &ProjectPath,
     user_path: &Path,
@@ -53,7 +50,7 @@ fn find_version(
     }
 }
 
-/// The version of `path` whose hash is `hash`, or starts with it.
+/// The version of `path` whose hash starts with `hash`.
 fn find_by_hash(
     path: &ProjectPath,
     user_path: &Path,
@@ -67,7 +64,7 @@ fn find_by_hash(
         )));
     }
 
-    // Keyed by hash: a version added more than once is one version
+    // Keyed by hash: a version added twice is one version
     let versions: HashMap<String, (Hashes, Compression)> = backend
         .get_audit_entries(&[path.to_native()])?
         .into_iter()
@@ -99,19 +96,18 @@ fn find_by_hash(
 /// A version written to the scratchpad.
 #[derive(Debug, Clone, Serialize)]
 pub struct Fetched {
-    /// The file it is a version of, relative to the project root
+    /// Relative to the project root
     pub path: PathBuf,
-    /// Where the version is, relative to the current directory
+    /// Relative to the current directory
     pub written_to: PathBuf,
     pub hash: String,
     pub size: u64,
-    /// It was there from an earlier fetch: nothing was downloaded
+    /// The copy was already there: nothing was downloaded
     pub already_there: bool,
 }
 
-/// Writes the version of `user_path` that `criteria` chooses to
-/// `.dvs-scratchpad/<start of its hash>/<path from the project root>`, replacing
-/// what is there. The file need not be tracked any more, only to have been added.
+/// Writes the version of `user_path` picked by `criteria` to
+/// `.dvs-scratchpad/<hash prefix>/<project path>`, replacing what is there.
 pub fn fetch_file(
     user_path: &Path,
     criteria: &FetchCriteria,
@@ -132,13 +128,6 @@ pub fn fetch_file(
         already_there,
     };
 
-    // The copy is hashed on every run, not trusted for being there: it may have
-    // been edited since it was fetched
-    if let Ok((existing, size)) = Hashes::compute_from_path(&target, &[])
-        && existing == hashes
-    {
-        return Ok(fetched(size, true));
-    }
     fs::create_dir_all(&scratchpad)?;
     if !destination_is_contained(&scratchpad, &target) {
         bail!(Error::new(
@@ -150,6 +139,12 @@ pub fn fetch_file(
         ));
     }
 
+    // Hashed every time: the copy may have been edited since it was fetched
+    if let Ok((existing, size)) = Hashes::compute_from_path(&target, &[])
+        && existing == hashes
+    {
+        return Ok(fetched(size, true));
+    }
     let stat = FileStat::from_path(&target).ok();
     let written = retrieve_verified(
         backend,
@@ -177,7 +172,9 @@ pub fn fetch_file(
             format!("{}: {message}", user_path.display())
         ));
     }
-    add_to_gitignore(paths.repo_root(), &[PathBuf::from(SCRATCHPAD_FOLDER_NAME)])?;
+    if let Err(e) = add_to_gitignore(paths.repo_root(), &[PathBuf::from(SCRATCHPAD_FOLDER_NAME)]) {
+        log::warn!("Failed to update .gitignore: {e}");
+    }
     Ok(fetched(fs::metadata(&target)?.len(), false))
 }
 
@@ -190,8 +187,8 @@ mod tests {
     use crate::{OperationContext, add_files};
     use tempfile::TempDir;
 
-    /// A project where `data/a.csv` was added as "old", "new", "old" and "new"
-    /// again, and the hash of "old".
+    /// A project where `data/a.csv` was added as old, new, old, new, and the
+    /// hash of old.
     fn repo() -> (TempDir, Config, DvsPaths, String) {
         let (tmp, root) = create_temp_git_repo();
         let (config, _) = init_dvs_repo(&root);
@@ -242,7 +239,7 @@ mod tests {
         }
         assert!(!paths.repo_root().join(SCRATCHPAD_FOLDER_NAME).exists());
 
-        // Added twice, and still one version
+        // Added twice, still one version
         for hash in [&old[..], &old[..SHORT_HASH_LEN], &old.to_uppercase()] {
             let fetched = fetch(&paths, &config, "data/a.csv", hash).unwrap();
             assert_eq!(fetched.hash, old, "{hash}");
@@ -295,14 +292,18 @@ mod tests {
 
         #[cfg(unix)]
         {
-            // The version's folder leads back to the project
+            // The hash folder is a symlink to the project root
             let folder = root
                 .join(SCRATCHPAD_FOLDER_NAME)
                 .join(&old[..SHORT_HASH_LEN]);
             fs::create_dir(root.join(SCRATCHPAD_FOLDER_NAME)).unwrap();
             std::os::unix::fs::symlink("..", &folder).unwrap();
-            assert!(failure().contains("leads outside"));
-            assert_eq!(fs::read(root.join("data/a.csv")).unwrap(), b"new");
+            // Refused whether or not the working file is already that version
+            for content in [&b"new"[..], b"old"] {
+                fs::write(root.join("data/a.csv"), content).unwrap();
+                assert!(failure().contains("leads outside"));
+                assert_eq!(fs::read(root.join("data/a.csv")).unwrap(), content);
+            }
             fs::remove_dir_all(root.join(SCRATCHPAD_FOLDER_NAME)).unwrap();
         }
 

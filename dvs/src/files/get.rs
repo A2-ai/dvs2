@@ -779,9 +779,8 @@ fn destination_unchanged(target: &Path, planned: &Option<FileStat>) -> bool {
 /// A per-file failure: its code and message.
 pub(crate) type FileError = (GetCode, String);
 
-/// Download the content of `hashes`, verify it and move it to `target`. An
-/// existing `target` is only replaced after the new bytes are verified and it
-/// is still as `planned_stat` saw it.
+/// Downloads `hashes` and moves it to `target` once verified. An existing
+/// `target` is only replaced if it is still as `planned_stat` saw it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn retrieve_verified(
     backend: &Backend,

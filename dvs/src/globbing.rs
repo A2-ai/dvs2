@@ -298,7 +298,7 @@ mod tests {
             File::create(root.join(written)).unwrap();
         }
 
-        // Left out: the records in .dvs, the .gitignore files and the fetched copy
+        // Skipped: .dvs records, .gitignore files and the fetched copy
         let walked = resolve_paths_for_add(vec![], Some("**/*"), &dvs_paths).unwrap();
         let expected = [
             "foo.txt",

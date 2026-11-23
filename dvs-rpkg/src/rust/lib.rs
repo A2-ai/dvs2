@@ -725,18 +725,12 @@ impl From<&GetReport> for GetInfo {
 /// @title Fetch an earlier version of a file
 /// @description
 /// Writes an earlier version of a file to
-/// `.dvs-scratchpad/<first 12 characters of the hash>/<path from the project root>`
-/// and returns where it is. The working file and what dvs tracks are not
-/// changed. A copy already there with that hash is kept. Anything else there
-/// is replaced.
+/// `.dvs-scratchpad/<first 12 characters of the hash>/<path>` and returns
+/// where it is. The working file and what dvs tracks are not changed.
 ///
-/// @param path The file, as it was added to dvs: one path, relative to the
-///   working directory.
+/// @param path The file, relative to the working directory.
 /// @param hash The hash of the version, or at least its first 12 characters.
-/// @return The path of the version, relative to the working directory. A
-///   fetch that fails raises a `dvs_error`, for example when the hash is too
-///   short, when it names no version of the file or several, or when the
-///   version is not in storage.
+/// @return The path of the version, relative to the working directory.
 /// @examples
 /// \dontrun{
 /// old <- read.csv(dvs_fetch("data/derived.csv", "87b86a9f9e06"))
