@@ -66,6 +66,10 @@ impl Error {
             message: message.into(),
         }
     }
+
+    pub fn invalid_arguments(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::InvalidArguments, message)
+    }
 }
 
 impl std::fmt::Display for Error {

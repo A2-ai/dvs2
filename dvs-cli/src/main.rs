@@ -28,9 +28,9 @@ use dvs::init::{create_metadata_folder, init};
 use dvs::paths::{CONFIG_FILE_NAME, DvsPaths};
 use dvs::{
     AddDetail, AddReport, AddResult, Backend, CancelToken, Compression, Counts, ErrorCode,
-    FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext, OperationRow,
-    Outcome, PathFilter, RowState, RunOutcome, Status, add_files, format_size, get_files,
-    set_num_threads,
+    FetchCriteria, FileMetadata, FileProgress, FileRow, GetOptions, GetVerdict, OperationContext,
+    OperationRow, Outcome, PathFilter, RowState, RunOutcome, Status, add_files, fetch_file,
+    format_size, get_files, set_num_threads,
 };
 
 use crate::observer::CliObserver;
@@ -172,6 +172,15 @@ pub enum Command {
         /// Replace files with local changes (same as --on-conflict overwrite)
         #[clap(long, short, conflicts_with = "on_conflict")]
         force: bool,
+    },
+    /// Writes an earlier version of a file to `.dvs-scratchpad/<start of its hash>/<path>`.
+    /// The working file and what dvs tracks are not changed.
+    Fetch {
+        /// The file, as it was added to dvs
+        path: PathBuf,
+        /// The hash of the version, or at least its first 12 characters (see `dvs history`)
+        #[clap(long)]
+        hash: String,
     },
     /// Show the project configuration, and the server info when the project uses a dvs-server backend
     Info,
@@ -834,6 +843,35 @@ fn try_main(cli: Cli, cancel: &CancelToken) -> Result<()> {
             }
             summary_exit(report.verdict())?;
         }
+        Command::Fetch { path, hash } => {
+            let config = find_config(&current_dir)?;
+            let dvs_paths = DvsPaths::from_cwd(&config)?;
+            let criteria = FetchCriteria::Hash(hash);
+            let fetched = fetch_file(&path, &criteria, &dvs_paths, config.backend())?;
+            if cli.json {
+                let counts = Counts::new(1, 0);
+                let outcome = RunOutcome::of(&counts, false);
+                let row = output::row_error_fields(json!(fetched));
+                output::emit(output::rows_envelope(
+                    "fetch",
+                    false,
+                    vec![row],
+                    counts,
+                    outcome,
+                ));
+            } else {
+                let what = if fetched.already_there {
+                    "already there"
+                } else {
+                    "fetched"
+                };
+                println!(
+                    "{what}  {}  {}",
+                    fetched.written_to.display(),
+                    format_size(fetched.size)
+                );
+            }
+        }
         Command::Info => {
             let config = find_config(&current_dir)?;
             let compression = info_compression(&config);
@@ -1190,6 +1228,7 @@ impl Command {
             Self::Add { .. } => "add",
             Self::Status { .. } => "status",
             Self::Get { .. } => "get",
+            Self::Fetch { .. } => "fetch",
             Self::Info => "info",
             Self::Availability { .. } => "availability",
             Self::History { .. } => "history",

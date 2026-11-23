@@ -41,6 +41,8 @@ You can pass some arguments to it or edit the toml file manually.
 
 `get` will retrieve the files thanks to the metadata folder and pull them from the storage to their location in the project.
 
+`fetch` writes an earlier version of a file to a scratch folder, without changing the working file or what is tracked.
+
 Both `add` and `get` support a dry run from the CLI, the library, or the R package, returning the outcome that would have happened for each file without actually doing it.
 
 `status` compares the working file with its metadata and, when available, the local baseline recorded by the last successful `get`.
@@ -88,7 +90,7 @@ them as success. Incompatible semantics need a new protocol version.
 
 Every `--json` result is one envelope, error envelopes included: `v` (`1`), `command` (`cli` for argument
 parsing errors), `outcome` (`complete`, `partial`, `failed` or `cancelled`; `get` also `aborted`), `dry_run` (a requested
-mutation preview), `error`, and for commands with rows (`add`, `get`, `status`, `availability`, `history`)
+mutation preview), `error`, and for commands with rows (`add`, `get`, `fetch`, `status`, `availability`, `history`)
 `counts` and `files` (the per-file, per-hash or per-entry rows; empty in an error envelope), plus the command's
 own fields (`add`/`get` `bytes`, `get` `on_conflict`/`source`, `init` `project_root`, `logout`
 `revoked`/`warnings`, `info` its discovery fields). It carries its timing: `started_at` and `finished_at`
@@ -599,6 +601,54 @@ returns the operation information (outcome, `did_as_asked`, policy and its sourc
 shows it as a header. Invalid arguments, not being in a dvs project, and configuration errors (`dvs_config_error`)
 are the only immediate errors.
 
+### fetch
+
+`fetch` writes an earlier version of a file to
+`.dvs-scratchpad/<first 12 characters of the hash>/<path from the project root>`. It does not change the
+working file, its metadata file or its baseline.
+
+The version is chosen by its hash, or at least the first 12 characters of it, as `dvs history` shows them. It
+must be a version of that file, and only one. A copy already there with that hash is kept. Anything else there
+is replaced.
+
+#### CLI
+
+```shell
+❯ dvs fetch --help
+Writes an earlier version of a file to `.dvs-scratchpad/<start of its hash>/<path>`. The working file and what dvs tracks are not changed
+
+Usage: dvs fetch [OPTIONS] --hash <HASH> <PATH>
+
+Arguments:
+  <PATH>  The file, as it was added to dvs
+
+Options:
+      --hash <HASH>  The hash of the version, or at least its first 12 characters (see `dvs history`)
+  -h, --help         Print help
+
+Global Options:
+      --json               Output results as JSON
+      --emit-events        Stream operation results and transfer progress as NDJSON
+      --threads <THREADS>  Number of threads for parallel operations (0 = auto-detect)
+```
+
+`--json` prints the envelope with one row. `written_to` is relative to the current directory. `already_there`
+is `true` when the copy was kept and nothing was downloaded. A failure is the shared error envelope, with no row.
+
+```json
+{"path": "data/a.csv", "written_to": ".dvs-scratchpad/87b86a9f9e06/data/a.csv", "hash": "87b86a9f…",
+ "size": 4, "already_there": false, "code": null, "message": null, "hint": null}
+```
+
+`--emit-events` sends the row as a `file_result`, and no transfer or progress events. `fetch` cannot be cancelled.
+
+Exit codes: `0` the version is there; `2` a hash that is too short, or that names no version of the file or
+several; `1` any other failure.
+
+#### Rust library
+
+`fetch_file(path, &FetchCriteria::Hash(hash), paths, backend)` returns a `Fetched`, the row above, or a coded error.
+
 ### status
 
 This returns the status (mentioned in the high level overview above)
@@ -793,6 +843,9 @@ After a successful `add`, each data file gets a `/<filename>` entry in its own d
 data out of Git while the `.dvs` metadata stays tracked. Existing entries are not duplicated. If there is no `.git`
 folder the update is skipped, and a failed `.gitignore` update is logged as a warning without failing the `add`.
 
+The first successful `fetch` adds `/.dvs-scratchpad` to the `.gitignore` at the project root. It is skipped if there
+is no `.git` folder.
+
 ### Globbing
 
 `add`, `status`, and `get` accept a `--glob` flag. The resolution works the following way:
@@ -800,6 +853,9 @@ folder the update is skipped, and a failed `.gitignore` update is logged as a wa
 - Explicit files: added/retrieved directly (glob ignored)
 - Explicit directories with a glob: walked and filtered by glob
 - No given paths with a glob: walks current directory filtered by glob
+
+A glob given to `add` never selects what dvs itself writes: the metadata folder, the `.gitignore` files and the
+versions in `.dvs-scratchpad`. Naming such a file explicitly still selects it.
 
 Globs use a literal path separator, meaning `*.csv` only matches files in the target directory and
 will not match `subdir/file.csv`. Use `'**/*.csv'` (quoted, to avoid shell expansion) to match recursively across subdirectories.

@@ -22,7 +22,7 @@ use crate::operation::{
 };
 use crate::paths::ProjectPath;
 use crate::utils::get_threadpool;
-use crate::{Backend, Compression, DvsPaths, RetrieveRequest, cache};
+use crate::{Backend, Compression, DvsPaths, Hashes, RetrieveRequest, cache};
 use fs_err as fs;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -545,7 +545,7 @@ fn project_relative(root: &Path, absolute: &Path) -> Option<PathBuf> {
 }
 
 /// `target` lexically relative to `base`; both absolute.
-fn relative_to(base: &Path, target: &Path) -> PathBuf {
+pub(crate) fn relative_to(base: &Path, target: &Path) -> PathBuf {
     let base: Vec<_> = base.components().collect();
     let target: Vec<_> = target.components().collect();
     let common = base
@@ -585,7 +585,7 @@ fn normalize(path: &Path) -> PathBuf {
 
 /// True when the nearest existing ancestor of `target` resolves inside `root`,
 /// so writing `target` cannot escape the project through a symlinked directory.
-fn destination_is_contained(root: &Path, target: &Path) -> bool {
+pub(crate) fn destination_is_contained(root: &Path, target: &Path) -> bool {
     let mut dir = target.parent();
     while let Some(d) = dir {
         match std::fs::symlink_metadata(d) {
@@ -777,34 +777,34 @@ fn destination_unchanged(target: &Path, planned: &Option<FileStat>) -> bool {
 }
 
 /// A per-file failure: its code and message.
-type FileError = (GetCode, String);
+pub(crate) type FileError = (GetCode, String);
 
-/// Download, verify and install one file. The existing working file is only
-/// replaced after the new bytes are verified and the destination is unchanged.
-fn install(
+/// Download the content of `hashes`, verify it and move it to `target`. An
+/// existing `target` is only replaced after the new bytes are verified and it
+/// is still as `planned_stat` saw it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn retrieve_verified(
     backend: &Backend,
-    paths: &DvsPaths,
-    relative_path: &Path,
-    metadata: &FileMetadata,
+    target: &Path,
+    hashes: &Hashes,
+    compression: Compression,
+    path: ProjectPath,
     planned_stat: &Option<FileStat>,
     operation_id: Uuid,
     on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
 ) -> Result<(), FileError> {
-    let target = paths.file_path(relative_path);
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| (io_code(&e), format!("cannot create its directory: {e}")))?;
     }
     let tmp_path = target.with_extension(format!("dvs-tmp.{}", Uuid::new_v4()));
-    let path = ProjectPath::from_path(relative_path)
-        .map_err(|e| (GetCode::Shared(ErrorCode::IoError), e.to_string()))?;
 
     let result = (|| {
         let retrieved = backend
             .retrieve(RetrieveRequest {
-                hashes: &metadata.hashes,
+                hashes,
                 target: &tmp_path,
-                compression: metadata.compression,
+                compression,
                 path,
                 operation_id,
                 on_bytes,
@@ -818,19 +818,19 @@ fn install(
         }
         let actual = FileMetadata::from_file(&tmp_path, Compression::None, None)
             .map_err(|e| (code_for(&e), e.to_string()))?;
-        if actual.hashes != metadata.hashes {
+        if actual.hashes != *hashes {
             return Err((
                 GetCode::HashMismatch,
                 "the stored content does not match the tracked hash".to_string(),
             ));
         }
-        if !destination_unchanged(&target, planned_stat) {
+        if !destination_unchanged(target, planned_stat) {
             return Err((
                 GetCode::DestinationChanged,
                 "the file changed while dvs was downloading it; your version was kept".to_string(),
             ));
         }
-        fs::rename(&tmp_path, &target)
+        fs::rename(&tmp_path, target)
             .map_err(|e| (io_code(&e), format!("cannot replace the file: {e}")))?;
         Ok(())
     })();
@@ -1127,15 +1127,20 @@ fn transfer(
     }
     let file_progress = ctx.observer().transfer_started(&p.row.path, metadata.size);
     let on_bytes = file_progress.as_ref().map(|fp| &*fp.on_bytes);
-    let result = install(
-        backend,
-        paths,
-        &p.row.path,
-        metadata,
-        &p.stat,
-        operation_id,
-        on_bytes,
-    );
+    let result = ProjectPath::from_path(&p.row.path)
+        .map_err(|e| (GetCode::Shared(ErrorCode::IoError), e.to_string()))
+        .and_then(|path| {
+            retrieve_verified(
+                backend,
+                &paths.file_path(&p.row.path),
+                &metadata.hashes,
+                metadata.compression,
+                path,
+                &p.stat,
+                operation_id,
+                on_bytes,
+            )
+        });
     if let Some(fp) = &file_progress {
         (fp.on_done)(result.is_ok());
     }

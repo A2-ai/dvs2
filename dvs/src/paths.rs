@@ -13,6 +13,8 @@ use crate::config::Config;
 
 pub const CONFIG_FILE_NAME: &str = "dvs.toml";
 pub const DEFAULT_FOLDER_NAME: &str = ".dvs";
+/// Where `dvs fetch` writes earlier versions, at the project root.
+pub const SCRATCHPAD_FOLDER_NAME: &str = ".dvs-scratchpad";
 
 /// `std::env::current_dir`, explaining its usual failure: the directory the shell
 /// is in was deleted, which otherwise shows as a bare "No such file or directory".
